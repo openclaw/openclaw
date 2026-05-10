@@ -19,6 +19,8 @@ const DELIVERABLE_ARTIFACT_EXTENSIONS = new Set([
   ".doc",
   ".docx",
   ".gif",
+  ".heic",
+  ".heif",
   ".jpeg",
   ".jpg",
   ".m4a",
@@ -174,6 +176,71 @@ function hasAssistantMediaDirective(texts: readonly string[] | undefined): boole
   return texts?.some((text) => /(^|\n)\s*MEDIA:/iu.test(text)) ?? false;
 }
 
+function hasVisibleAssistantText(texts: readonly string[] | undefined): boolean {
+  return texts?.some((text) => text.trim().length > 0) ?? false;
+}
+
+function describeArtifact(filePath: string): string {
+  switch (path.extname(filePath).toLowerCase()) {
+    case ".apng":
+    case ".avif":
+    case ".bmp":
+    case ".gif":
+    case ".heic":
+    case ".heif":
+    case ".jpeg":
+    case ".jpg":
+    case ".png":
+    case ".svg":
+    case ".webp":
+      return "image";
+    case ".pdf":
+      return "PDF";
+    case ".csv":
+    case ".ods":
+    case ".tsv":
+    case ".xls":
+    case ".xlsx":
+      return "spreadsheet";
+    case ".doc":
+    case ".docx":
+    case ".md":
+    case ".odt":
+    case ".rtf":
+    case ".txt":
+      return "document";
+    case ".odp":
+    case ".ppt":
+    case ".pptx":
+      return "presentation";
+    case ".m4a":
+    case ".mp3":
+    case ".ogg":
+    case ".opus":
+    case ".wav":
+      return "audio";
+    case ".mov":
+    case ".mp4":
+    case ".webm":
+      return "video";
+    case ".zip":
+      return "archive";
+    default:
+      return "file";
+  }
+}
+
+function formatArtifactSummary(artifactPaths: readonly string[]): string {
+  if (artifactPaths.length === 1 && artifactPaths[0]) {
+    return `Generated ${describeArtifact(artifactPaths[0])} attached.`;
+  }
+  const kinds = Array.from(new Set(artifactPaths.map(describeArtifact)));
+  if (kinds.length === 1 && kinds[0]) {
+    return `Generated ${artifactPaths.length} ${kinds[0]} files attached.`;
+  }
+  return `Generated ${artifactPaths.length} files attached.`;
+}
+
 export function appendCodexNativeArtifactsToResult<T extends ResultWithMedia>(
   result: T,
   artifactPaths: readonly string[],
@@ -196,6 +263,9 @@ export function appendCodexNativeArtifactsToResult<T extends ResultWithMedia>(
   }
   return {
     ...result,
+    assistantTexts: hasVisibleAssistantText(result.assistantTexts)
+      ? result.assistantTexts
+      : [formatArtifactSummary(freshArtifacts)],
     toolMediaUrls: [...(result.toolMediaUrls ?? []), ...freshArtifacts],
   };
 }

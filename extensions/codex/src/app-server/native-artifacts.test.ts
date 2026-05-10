@@ -46,7 +46,19 @@ describe("Codex native artifact collection", () => {
         "/tmp/a.png",
         "/tmp/b.docx",
       ]),
-    ).toMatchObject({ toolMediaUrls: ["/tmp/a.png", "/tmp/b.docx"] });
+    ).toMatchObject({
+      assistantTexts: ["Generated document attached."],
+      toolMediaUrls: ["/tmp/a.png", "/tmp/b.docx"],
+    });
+
+    expect(
+      appendCodexNativeArtifactsToResult({ assistantTexts: ["Done."], toolMediaUrls: [] }, [
+        "/tmp/a.png",
+      ]),
+    ).toMatchObject({
+      assistantTexts: ["Done."],
+      toolMediaUrls: ["/tmp/a.png"],
+    });
 
     expect(
       appendCodexNativeArtifactsToResult(

@@ -2571,7 +2571,7 @@ describe("runCodexAppServerAttempt", () => {
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await expect(run).resolves.toMatchObject({
-      assistantTexts: [],
+      assistantTexts: ["Generated image attached."],
       toolMediaUrls: [generatedImage],
     });
   });
