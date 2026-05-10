@@ -64,7 +64,7 @@ describe("performMatrixRequest", () => {
             status: 200,
             headers: new Headers({ "content-length": "0x3" }),
             arrayBuffer,
-          }) as Response,
+          }) as unknown as Response,
       ),
     );
 

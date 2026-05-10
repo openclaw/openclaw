@@ -196,9 +196,9 @@ describe("downloadGoogleChatMedia", () => {
         "content-type": "application/octet-stream",
       }),
       arrayBuffer,
-    } as Response;
+    } as unknown as Response;
 
-    await expectDownloadToRejectForResponse(response, "invalid content-length header: 0x3");
+    await expectDownloadToRejectForResponse(response, /invalid content-length header: 0x3/);
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
