@@ -54,6 +54,21 @@ function createOps(params: {
     chatDeltaSentAt: new Map([[runId, Date.now()]]),
     chatDeltaLastBroadcastLen: new Map([[runId, buffer?.length ?? 0]]),
     chatDeltaLastBroadcastText: new Map(buffer !== undefined ? [[runId, buffer]] : []),
+    agentDeltaSentAt: new Map([[`${runId}:assistant`, Date.now()]]),
+    bufferedAgentEvents: new Map([
+      [
+        `${runId}:assistant`,
+        {
+          payload: {
+            runId,
+            seq: 1,
+            stream: "assistant",
+            ts: Date.now(),
+            data: { text: "buffer", delta: "buffer" },
+          },
+        },
+      ],
+    ]),
     chatAbortedRuns: new Map(),
     removeChatRun,
     agentRunSeq: new Map(),
@@ -110,6 +125,8 @@ describe("abortChatRunById", () => {
     expect(ops.chatDeltaSentAt.has(runId)).toBe(false);
     expect(ops.chatDeltaLastBroadcastLen.has(runId)).toBe(false);
     expect(ops.chatDeltaLastBroadcastText.has(runId)).toBe(false);
+    expect(ops.agentDeltaSentAt?.has(`${runId}:assistant`)).toBe(false);
+    expect(ops.bufferedAgentEvents?.has(`${runId}:assistant`)).toBe(false);
     expect(ops.removeChatRun).toHaveBeenCalledWith(runId, runId, sessionKey);
     expect(ops.agentRunSeq.has(runId)).toBe(false);
     expect(ops.agentRunSeq.has("client-run-1")).toBe(false);
