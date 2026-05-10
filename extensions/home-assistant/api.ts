@@ -38,4 +38,18 @@ export {
   type ServiceCheckResult,
   type ServiceDeniedReason,
 } from "./allowlist.js";
+export {
+  HA_SERVICE_CALL_METHOD,
+  HA_STATE_EVENT,
+  HA_SUBSCRIBE_METHOD,
+  attachHomeAssistantBridge,
+  type AttachBridgeArgs,
+  type BridgeBroadcastFn,
+  type BridgeGatewayApi,
+  type BridgeGatewayHandler,
+  type BridgeGatewayHandlerArgs,
+  type BridgeHandle,
+  type BridgeLogger,
+  type ServiceCallClient,
+} from "./gateway-bridge.js";
 export { registerHomeAssistantPlugin } from "./register.runtime.js";

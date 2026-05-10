@@ -172,6 +172,40 @@ export class HomeAssistantClient {
     };
   }
 
+  /**
+   * Send a `call_service` frame to HA.
+   *
+   * Fire-and-forget: the kiosk's reconciliation path is the state-changed
+   * echo, not the result frame. If we ever need the typed result, swap this
+   * for a Promise-returning variant that tracks the command id and resolves
+   * on the matching `result` message.
+   *
+   * Caller is responsible for allow-list / deny-list gating before getting
+   * here -- see `allowlist.ts`. This method validates only WS readiness.
+   */
+  callService(args: {
+    domain: string;
+    service: string;
+    target: string;
+    serviceData?: Record<string, unknown>;
+  }): void {
+    if (this.state !== "subscribed" || !this.socket) {
+      throw new Error("home-assistant client is not subscribed; cannot call_service yet");
+    }
+    const id = this.takeCommandId();
+    const payload: Record<string, unknown> = {
+      id,
+      type: "call_service",
+      domain: args.domain,
+      service: args.service,
+      target: { entity_id: args.target },
+    };
+    if (args.serviceData) {
+      payload.service_data = args.serviceData;
+    }
+    this.send(payload);
+  }
+
   /** Visible for tests; pure function over the configured backoff bounds. */
   computeReconnectDelay(attempt: number): number {
     if (attempt <= 0) {

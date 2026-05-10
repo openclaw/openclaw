@@ -411,6 +411,63 @@ describe("HomeAssistantClient", () => {
     });
   });
 
+  describe("callService", () => {
+    it("sends a call_service frame to HA with the configured domain/service/target", () => {
+      const h = createHarness();
+      const ws = driveToSubscribed(h);
+
+      h.client.callService({
+        domain: "switch",
+        service: "toggle",
+        target: "switch.sonoff_10013c3266",
+      });
+
+      const sent = ws.findSent((m) => m.type === "call_service");
+      expect(sent).toBeTruthy();
+      expect(sent).toMatchObject({
+        type: "call_service",
+        domain: "switch",
+        service: "toggle",
+        target: { entity_id: "switch.sonoff_10013c3266" },
+      });
+      expect(typeof sent!.id).toBe("number");
+    });
+
+    it("forwards optional service_data to HA", () => {
+      const h = createHarness();
+      const ws = driveToSubscribed(h);
+
+      h.client.callService({
+        domain: "cover",
+        service: "set_cover_position",
+        target: "cover.aqara_roller_blind_left",
+        serviceData: { position: 50 },
+      });
+
+      const sent = ws.findSent((m) => m.type === "call_service");
+      expect(sent).toMatchObject({
+        type: "call_service",
+        domain: "cover",
+        service: "set_cover_position",
+        target: { entity_id: "cover.aqara_roller_blind_left" },
+        service_data: { position: 50 },
+      });
+    });
+
+    it("throws when called before subscribe completes", () => {
+      const h = createHarness();
+      h.client.start();
+      // Not yet subscribed.
+      expect(() =>
+        h.client.callService({
+          domain: "switch",
+          service: "toggle",
+          target: "switch.sonoff_10013c3266",
+        }),
+      ).toThrow(/not subscribed|not connected/i);
+    });
+  });
+
   describe("integration: socket recycle after a heartbeat miss flushes stale state", () => {
     it("reset is called when a fresh subscribe completes after reconnect", () => {
       const h = createHarness({ heartbeatIntervalMs: 30000, heartbeatTimeoutMs: 10000 });

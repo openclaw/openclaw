@@ -7,12 +7,15 @@ dashboard view consumes this plugin via the OpenClaw gateway.
 Tracking plan: [`docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md`](../../docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md).
 Cross-plan dependency: [`docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md`](../../docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md).
 
-> **Status: gate landed (Units 1 + 2 + 3).** This package now ships the
-> manifest, config schema, defaults, the long-lived HA WebSocket client,
-> the entity state store, and the centralized allow-list / service
-> deny-list gate. The gateway bridge (Unit 4) is the next piece -- it
-> wires the WS client into `register.runtime.ts` and bridges state and
-> service-call dispatch onto the OpenClaw gateway WS.
+> **Status: bridge landed (Units 1 + 2 + 3 + 4).** This package now ships
+> the manifest, config schema, defaults, the long-lived HA WebSocket
+> client, the entity state store, the allow-list / deny-list gate, and
+> the gateway bridge that exposes the kiosk-facing methods on the
+> OpenClaw gateway WS. The remaining piece for v1 ship is wiring
+> `register.runtime.ts` to actually instantiate the WS client with a
+> resolved long-lived token from `~/.openclaw/credentials/` and call
+> `attachHomeAssistantBridge` -- the bridge logic and primitives are
+> all in place and exported through `./api.ts`.
 
 ## Configuration
 
@@ -64,12 +67,54 @@ is a credentials-store update, no code change.
   is separated from runtime logic; future units add narrow `*.runtime.ts`
   modules.
 
-## What lands in later units
+## Gateway bridge (`gateway-bridge.ts`)
 
-- **Unit 4:** `gateway-bridge.ts` + `src/gateway/protocol/ha-events.ts` --
-  bridges HA state and service calls onto the OpenClaw gateway WS via new
-  additive `ha:state` and `ha:service-call` topics, and starts the WS client
-  on plugin register.
+The kiosk view talks to this plugin entirely through the existing OpenClaw
+gateway WebSocket. No new core protocol files were needed -- plugin
+broadcasts already use the `plugin.*` namespace and `registerGatewayMethod`
+accepts arbitrary string method names.
+
+| Direction                 | Wire name                     | Scope            | Payload shape                                                                                                                                     |
+| ------------------------- | ----------------------------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ha:subscribe` request    | `home-assistant.subscribe`    | `operator.read`  | `{}` -> `{ snapshot: [{ entity_id, state }] }`. Captures the broadcast function and returns the current cached snapshot of allow-listed entities. |
+| `ha:state` push           | `plugin.home-assistant.state` | (operator/admin) | `{ entity_id, prev, next }` for every state-store diff after subscribe.                                                                           |
+| `ha:service-call` request | `home-assistant.serviceCall`  | `operator.write` | `{ domain, service, target, serviceData? }` -> `{ dispatched: true }` on success, structured error otherwise.                                     |
+
+Validation order on `home-assistant.serviceCall`:
+
+1. `target` present and non-empty -> else `invalid_params`.
+2. `domain.service` passes `checkServiceCall` (deny-list + format checks)
+   -> else `service-denied`.
+3. `target` is in `allowList` -> else `entity-denied`.
+4. Dispatch via `ws-client.callService(...)`. WS-client failures surface as
+   `ha_call_failed`.
+
+> **Plan deviation recorded.** The original plan called for adding `ha:state`
+> and `ha:service-call` to `src/gateway/protocol/`. After inspecting the
+> gateway, plugin broadcasts already use the `plugin.*` namespace
+> (`src/gateway/server-broadcast.ts`) and method handlers register against
+> arbitrary names (`OpenClawPluginApi.registerGatewayMethod`). No core
+> protocol additions were needed; the bridge stays fully extension-local
+> per `extensions/CLAUDE.md` boundary rules.
+
+## v1 ship: wiring `register.runtime.ts`
+
+The bridge is built and tested; the last step is wiring it on plugin
+register. Pseudo-shape:
+
+```ts
+// extensions/home-assistant/register.runtime.ts (v1 ship)
+const config = resolveHomeAssistantConfig(api);
+if (!config) return;                // not configured -> no-op
+const token = await resolveCredential(config.tokenRef);
+const store = new HomeAssistantStateStore({ allowList: config.allowList });
+const client = new HomeAssistantClient({ url: config.homeAssistantUrl, token, store, ... });
+attachHomeAssistantBridge({ api, store, client, config });
+client.start();
+```
+
+Credential resolution follows the existing channel/provider pattern under
+`~/.openclaw/credentials/` -- not landed in this unit.
 
 ## Allow-list / deny-list gate (`allowlist.ts`)
 
