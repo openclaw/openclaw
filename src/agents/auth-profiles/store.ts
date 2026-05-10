@@ -411,10 +411,10 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
       });
       return latestStore;
     }
+    return latestStore;
   } finally {
     release();
   }
-  return synced;
 }
 
 function shouldKeepProfileInLocalStore(params: {

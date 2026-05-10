@@ -297,4 +297,49 @@ describe("auth profile store cache", () => {
       expect(openaiProfile?.key).toBe("sk-concurrent");
     });
   });
+
+  it("returns the reloaded store when the synced CLI profile changed concurrently", async () => {
+    await withAgentDirEnv("openclaw-auth-store-external-cli-profile-race-", (agentDir) => {
+      const profileId = "anthropic:claude-cli";
+      const authPath = writeOAuthStore(agentDir, profileId, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      mocks.resolveExternalCliAuthProfiles.mockImplementationOnce(() => {
+        writeOAuthStore(agentDir, profileId, {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "manual-concurrent-access",
+          refresh: "manual-concurrent-refresh",
+          expires: Date.now() + 120_000,
+        });
+        return [
+          createPersistedOverlay(profileId, {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "fresh-cli-access",
+            refresh: "fresh-cli-refresh",
+            expires: Date.now() + 60_000,
+          }),
+        ];
+      });
+
+      const first = ensureAuthProfileStore(agentDir);
+      const second = ensureAuthProfileStore(agentDir);
+      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+        profiles: Record<string, OAuthCredential>;
+      };
+
+      expect((first.profiles[profileId] as OAuthCredential | undefined)?.access).toBe(
+        "manual-concurrent-access",
+      );
+      expect((second.profiles[profileId] as OAuthCredential | undefined)?.access).toBe(
+        "manual-concurrent-access",
+      );
+      expect(persisted.profiles[profileId]?.access).toBe("manual-concurrent-access");
+    });
+  });
 });
