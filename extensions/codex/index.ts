@@ -6,6 +6,12 @@ import { buildCodexMediaUnderstandingProvider } from "./media-understanding-prov
 import { buildCodexProvider } from "./provider.js";
 import { createCodexCommand } from "./src/commands.js";
 import {
+  CodexContinuityBridge,
+  setCodexContinuityBridgeForRuntime,
+} from "./src/continuity/bridge.js";
+import { registerCodexContinuityHttpRoutes } from "./src/continuity/http.js";
+import type { CodexBridgeAuditEvent, CodexBridgeWatchRecord } from "./src/continuity/types.js";
+import {
   handleCodexConversationBindingResolved,
   handleCodexConversationInboundClaim,
 } from "./src/conversation-binding.js";
@@ -30,6 +36,53 @@ export default definePluginEntry({
       buildCodexMediaUnderstandingProvider({ pluginConfig: api.pluginConfig }),
     );
     api.registerMigrationProvider(buildCodexMigrationProvider());
+    const continuityBridge = new CodexContinuityBridge({
+      resolvePluginConfig: resolveCurrentPluginConfig,
+      configForAppServer: () => api.config,
+      watchStore: api.runtime.state.openKeyedStore<CodexBridgeWatchRecord>({
+        namespace: "codex.continuity.watch",
+        maxEntries: 500,
+      }),
+      eventStore: api.runtime.state.openKeyedStore<CodexBridgeAuditEvent>({
+        namespace: "codex.continuity.events",
+        maxEntries: 1_000,
+      }),
+      logger: api.logger,
+      sendTelegram: async ({ channel, target, text, accountId, threadId }) => {
+        if (channel !== "telegram") {
+          throw new Error(`unsupported notify channel: ${channel}`);
+        }
+        const adapter = await api.runtime.channel.outbound.loadAdapter("telegram");
+        const send = adapter?.sendText;
+        if (!send) {
+          throw new Error("telegram runtime unavailable");
+        }
+        await send({
+          cfg: api.config,
+          to: target,
+          text,
+          ...(threadId != null ? { threadId } : {}),
+          ...(accountId ? { accountId } : {}),
+        });
+      },
+    });
+    setCodexContinuityBridgeForRuntime(continuityBridge);
+    api.registerService({
+      id: "codex-continuity",
+      start: () => continuityBridge.start(),
+      stop: () => continuityBridge.stop(),
+    });
+    api.registerRuntimeLifecycle({
+      id: "codex-continuity",
+      cleanup: () => {
+        continuityBridge.stop();
+        setCodexContinuityBridgeForRuntime(undefined);
+      },
+    });
+    registerCodexContinuityHttpRoutes({
+      registerHttpRoute: api.registerHttpRoute,
+      bridge: continuityBridge,
+    });
     api.registerCommand(createCodexCommand({ pluginConfig: api.pluginConfig }));
     api.on("inbound_claim", (event, ctx) =>
       handleCodexConversationInboundClaim(event, ctx, {

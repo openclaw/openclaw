@@ -19,7 +19,7 @@
   "syntheticAuthRefs": ["codex"],
   "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
-    "onStartup": false,
+    "onStartup": true,
     "onAgentHarnesses": ["codex"]
   },
   "commandAliases": [
@@ -145,6 +145,68 @@
           "serviceTier": { "type": ["string", "null"], "enum": ["fast", "flex", null] },
           "defaultWorkspaceDir": {
             "type": "string"
+          }
+        }
+      },
+      "codexBridge": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "default": true
+          },
+          "pollIntervalMs": {
+            "type": "number",
+            "minimum": 5000,
+            "default": 60000
+          },
+          "watchTtlMs": {
+            "type": "number",
+            "minimum": 60000,
+            "default": 86400000
+          },
+          "sqliteStatePath": {
+            "type": "string"
+          },
+          "maxThreads": {
+            "type": "number",
+            "minimum": 1,
+            "default": 25
+          },
+          "notifyChannel": {
+            "type": "string",
+            "default": "telegram"
+          },
+          "notifyTarget": {
+            "type": "string"
+          },
+          "enableTelegramWrites": {
+            "type": "boolean",
+            "default": false
+          },
+          "allowedRepos": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "trustedTelegramSenders": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "confirmedWriteMethods": {
+            "type": "array",
+            "items": { "type": "string" },
+            "default": []
+          },
+          "devNotifyTestEnabled": {
+            "type": "boolean",
+            "default": false
+          },
+          "telegramDryRun": {
+            "type": "boolean",
+            "default": false
           }
         }
       }
