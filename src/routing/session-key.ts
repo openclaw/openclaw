@@ -1,8 +1,5 @@
 import type { ChatType } from "../channels/chat-type.js";
-import {
-  isCronRunSessionKey,
-  parseAgentSessionKey,
-} from "../sessions/session-key-utils.js";
+import { isCronRunSessionKey, parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { normalizeAccountId } from "./account-id.js";
 
