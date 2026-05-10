@@ -5,7 +5,7 @@
   },
   {
     "source": "Active Memory",
-    "target": "Active Memory"
+    "target": "主動記憶體"
   },
   {
     "source": "ClawHub",
@@ -17,7 +17,7 @@
   },
   {
     "source": "Compaction",
-    "target": "Compaction"
+    "target": "壓縮整合"
   },
   {
     "source": "Cron",
@@ -25,15 +25,15 @@
   },
   {
     "source": "Dreaming",
-    "target": "Dreaming"
+    "target": "夢境回顧"
   },
   {
     "source": "Gateway",
-    "target": "Gateway"
+    "target": "閘道"
   },
   {
     "source": "Heartbeat",
-    "target": "Heartbeat"
+    "target": "心跳機制"
   },
   {
     "source": "Mintlify",
@@ -41,7 +41,7 @@
   },
   {
     "source": "Node",
-    "target": "Node"
+    "target": "節點"
   },
   {
     "source": "OpenClaw",
@@ -53,11 +53,11 @@
   },
   {
     "source": "Plugin",
-    "target": "Plugin"
+    "target": "外掛程式"
   },
   {
     "source": "Skills",
-    "target": "Skills"
+    "target": "技能"
   },
   {
     "source": "Tailscale",

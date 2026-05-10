@@ -93,11 +93,11 @@
   },
   {
     "source": "Status",
-    "target": "Status"
+    "target": "状态"
   },
   {
     "source": "Gateway",
-    "target": "Gateway 网关"
+    "target": "网关"
   },
   {
     "source": "Gateway RPC reference",
