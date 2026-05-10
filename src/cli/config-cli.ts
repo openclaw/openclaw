@@ -1447,12 +1447,14 @@ async function runConfigOperations(params: {
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const unsetPaths: PathSegment[][] = [];
+  const explicitSetPaths: PathSegment[][] = [];
   for (const operation of operations) {
     if (operation.mutation === "delete") {
       unsetAtPath(next, operation.setPath);
       unsetPaths.push(operation.setPath);
       continue;
     }
+    explicitSetPaths.push(operation.setPath);
     if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
       mergeAtPath(next, operation.setPath, operation.value);
     } else {
@@ -1582,7 +1584,14 @@ async function runConfigOperations(params: {
   await replaceConfigFile({
     nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-    ...(unsetPaths.length > 0 ? { writeOptions: { unsetPaths } } : {}),
+    ...(unsetPaths.length > 0 || explicitSetPaths.length > 0
+      ? {
+          writeOptions: {
+            ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
+            ...(explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+          },
+        }
+      : {}),
   });
   if (removedGatewayAuthPaths.length > 0) {
     runtime.log(

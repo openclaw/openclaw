@@ -329,20 +329,71 @@ function preserveUntouchedIncludes(params: {
   return next;
 }
 
+function hasPathValue(value: unknown, path: readonly string[]): boolean {
+  if (path.length === 0) {
+    return true;
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  const [head, ...tail] = path;
+  if (isBlockedObjectKey(head) || !Object.prototype.hasOwnProperty.call(value, head)) {
+    return false;
+  }
+  return tail.length === 0 || hasPathValue(value[head], tail);
+}
+
+export function injectExplicitlySetPaths(params: {
+  valueSource: unknown;
+  persistedCandidate: unknown;
+  explicitSetPaths?: readonly (readonly string[])[];
+  rootAuthoredConfig?: unknown;
+}): unknown {
+  if (!params.explicitSetPaths || params.explicitSetPaths.length === 0) {
+    return params.persistedCandidate;
+  }
+
+  let next = params.persistedCandidate;
+  for (const path of params.explicitSetPaths) {
+    if (
+      path.length === 0 ||
+      path.some(isBlockedObjectKey) ||
+      hasPathValue(next, path) ||
+      (params.rootAuthoredConfig && isIncludeOwnedPath(params.rootAuthoredConfig, [...path]))
+    ) {
+      continue;
+    }
+    const nextValue = getPathValue(params.valueSource, [...path]);
+    if (nextValue === undefined) {
+      continue;
+    }
+    next = setPathValueCreatingParents(next, [...path], nextValue);
+  }
+  return next;
+}
+
 export function resolvePersistCandidateForWrite(params: {
   runtimeConfig: unknown;
   sourceConfig: unknown;
   nextConfig: unknown;
   rootAuthoredConfig?: unknown;
   unsetPaths?: readonly string[][];
+  explicitSetPaths?: readonly (readonly string[])[];
+  explicitSetValueSource?: unknown;
 }): unknown {
   const patch = createMergePatch(params.runtimeConfig, params.nextConfig);
   const projectedSource = projectSourceOntoRuntimeShape(params.sourceConfig, params.runtimeConfig);
   const rootAuthoredConfig = params.rootAuthoredConfig ?? params.sourceConfig;
-  const persisted = preserveUntouchedIncludes({
+  const persistedBase = preserveUntouchedIncludes({
     patch,
     rootAuthoredConfig,
     persistedCandidate: applyMergePatch(projectedSource, patch),
+  });
+  const persisted = injectExplicitlySetPaths({
+    valueSource: params.explicitSetValueSource ?? params.nextConfig,
+    persistedCandidate: persistedBase,
+    explicitSetPaths: params.explicitSetPaths,
+    rootAuthoredConfig,
   });
   const withSchema = preserveRootSchemaUri({
     rootAuthoredConfig,

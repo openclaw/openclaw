@@ -757,4 +757,40 @@ describe("config io write prepare", () => {
     expect(persisted.$schema).toBe(123);
     expect(persisted.gateway).toEqual({ mode: "local", port: 18789 });
   });
+
+  it("persists explicitly set keys whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+      gateway: { port: 18789 },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [
+        ["channels", "telegram", "dmPolicy"],
+        ["channels", "telegram", "groupPolicy"],
+      ],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram?.dmPolicy).toBe("pairing");
+    expect(persisted.channels?.telegram?.groupPolicy).toBe("allowlist");
+    expect(persisted.channels?.telegram?.botToken).toBe("tok-abc");
+  });
 });
