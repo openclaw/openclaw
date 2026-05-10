@@ -731,6 +731,9 @@ sessionId}` and session key context.
 - Matrix startup maintenance no longer moves legacy Matrix files. Startup only
   reports pending migration state and tells the operator to run
   `openclaw doctor --fix`; the snapshot/import/delete step remains doctor-owned.
+- Matrix runtime migration barrels expose read-only detection/status helpers
+  only. The legacy state/crypto mutation helpers are imported by Matrix doctor
+  directly instead of being part of the runtime-heavy API surface.
 - Matrix migration snapshot reuse markers now live in SQLite plugin state
   instead of `matrix/migration-snapshot.json`; doctor can still reuse the same
   verified pre-migration archive without writing a sidecar state file.

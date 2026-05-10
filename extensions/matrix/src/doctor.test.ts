@@ -12,15 +12,28 @@ import {
   runMatrixDoctorSequence,
 } from "./doctor.js";
 
-vi.mock("./matrix-migration.runtime.js", async () => {
-  const actual = await vi.importActual<typeof import("./matrix-migration.runtime.js")>(
-    "./matrix-migration.runtime.js",
-  );
+vi.mock("./legacy-state.js", async () => {
+  const actual = await vi.importActual<typeof import("./legacy-state.js")>("./legacy-state.js");
+  return {
+    ...actual,
+    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
+vi.mock("./legacy-crypto.js", async () => {
+  const actual = await vi.importActual<typeof import("./legacy-crypto.js")>("./legacy-crypto.js");
+  return {
+    ...actual,
+    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
+  };
+});
+
+vi.mock("./migration-snapshot.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./migration-snapshot.js")>("./migration-snapshot.js");
   return {
     ...actual,
     maybeCreateMatrixMigrationSnapshot: vi.fn(),
-    autoMigrateLegacyMatrixState: vi.fn(async () => ({ changes: [], warnings: [] })),
-    autoPrepareLegacyMatrixCrypto: vi.fn(async () => ({ changes: [], warnings: [] })),
     resolveMatrixMigrationStatus: vi.fn(() => ({
       legacyState: null,
       legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
@@ -123,24 +136,26 @@ describe("matrix doctor", () => {
   });
 
   it("surfaces matrix sequence warnings and repair changes", async () => {
-    const runtimeApi = await import("./matrix-migration.runtime.js");
-    vi.mocked(runtimeApi.resolveMatrixMigrationStatus).mockReturnValue({
+    const legacyState = await import("./legacy-state.js");
+    const legacyCrypto = await import("./legacy-crypto.js");
+    const migrationSnapshot = await import("./migration-snapshot.js");
+    vi.mocked(migrationSnapshot.resolveMatrixMigrationStatus).mockReturnValue({
       legacyState: null,
       legacyCrypto: { inspectorAvailable: true, warnings: [], plans: [] },
       pending: true,
       actionable: true,
     });
-    vi.mocked(runtimeApi.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
+    vi.mocked(migrationSnapshot.maybeCreateMatrixMigrationSnapshot).mockResolvedValue({
       archivePath: "/tmp/matrix-backup.tgz",
       created: true,
       markerKey: "current",
     });
-    vi.mocked(runtimeApi.autoMigrateLegacyMatrixState).mockResolvedValue({
+    vi.mocked(legacyState.autoMigrateLegacyMatrixState).mockResolvedValue({
       migrated: true,
       changes: ["Migrated legacy sync state"],
       warnings: [],
     });
-    vi.mocked(runtimeApi.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
+    vi.mocked(legacyCrypto.autoPrepareLegacyMatrixCrypto).mockResolvedValue({
       migrated: true,
       changes: ["Prepared recovery key export"],
       warnings: [],

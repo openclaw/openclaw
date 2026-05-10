@@ -1,5 +1,5 @@
-export { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";
-export { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
+export { detectLegacyMatrixState } from "./legacy-state.js";
+export { detectLegacyMatrixCrypto } from "./legacy-crypto.js";
 export {
   hasActionableMatrixMigration,
   hasPendingMatrixMigration,

@@ -10,14 +10,12 @@ import {
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
 } from "./doctor-contract.js";
 import { autoMigrateLegacyMatrixCredentials } from "./legacy-credentials.js";
+import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
+import { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";
 import {
-  autoMigrateLegacyMatrixState,
-  autoPrepareLegacyMatrixCrypto,
-  detectLegacyMatrixCrypto,
-  detectLegacyMatrixState,
   maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationStatus,
-} from "./matrix-migration.runtime.js";
+} from "./migration-snapshot.js";
 import { isRecord } from "./record-shared.js";
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
