@@ -488,6 +488,62 @@ function findConfiguredAgentModelParams(params: {
   return undefined;
 }
 
+function findConfiguredAgentModelEntry(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}) {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const directKeys = [
+    modelKey(params.provider, params.modelId),
+    `${params.provider}/${params.modelId}`,
+  ];
+  for (const key of directKeys) {
+    if (Object.prototype.hasOwnProperty.call(configuredModels, key)) {
+      return configuredModels[key];
+    }
+  }
+
+  const normalizedProvider = normalizeProviderId(params.provider);
+  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
+    .trim()
+    .toLowerCase();
+  for (const [rawKey, entry] of Object.entries(configuredModels)) {
+    const slashIndex = rawKey.indexOf("/");
+    if (slashIndex <= 0) {
+      continue;
+    }
+    const candidateProvider = rawKey.slice(0, slashIndex);
+    const candidateModelId = rawKey.slice(slashIndex + 1);
+    if (
+      normalizeProviderId(candidateProvider) === normalizedProvider &&
+      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
+        normalizedModelId
+    ) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function buildMissingProviderModelRegistrationHint(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  modelId: string;
+}): string | undefined {
+  if (!findConfiguredAgentModelEntry(params)) {
+    return undefined;
+  }
+  const providerConfig = resolveConfiguredProviderConfig(params.cfg, params.provider);
+  if (findConfiguredProviderModel(providerConfig, params.provider, params.modelId)) {
+    return undefined;
+  }
+  return `Found in agents.defaults.models but not in models.providers['${params.provider}'].models[]. Both blocks are required to register a model with a provider plugin.`;
+}
+
 function mergeConfiguredRuntimeModelParams(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -1223,6 +1279,10 @@ function buildUnknownModelError(params: {
     return suppressed;
   }
   const base = `Unknown model: ${params.provider}/${params.modelId}`;
+  const configHint = buildMissingProviderModelRegistrationHint(params);
+  if (configHint) {
+    return `${base}. ${configHint}`;
+  }
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
     provider: params.provider,

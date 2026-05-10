@@ -918,6 +918,26 @@ describe("resolveModel", () => {
     });
   });
 
+  it("explains when a provider plugin model is only configured in agent defaults", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "microsoft-foundry/Kimi-K2.6-1": {
+              params: { deployment: "Kimi-K2.6-1" },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("microsoft-foundry", "Kimi-K2.6-1", "/tmp/agent", cfg);
+
+    expect(result.error).toBe(
+      "Unknown model: microsoft-foundry/Kimi-K2.6-1. Found in agents.defaults.models but not in models.providers['microsoft-foundry'].models[]. Both blocks are required to register a model with a provider plugin.",
+    );
+  });
+
   it("propagates reasoning from matching configured fallback model", () => {
     const cfg = {
       models: {
