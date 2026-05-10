@@ -27,6 +27,7 @@ export const DEFAULT_PROMOTION_MIN_UNIQUE_QUERIES = 2;
 const PROMOTION_MARKER_PREFIX = "openclaw-memory-promotion:";
 const MAX_QUERY_HASHES = 32;
 const MAX_RECALL_DAYS = 16;
+const MAX_RECALL_ENTRY_AGE_DAYS = 30;
 const SHORT_TERM_STORE_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-recall.json");
 const SHORT_TERM_PHASE_SIGNAL_RELATIVE_PATH = path.join("memory", ".dreams", "phase-signals.json");
 const SHORT_TERM_LOCK_RELATIVE_PATH = path.join("memory", ".dreams", "short-term-promotion.lock");
@@ -436,6 +437,7 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
   if (!raw || typeof raw !== "object") {
     return emptyStore(nowIso);
   }
+  const nowMs = Date.parse(nowIso);
   const record = raw as Record<string, unknown>;
   const entriesRaw = record.entries;
   const entries: Record<string, ShortTermRecallEntry> = {};
@@ -463,6 +465,13 @@ function normalizeStore(raw: unknown, nowIso: string): ShortTermRecallStore {
         typeof entry.firstRecalledAt === "string" ? entry.firstRecalledAt : nowIso;
       const lastRecalledAt =
         typeof entry.lastRecalledAt === "string" ? entry.lastRecalledAt : nowIso;
+      const lastRecalledMs = Date.parse(lastRecalledAt);
+      if (
+        Number.isFinite(lastRecalledMs) &&
+        nowMs - lastRecalledMs > MAX_RECALL_ENTRY_AGE_DAYS * DAY_MS
+      ) {
+        continue;
+      }
       const promotedAt = typeof entry.promotedAt === "string" ? entry.promotedAt : undefined;
       const claimHash =
         typeof entry.claimHash === "string" && entry.claimHash.trim().length > 0

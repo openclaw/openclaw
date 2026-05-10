@@ -105,6 +105,7 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
+const MAX_DIARY_ENTRIES = 90;
 const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 
 type DreamsFileLockEntry = {
@@ -430,6 +431,13 @@ function joinDiaryBlocks(blocks: string[]): string {
   return blocks.map((block) => `---\n\n${block.trim()}\n`).join("\n");
 }
 
+function capDiaryBlocks(blocks: string[], maxEntries: number): string[] {
+  if (blocks.length <= maxEntries) {
+    return blocks;
+  }
+  return blocks.slice(-maxEntries);
+}
+
 function stripBackfillDiaryBlocks(existing: string): { updated: string; removed: number } {
   const ensured = ensureDiarySection(existing);
   const startIdx = ensured.indexOf(DIARY_START_MARKER);
@@ -573,17 +581,20 @@ export async function writeBackfillDiaryEntries(params: {
           ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
           : "";
       const preservedBlocks = splitDiaryBlocks(inner);
-      const nextBlocks = [
-        ...preservedBlocks,
-        ...params.entries.map((entry) =>
-          buildBackfillDiaryEntry({
-            isoDay: entry.isoDay,
-            bodyLines: entry.bodyLines,
-            sourcePath: entry.sourcePath,
-            timezone: params.timezone,
-          }),
-        ),
-      ];
+      const nextBlocks = capDiaryBlocks(
+        [
+          ...preservedBlocks,
+          ...params.entries.map((entry) =>
+            buildBackfillDiaryEntry({
+              isoDay: entry.isoDay,
+              bodyLines: entry.bodyLines,
+              sourcePath: entry.sourcePath,
+              timezone: params.timezone,
+            }),
+          ),
+        ],
+        MAX_DIARY_ENTRIES,
+      );
       return {
         content: replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks)),
         result: {
@@ -645,14 +656,16 @@ export async function dedupeDreamDiaryEntries(params: {
         seen.add(fingerprint);
         keptBlocks.push(block);
       }
+      const capped = capDiaryBlocks(keptBlocks, MAX_DIARY_ENTRIES);
+      const droppedByCap = keptBlocks.length - capped.length;
       return {
-        content: replaceDiaryContent(ensured, joinDiaryBlocks(keptBlocks)),
+        content: replaceDiaryContent(ensured, joinDiaryBlocks(capped)),
         result: {
           dreamsPath,
-          removed,
-          kept: keptBlocks.length,
+          removed: removed + droppedByCap,
+          kept: capped.length,
         },
-        shouldWrite: removed > 0,
+        shouldWrite: removed > 0 || droppedByCap > 0,
       };
     },
   });
@@ -675,8 +688,15 @@ export async function appendNarrativeEntry(params: {
     updater: (existing, dreamsPath) => {
       let updated: string;
       if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
+        const startIdx = existing.indexOf(DIARY_START_MARKER);
         const endIdx = existing.lastIndexOf(DIARY_END_MARKER);
-        updated = existing.slice(0, endIdx) + entry + "\n" + existing.slice(endIdx);
+        const before = existing.slice(0, startIdx);
+        const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+        const after = existing.slice(endIdx);
+        const blocks = splitDiaryBlocks(inner);
+        blocks.push(entry.trim());
+        const capped = capDiaryBlocks(blocks, MAX_DIARY_ENTRIES);
+        updated = `${before}${DIARY_START_MARKER}\n${joinDiaryBlocks(capped)}\n${after}`;
       } else if (existing.includes(DIARY_START_MARKER)) {
         const startIdx = existing.indexOf(DIARY_START_MARKER) + DIARY_START_MARKER.length;
         updated =
