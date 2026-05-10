@@ -136,7 +136,7 @@ describe("minimax provider hooks", () => {
       } as never),
     ).toMatchObject({
       sanitizeMode: "full",
-      sanitizeToolCallIds: true,
+      sanitizeToolCallIds: false,
       preserveSignatures: true,
       validateAnthropicTurns: true,
     });
