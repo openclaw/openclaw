@@ -1339,7 +1339,96 @@ describe("gateway startup reconciliation", () => {
     }
   });
 
-  it("still warns on runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
+  it("keeps ordinary heartbeat reconciliation quiet when no gateway cron context is available", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: "" },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("cron service unavailable"),
+      );
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("still warns on gateway runtime reconciliation when cron remains unavailable", async () => {
+    clearInternalHooks();
+    const logger = createLogger();
+    const onMock = vi.fn();
+    const api: DreamingPluginApiTestDouble = {
+      config: {
+        plugins: {
+          entries: {
+            "memory-core": {
+              config: {
+                dreaming: {
+                  enabled: true,
+                  frequency: "15 4 * * *",
+                  timezone: "UTC",
+                },
+              },
+            },
+          },
+        },
+      },
+      pluginConfig: {},
+      logger,
+      runtime: {},
+      on: onMock,
+    };
+
+    try {
+      registerShortTermPromotionDreamingForTest(api);
+      await triggerGatewayStart(onMock, {
+        config: api.config,
+        getCron: () => undefined,
+      });
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
+      await beforeAgentReply(
+        { cleanedBody: "" },
+        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+      );
+
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
+    } finally {
+      clearInternalHooks();
+    }
+  });
+
+  it("still warns on managed runtime reconciliation when cron remains unavailable (preserves #69939 genuine-failure signal)", async () => {
     clearInternalHooks();
     const logger = createLogger();
     const onMock = vi.fn();
@@ -1374,12 +1463,12 @@ describe("gateway startup reconciliation", () => {
       });
       expect(logger.warn).not.toHaveBeenCalled();
 
-      // Now a runtime heartbeat reconciliation happens and cron is still missing
+      // Now a managed runtime reconciliation happens and cron is still missing
       // (e.g. the cron service genuinely failed to initialize). The warning must fire.
       const beforeAgentReply = getBeforeAgentReplyHandler(onMock);
       await beforeAgentReply(
-        { cleanedBody: "" },
-        { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
+        { cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT },
+        { trigger: "cron", workspaceDir: ".", sessionKey: "agent:main:cron:job-managed" },
       );
 
       expectLogContains(logger.warn, "cron service unavailable");
