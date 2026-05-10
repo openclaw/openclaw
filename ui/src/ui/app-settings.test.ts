@@ -414,13 +414,34 @@ describe("applySettingsFromUrl", () => {
     expect(window.location.hash).toBe("");
   });
 
-  it("resets stale persisted session selection to main when a token is supplied without a session", () => {
+  it("preserves persisted session selection on a matching token reconnect without a session", () => {
     setTestWindowUrl("https://control.example/chat#token=test-token");
     const host = createHost("chat");
     host.settings = {
       ...host.settings,
       gatewayUrl: "ws://localhost:18789",
-      token: "",
+      token: "test-token",
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+    };
+    host.sessionKey = "agent:test_old:main";
+
+    applySettingsFromUrl(host);
+
+    expect(host.sessionKey).toBe("agent:test_old:main");
+    expect(host.settings.sessionKey).toBe("agent:test_old:main");
+    expect(host.settings.lastActiveSessionKey).toBe("agent:test_old:main");
+    expect(host.settings.token).toBe("test-token");
+    expect(window.location.hash).toBe("");
+  });
+
+  it("resets stale persisted session selection to main for a fresh token-only launch", () => {
+    setTestWindowUrl("https://control.example/chat#token=new-token");
+    const host = createHost("chat");
+    host.settings = {
+      ...host.settings,
+      gatewayUrl: "ws://localhost:18789",
+      token: "old-token",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
     };
@@ -431,10 +452,34 @@ describe("applySettingsFromUrl", () => {
     expect(host.sessionKey).toBe("main");
     expect(host.settings.sessionKey).toBe("main");
     expect(host.settings.lastActiveSessionKey).toBe("main");
+    expect(host.settings.token).toBe("new-token");
+    expect(window.location.hash).toBe("");
   });
 
   it("characterizes token, session, and gateway URL combinations", () => {
     const scenarios = [
+      {
+        name: "same gateway matching token keeps persisted session",
+        url: "https://control.example/chat#token=token-preserve",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "token-preserve",
+        expectedToken: "token-preserve",
+        expectedSession: "agent:test_old:main",
+        expectedPendingGatewayUrl: null,
+        expectedPendingGatewayToken: null,
+        expectedSearch: "",
+      },
+      {
+        name: "same gateway fresh token resets stale persisted session",
+        url: "https://control.example/chat#token=token-fresh",
+        settingsGatewayUrl: "ws://gateway-a.example:18789",
+        settingsToken: "old-token",
+        expectedToken: "token-fresh",
+        expectedSession: "main",
+        expectedPendingGatewayUrl: null,
+        expectedPendingGatewayToken: null,
+        expectedSearch: "",
+      },
       {
         name: "same gateway applies token and session immediately",
         url: "https://control.example/chat?session=agent%3Atest_new%3Amain#token=token-a",

@@ -211,7 +211,9 @@ export function applySettingsFromUrl(host: SettingsHost) {
   const hasTokenParam = hashToken != null || queryToken != null;
   const token = normalizeOptionalString(hashToken ?? queryToken);
   const session = normalizeOptionalString(params.get("session") ?? hashParams.get("session"));
-  const shouldResetSessionForToken = Boolean(token && !session && !gatewayUrlChanged);
+  const shouldResetSessionForToken = Boolean(
+    token && !session && !gatewayUrlChanged && token !== host.settings.token,
+  );
   let shouldCleanUrl = false;
 
   if (params.has("token")) {
