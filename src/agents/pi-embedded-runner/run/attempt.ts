@@ -159,6 +159,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -2247,6 +2248,21 @@ export async function runEmbeddedAttempt(
                   };
                 },
               });
+            }
+          }
+
+          if (params.sessionKey && params.config && !isRawModelRun) {
+            const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
+              cfg: params.config,
+              controllerSessionKey: params.sessionKey,
+              hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
+            });
+            if (activeSubagentPromptAddition) {
+              systemPromptText = prependSystemPromptAddition({
+                systemPrompt: systemPromptText,
+                systemPromptAddition: activeSubagentPromptAddition,
+              });
+              applySystemPromptOverrideToSession(activeSession, systemPromptText);
             }
           }
 

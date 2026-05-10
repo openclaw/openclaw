@@ -328,9 +328,24 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+  });
+
+  it("only mentions sessions_yield wait guidance when the tool is available", () => {
+    const withoutYield = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+    const withYield = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+    });
+
+    expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
+    expect(withYield).toContain("use `sessions_yield` when waiting");
   });
 
   it("lists available tools when provided", () => {
@@ -769,19 +784,24 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents"],
     });
+    const orchestrationWaitPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+    });
 
     expect(messagingPrompt).not.toContain("Sub-agent orchestration");
     expect(messagingPrompt).not.toContain("sessions_spawn(...)");
     expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` only for on-demand status, debugging, or intervention.',
     );
+    expect(orchestrationWaitPrompt).toContain("use `sessions_yield` to wait for completion events");
   });
 
   it("adds stronger sub-agent delegation guidance in prefer mode", () => {
@@ -802,6 +822,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(preferPrompt).toContain(
       "Anything requiring more work than a direct reply should go through `sessions_spawn`",
     );
+    expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
+    expect(preferPrompt).toContain("Treat child outputs as reports/evidence");
     expect(preferPrompt).toContain(
       "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
     );
@@ -1234,6 +1256,8 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
     );
+    expect(prompt).toContain("call `sessions_yield` to end the turn and wait");
+    expect(prompt).toContain("expected output, relevant files/inputs, write scope");
     expect(prompt).toContain(
       "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
     );
