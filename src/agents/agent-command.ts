@@ -66,6 +66,7 @@ import {
   modelKey,
   normalizeModelRef,
   parseModelRef,
+  resolveAllowedModelSelection,
   resolveConfiguredModelRef,
   resolveDefaultModelForAgent,
   resolveThinkingDefault,
@@ -771,6 +772,21 @@ async function agentCommandInternal(
       allowedModelCatalog = allowed.allowedCatalog;
       allowAnyModel = allowed.allowAny ?? false;
     }
+
+    const allowedInitialSelection = resolveAllowedModelSelection({
+      provider,
+      model,
+      allowAny: allowAnyModel,
+      allowedKeys: allowedModelKeys,
+      allowedCatalog: allowedModelCatalog,
+    });
+    if (!allowedInitialSelection) {
+      throw new Error(
+        `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+      );
+    }
+    provider = allowedInitialSelection.provider;
+    model = allowedInitialSelection.model;
 
     if (sessionEntry && sessionStore && sessionKey && hasStoredOverride) {
       const entry = sessionEntry;

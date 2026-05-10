@@ -236,6 +236,41 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
+  it("uses the first visible provider wildcard model when the configured primary is filtered out", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "openai-codex/*": {},
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5-codex");
+    expect(state.allowedModelKeys.has("anthropic/claude-opus-4-5")).toBe(false);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
   it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
     authProfileStoreMock.store = {
       version: 1,

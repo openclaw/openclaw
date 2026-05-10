@@ -122,6 +122,27 @@ export function isModelKeyAllowedBySet(allowedKeys: ReadonlySet<string>, key: st
   return allowedKeys.has(providerWildcardModelKey(key.slice(0, separator)));
 }
 
+export function resolveAllowedModelSelection(params: {
+  provider: string;
+  model: string;
+  allowAny: boolean;
+  allowedKeys: ReadonlySet<string>;
+  allowedCatalog: readonly ModelCatalogEntry[];
+}): ModelRef | null {
+  const current = normalizeModelRef(params.provider, params.model);
+  if (
+    params.allowAny ||
+    isModelKeyAllowedBySet(params.allowedKeys, modelKey(current.provider, current.model))
+  ) {
+    return current;
+  }
+  const fallback = params.allowedCatalog[0];
+  if (!fallback) {
+    return null;
+  }
+  return normalizeModelRef(fallback.provider, fallback.id);
+}
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;

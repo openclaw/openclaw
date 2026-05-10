@@ -11,7 +11,9 @@ import {
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
+  parseConfiguredModelVisibilityEntries,
   resolvePersistedOverrideModelRef,
+  resolveAllowedModelSelection,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -126,11 +128,20 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
+  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
+    normalizeProviderId(defaultProvider),
+  );
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
-  const needsModelCatalog = params.hasModelDirective;
+  const needsModelCatalog =
+    params.hasModelDirective ||
+    Boolean(
+      hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard,
+    );
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
+  let allowAnyModel = !hasAllowlist;
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
@@ -153,6 +164,7 @@ export async function createModelSelectionState(params: {
     });
     allowedModelCatalog = allowed.allowedCatalog;
     allowedModelKeys = allowed.allowedKeys;
+    allowAnyModel = allowed.allowAny;
     logStage(
       "allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
@@ -167,6 +179,7 @@ export async function createModelSelectionState(params: {
     });
     allowedModelCatalog = allowed.allowedCatalog;
     allowedModelKeys = allowed.allowedKeys;
+    allowAnyModel = allowed.allowAny;
     logStage(
       "configured-allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
@@ -174,6 +187,21 @@ export async function createModelSelectionState(params: {
   } else if (configuredModelCatalog.length > 0) {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
+
+  const allowedInitialSelection = resolveAllowedModelSelection({
+    provider,
+    model,
+    allowAny: allowAnyModel,
+    allowedKeys: allowedModelKeys,
+    allowedCatalog: allowedModelCatalog,
+  });
+  if (!allowedInitialSelection) {
+    throw new Error(
+      `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+    );
+  }
+  provider = allowedInitialSelection.provider;
+  model = allowedInitialSelection.model;
 
   if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
     const normalizedOverride = normalizeModelRef(
