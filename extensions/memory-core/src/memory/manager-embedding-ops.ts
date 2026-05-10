@@ -50,6 +50,8 @@ const EMBEDDING_QUERY_TIMEOUT_REMOTE_MS = 60_000;
 const EMBEDDING_QUERY_TIMEOUT_LOCAL_MS = 5 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_REMOTE_MS = 2 * 60_000;
 const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
+// Conservative item count limit; Qianfan bge-large-zh enforces max 2000 per batch
+const EMBEDDING_BATCH_MAX_ITEMS = 2000;
 
 const log = createSubsystemLogger("memory");
 
@@ -164,25 +166,32 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     let cursor = 0;
     for (const batch of batches) {
-      const inputs = buildTextEmbeddingInputs(batch);
-      const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
-      if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw new Error(
-          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-        );
+      // Sub-batch by item count for providers with per-batch item limits (e.g. Qianfan max 2000)
+      const subBatches: MemoryChunk[][] = [];
+      for (let i = 0; i < batch.length; i += EMBEDDING_BATCH_MAX_ITEMS) {
+        subBatches.push(batch.slice(i, i + EMBEDDING_BATCH_MAX_ITEMS));
       }
-      const batchEmbeddings = hasStructuredInputs
-        ? await this.embedBatchInputsWithRetry(inputs)
-        : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
-      for (let i = 0; i < batch.length; i += 1) {
-        const item = missing[cursor + i];
-        const embedding = batchEmbeddings[i] ?? [];
-        if (item) {
-          embeddings[item.index] = embedding;
-          toCache.push({ hash: item.chunk.hash, embedding });
+      for (const subBatch of subBatches) {
+        const inputs = buildTextEmbeddingInputs(subBatch);
+        const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
+        if (hasStructuredInputs && !provider.embedBatchInputs) {
+          throw new Error(
+            `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+          );
         }
+        const batchEmbeddings = hasStructuredInputs
+          ? await this.embedBatchInputsWithRetry(inputs)
+          : await this.embedBatchWithRetry(subBatch.map((chunk) => chunk.text));
+        for (let i = 0; i < subBatch.length; i += 1) {
+          const item = missing[cursor + i];
+          const embedding = batchEmbeddings[i] ?? [];
+          if (item) {
+            embeddings[item.index] = embedding;
+            toCache.push({ hash: item.chunk.hash, embedding });
+          }
+        }
+        cursor += subBatch.length;
       }
-      cursor += batch.length;
     }
     upsertMemoryEmbeddingCache({
       db: this.db,
