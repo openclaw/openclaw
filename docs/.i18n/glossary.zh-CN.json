@@ -880,6 +880,26 @@
     "target": "工具、技能和插件"
   },
   {
+    "source": "Docs tools, skills, and plugins navigation refactor",
+    "target": "文档工具、技能和插件导航重构"
+  },
+  {
+    "source": "Tools overview",
+    "target": "工具概览"
+  },
+  {
+    "source": "Automation overview",
+    "target": "自动化概览"
+  },
+  {
+    "source": "Sub-agents",
+    "target": "子智能体"
+  },
+  {
+    "source": "ACP agents",
+    "target": "ACP 智能体"
+  },
+  {
     "source": "Tools and custom providers",
     "target": "工具和自定义提供商"
   },
