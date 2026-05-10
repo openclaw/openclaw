@@ -1,0 +1,58 @@
+name: openclaw
+metadata:
+  template: openclaw-alpacore-aca@0.0.1-beta
+infra:
+  provider: bicep
+  path: infra
+requiredVersions:
+  azd: ">= 1.20.0"
+services:
+  openclaw:
+    project: .
+    language: docker
+    host: containerapp
+    resourceName: ${SERVICE_OPENCLAW_RESOURCE_NAME}
+    docker:
+      path: ./Dockerfile
+      context: .
+      remoteBuild: false
+    uses:
+      - postgres
+      - keyvault
+  alpa-engine:
+    project: ./infra/images/alpa-engine
+    language: docker
+    host: containerapp
+    resourceName: ${SERVICE_ALPA_ENGINE_RESOURCE_NAME}
+    docker:
+      path: Dockerfile
+      context: .
+    uses:
+      - postgres
+      - keyvault
+  alpacore-service:
+    project: ./infra/images/alpacore-service
+    language: docker
+    host: containerapp
+    resourceName: ${SERVICE_ALPACORE_SERVICE_RESOURCE_NAME}
+    docker:
+      path: Dockerfile
+      context: .
+    uses:
+      - postgres
+      - keyvault
+  open-webui:
+    project: ./infra/images/open-webui
+    language: docker
+    host: containerapp
+    resourceName: ${SERVICE_OPEN_WEBUI_RESOURCE_NAME}
+    docker:
+      path: Dockerfile
+      context: .
+    uses:
+      - keyvault
+resources:
+  postgres:
+    type: db.postgres
+  keyvault:
+    type: keyvault

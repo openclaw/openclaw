@@ -1,0 +1,1 @@
+FROM alpacore-service:latest
