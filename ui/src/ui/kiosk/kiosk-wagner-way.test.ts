@@ -163,6 +163,45 @@ describe("kiosk-wagner-way", () => {
     ]);
   });
 
+  it("integration: tile tap dispatches via the controller and reconciles on state echo", async () => {
+    const { el, client } = await mountView();
+    // Block the gateway service-call promise until we explicitly resolve.
+    let resolveCall: (v: unknown) => void = () => undefined;
+    const slowCall = new Promise<unknown>((resolve) => {
+      resolveCall = resolve;
+    });
+    const originalRequest = client.request.bind(client);
+    client.request = ((method: string, params: unknown) => {
+      if (method === "home-assistant.serviceCall") {
+        return slowCall;
+      }
+      return originalRequest(method, params);
+    }) as typeof client.request;
+
+    const controller = el.getInteractionController();
+    expect(controller).toBeTruthy();
+
+    // Tap the Main Gate tile.
+    const tiles = el.querySelectorAll("kiosk-tile-toggle");
+    const gateTile = Array.from(tiles).find(
+      (t) => (t as HTMLElement & { name?: string }).name === "Main Gate",
+    );
+    expect(gateTile).toBeTruthy();
+    gateTile!.querySelector("button")!.click();
+
+    // Status reflects pending while the gateway call is in flight.
+    const gateEntity = DEFAULT_WAGNER_WAY_SLOTS["tile.gate_main"];
+    expect(controller!.status.get(gateEntity)?.pending).toBe(true);
+
+    // HA echoes the new state. Controller reconciles, status clears.
+    client.emit(makeStateEvent(gateEntity, "on"));
+    expect(controller!.status.get(gateEntity)).toBeUndefined();
+
+    // Resolve the slow gateway promise so vitest doesn't leave it open.
+    resolveCall({ dispatched: true });
+    await flush(2);
+  });
+
   it("renders disabled placeholders for Vacuums and Front Door Cam", async () => {
     const { el } = await mountView();
 

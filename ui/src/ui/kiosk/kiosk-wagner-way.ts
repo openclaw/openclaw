@@ -30,7 +30,9 @@ import "./components/badge-entity.js";
 import "./components/weather-card.js";
 import "./components/energy-flow-card.js";
 import type { GaugeColorSegment } from "./components/gauge-circular.js";
+import type { TileTapDetail } from "./components/tile-toggle.js";
 import type { HaStateBinding } from "./ha-state-binding.js";
+import { TileInteractionController } from "./tile-interaction-controller.js";
 
 // -- Slot contract ----------------------------------------------------------
 
@@ -311,8 +313,20 @@ export class KioskWagnerWay extends LitElement {
     }
   }
 
+  /**
+   * Visible for tests: the controller that handles optimistic
+   * dispatch + reconciliation for tile taps.
+   */
+  getInteractionController(): TileInteractionController | null {
+    return this.interactionController;
+  }
+
   override render(): TemplateResult {
-    return html`<section class="kiosk-wagner-way" data-test-id="kiosk-wagner-way">
+    return html`<section
+      class="kiosk-wagner-way"
+      data-test-id="kiosk-wagner-way"
+      @tile-tap=${this.onTileTap}
+    >
       ${this.renderBadges()} ${this.renderHouseInfoRow()} ${this.renderGaugeRow(ENERGY_GAUGES)}
       ${this.renderGaugeRow(POWER_GAUGES)} ${this.renderHeading("Major Appliances")}
       ${this.renderGaugeRow(APPLIANCE_GAUGES)} ${this.renderHeading("Quick Keys")}
@@ -327,12 +341,26 @@ export class KioskWagnerWay extends LitElement {
     this.removeBindingListener = this.binding.subscribeAll(() => {
       this.revision += 1;
     });
+    this.interactionController = new TileInteractionController({ binding: this.binding });
+    this.removeStatusListener = this.interactionController.onStatusChange(() => {
+      this.revision += 1;
+    });
   }
 
   private detachFromBinding(): void {
     this.removeBindingListener?.();
     this.removeBindingListener = null;
+    this.removeStatusListener?.();
+    this.removeStatusListener = null;
+    this.interactionController?.detach();
+    this.interactionController = null;
   }
+
+  private onTileTap = (ev: Event): void => {
+    const detail = (ev as CustomEvent<TileTapDetail>).detail;
+    if (!detail || !this.interactionController) return;
+    void this.interactionController.dispatch(detail);
+  };
 
   private resolve(slot: string): string | undefined {
     return this.slots[slot];
@@ -448,6 +476,7 @@ export class KioskWagnerWay extends LitElement {
       ${QUICK_KEY_TILES.map((spec) => {
         const id = this.resolve(spec.slot) ?? "";
         const state = this.rawState(spec.slot);
+        const status = id ? this.interactionController?.status.get(id) : undefined;
         return html`<kiosk-tile-toggle
           .entityId=${id}
           .domain=${spec.domain}
@@ -455,6 +484,9 @@ export class KioskWagnerWay extends LitElement {
           .name=${spec.name}
           .state=${state}
           .icon=${spec.icon ?? ""}
+          .pending=${status?.pending ?? false}
+          .error=${status?.error ?? false}
+          .errorMessage=${status?.errorMessage ?? ""}
         ></kiosk-tile-toggle>`;
       })}
     </div>`;
