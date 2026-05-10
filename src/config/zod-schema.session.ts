@@ -1,5 +1,4 @@
 import { z } from "zod";
-import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
@@ -101,32 +100,6 @@ export const SessionSchema = z
               code: z.ZodIssueCode.custom,
               path: ["pruneAfter"],
               message: "invalid duration (use ms, s, m, h, d)",
-            });
-          }
-        }
-        if (val.maxDiskBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.maxDiskBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["maxDiskBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
-            });
-          }
-        }
-        if (val.highWaterBytes !== undefined) {
-          try {
-            parseByteSize(normalizeStringifiedOptionalString(val.highWaterBytes) ?? "", {
-              defaultUnit: "b",
-            });
-          } catch {
-            ctx.addIssue({
-              code: z.ZodIssueCode.custom,
-              path: ["highWaterBytes"],
-              message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }
         }

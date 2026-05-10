@@ -107,6 +107,7 @@ export async function resetReplyRunSession(params: {
     sourceAgentId: agentId,
     sourceSessionId: prevEntry.sessionId,
     sourceTranscript: prevEntry.sessionFile,
+    targetAgentId: agentId,
     targetTranscript: nextSessionFile,
     newSessionId: nextSessionId,
   });

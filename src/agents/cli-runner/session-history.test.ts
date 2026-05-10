@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { replaceSqliteSessionTranscriptEvents } from "../../config/sessions/transcript-store.sqlite.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { CURRENT_SESSION_VERSION } from "../transcript/session-transcript-contract.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -27,35 +29,35 @@ function createSessionTranscript(params: {
       "sessions",
       `${params.sessionId}.jsonl`,
     );
-  fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-  fs.writeFileSync(
-    sessionFile,
-    `${JSON.stringify({
+  const events: unknown[] = [
+    {
       type: "session",
       version: CURRENT_SESSION_VERSION,
       id: params.sessionId,
       timestamp: new Date(0).toISOString(),
       cwd: params.rootDir,
-    })}\n`,
-    "utf-8",
-  );
+    },
+  ];
   for (const [index, message] of (params.messages ?? []).entries()) {
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: `msg-${index}`,
-        parentId: index > 0 ? `msg-${index - 1}` : null,
-        timestamp: new Date(index + 1).toISOString(),
-        message: {
-          role: "user",
-          content: message,
-          timestamp: index + 1,
-        },
-      })}\n`,
-      "utf-8",
-    );
+    events.push({
+      type: "message",
+      id: `msg-${index}`,
+      parentId: index > 0 ? `msg-${index - 1}` : null,
+      timestamp: new Date(index + 1).toISOString(),
+      message: {
+        role: "user",
+        content: message,
+        timestamp: index + 1,
+      },
+    });
   }
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId ?? "main",
+    sessionId: params.sessionId,
+    transcriptPath: sessionFile,
+    events,
+    now: () => 1_770_000_000_000,
+  });
   return sessionFile;
 }
 
@@ -80,8 +82,51 @@ function expectCompactionSummary(value: unknown, summary: string) {
   expect(message.summary).toBe(summary);
 }
 
+function appendSessionTranscriptEvents(params: {
+  sessionId: string;
+  sessionFile: string;
+  agentId?: string;
+  events: unknown[];
+}): void {
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId ?? "main",
+    sessionId: params.sessionId,
+    transcriptPath: params.sessionFile,
+    events: params.events,
+    now: () => 1_770_000_000_000,
+  });
+}
+
+function createSessionTranscriptEvents(params: {
+  rootDir: string;
+  sessionId: string;
+  messages?: string[];
+}) {
+  return [
+    {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: params.sessionId,
+      timestamp: new Date(0).toISOString(),
+      cwd: params.rootDir,
+    },
+    ...(params.messages ?? []).map((message, index) => ({
+      type: "message",
+      id: `msg-${index}`,
+      parentId: index > 0 ? `msg-${index - 1}` : null,
+      timestamp: new Date(index + 1).toISOString(),
+      message: {
+        role: "user",
+        content: message,
+        timestamp: index + 1,
+      },
+    })),
+  ];
+}
+
 describe("loadCliSessionHistoryMessages", () => {
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
 
@@ -94,12 +139,7 @@ describe("loadCliSessionHistoryMessages", () => {
       sessionId: "session-test",
       messages: ["expected history"],
     });
-    const outsideFile = createSessionTranscript({
-      rootDir: outsideDir,
-      sessionId: "session-test",
-      filePath: path.join(outsideDir, "stolen.jsonl"),
-      messages: ["stolen history"],
-    });
+    const outsideFile = path.join(outsideDir, "stolen.jsonl");
 
     try {
       const history = await loadCliSessionHistoryMessages({
@@ -157,15 +197,13 @@ describe("loadCliSessionHistoryMessages", () => {
       "sessions",
       "session-symlink.jsonl",
     );
-    const outsideFile = createSessionTranscript({
+    createSessionTranscript({
       rootDir: outsideDir,
       sessionId: "session-symlink",
+      agentId: "other",
       filePath: path.join(outsideDir, "outside.jsonl"),
       messages: ["stolen history"],
     });
-    fs.mkdirSync(path.dirname(canonicalSessionFile), { recursive: true });
-    fs.symlinkSync(outsideFile, canonicalSessionFile);
-
     try {
       expect(
         await loadCliSessionHistoryMessages({
@@ -191,8 +229,12 @@ describe("loadCliSessionHistoryMessages", () => {
       "sessions",
       "session-oversized.jsonl",
     );
-    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(sessionFile, "x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES + 1), "utf-8");
+    createSessionTranscript({
+      rootDir: stateDir,
+      sessionId: "session-oversized",
+      filePath: sessionFile,
+      messages: ["x".repeat(MAX_CLI_SESSION_HISTORY_FILE_BYTES + 1)],
+    });
 
     try {
       expect(
@@ -213,7 +255,6 @@ describe("loadCliSessionHistoryMessages", () => {
     const customStoreDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-cli-store-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const storePath = path.join(customStoreDir, "sessions.json");
-    fs.writeFileSync(storePath, "{}", "utf-8");
     const sessionFile = createSessionTranscript({
       rootDir: customStoreDir,
       sessionId: "session-custom-store",
@@ -244,6 +285,7 @@ describe("loadCliSessionHistoryMessages", () => {
 
 describe("loadCliSessionReseedMessages", () => {
   afterEach(() => {
+    closeOpenClawStateDatabaseForTest();
     vi.unstubAllEnvs();
   });
 
@@ -348,34 +390,37 @@ describe("loadCliSessionReseedMessages", () => {
       sessionId: "session-compacted",
       messages: ["pre-compaction raw history"],
     });
-    fs.appendFileSync(
+    appendSessionTranscriptEvents({
+      sessionId: "session-compacted",
       sessionFile,
-      `${JSON.stringify({
-        type: "compaction",
-        id: "compaction-1",
-        parentId: "msg-0",
-        timestamp: new Date(2).toISOString(),
-        summary: "safe compacted summary",
-        firstKeptEntryId: "msg-0",
-        tokensBefore: 10_000,
-      })}\n`,
-      "utf-8",
-    );
-    fs.appendFileSync(
-      sessionFile,
-      `${JSON.stringify({
-        type: "message",
-        id: "msg-1",
-        parentId: "compaction-1",
-        timestamp: new Date(3).toISOString(),
-        message: {
-          role: "user",
-          content: "post-compaction ask",
-          timestamp: 3,
+      events: [
+        ...createSessionTranscriptEvents({
+          rootDir: stateDir,
+          sessionId: "session-compacted",
+          messages: ["pre-compaction raw history"],
+        }),
+        {
+          type: "compaction",
+          id: "compaction-1",
+          parentId: "msg-0",
+          timestamp: new Date(2).toISOString(),
+          summary: "safe compacted summary",
+          firstKeptEntryId: "msg-0",
+          tokensBefore: 10_000,
         },
-      })}\n`,
-      "utf-8",
-    );
+        {
+          type: "message",
+          id: "msg-1",
+          parentId: "compaction-1",
+          timestamp: new Date(3).toISOString(),
+          message: {
+            role: "user",
+            content: "post-compaction ask",
+            timestamp: 3,
+          },
+        },
+      ],
+    });
 
     try {
       const reseed = await loadCliSessionReseedMessages({

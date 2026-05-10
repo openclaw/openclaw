@@ -11,7 +11,6 @@ import {
   piSdkMock,
   rpcReq,
   startConnectedServerWithClient,
-  writeSessionStore,
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,

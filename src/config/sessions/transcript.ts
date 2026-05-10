@@ -104,10 +104,6 @@ function parseAssistantTranscriptEventText(event: unknown): AssistantTranscriptT
   };
 }
 
-function parseAssistantTranscriptText(line: string): AssistantTranscriptText | undefined {
-  return parseAssistantTranscriptEventText(JSON.parse(line));
-}
-
 export async function resolveSessionTranscriptFile(params: {
   sessionId: string;
   sessionKey: string;

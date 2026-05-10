@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -54,10 +53,6 @@ function encodeSessionCwd(cwd: string): string {
 
 function resolveDefaultSessionDir(cwd: string): string {
   return path.join(os.homedir(), ".openclaw", "sessions", encodeSessionCwd(cwd));
-}
-
-function ensureDirSync(dir: string): void {
-  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
 }
 
 function resolveAgentIdFromSessionPath(sessionFile: string): string {
@@ -126,12 +121,6 @@ function loadTranscriptState(params: { sessionFile: string; sessionId?: string; 
   const sqliteEvents = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
   if (sqliteEvents.length > 0) {
     return { state: createTranscriptStateFromEvents(sqliteEvents), scope };
-  }
-
-  if (fs.existsSync(params.sessionFile) && fs.statSync(params.sessionFile).size > 0) {
-    throw new Error(
-      `Legacy transcript has not been imported into SQLite: ${params.sessionFile}. Run "openclaw doctor --fix" to build the session database.`,
-    );
   }
 
   const header = createSessionHeader({
@@ -317,7 +306,6 @@ export class TranscriptSessionManager implements SessionManager {
 
   static create(cwd: string, sessionDir?: string): TranscriptSessionManager {
     const dir = path.resolve(sessionDir ?? resolveDefaultSessionDir(cwd));
-    ensureDirSync(dir);
     const header = createSessionHeader({ cwd });
     const sessionFile = path.join(dir, createSessionFileName(header));
     const sqliteScope = {
@@ -348,7 +336,6 @@ export class TranscriptSessionManager implements SessionManager {
 
   static continueRecent(cwd: string, sessionDir?: string): TranscriptSessionManager {
     const dir = path.resolve(sessionDir ?? resolveDefaultSessionDir(cwd));
-    ensureDirSync(dir);
     const newestSqlite = listSqliteSessionTranscriptFiles()
       .filter((entry) => path.dirname(path.resolve(entry.path)) === dir)
       .toSorted((a, b) => b.updatedAt - a.updatedAt)[0];
@@ -374,7 +361,6 @@ export class TranscriptSessionManager implements SessionManager {
       loadSqliteSessionTranscriptEvents(sourceScope).map((entry) => entry.event),
     );
     const dir = path.resolve(sessionDir ?? resolveDefaultSessionDir(targetCwd));
-    ensureDirSync(dir);
     const header = createSessionHeader({
       cwd: targetCwd,
       parentSession: sourceFile,

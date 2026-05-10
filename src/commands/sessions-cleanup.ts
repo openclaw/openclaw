@@ -62,8 +62,6 @@ function buildActionRows(params: {
   missingKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
-  dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   return toSessionDisplayRows(params.beforeStore).map((row) =>
     Object.assign({}, row, {
@@ -72,8 +70,6 @@ function buildActionRows(params: {
         missingKeys: params.missingKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
-        budgetEvictedKeys: params.budgetEvictedKeys,
-        dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),
   );
@@ -99,16 +95,6 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
-  if (params.summary.unreferencedArtifacts?.scannedFiles) {
-    params.runtime.log(
-      `Would prune unreferenced artifacts: ${params.summary.unreferencedArtifacts.removedFiles}`,
-    );
-  }
-  if (params.summary.diskBudget) {
-    params.runtime.log(
-      `Would enforce disk budget: ${params.summary.diskBudget.totalBytesBefore} -> ${params.summary.diskBudget.totalBytesAfter} bytes (files ${params.summary.diskBudget.removedFiles}, entries ${params.summary.diskBudget.removedEntries})`,
-    );
-  }
   if (params.actionRows.length === 0) {
     return;
   }
@@ -152,11 +138,6 @@ function renderAppliedSummaries(params: {
     }
     params.runtime.log(`Session store: ${summary.storePath}`);
     params.runtime.log(`Applied maintenance. Current entries: ${summary.appliedCount ?? 0}`);
-    if (summary.unreferencedArtifacts?.removedFiles) {
-      params.runtime.log(
-        `Pruned unreferenced artifacts: ${summary.unreferencedArtifacts.removedFiles}`,
-      );
-    }
   }
 }
 

@@ -1578,7 +1578,7 @@ export const FIELD_HELP: Record<string, string> = {
   "session.threadBindings.defaultSpawnContext":
     'Default native subagent context for thread-bound spawns. Use "fork" to start from the requester transcript or "isolated" for a clean child. Default: "fork".',
   "session.maintenance":
-    "Automatic session-store maintenance controls for pruning age, entry caps, and disk budget cleanup. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
+    "Explicit SQLite session-row maintenance controls for age and entry-count retention. Start in warn mode to observe impact, then enforce once thresholds are tuned.",
   "session.maintenance.mode":
     'Determines whether maintenance policies are only reported ("warn") or actively applied ("enforce"). Keep "warn" during rollout and switch to "enforce" after validating safe thresholds.',
   "session.maintenance.pruneAfter":
@@ -1590,9 +1590,9 @@ export const FIELD_HELP: Record<string, string> = {
   "session.maintenance.rotateBytes":
     'Deprecated and ignored. Do not use for `sessions.json` growth control; OpenClaw no longer creates automatic rotation backups, and "openclaw doctor --fix" removes this key.',
   "session.maintenance.maxDiskBytes":
-    "Optional per-agent sessions-directory disk budget (for example `500mb`). Use this to cap session storage per agent; when exceeded, warn mode reports pressure and enforce mode performs oldest-first cleanup.",
+    "Deprecated and ignored. Session transcripts now live in SQLite; use openclaw doctor --fix to remove legacy disk-budget settings.",
   "session.maintenance.highWaterBytes":
-    "Target size after disk-budget cleanup (high-water mark). Defaults to 80% of maxDiskBytes; set explicitly for tighter reclaim behavior on constrained disks.",
+    "Deprecated and ignored with session.maintenance.maxDiskBytes. Use openclaw doctor --fix to remove it from legacy configs.",
   cron: "Global scheduler settings for stored cron jobs, run concurrency, delivery fallback, and run-session retention. Keep defaults unless you are scaling job volume or integrating external webhook receivers.",
   "cron.enabled":
     "Enables cron job execution for stored schedules managed by the gateway. Keep enabled for normal reminder/automation flows, and disable only to pause all cron execution without deleting jobs.",

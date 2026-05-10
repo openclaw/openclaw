@@ -1216,8 +1216,6 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
       mode: "warn", // warn | enforce
       pruneAfter: "30d",
       maxEntries: 500,
-      maxDiskBytes: "500mb", // optional hard budget
-      highWaterBytes: "400mb", // optional cleanup target
     },
     threadBindings: {
       enabled: true,
@@ -1251,13 +1249,13 @@ See [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) for preceden
 - **`agentToAgent.maxPingPongTurns`**: maximum reply-back turns between agents during agent-to-agent exchanges (integer, range: `0`-`20`, default: `5`). `0` disables ping-pong chaining.
 - **`sendPolicy`**: match by `channel`, `chatType` (`direct|group|channel`, with legacy `dm` alias), `keyPrefix`, or `rawKeyPrefix`. First deny wins.
 - **`store`**: optional legacy/custom JSON store path. When omitted, the canonical per-agent session store uses `~/.openclaw/state/openclaw.sqlite`.
-- **`maintenance`**: session-store cleanup + retention controls.
+- **`maintenance`**: explicit SQLite session-row cleanup + retention controls.
   - `mode`: `warn` emits warnings only; `enforce` applies cleanup.
   - `pruneAfter`: age cutoff for stale entries (default `30d`).
   - `maxEntries`: maximum number of entries in the session store (default `500`). Runtime writes do not prune or cap entries; `openclaw sessions cleanup --enforce` applies the cap immediately.
   - `rotateBytes`: deprecated and ignored; `openclaw doctor --fix` removes it from older configs.
-  - `maxDiskBytes`: optional sessions-directory disk budget. In `warn` mode it logs warnings; in `enforce` mode it removes oldest artifacts/sessions first.
-  - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`.
+  - `maxDiskBytes`: deprecated and ignored; session transcripts are stored in SQLite.
+  - `highWaterBytes`: deprecated and ignored with `maxDiskBytes`.
 - **`threadBindings`**: global defaults for thread-bound session features.
   - `enabled`: master default switch (providers can override; Discord uses `channels.discord.threadBindings.enabled`)
   - `idleHours`: default inactivity auto-unfocus in hours (`0` disables; providers can override)

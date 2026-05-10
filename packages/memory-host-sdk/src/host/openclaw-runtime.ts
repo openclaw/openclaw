@@ -54,6 +54,11 @@ export {
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export {
+  listSqliteSessionTranscripts,
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "../../../../src/config/sessions/transcript-store.sqlite.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
   MemoryBackend,

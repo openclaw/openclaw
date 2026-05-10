@@ -1,8 +1,10 @@
 import crypto from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import * as readline from "node:readline";
+import {
+  loadSqliteSessionTranscriptEvents,
+  resolveSqliteSessionTranscriptScopeForPath,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   DEFAULT_PROVIDER,
   parseModelRef,
@@ -1642,43 +1644,24 @@ async function streamBoundedTranscriptJsonl(params: {
   onRecord: (record: unknown) => boolean | void;
 }): Promise<void> {
   const limits = resolveTranscriptReadLimits(params.limits);
-  try {
-    const stats = await fs.stat(params.sessionFile);
-    if (!stats.isFile() || stats.size > limits.maxBytes) {
-      return;
-    }
-  } catch {
+  const scope = resolveSqliteSessionTranscriptScopeForPath({
+    transcriptPath: params.sessionFile,
+  });
+  if (!scope) {
     return;
   }
-  const stream = fsSync.createReadStream(params.sessionFile, {
-    encoding: "utf8",
-  });
-  const rl = readline.createInterface({
-    input: stream,
-    crlfDelay: Infinity,
-  });
-  let seenLines = 0;
   try {
-    for await (const line of rl) {
-      seenLines += 1;
-      if (seenLines > limits.maxLines) {
+    const events = loadSqliteSessionTranscriptEvents(scope);
+    if (JSON.stringify(events.map((entry) => entry.event)).length > limits.maxBytes) {
+      return;
+    }
+    for (const { event } of events.slice(0, limits.maxLines)) {
+      if (params.onRecord(event)) {
         break;
       }
-      const trimmed = line.trim();
-      if (!trimmed) {
-        continue;
-      }
-      try {
-        if (params.onRecord(JSON.parse(trimmed) as unknown)) {
-          break;
-        }
-      } catch {}
     }
   } catch {
     // Treat transcript recovery as best-effort on timeout/abort paths.
-  } finally {
-    rl.close();
-    stream.destroy();
   }
 }
 
