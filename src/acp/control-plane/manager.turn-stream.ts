@@ -27,6 +27,15 @@ export async function consumeAcpTurnStream(params: {
 
   for await (const event of params.runtime.runTurn(params.turn)) {
     if (!params.eventGate.open) {
+      // Gate closed by timeout: still deliver non-output events so callers can
+      // observe errors and terminal signals that cross the deadline boundary.
+      await params.onEvent?.(event);
+      if (event.type === "error") {
+        streamError = new AcpRuntimeError(
+          normalizeAcpErrorCode(event.code),
+          normalizeText(event.message) || "ACP turn failed before completion.",
+        );
+      }
       continue;
     }
     if (event.type === "done") {
@@ -43,7 +52,7 @@ export async function consumeAcpTurnStream(params: {
     await params.onEvent?.(event);
   }
 
-  if (params.eventGate.open && streamError) {
+  if (streamError) {
     throw streamError;
   }
 
