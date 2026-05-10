@@ -227,8 +227,8 @@ importers:
         specifier: 0.12.0
         version: 0.12.0
       acpx:
-        specifier: 0.6.1
-        version: 0.6.1
+        specifier: 0.7.0
+        version: 0.7.0
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -876,7 +876,7 @@ importers:
         version: 0.27.2(apache-arrow@18.1.0)
       openai:
         specifier: ^6.34.0
-        version: 6.34.0(ws@8.20.0)(zod@4.3.6)
+        version: 6.34.0(ws@8.20.0)(zod@4.4.3)
       typebox:
         specifier: 1.1.33
         version: 1.1.33
@@ -1604,6 +1604,11 @@ packages:
 
   '@agentclientprotocol/sdk@0.20.0':
     resolution: {integrity: sha512-BxEHyE4MvwyOsdyVPub1vEtyrq8E0JSdjC+ckXWimY1VabFCTXdPyXv2y2Omz1j+iod7Z8oBJDXFCJptM0GBqQ==}
+    peerDependencies:
+      zod: ^3.25.0 || ^4.0.0
+
+  '@agentclientprotocol/sdk@0.21.0':
+    resolution: {integrity: sha512-ONj+Q8qOdNQp5XbH5jnMwzT9IKZJsSN0p0lkceS4GtUtNOPVLpNzSS8gqQdGMKfBvA0ESbkL8BTaSN1Rc9miEw==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -2852,20 +2857,24 @@ packages:
   '@mariozechner/pi-agent-core@0.70.5':
     resolution: {integrity: sha512-ZUnJ7fFeJog97KG8FewEyqaObY2sLWvfDurKHl9kImVEbgt3l1LJ9A5pb+4/5KXnCVsoF/Brd0h+7yBEd1Aj5g==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-agent-core instead going forward
 
   '@mariozechner/pi-ai@0.70.5':
     resolution: {integrity: sha512-eyeyOfu/YiqzY6q391oRYdmnPIIU1VTKAn3hWIvzqkRHkcArd41/YynG8mw6bgoLdmCnIBoY3fD6nzEHEHLIMA==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-ai instead going forward
     hasBin: true
 
   '@mariozechner/pi-coding-agent@0.70.5':
     resolution: {integrity: sha512-5sQjY2LQLvYfMjo4Dn6P6iy3LFm3MZYgrYmgCQSwQSUM5yqzWceidYYXS4knloW7gNkko+nnhKB2u4NF3w+dVw==}
     engines: {node: '>=20.6.0'}
+    deprecated: please use @earendil-works/pi-coding-agent instead going forward
     hasBin: true
 
   '@mariozechner/pi-tui@0.70.5':
     resolution: {integrity: sha512-5Ol9weTqpsQ85gg1C6Mo8M8o/HYz4uN7nM7QTPrw/Rm/UoFgO1/T/Irago5aGfzlIj/nmsGcqb7NlkWtT4vXUg==}
     engines: {node: '>=20.0.0'}
+    deprecated: please use @earendil-works/pi-tui instead going forward
 
   '@matrix-org/matrix-sdk-crypto-nodejs@0.5.1':
     resolution: {integrity: sha512-m1nTFhUJv8AZCvuVmZ0wgYsFaseVNMhl3Jqu18KoHs7TQa+mmAW4q3xY6MuVApd75Zu9E0ooQeA5obUZdQ24OA==}
@@ -4283,6 +4292,7 @@ packages:
 
   '@ungap/structured-clone@1.3.0':
     resolution: {integrity: sha512-WmoN8qaIAo7WTYWbAZuG8PYEhn5fkz7dZrqTBZ7dtt//lL2Gwms1IcnQ5yHqjDfX8Ft5j4YzDM23f87zBfDe9g==}
+    deprecated: Potential CWE-502 - Update to 1.3.1 or higher
 
   '@urbit/aura@3.0.0':
     resolution: {integrity: sha512-N8/FHc/lmlMDCumMuTXyRHCxlov5KZY6unmJ9QR2GOw+OpROZMBsXYGwE+ZMtvN21ql9+Xb8KhGNBj08IrG3Wg==}
@@ -4445,8 +4455,8 @@ packages:
     engines: {node: '>=0.4.0'}
     hasBin: true
 
-  acpx@0.6.1:
-    resolution: {integrity: sha512-qxZPbm3SKq0UqQ0sOJ0M4iTLkF9AR7+I+JE/L/UeMUU1vW5N4nUVkZHytoHTBAu7nrej6THNzCPgrIZfv9T3AA==}
+  acpx@0.7.0:
+    resolution: {integrity: sha512-BratfuaUoZv1iSETJobqhiWM3E/Z3lJlGRxSImJX162LXSwqwnWiCEh6GjKzx2/56rJgZno8VV06aXev46mLmw==}
     engines: {node: '>=22.12.0'}
     hasBin: true
 
@@ -7708,6 +7718,9 @@ packages:
   zod@4.3.6:
     resolution: {integrity: sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg==}
 
+  zod@4.4.3:
+    resolution: {integrity: sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ==}
+
   zwitch@2.0.4:
     resolution: {integrity: sha512-bXE4cR/kVZhKZX/RjPEflHaKVhUVl85noU3v6b8apfQEc1x4A+zBxjZ4lN8LqGd6WZ3dl98pY4o717VFmoPp+A==}
 
@@ -7725,6 +7738,10 @@ snapshots:
   '@agentclientprotocol/sdk@0.20.0(zod@4.3.6)':
     dependencies:
       zod: 4.3.6
+
+  '@agentclientprotocol/sdk@0.21.0(zod@4.4.3)':
+    dependencies:
+      zod: 4.4.3
 
   '@anthropic-ai/claude-agent-sdk-darwin-arm64@0.2.119':
     optional: true
@@ -11254,13 +11271,13 @@ snapshots:
 
   acorn@8.16.0: {}
 
-  acpx@0.6.1:
+  acpx@0.7.0:
     dependencies:
-      '@agentclientprotocol/sdk': 0.20.0(zod@4.3.6)
+      '@agentclientprotocol/sdk': 0.21.0(zod@4.4.3)
       commander: 14.0.3
       skillflag: 0.1.4
       tsx: 4.21.0
-      zod: 4.3.6
+      zod: 4.4.3
     transitivePeerDependencies:
       - bare-abort-controller
       - bare-buffer
@@ -13559,6 +13576,11 @@ snapshots:
       ws: 8.20.0
       zod: 4.3.6
 
+  openai@6.34.0(ws@8.20.0)(zod@4.4.3):
+    optionalDependencies:
+      ws: 8.20.0
+      zod: 4.4.3
+
   openshell@0.1.0:
     dependencies:
       dotenv: 16.6.1
@@ -15014,5 +15036,7 @@ snapshots:
   zod@3.25.76: {}
 
   zod@4.3.6: {}
+
+  zod@4.4.3: {}
 
   zwitch@2.0.4: {}

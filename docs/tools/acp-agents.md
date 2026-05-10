@@ -791,6 +791,8 @@ operations:
 | `/acp set <key> <value>`     | generic                               | `key=cwd` uses the cwd override path.                                                                                                                                                                 |
 | `/acp reset-options`         | clears all runtime overrides          | —                                                                                                                                                                                                     |
 
+For `claude-agent-acp` v0.31+, the harness advertises only `mode | model | effort` and does not advertise `thinking`. Direct `/acp set thinking <level>` against a Claude session is therefore rejected by the underlying `setSessionConfigOption` call; the fail-soft warn-and-skip path in `applyManagerRuntimeControls` only swallows unsupported keys during pre-turn replay of persisted runtime options, not on interactive direct setters. Until per-harness vocabulary translation lands, use `/acp set effort <value>` against Claude — that targets the advertised `effort` id directly. The equivalent programmatic form is `runtimeOptions.backendExtras = { effort: "<value>" }`.
+
 ## acpx harness, plugin setup, and permissions
 
 For acpx harness configuration (Claude Code / Codex / Gemini CLI
