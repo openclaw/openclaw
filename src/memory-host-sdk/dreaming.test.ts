@@ -163,10 +163,12 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/shared",
         agentIds: ["alpha", "gamma"],
+        shared: true,
       },
       {
         workspaceDir: "/workspace/beta",
         agentIds: ["beta"],
+        shared: false,
       },
     ]);
   });
@@ -190,14 +192,17 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace/agi-ceo",
         agentIds: ["agi-ceo"],
+        shared: false,
       },
       {
         workspaceDir: "/workspace/agi-cdo",
         agentIds: ["agi-cdo"],
+        shared: false,
       },
       {
         workspaceDir: "/workspace/main",
         agentIds: ["main"],
+        shared: false,
       },
     ]);
   });
@@ -215,6 +220,7 @@ describe("memory dreaming host helpers", () => {
       {
         workspaceDir: "/workspace",
         agentIds: ["main"],
+        shared: false,
       },
     ]);
 
@@ -228,6 +234,42 @@ describe("memory dreaming host helpers", () => {
         "America/Los_Angeles",
       ),
     ).toBe(true);
+  });
+
+  it("sets shared=true when multiple agents share a workspace directory", () => {
+    const cfg = {
+      agents: {
+        list: [
+          { id: "emmi", workspace: "/workspace/shared" },
+          { id: "anya", workspace: "/workspace/shared" },
+          { id: "gunn", workspace: "/workspace/shared" },
+          { id: "ghost", workspace: "/workspace/isolated" },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const workspaces = resolveMemoryDreamingWorkspaces(cfg);
+    const shared = workspaces.find((w) => w.workspaceDir === "/workspace/shared");
+    const isolated = workspaces.find((w) => w.workspaceDir === "/workspace/isolated");
+
+    expect(shared?.shared).toBe(true);
+    expect(shared?.agentIds).toEqual(["emmi", "anya", "gunn"]);
+    expect(isolated?.shared).toBe(false);
+    expect(isolated?.agentIds).toEqual(["ghost"]);
+  });
+
+  it("sets shared=false for single-agent workspaces", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/workspace/solo",
+        },
+      },
+    } as OpenClawConfig;
+
+    const workspaces = resolveMemoryDreamingWorkspaces(cfg);
+    expect(workspaces).toHaveLength(1);
+    expect(workspaces[0].shared).toBe(false);
   });
 
   it("resolves the configured memory-slot plugin id", () => {

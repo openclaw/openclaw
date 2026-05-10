@@ -17,7 +17,7 @@ import { asRecord } from "./dreaming-shared.js";
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
 const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
+  /(?:^|\/)memory\/\.dreams\/session-corpus\/(?:.+\/)?(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
@@ -191,6 +191,10 @@ type RankShortTermPromotionOptions = {
   recencyHalfLifeDays?: number;
   weights?: Partial<PromotionWeights>;
   nowMs?: number;
+  /** Agent-scoped isolation: current agent identity for shared workspace filtering (Bug #65374). */
+  currentAgentId?: string;
+  /** Whether the workspace is shared across agents (Bug #65374). */
+  isShared?: boolean;
 };
 
 type ApplyShortTermPromotionsOptions = {
@@ -203,6 +207,8 @@ type ApplyShortTermPromotionsOptions = {
   maxAgeDays?: number;
   nowMs?: number;
   timezone?: string;
+  currentAgentId?: string;
+  sessionKey?: string;
 };
 
 type ApplyShortTermPromotionsResult = {
@@ -1229,9 +1235,23 @@ export async function rankShortTermPromotionCandidates(
     readStore(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
   ]);
+
+  // Bug #65374: Agent-scoped isolation on the promotion ranking path.
+  // In shared workspaces, only rank entries from the current agent's corpus path.
+  // Fail closed: shared workspace without identity returns no candidates.
+  let storeEntries = Object.values(store.entries);
+  if (options.isShared) {
+    if (!options.currentAgentId?.trim()) {
+      // Shared workspace with no identity: fail closed, no candidates
+      return [];
+    }
+    const agentCorpusPrefix = `memory/.dreams/session-corpus/${options.currentAgentId}/`;
+    storeEntries = storeEntries.filter((entry) => entry.path.startsWith(agentCorpusPrefix));
+  }
+
   const candidates: PromotionCandidate[] = [];
 
-  for (const entry of Object.values(store.entries)) {
+  for (const entry of storeEntries) {
     if (!entry || entry.source !== "memory" || !isShortTermMemoryPath(entry.path)) {
       continue;
     }
@@ -1548,6 +1568,54 @@ function extractPromotionMarkers(memoryText: string): Set<string> {
   return markers;
 }
 
+/** Provenance sidecar path for Layer 3 (Bug #65374). */
+const PROVENANCE_RELATIVE_PATH = path.join("memory", ".dreams", "provenance.json");
+
+interface ProvenanceEntry {
+  id: string;
+  agentId?: string;
+  sessionKey?: string;
+  promotedAt: string;
+  score: number;
+  contentHash: string;
+  sourcePath: string;
+  sourceLineRange: string;
+}
+
+interface ProvenanceStore {
+  version: 1;
+  entries: ProvenanceEntry[];
+  updatedAt: string;
+}
+
+function hashContent(content: string): string {
+  return createHash("sha256").update(content).digest("hex").slice(0, 16);
+}
+
+async function appendProvenanceEntries(params: {
+  workspaceDir: string;
+  entries: ProvenanceEntry[];
+}): Promise<void> {
+  const provenancePath = path.join(params.workspaceDir, PROVENANCE_RELATIVE_PATH);
+  await fs.mkdir(path.dirname(provenancePath), { recursive: true });
+  let store: ProvenanceStore;
+  try {
+    const raw = await fs.readFile(provenancePath, "utf-8");
+    store = JSON.parse(raw) as ProvenanceStore;
+  } catch {
+    store = { version: 1, entries: [], updatedAt: new Date().toISOString() };
+  }
+  // Deduplicate by id
+  const existingIds = new Set(store.entries.map((e) => e.id));
+  for (const entry of params.entries) {
+    if (!existingIds.has(entry.id)) {
+      store.entries.push(entry);
+    }
+  }
+  store.updatedAt = new Date().toISOString();
+  await fs.writeFile(provenancePath, JSON.stringify(store, null, 2), "utf-8");
+}
+
 export async function applyShortTermPromotions(
   options: ApplyShortTermPromotionsOptions,
 ): Promise<ApplyShortTermPromotionsResult> {
@@ -1674,6 +1742,22 @@ export async function applyShortTermPromotions(
         recallCount: candidate.recallCount,
       })),
     });
+
+    // Layer 3: Write provenance sidecar (Bug #65374)
+    // Records which agent promoted what, with content hashes for tamper evidence.
+    const provenanceEntries: ProvenanceEntry[] = rehydratedSelected.map((candidate) => ({
+      id: candidate.key,
+      agentId: options.currentAgentId,
+      sessionKey: options.sessionKey,
+      promotedAt: nowIso,
+      score: candidate.score,
+      contentHash: hashContent(candidate.snippet || ""),
+      sourcePath: candidate.path,
+      sourceLineRange: `${candidate.startLine}-${candidate.endLine}`,
+    }));
+    if (provenanceEntries.length > 0) {
+      await appendProvenanceEntries({ workspaceDir, entries: provenanceEntries });
+    }
 
     return {
       memoryPath,

@@ -498,6 +498,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   config: ShortTermPromotionDreamingConfig;
   logger: Logger;
   subagent?: Parameters<typeof generateAndAppendDreamNarrative>[0]["subagent"];
+  currentAgentId?: string;
+  sessionKey?: string;
 }): Promise<{ handled: true; reason: string } | undefined> {
   if (params.trigger !== "heartbeat" && params.trigger !== "cron") {
     return undefined;
@@ -512,12 +514,22 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
   const recencyHalfLifeDays =
     params.config.recencyHalfLifeDays ?? DEFAULT_MEMORY_DREAMING_RECENCY_HALF_LIFE_DAYS;
   const fallbackWorkspaceDir = normalizeTrimmedString(params.workspaceDir);
-  const workspaceCandidates = params.cfg
+  const workspaceEntries = params.cfg
     ? resolveMemoryDreamingWorkspaces(params.cfg, {
         primaryWorkspaceDir: fallbackWorkspaceDir,
         primaryAgentId: "main",
-      }).map((entry) => entry.workspaceDir)
+      })
     : [];
+  // Warn on shared workspaces (Bug #65374 — cross-agent dreaming contamination risk)
+  for (const entry of workspaceEntries) {
+    if (entry.shared && entry.agentIds.length > 1) {
+      params.logger.warn(
+        `memory-core: workspace ${entry.workspaceDir} is shared by agents ` +
+          `${entry.agentIds.join(", ")}. Cross-agent dreaming contamination risk.`,
+      );
+    }
+  }
+  const workspaceCandidates = workspaceEntries.map((entry) => entry.workspaceDir);
   const seenWorkspaces = new Set<string>();
   const workspaces = workspaceCandidates.filter((workspaceDir) => {
     if (seenWorkspaces.has(workspaceDir)) {
@@ -526,6 +538,27 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     seenWorkspaces.add(workspaceDir);
     return true;
   });
+  // Bug #65374: Build per-workspace isolation metadata from workspace entries.
+  const workspaceMeta = new Map<string, { isShared: boolean; agentIds: string[] }>();
+  for (const entry of workspaceEntries) {
+    const existing = workspaceMeta.get(entry.workspaceDir);
+    if (existing) {
+      // Merge agent IDs for the same workspace
+      for (const id of entry.agentIds) {
+        if (!existing.agentIds.includes(id)) {
+          existing.agentIds.push(id);
+        }
+      }
+      if (entry.shared) {
+        existing.isShared = true;
+      }
+    } else {
+      workspaceMeta.set(entry.workspaceDir, {
+        isShared: entry.shared,
+        agentIds: [...entry.agentIds],
+      });
+    }
+  }
   if (workspaces.length === 0 && fallbackWorkspaceDir) {
     workspaces.push(fallbackWorkspaceDir);
   }
@@ -562,6 +595,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         subagent: params.subagent,
         detachNarratives,
         nowMs: sweepNowMs,
+        currentAgentId: params.currentAgentId,
       });
 
       const reportLines: string[] = [];
@@ -581,6 +615,9 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         recencyHalfLifeDays,
         maxAgeDays: params.config.maxAgeDays,
         nowMs: sweepNowMs,
+        // Bug #65374: Use per-workspace isolation metadata instead of global .some()
+        currentAgentId: params.currentAgentId ?? workspaceMeta.get(workspaceDir)?.agentIds[0],
+        isShared: workspaceMeta.get(workspaceDir)?.isShared ?? false,
       });
       totalCandidates += candidates.length;
       reportLines.push(`- Ranked ${candidates.length} candidate(s) for durable promotion.`);
@@ -608,6 +645,8 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
         maxAgeDays: params.config.maxAgeDays,
         timezone: params.config.timezone,
         nowMs: sweepNowMs,
+        currentAgentId: params.currentAgentId,
+        sessionKey: params.sessionKey,
       });
       totalApplied += applied.applied;
       reportLines.push(`- Promoted ${applied.applied} candidate(s) into MEMORY.md.`);
@@ -888,6 +927,22 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         return undefined;
       }
       const currentConfig = resolveCurrentConfig();
+
+      // Bug #65374: Validate ctx.agentId against configured agents (Ghost audit finding)
+      if (ctx.agentId) {
+        const configuredAgentIds = (currentConfig.agents?.list ?? []).map((a: any) =>
+          typeof a?.id === "string" ? a.id.toLowerCase() : "",
+        );
+        if (
+          configuredAgentIds.length > 0 &&
+          !configuredAgentIds.includes(ctx.agentId.toLowerCase())
+        ) {
+          api.logger.warn(
+            `memory-core: ctx.agentId "${ctx.agentId}" not in configured agents list — skipping dreaming`,
+          );
+          return undefined;
+        }
+      }
       const config = await reconcileManagedDreamingCron({
         reason: "runtime",
       });
@@ -909,6 +964,8 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
         config,
         logger: api.logger,
         subagent: config.enabled ? api.runtime?.subagent : undefined,
+        currentAgentId: ctx.agentId,
+        sessionKey: ctx.sessionKey,
       });
     } catch (err) {
       api.logger.error(`memory-core: dreaming trigger failed: ${formatErrorMessage(err)}`);
