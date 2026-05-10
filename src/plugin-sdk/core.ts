@@ -121,7 +121,11 @@ export type {
   UnifiedModelCatalogSource,
 } from "../model-catalog/types.js";
 export type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-export type { OpenClawPluginToolContext, OpenClawPluginToolFactory } from "../plugins/types.js";
+export type {
+  OpenClawPluginActiveModelContext,
+  OpenClawPluginToolContext,
+  OpenClawPluginToolFactory,
+} from "../plugins/types.js";
 export type {
   MemoryPluginCapability,
   MemoryPluginPublicArtifact,

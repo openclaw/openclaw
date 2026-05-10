@@ -42,6 +42,22 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
   });
 
+  it("forwards runtime-owned active model metadata", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: " local-provider ",
+        modelId: " local-model ",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "local-provider",
+      modelId: "local-model",
+      modelRef: "local-provider/local-model",
+    });
+  });
+
   it("infers the default agent workspace when workspaceDir is omitted", () => {
     const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
     const result = resolveOpenClawPluginToolInputs({
