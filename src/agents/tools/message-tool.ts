@@ -196,13 +196,14 @@ function buildSendSchema(options: { includePresentation: boolean; includeDeliver
     gifPlayback: Type.Optional(Type.Boolean()),
     forceDocument: Type.Optional(
       Type.Boolean({
-        description: "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+        description:
+          "Send image/GIF/video as document to avoid Telegram compression (Telegram only).",
       }),
     ),
     asDocument: Type.Optional(
       Type.Boolean({
         description:
-          "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "Send image/GIF/video as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
       }),
     ),
   };

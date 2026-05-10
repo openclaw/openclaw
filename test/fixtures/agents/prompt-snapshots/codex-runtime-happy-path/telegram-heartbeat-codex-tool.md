@@ -592,7 +592,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "asDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
+          "description": "Send image/GIF/video as document to avoid Telegram compression. Alias for forceDocument (Telegram only).",
           "type": "boolean"
         },
         "asVoice": {
@@ -632,7 +632,7 @@ Full JSON: `codex-dynamic-tools.heartbeat-turn.json`
           "type": "string"
         },
         "forceDocument": {
-          "description": "Send image/GIF as document to avoid Telegram compression (Telegram only).",
+          "description": "Send image/GIF/video as document to avoid Telegram compression (Telegram only).",
           "type": "boolean"
         },
         "gatewayToken": {

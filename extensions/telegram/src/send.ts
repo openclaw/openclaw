@@ -845,7 +845,9 @@ export async function sendMessageTelegram(
       ...(!needsSeparateText && replyMarkup ? { reply_markup: replyMarkup } : {}),
     };
     const videoDimensions =
-      kind === "video" && !isVideoNote ? await probeVideoDimensions(media.buffer) : undefined;
+      kind === "video" && !isVideoNote && !opts.forceDocument
+        ? await probeVideoDimensions(media.buffer)
+        : undefined;
     const mediaParams = {
       ...(htmlCaption ? { caption: htmlCaption, parse_mode: "HTML" as const } : {}),
       ...baseMediaParams,
@@ -890,7 +892,7 @@ export async function sendMessageTelegram(
             ) as Promise<TelegramMessageLike>,
         };
       }
-      if (kind === "video") {
+      if (kind === "video" && !opts.forceDocument) {
         if (isVideoNote) {
           return {
             label: "video_note",
@@ -947,7 +949,7 @@ export async function sendMessageTelegram(
             chatId,
             file,
             // Only force Telegram to keep the uploaded media type when callers explicitly
-            // opt into document delivery for image/GIF uploads.
+            // opt into document delivery for typed media uploads.
             (opts.forceDocument
               ? { ...effectiveParams, disable_content_type_detection: true }
               : effectiveParams) as Parameters<typeof api.sendDocument>[2],

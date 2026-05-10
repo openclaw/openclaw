@@ -1115,6 +1115,43 @@ describe("sendMessageTelegram", () => {
     });
   });
 
+  it("sends video as document when forceDocument is true", async () => {
+    const chatId = "123";
+    const videoBuffer = Buffer.from("fake-video");
+    const sendDocument = vi.fn().mockResolvedValue({
+      message_id: 202,
+      chat: { id: chatId },
+    });
+    const sendVideo = vi.fn();
+    const api = { sendDocument, sendVideo } as unknown as {
+      sendDocument: typeof sendDocument;
+      sendVideo: typeof sendVideo;
+    };
+
+    mockLoadedMedia({
+      buffer: videoBuffer,
+      contentType: "video/mp4",
+      fileName: "video.mp4",
+    });
+
+    const res = await sendMessageTelegram(chatId, "my caption", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/video.mp4",
+      forceDocument: true,
+    });
+
+    expect(probeVideoDimensions).not.toHaveBeenCalled();
+    expectMediaSendCall(sendDocument.mock.calls[0], "send document call", chatId, {
+      caption: "my caption",
+      parse_mode: "HTML",
+      disable_content_type_detection: true,
+    });
+    expect(sendVideo).not.toHaveBeenCalled();
+    expect(res.messageId).toBe("202");
+  });
+
   it("does not probe video dimensions for video notes", async () => {
     const chatId = "123";
     const sendVideoNote = vi.fn().mockResolvedValue({
