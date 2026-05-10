@@ -11,7 +11,7 @@ import {
   refreshPersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import { type RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
-import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
+import { recordPluginInstallInRecordMap, type PluginInstallUpdate } from "./installs.js";
 
 export {
   loadInstalledPluginIndexInstallRecords,
@@ -86,7 +86,7 @@ export function recordPluginInstallInRecords(
   records: Record<string, PluginInstallRecord>,
   update: PluginInstallUpdate,
 ): Record<string, PluginInstallRecord> {
-  return recordPluginInstall({ plugins: { installs: records } }, update).plugins?.installs ?? {};
+  return recordPluginInstallInRecordMap(records, update);
 }
 
 export function removePluginInstallRecordFromRecords(
