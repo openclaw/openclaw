@@ -14,6 +14,11 @@ const installSecurityScanState = vi.hoisted(() => ({
   scanSkillInstallSource: vi.fn(),
 }));
 
+const replaceFileState = vi.hoisted(() => ({
+  publishFailureTarget: "",
+  publishFailures: 0,
+}));
+
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
   return {
@@ -27,6 +32,27 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
 vi.mock("../../plugins/install-security-scan.js", () => ({
   scanSkillInstallSource: installSecurityScanState.scanSkillInstallSource,
 }));
+
+vi.mock("../../infra/replace-file.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../infra/replace-file.js")>();
+  return {
+    ...actual,
+    movePathWithCopyFallback: async (
+      options: Parameters<typeof actual.movePathWithCopyFallback>[0],
+    ) => {
+      if (
+        replaceFileState.publishFailures === 0 &&
+        replaceFileState.publishFailureTarget &&
+        String(options.from).includes(".openclaw-install-stage-") &&
+        String(options.to) === replaceFileState.publishFailureTarget
+      ) {
+        replaceFileState.publishFailures += 1;
+        throw new Error("publish boom");
+      }
+      return await actual.movePathWithCopyFallback(options);
+    },
+  };
+});
 
 let tempDirs: string[] = [];
 
@@ -169,6 +195,8 @@ describe("skill upload gateway handlers", () => {
   beforeEach(() => {
     tempDirs = [];
     vi.unstubAllEnvs();
+    replaceFileState.publishFailureTarget = "";
+    replaceFileState.publishFailures = 0;
     installSecurityScanState.scanSkillInstallSource.mockReset();
     installSecurityScanState.scanSkillInstallSource.mockResolvedValue(undefined);
   });
@@ -547,6 +575,10 @@ describe("skill upload gateway handlers", () => {
         })
       ).ok,
     ).toBe(true);
+    replaceFileState.publishFailureTarget = path.join(
+      await fs.realpath(path.join(workspaceDir, "skills")),
+      "rollback-demo",
+    );
 
     const forced = await uploadArchive(handlers, {
       archive: await makeSkillArchive({
@@ -555,15 +587,6 @@ describe("skill upload gateway handlers", () => {
       }),
       slug: "rollback-demo",
       force: true,
-    });
-    const realRename = fs.rename.bind(fs);
-    let renameCalls = 0;
-    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
-      renameCalls += 1;
-      if (renameCalls === 2) {
-        throw new Error("publish boom");
-      }
-      return await realRename(...args);
     });
 
     const install = await call(handlers, "skills.install", {

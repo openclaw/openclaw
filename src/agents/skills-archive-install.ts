@@ -111,6 +111,9 @@ const TRANSIENT_ARCHIVE_ERROR_PATTERNS = [
 
 function archiveFailureKind(error: string): SkillArchiveInstallFailureKind {
   const lower = error.toLowerCase();
+  if (lower.startsWith("failed to install skill:")) {
+    return "unavailable";
+  }
   for (const pattern of TRANSIENT_ARCHIVE_ERROR_PATTERNS) {
     if (lower.includes(pattern)) {
       return "unavailable";
