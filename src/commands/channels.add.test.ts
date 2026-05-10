@@ -97,7 +97,8 @@ vi.mock("./onboard-channels.js", async () => {
     await vi.importActual<typeof import("./onboard-channels.js")>("./onboard-channels.js");
   return {
     ...actual,
-    setupChannels: (...args: unknown[]) => channelWizardMocks.setupChannels(...args),
+    setupChannels: (...args: Parameters<typeof actual.setupChannels>) =>
+      channelWizardMocks.setupChannels(...args),
   };
 });
 

@@ -1,5 +1,5 @@
 import { PassThrough } from "node:stream";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceAgentConsultChatMessage,
   buildRealtimeVoiceAgentConsultPolicyInstructions,

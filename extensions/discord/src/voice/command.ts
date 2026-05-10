@@ -3,8 +3,8 @@ import {
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveDiscordAccountAllowFrom } from "../accounts.js";
 import {
   Command,

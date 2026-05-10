@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";

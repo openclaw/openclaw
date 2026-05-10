@@ -9,9 +9,9 @@ import type {
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
 import { createInboundDebouncer } from "openclaw/plugin-sdk/channel-inbound-debounce";
+import { getChildLogger } from "openclaw/plugin-sdk/logging-core";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
-import { getChildLogger } from "openclaw/plugin-sdk/text-runtime";
 import { readWebSelfIdentityForDecision, WhatsAppAuthUnstableError } from "../auth-store.js";
 import { getPrimaryIdentityId, resolveComparableIdentity } from "../identity.js";
 import { cacheInboundMessageMeta } from "../quoted-message.js";

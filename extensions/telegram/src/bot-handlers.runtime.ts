@@ -8,13 +8,13 @@ import {
 } from "openclaw/plugin-sdk/channel-inbound-debounce";
 import { resolveStoredModelOverride } from "openclaw/plugin-sdk/command-auth-native";
 import { buildCommandsMessagePaginated } from "openclaw/plugin-sdk/command-status";
-import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
-import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DmPolicy, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
+import { replaceConfigFile } from "openclaw/plugin-sdk/config-mutation";
 import {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,

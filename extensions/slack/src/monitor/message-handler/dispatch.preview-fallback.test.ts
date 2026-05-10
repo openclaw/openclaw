@@ -475,7 +475,7 @@ vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
   resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
 }));
 

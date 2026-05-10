@@ -214,6 +214,10 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/config-contracts": {
+      "types": "./dist/plugin-sdk/config-contracts.d.ts",
+      "default": "./dist/plugin-sdk/config-contracts.js"
+    },
     "./plugin-sdk/config-types": {
       "types": "./dist/plugin-sdk/config-types.d.ts",
       "default": "./dist/plugin-sdk/config-types.js"
@@ -1106,10 +1110,6 @@
       "types": "./dist/plugin-sdk/provider-auth-result.d.ts",
       "default": "./dist/plugin-sdk/provider-auth-result.js"
     },
-    "./plugin-sdk/provider-auth-login": {
-      "types": "./dist/plugin-sdk/provider-auth-login.d.ts",
-      "default": "./dist/plugin-sdk/provider-auth-login.js"
-    },
     "./plugin-sdk/provider-selection-runtime": {
       "types": "./dist/plugin-sdk/provider-selection-runtime.d.ts",
       "default": "./dist/plugin-sdk/provider-selection-runtime.js"
@@ -1261,6 +1261,10 @@
     "./plugin-sdk/text-autolink-runtime": {
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
+    },
+    "./plugin-sdk/text-utility-runtime": {
+      "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-utility-runtime.js"
     },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
@@ -1470,6 +1474,8 @@
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
     "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
+    "plugin-sdk:surface": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs",
+    "plugin-sdk:surface:check": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",

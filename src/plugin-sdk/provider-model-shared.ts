@@ -24,7 +24,6 @@ import type {
 import {
   normalizeAntigravityPreviewModelId,
   normalizeGooglePreviewModelId,
-  normalizeNativeXaiModelId,
 } from "./provider-model-id-normalize.js";
 
 export type { ModelApi, ModelProviderConfig } from "../config/types.models.js";
@@ -107,7 +106,7 @@ const BASE_CLAUDE_THINKING_LEVELS = [
   { id: "high" },
 ] as const satisfies ProviderThinkingProfile["levels"];
 
-export function getModelProviderHint(modelId: string): string | null {
+function getModelProviderHint(modelId: string): string | null {
   const trimmed = normalizeOptionalLowercaseString(modelId);
   if (!trimmed) {
     return null;
@@ -128,7 +127,7 @@ function matchesClaudeModelPrefix(modelId: string, prefixes: readonly string[]):
   return Boolean(lower && prefixes.some((prefix) => lower.startsWith(prefix)));
 }
 
-export function isClaudeOpus47ModelId(modelId: string): boolean {
+function isClaudeOpus47ModelId(modelId: string): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
 }
 
@@ -152,11 +151,7 @@ export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingP
   return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
-export {
-  normalizeAntigravityPreviewModelId,
-  normalizeGooglePreviewModelId,
-  normalizeNativeXaiModelId,
-};
+export { normalizeAntigravityPreviewModelId, normalizeGooglePreviewModelId };
 
 export type ProviderReplayFamily =
   | "openai-compatible"

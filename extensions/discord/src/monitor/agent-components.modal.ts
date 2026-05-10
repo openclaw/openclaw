@@ -1,4 +1,4 @@
-import { logError } from "openclaw/plugin-sdk/text-runtime";
+import { logError } from "openclaw/plugin-sdk/logging-core";
 import { parseDiscordModalCustomIdForInteraction } from "../component-custom-id.js";
 import { resolveDiscordModalEntryWithPersistence } from "../components-registry.js";
 import { Modal, type ComponentData, type ModalInteraction } from "../internal/discord.js";

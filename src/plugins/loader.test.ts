@@ -1037,7 +1037,7 @@ describe("loadOpenClawPlugins", () => {
       "utf-8",
     );
     fs.writeFileSync(
-      path.join(packageRoot, "dist", "plugin-sdk", "text-runtime.js"),
+      path.join(packageRoot, "dist", "plugin-sdk", "string-coerce-runtime.js"),
       "export const normalizeLowercaseStringOrEmpty = (value) => String(value).toLowerCase();\n",
       "utf-8",
     );
@@ -1045,7 +1045,7 @@ describe("loadOpenClawPlugins", () => {
     fs.writeFileSync(
       path.join(pluginRoot, "index.js"),
       [
-        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";`,
+        `import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";`,
         `export default {`,
         `  id: "discord",`,
         `  register(api) {`,
