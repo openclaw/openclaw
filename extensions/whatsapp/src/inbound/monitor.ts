@@ -271,6 +271,16 @@ export async function attachWebInboxToSocket(
           await finalizeInboundDedupe(entries);
           return;
         }
+        // If any entry carries a media attachment, dispatch each separately to
+        // avoid dropping images from all but the last message in the batch.
+        const hasMedia = entries.some((entry) => entry.mediaPath);
+        if (hasMedia) {
+          for (const entry of entries) {
+            await options.onMessage(entry);
+          }
+          await finalizeInboundDedupe(entries);
+          return;
+        }
         const mentioned = new Set<string>();
         for (const entry of entries) {
           for (const jid of entry.mentions ?? entry.mentionedJids ?? []) {
