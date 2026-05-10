@@ -263,7 +263,7 @@ describe("registerTelegramNativeCommands", () => {
     const { bot, commandHandlers, sendMessage } = createCommandBot();
 
     registerTelegramNativeCommands({
-      ...createNativeCommandTestParams({}, { bot }),
+      ...createNativeCommandTestParams({}, { bot, allowFrom: [200] }),
     });
 
     const handler = commandHandlers.get("fast");

@@ -74,11 +74,6 @@ export function createSignalToolResultConfig(
   };
 }
 
-export async function flush() {
-  await Promise.resolve();
-  await Promise.resolve();
-}
-
 export function createMockSignalDaemonHandle(
   overrides: {
     stop?: MockFn;

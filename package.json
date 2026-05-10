@@ -619,6 +619,10 @@
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
     },
+    "./plugin-sdk/access-groups": {
+      "types": "./dist/plugin-sdk/access-groups.d.ts",
+      "default": "./dist/plugin-sdk/access-groups.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -802,6 +806,14 @@
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-ingress": {
+      "types": "./dist/plugin-sdk/channel-ingress.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress.js"
+    },
+    "./plugin-sdk/channel-ingress-runtime": {
+      "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
     },
     "./plugin-sdk/channel-message": {
       "types": "./dist/plugin-sdk/channel-message.d.ts",
@@ -1419,6 +1431,7 @@
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
+    "lint:extensions:no-deprecated-channel-access": "node --import tsx scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
     "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
     "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",

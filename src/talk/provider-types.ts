@@ -100,6 +100,7 @@ export type RealtimeVoiceProviderConfiguredContext = {
 };
 
 export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
+  cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   audioFormat?: RealtimeVoiceAudioFormat;
   instructions?: string;
@@ -109,11 +110,16 @@ export type RealtimeVoiceBridgeCreateRequest = RealtimeVoiceBridgeCallbacks & {
 };
 
 export type RealtimeVoiceBrowserSessionCreateRequest = {
+  cfg?: OpenClawConfig;
   providerConfig: RealtimeVoiceProviderConfig;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
   model?: string;
   voice?: string;
+  vadThreshold?: number;
+  silenceDurationMs?: number;
+  prefixPaddingMs?: number;
+  reasoningEffort?: string;
 };
 
 export type RealtimeVoiceBrowserAudioContract = {

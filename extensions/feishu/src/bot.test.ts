@@ -1080,10 +1080,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
-      useAccessGroups: true,
-      authorizers: [{ configured: false, allowed: false }],
-    });
+    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         ChatType: "group",
@@ -1164,10 +1161,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     await dispatchMessage({ cfg, event });
 
-    expect(mockResolveCommandAuthorizedFromAuthorizers).toHaveBeenCalledWith({
-      useAccessGroups: true,
-      authorizers: [{ configured: true, allowed: true }],
-    });
+    expect(mockResolveCommandAuthorizedFromAuthorizers).not.toHaveBeenCalled();
     expect(mockFinalizeInboundContext).toHaveBeenCalledWith(
       expect.objectContaining({
         ChatType: "group",

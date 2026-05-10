@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -55,7 +55,9 @@ function normalizeProviderModelsForConfig(
   const seenById = new Map<string, number>();
   for (const model of provider.models) {
     const rawId = getProviderModelId(model);
-    const normalizedId = rawId ? normalizeStaticProviderModelId(providerKey, rawId) : rawId;
+    const normalizedId = rawId
+      ? normalizeConfiguredProviderCatalogModelId(providerKey, rawId)
+      : rawId;
     const normalizedModel =
       normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
     if (normalizedModel !== model) {

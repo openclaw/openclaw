@@ -4,7 +4,7 @@ import {
   listChatCommands,
   maybeResolveTextAlias,
   normalizeCommandBody,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import {
   isAbortRequestText,
   isBtwRequestText,

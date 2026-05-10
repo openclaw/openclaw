@@ -1519,13 +1519,15 @@ async function processOpenAICompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    if (!choice.delta) {
+    const choiceDelta =
+      choice.delta ?? (choice as unknown as { message?: ChatCompletionChunk["delta"] }).message;
+    if (!choiceDelta) {
       continue;
     }
-    if (choice.delta.content) {
+    if (choiceDelta.content) {
       // Structured content can contain visible text and thinking blocks in the
       // same delta, so route each extracted block through the normal stream path.
-      const contentDeltas = getCompletionsContentDeltas(choice.delta.content);
+      const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
       for (const contentDelta of contentDeltas) {
         if (contentDelta.kind === "text") {
           appendFilteredVisibleTextDelta(contentDelta.text);
@@ -1537,7 +1539,7 @@ async function processOpenAICompletionsStream(
       }
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
-      choice.delta as Record<string, unknown>,
+      choiceDelta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
     );
     for (const reasoningDelta of reasoningDeltas) {
@@ -1551,8 +1553,8 @@ async function processOpenAICompletionsStream(
         appendThinkingDelta(reasoningDelta);
       }
     }
-    if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
-      for (const toolCall of choice.delta.tool_calls) {
+    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      for (const toolCall of choiceDelta.tool_calls) {
         if (
           !currentBlock ||
           currentBlock.type !== "toolCall" ||

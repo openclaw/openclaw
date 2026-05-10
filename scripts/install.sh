@@ -1435,7 +1435,7 @@ promote_supported_node_binary() {
 }
 
 activate_supported_node_on_path() {
-    promote_supported_node_binary "$@"
+    promote_supported_node_binary
 }
 
 print_active_node_paths() {

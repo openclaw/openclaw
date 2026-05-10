@@ -73,6 +73,24 @@ function resolveRuntime(opts: MonitorSignalOpts): RuntimeEnv {
   return opts.runtime ?? createNonExitingRuntime();
 }
 
+function createSignalMonitorTaskRunner(runtime: RuntimeEnv) {
+  const inFlight = new Set<Promise<void>>();
+  return {
+    runEventTask(task: () => Promise<void>): void {
+      const trackedTask = Promise.resolve()
+        .then(task)
+        .catch((err) => runtime.error?.(`event handler failed: ${String(err)}`))
+        .finally(() => inFlight.delete(trackedTask));
+      inFlight.add(trackedTask);
+    },
+    async waitForIdle(): Promise<void> {
+      while (inFlight.size > 0) {
+        await Promise.allSettled(Array.from(inFlight));
+      }
+    },
+  };
+}
+
 function mergeAbortSignals(
   a?: AbortSignal,
   b?: AbortSignal,
@@ -431,6 +449,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
   );
   const readReceiptsViaDaemon = autoStart && sendReadReceipts;
   const daemonLifecycle = createSignalDaemonLifecycle({ abortSignal: opts.abortSignal });
+  const monitorTaskRunner = createSignalMonitorTaskRunner(runtime);
   let daemonHandle: SignalDaemonHandle | null = null;
 
   if (autoStart && configuredApiMode === "container") {
@@ -518,9 +537,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
-        void handleEvent(event).catch((err) => {
-          runtime.error?.(`event handler failed: ${String(err)}`);
-        });
+        monitorTaskRunner.runEventTask(() => handleEvent(event));
       },
     });
     const daemonExitError = daemonLifecycle.getExitError();
@@ -534,6 +551,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
     }
     throw err;
   } finally {
+    await monitorTaskRunner.waitForIdle();
     daemonLifecycle.dispose();
     opts.abortSignal?.removeEventListener("abort", onAbort);
     daemonLifecycle.stop();

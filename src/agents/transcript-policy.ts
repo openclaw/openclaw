@@ -84,6 +84,11 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
   return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
 }
 
+function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
+  const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
+  return compat?.supportsReasoningEffort === false;
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -138,7 +143,7 @@ function buildUnownedProviderTransportReplayFallback(params: {
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
       : {}),
-    ...(isAnthropic && params.model?.compat?.supportsReasoningEffort === false
+    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
       ? { dropThinkingBlocks: true }
       : {}),
     ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
@@ -226,7 +231,7 @@ function resolveTranscriptPolicyCacheKey(params: {
     provider: params.provider,
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
-    dropsThinkingForReasoningCompat: params.model?.compat?.supportsReasoningEffort === false,
+    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
     workspaceDir: params.workspaceDir ?? "",
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,

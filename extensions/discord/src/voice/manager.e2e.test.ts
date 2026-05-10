@@ -1178,6 +1178,7 @@ describe("DiscordVoiceManager", () => {
     const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
       | {
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
 
@@ -1424,6 +1425,7 @@ describe("DiscordVoiceManager", () => {
             session: typeof realtimeSessionMock,
           ) => void;
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
 
@@ -1499,6 +1501,7 @@ describe("DiscordVoiceManager", () => {
             session: typeof realtimeSessionMock,
           ) => void;
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
 
@@ -1573,6 +1576,7 @@ describe("DiscordVoiceManager", () => {
             session: typeof realtimeSessionMock,
           ) => void;
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+          onEvent?: (event: { direction: "server"; type: string }) => void;
         }
       | undefined;
 
