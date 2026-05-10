@@ -201,6 +201,8 @@ function deliveryStatusFromDurableSend(send: DurableSendResult): AgentCommandDel
         ...(payloadOutcomes ? { payloadOutcomes } : {}),
       };
   }
+  const exhaustive: never = send;
+  return exhaustive;
 }
 
 function preDeliveryFailureStatus(reason: string): AgentCommandDeliveryStatus {
