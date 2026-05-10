@@ -152,6 +152,17 @@ function resolveToolErrorWarningPolicy(params: {
   if (normalizedToolName === "sessions_send") {
     return { showWarning: false, includeDetails };
   }
+  // Read-only gateway config.schema.lookup misses are expected query failures,
+  // not destructive actions. Suppress noisy user-facing warnings (#42856).
+  if (
+    normalizedToolName === "gateway" &&
+    !params.lastToolError.mutatingAction &&
+    (normalizeOptionalLowercaseString(params.lastToolError.error) ?? "").includes(
+      "config schema path not found",
+    )
+  ) {
+    return { showWarning: false, includeDetails };
+  }
   const isMutatingToolError =
     params.lastToolError.mutatingAction ?? isLikelyMutatingToolName(params.lastToolError.toolName);
   if (isMutatingToolError) {
