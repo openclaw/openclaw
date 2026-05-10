@@ -283,13 +283,10 @@ describe("qa-channel plugin", () => {
           replyToId: "parent-1",
           threadId: "thread-1",
         });
-        expect(result.receipt.parts[0]).toEqual(
-          expect.objectContaining({
-            kind: "text",
-            replyToId: "parent-1",
-            threadId: "thread-1",
-          }),
-        );
+        const receiptPart = result.receipt.parts[0];
+        expect(receiptPart?.kind).toBe("text");
+        expect(receiptPart?.replyToId).toBe("parent-1");
+        expect(receiptPart?.threadId).toBe("thread-1");
       };
 
       await verifyChannelMessageAdapterCapabilityProofs({

@@ -101,17 +101,14 @@ describe("engine/utils/stt", () => {
     });
 
     expect(transcript).toBe("hello from audio");
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "https://api.example.test/v1/audio/transcriptions",
-        auditContext: "qqbot-stt",
-        init: expect.objectContaining({
-          method: "POST",
-          headers: { Authorization: "Bearer secret" },
-          body: expect.any(FormData),
-        }),
-      }),
-    );
+    const request = fetchWithSsrFGuardMock.mock.calls[0]?.[0] as
+      | { url?: string; auditContext?: string; init?: RequestInit }
+      | undefined;
+    expect(request?.url).toBe("https://api.example.test/v1/audio/transcriptions");
+    expect(request?.auditContext).toBe("qqbot-stt");
+    expect(request?.init?.method).toBe("POST");
+    expect(request?.init?.headers).toEqual({ Authorization: "Bearer secret" });
+    expect(request?.init?.body).toBeInstanceOf(FormData);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

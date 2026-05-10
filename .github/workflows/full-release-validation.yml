@@ -32,7 +32,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
       run_release_soak:
@@ -202,7 +202,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -301,7 +301,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -400,7 +400,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 720
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 720 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -616,7 +616,7 @@ jobs:
     needs: [resolve_target, prepare_release_package]
     if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 120 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -783,6 +783,7 @@ jobs:
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -809,7 +810,7 @@ jobs:
             head_sha="$(jq -r '.headSha // ""' <<< "$run_json")"
             echo "${label}: ${status}/${conclusion} attempt ${attempt} head ${head_sha}: ${url}"
 
-            if [[ -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
+            if [[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
               echo "::error::${label} child run used ${head_sha}, expected ${TARGET_SHA}. Dispatch Full Release Validation from a ref pinned to the target SHA, not a moving branch."
               return 1
             fi

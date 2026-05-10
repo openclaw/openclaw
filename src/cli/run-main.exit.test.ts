@@ -25,6 +25,7 @@ const registerPluginCliCommandsFromValidatedConfigMock = vi.hoisted(() => vi.fn(
 const resolvePluginCliRootOwnerIdsMock = vi.hoisted(() => vi.fn());
 const resolveManifestCommandAliasOwnerMock = vi.hoisted(() => vi.fn());
 const resolveManifestToolOwnerMock = vi.hoisted(() => vi.fn());
+const resolveManifestCliCommandSurfaceOwnerMock = vi.hoisted(() => vi.fn());
 const restoreTerminalStateMock = vi.hoisted(() => vi.fn());
 const hasEnvHttpProxyAgentConfiguredMock = vi.hoisted(() => vi.fn(() => false));
 const ensureGlobalUndiciEnvProxyDispatcherMock = vi.hoisted(() => vi.fn());
@@ -179,6 +180,7 @@ vi.mock("../plugins/cli-registry-loader.js", () => ({
 }));
 
 vi.mock("../plugins/manifest-command-aliases.runtime.js", () => ({
+  resolveManifestCliCommandSurfaceOwner: resolveManifestCliCommandSurfaceOwnerMock,
   resolveManifestCommandAliasOwner: resolveManifestCommandAliasOwnerMock,
   resolveManifestToolOwner: resolveManifestToolOwnerMock,
 }));
@@ -252,6 +254,7 @@ describe("runCli exit behavior", () => {
     );
     resolveManifestCommandAliasOwnerMock.mockReturnValue(undefined);
     resolveManifestToolOwnerMock.mockReturnValue(undefined);
+    resolveManifestCliCommandSurfaceOwnerMock.mockReturnValue(undefined);
     delete process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH;
     delete process.env.OPENCLAW_HIDE_BANNER;
   });
@@ -485,6 +488,53 @@ describe("runCli exit behavior", () => {
     expect(startProxyMock).not.toHaveBeenCalled();
     expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(buildProgramMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("does not suggest plugins.allow for unknown command roots before proxy startup", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      plugins: {
+        allow: ["browser"],
+      },
+    });
+
+    let error: unknown;
+    try {
+      await runCli(["node", "openclaw", "totally-unknown"]);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      'No built-in command or plugin CLI metadata owns "totally-unknown"',
+    );
+    expect((error as Error).message).not.toContain("plugins.allow");
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
+    expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves plugins.allow diagnostics for roots owned only by CLI metadata", async () => {
+    loadConfigMock.mockReturnValueOnce({
+      plugins: {
+        allow: ["browser"],
+      },
+    });
+    resolvePluginCliRootOwnerIdsMock.mockImplementation(
+      ({
+        cfg,
+        primaryCommand,
+      }: {
+        cfg?: { plugins?: { allow?: string[] } };
+        primaryCommand?: string;
+      }) => (primaryCommand === "qa" && cfg?.plugins?.allow?.length === 0 ? ["qa-lab"] : []),
+    );
+
+    await expect(runCli(["node", "openclaw", "qa"])).rejects.toThrow(
+      'Add "qa-lab" to `plugins.allow` instead of "qa"',
+    );
+    expect(startProxyMock).not.toHaveBeenCalled();
+    expect(tryRouteCliMock).not.toHaveBeenCalled();
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
   });
 

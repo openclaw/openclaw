@@ -117,6 +117,8 @@ function normalizeOpenAIRealtimeVoice(value: unknown): OpenAIRealtimeVoice | und
 type RealtimeEvent = {
   type: string;
   delta?: string;
+  data?: string;
+  text?: string;
   transcript?: string;
   item_id?: string;
   call_id?: string;
@@ -854,12 +856,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         this.responseCreateInFlight = false;
         return;
 
+      case "conversation.output_audio.delta":
       case "response.audio.delta":
       case "response.output_audio.delta": {
-        if (!event.delta) {
+        const audioDelta = event.delta ?? event.data;
+        if (!audioDelta) {
           return;
         }
-        const audio = base64ToBuffer(event.delta);
+        const audio = base64ToBuffer(audioDelta);
         this.config.onAudio(audio);
         if (event.item_id && event.item_id !== this.lastAssistantItemId) {
           this.lastAssistantItemId = event.item_id;
@@ -878,6 +882,8 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "conversation.output_transcript.delta":
+      case "response.output_text.delta":
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta":
         if (event.delta) {
@@ -885,22 +891,27 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "response.output_text.done":
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done":
-        if (event.transcript) {
-          this.config.onTranscript?.("assistant", event.transcript, true);
+        {
+          const transcript = event.transcript ?? event.text;
+          if (transcript) {
+            this.config.onTranscript?.("assistant", transcript, true);
+          }
+        }
+        return;
+
+      case "conversation.input_transcript.delta":
+      case "conversation.item.input_audio_transcription.delta":
+        if (event.delta) {
+          this.config.onTranscript?.("user", event.delta, false);
         }
         return;
 
       case "conversation.item.input_audio_transcription.completed":
         if (event.transcript) {
           this.config.onTranscript?.("user", event.transcript, true);
-        }
-        return;
-
-      case "conversation.item.input_audio_transcription.delta":
-        if (event.delta) {
-          this.config.onTranscript?.("user", event.delta, false);
         }
         return;
 

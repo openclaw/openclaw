@@ -151,6 +151,21 @@ export type RunEmbeddedPiAgentParams = {
   runId: string;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase:
+      | "runner_entered"
+      | "workspace"
+      | "runtime_plugins"
+      | "model_resolution"
+      | "auth"
+      | "context_engine"
+      | "attempt_dispatch"
+      | "context_assembled"
+      | "model_call_started";
+    provider?: string;
+    model?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   shouldEmitToolResult?: () => boolean;
   shouldEmitToolOutput?: () => boolean;

@@ -19,6 +19,7 @@ const ANSI_ESCAPE_RE = new RegExp(String.raw`\u001B\[[0-9;]*m`, "g");
 const HASHED_ROOT_JS_RE = /^(?<base>.+)-[A-Za-z0-9_-]+\.js$/u;
 const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
+const DEFAULT_TSDOWN_NODE_OPTIONS = "--max-old-space-size=6144";
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
 const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
@@ -199,6 +200,19 @@ function parseNonNegativeInteger(value) {
   return Math.trunc(parsed);
 }
 
+function resolveTsdownEnv(env) {
+  const nodeOptions = env.NODE_OPTIONS?.trim() ?? "";
+  if (/(?:^|\s)--max-old-space-size(?:=|\s+)/u.test(nodeOptions)) {
+    return env;
+  }
+  return {
+    ...env,
+    NODE_OPTIONS: nodeOptions
+      ? `${nodeOptions} ${DEFAULT_TSDOWN_NODE_OPTIONS}`
+      : DEFAULT_TSDOWN_NODE_OPTIONS,
+  };
+}
+
 export function createTsdownOutputScanner(params = {}) {
   const maxCaptureBytes = params.maxCaptureBytes ?? DEFAULT_CAPTURE_BYTES;
   let captured = "";
@@ -242,7 +256,7 @@ export function createTsdownOutputScanner(params = {}) {
 }
 
 export function resolveTsdownBuildInvocation(params = {}) {
-  const env = params.env ?? process.env;
+  const env = resolveTsdownEnv(params.env ?? process.env);
   const runner = resolvePnpmRunner({
     pnpmArgs: [
       "exec",

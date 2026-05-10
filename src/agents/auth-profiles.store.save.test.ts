@@ -15,6 +15,7 @@ import type { AuthProfileStore } from "./auth-profiles/types.js";
 vi.mock("./auth-profiles/external-auth.js", () => ({
   overlayExternalAuthProfiles: <T>(store: T) => store,
   shouldPersistExternalAuthProfile: () => true,
+  syncPersistedExternalCliAuthProfiles: <T>(store: T) => store,
 }));
 
 describe("saveAuthProfileStore", () => {

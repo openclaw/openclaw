@@ -1372,15 +1372,16 @@ persist_shell_path_prepend() {
         return 1
     fi
 
-    local path_line="export PATH=\"${dir}:\$PATH\""
+    local path_expr="${2:-$dir}"
+    local path_line="export PATH=\"${path_expr}:\$PATH\""
     local wrote_rc=0
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [[ -f "$rc" ]]; then
-            if ! grep -Fq "$dir" "$rc"; then
+            if [[ "$(sed -n '1p' "$rc")" != "$path_line" ]]; then
                 local tmp_rc="${rc}.openclaw-tmp"
                 {
                     printf '%s\n' "$path_line"
-                    cat "$rc"
+                    grep -Fvx "$path_line" "$rc" || true
                 } > "$tmp_rc"
                 mv "$tmp_rc" "$rc"
             fi
@@ -1761,25 +1762,7 @@ fix_npm_permissions() {
     npm config set prefix "$HOME/.npm-global"
     ui_warn "Avoid sudo npm i -g for future OpenClaw updates; use npm i -g openclaw@latest so npm keeps using this user prefix instead of a different global prefix."
 
-    # shellcheck disable=SC2016
-    local path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
-    local wrote_rc=0
-    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]]; then
-            if ! grep -q ".npm-global" "$rc"; then
-                local tmp_rc="${rc}.openclaw-tmp"
-                {
-                    printf '%s\n' "$path_line"
-                    cat "$rc"
-                } > "$tmp_rc"
-                mv "$tmp_rc" "$rc"
-            fi
-            wrote_rc=1
-        fi
-    done
-    if [[ "$wrote_rc" -eq 0 ]]; then
-        printf '%s\n' "$path_line" >> "$HOME/.bashrc"
-    fi
+    persist_shell_path_prepend "$HOME/.npm-global/bin" "\$HOME/.npm-global/bin" || true
 
     export PATH="$HOME/.npm-global/bin:$PATH"
     ui_success "npm configured for user installs"
@@ -1933,8 +1916,7 @@ ensure_user_local_bin_on_path() {
 
     export PATH="$target:$PATH"
 
-    # shellcheck disable=SC2016
-    local path_line='export PATH="$HOME/.local/bin:$PATH"'
+    local path_line="export PATH=\"\$HOME/.local/bin:\$PATH\""
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
         if [[ -f "$rc" ]] && ! grep -q ".local/bin" "$rc"; then
             echo "$path_line" >> "$rc"

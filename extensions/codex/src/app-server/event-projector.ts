@@ -18,6 +18,7 @@ import {
   type MessagingToolSend,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -115,6 +116,8 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly nativeGeneratedMediaUrls = new Set<string>();
+  private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -294,7 +297,7 @@ export class CodexAppServerEventProjector {
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
-      toolMediaUrls: toolTelemetry.toolMediaUrls,
+      toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
@@ -462,6 +465,7 @@ export class CodexAppServerEventProjector {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
     }
+    this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
       this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -597,6 +601,7 @@ export class CodexAppServerEventProjector {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
+      this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
         this.planTextByItem.set(item.id, item.text);
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -672,6 +677,28 @@ export class CodexAppServerEventProjector {
     this.assistantTextByItem.set(itemId, text);
   }
 
+  private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "imageGeneration") {
+      return;
+    }
+    const savedPath = readItemString(item, "savedPath")?.trim();
+    if (savedPath) {
+      this.nativeGeneratedMediaUrls.add(savedPath);
+    }
+  }
+
+  private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
+    const mediaUrls = new Set(
+      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+    );
+    if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
+      for (const mediaUrl of this.nativeGeneratedMediaUrls) {
+        mediaUrls.add(mediaUrl);
+      }
+    }
+    return mediaUrls.size > 0 ? [...mediaUrls] : toolTelemetry.toolMediaUrls;
+  }
+
   private async maybeEndReasoning(): Promise<void> {
     if (!this.reasoningStarted || this.reasoningEnded) {
       return;
@@ -740,6 +767,7 @@ export class CodexAppServerEventProjector {
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     this.emitAgentEvent({
       stream: "tool",
       data: {
@@ -758,6 +786,54 @@ export class CodexAppServerEventProjector {
           : {}),
       },
     });
+  }
+
+  private emitDiagnosticToolExecutionEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    const base = {
+      runId: this.params.runId,
+      sessionId: this.params.sessionId,
+      sessionKey: this.params.sessionKey,
+      toolName: params.name,
+      toolCallId: params.item.id,
+    };
+    if (params.phase === "start") {
+      this.diagnosticToolStartedAtByItem.set(params.item.id, Date.now());
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...base,
+      });
+      return;
+    }
+
+    const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
+    this.diagnosticToolStartedAtByItem.delete(params.item.id);
+    const itemDurationMs =
+      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
+    const durationMs =
+      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
+    const terminalEvent =
+      params.status === "blocked"
+        ? {
+            type: "tool.execution.blocked" as const,
+            reason: "codex_native_tool_blocked",
+            deniedReason: "codex_native_tool_blocked",
+          }
+        : params.status === "failed"
+          ? {
+              type: "tool.execution.error" as const,
+              durationMs,
+              errorCategory: "codex_native_tool_error",
+            }
+          : {
+              type: "tool.execution.completed" as const,
+              durationMs,
+            };
+    emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
   }
 
   private emitToolResultSummary(item: CodexThreadItem | undefined): void {
@@ -1016,6 +1092,7 @@ export class CodexAppServerEventProjector {
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
+    const args = normalizeToolTranscriptArguments(params.arguments);
     return {
       role: "assistant",
       content: [
@@ -1023,7 +1100,8 @@ export class CodexAppServerEventProjector {
           type: "toolCall",
           id: params.id,
           name: params.name,
-          arguments: normalizeToolTranscriptArguments(params.arguments),
+          arguments: args,
+          input: args,
         },
       ],
       api: this.params.model.api ?? "openai-codex-responses",
@@ -1045,6 +1123,9 @@ export class CodexAppServerEventProjector {
       content: [
         {
           type: "toolResult",
+          id: params.id,
+          name: params.name,
+          toolName: params.name,
           toolCallId: params.id,
           toolUseId: params.id,
           tool_use_id: params.id,

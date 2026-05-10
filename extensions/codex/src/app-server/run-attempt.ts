@@ -73,10 +73,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import {
-  applyCodexDynamicToolProfile,
-  normalizeCodexDynamicToolName,
-} from "./dynamic-tool-profile.js";
+import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -98,6 +95,7 @@ import {
   type CodexUserInput,
   isJsonObject,
   type CodexServerNotification,
+  type CodexDynamicToolSpec,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
   type CodexTurnStartResponse,
@@ -161,6 +159,11 @@ type OpenClawCodingToolsOptions = NonNullable<
 >;
 type OpenClawCodingToolsFactory =
   (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
+type CodexBootstrapContext = Awaited<ReturnType<typeof resolveBootstrapContextForRun>>;
+type CodexBootstrapFile = CodexBootstrapContext["bootstrapFiles"][number];
+type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
+type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
+type CodexWorkspaceBootstrapContext = CodexBootstrapContext & { instructions?: string };
 
 const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
 const clientFactory = defaultCodexAppServerClientFactory;
@@ -574,13 +577,14 @@ export async function runCodexAppServerAttempt(
   // Build the workspace bootstrap block before finalizing developer
   // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
   // through the explicit `developerInstructions` field.
-  const workspaceBootstrapInstructions = await buildCodexWorkspaceBootstrapInstructions({
+  const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
     sessionKey: sandboxSessionKey,
     sessionAgentId,
   });
+  const workspaceBootstrapInstructions = workspaceBootstrapContext.instructions;
   let promptText = params.prompt;
   let developerInstructions = joinPresentSections(
     baseDeveloperInstructions,
@@ -636,11 +640,20 @@ export async function runCodexAppServerAttempt(
     promptText = projection.promptText;
     prePromptMessageCount = projection.prePromptMessageCount;
   }
+  promptText = prependCurrentTurnContext(promptText, params.currentTurnContext);
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
     prompt: promptText,
     developerInstructions,
     messages: historyMessages,
     ctx: hookContext,
+  });
+  const systemPromptReport = buildCodexSystemPromptReport({
+    attempt: params,
+    sessionKey: sandboxSessionKey,
+    workspaceDir: effectiveWorkspace,
+    developerInstructions: promptBuild.developerInstructions,
+    workspaceBootstrapContext,
+    tools: toolBridge.specs,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
@@ -1531,6 +1544,7 @@ export async function runCodexAppServerAttempt(
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
+      systemPromptReport,
     };
   } finally {
     emitLifecycleTerminal({
@@ -1907,8 +1921,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
-  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
+  const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -2198,15 +2212,15 @@ async function readMirroredSessionHistoryMessages(
   return messages;
 }
 
-async function buildCodexWorkspaceBootstrapInstructions(params: {
+async function buildCodexWorkspaceBootstrapContext(params: {
   params: EmbeddedRunAttemptParams;
   resolvedWorkspace: string;
   effectiveWorkspace: string;
   sessionKey: string;
   sessionAgentId: string;
-}): Promise<string | undefined> {
+}): Promise<CodexWorkspaceBootstrapContext> {
   try {
-    const { contextFiles } = await resolveBootstrapContextForRun({
+    const bootstrapContext = await resolveBootstrapContextForRun({
       workspaceDir: params.resolvedWorkspace,
       config: params.params.config,
       sessionKey: params.sessionKey,
@@ -2216,19 +2230,156 @@ async function buildCodexWorkspaceBootstrapInstructions(params: {
       contextMode: params.params.bootstrapContextMode,
       runKind: params.params.bootstrapContextRunKind,
     });
-    return renderCodexWorkspaceBootstrapInstructions(
-      contextFiles.map((file) =>
-        remapCodexContextFilePath({
-          file,
-          sourceWorkspaceDir: params.resolvedWorkspace,
-          targetWorkspaceDir: params.effectiveWorkspace,
-        }),
-      ),
+    const contextFiles = bootstrapContext.contextFiles.map((file) =>
+      remapCodexContextFilePath({
+        file,
+        sourceWorkspaceDir: params.resolvedWorkspace,
+        targetWorkspaceDir: params.effectiveWorkspace,
+      }),
     );
+    return {
+      ...bootstrapContext,
+      contextFiles,
+      instructions: renderCodexWorkspaceBootstrapInstructions(contextFiles),
+    };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
-    return undefined;
+    return { bootstrapFiles: [], contextFiles: [] };
   }
+}
+
+function buildCodexSystemPromptReport(params: {
+  attempt: EmbeddedRunAttemptParams;
+  sessionKey: string;
+  workspaceDir: string;
+  developerInstructions: string;
+  workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
+  tools: CodexDynamicToolSpec[];
+}): CodexSystemPromptReport {
+  const toolEntries = params.tools.map(buildCodexToolReportEntry);
+  const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
+  const projectContextChars = params.workspaceBootstrapContext.instructions?.length ?? 0;
+  const bootstrapMaxChars = readPositiveNumber(
+    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
+  );
+  const bootstrapTotalMaxChars = readPositiveNumber(
+    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
+  );
+  return {
+    source: "run",
+    generatedAt: Date.now(),
+    sessionId: params.attempt.sessionId,
+    sessionKey: params.sessionKey,
+    provider: params.attempt.provider,
+    model: params.attempt.modelId,
+    workspaceDir: params.workspaceDir,
+    ...(bootstrapMaxChars ? { bootstrapMaxChars } : {}),
+    ...(bootstrapTotalMaxChars ? { bootstrapTotalMaxChars } : {}),
+    systemPrompt: {
+      chars: params.developerInstructions.length,
+      projectContextChars,
+      nonProjectContextChars: Math.max(
+        0,
+        params.developerInstructions.length - projectContextChars,
+      ),
+    },
+    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
+      bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
+      injectedFiles: params.workspaceBootstrapContext.contextFiles,
+    }),
+    skills: {
+      promptChars: 0,
+      entries: [],
+    },
+    tools: {
+      listChars: 0,
+      schemaChars,
+      entries: toolEntries,
+    },
+  };
+}
+
+function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
+  const summary = tool.description.trim();
+  if (tool.deferLoading === true) {
+    return {
+      name: tool.name,
+      summaryChars: summary.length,
+      schemaChars: 0,
+      propertiesCount: null,
+    };
+  }
+  return {
+    name: tool.name,
+    summaryChars: summary.length,
+    ...buildCodexToolSchemaStats(tool.inputSchema),
+  };
+}
+
+function buildCodexToolSchemaStats(
+  schema: JsonValue,
+): Pick<CodexToolReportEntry, "schemaChars" | "propertiesCount"> {
+  const schemaChars = (() => {
+    try {
+      return JSON.stringify(schema).length;
+    } catch {
+      return 0;
+    }
+  })();
+  const properties =
+    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
+  return {
+    schemaChars,
+    propertiesCount: properties ? Object.keys(properties).length : null,
+  };
+}
+
+function buildCodexBootstrapInjectionStats(params: {
+  bootstrapFiles: CodexBootstrapFile[];
+  injectedFiles: EmbeddedContextFile[];
+}): CodexSystemPromptReport["injectedWorkspaceFiles"] {
+  const injectedByPath = new Map<string, string>();
+  const injectedByBaseName = new Map<string, string>();
+  for (const file of params.injectedFiles) {
+    const pathValue = readNonEmptyString(file.path);
+    if (!pathValue) {
+      continue;
+    }
+    if (!injectedByPath.has(pathValue)) {
+      injectedByPath.set(pathValue, file.content);
+    }
+    const baseName = path.posix.basename(pathValue.replaceAll("\\", "/"));
+    if (!injectedByBaseName.has(baseName)) {
+      injectedByBaseName.set(baseName, file.content);
+    }
+  }
+  return params.bootstrapFiles.map((file) => {
+    const pathValue = readNonEmptyString(file.path) ?? file.name;
+    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
+    const injected =
+      injectedByPath.get(pathValue) ??
+      injectedByPath.get(file.name) ??
+      injectedByBaseName.get(file.name);
+    const injectedChars = injected?.length ?? 0;
+    return {
+      name: file.name,
+      path: pathValue,
+      missing: file.missing,
+      rawChars,
+      injectedChars,
+      truncated: !file.missing && injectedChars < rawChars,
+    };
+  });
+}
+
+function readPositiveNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function readNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function renderCodexWorkspaceBootstrapInstructions(
@@ -2252,9 +2403,7 @@ function renderCodexWorkspaceBootstrapInstructions(
     "The following project context files have been loaded:",
   ];
   if (hasSoulFile) {
-    lines.push(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-    );
+    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
   }
   lines.push("");
   for (const file of files) {
@@ -2344,6 +2493,14 @@ function joinPresentSections(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
+function prependCurrentTurnContext(
+  prompt: string,
+  context: EmbeddedRunAttemptParams["currentTurnContext"],
+): string {
+  const text = context?.text.trim();
+  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+}
+
 function handleApprovalRequest(params: {
   method: string;
   params: JsonValue | undefined;
@@ -2369,7 +2526,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
-  applyCodexDynamicToolProfile,
+  filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,

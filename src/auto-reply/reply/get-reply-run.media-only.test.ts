@@ -585,7 +585,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
 
     const call = requireRunReplyAgentCall();
-    expect(call.followupRun.prompt).toContain("Thread starter (untrusted, for context):");
+    expect(call.followupRun.currentTurnContext?.text).toContain(
+      "Thread starter (untrusted, for context):",
+    );
     expect(call.followupRun.prompt).not.toContain("[Thread starter - for context]");
   });
 
@@ -686,8 +688,9 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call?.followupRun.prompt).toContain("Chat history since last reply");
-    expect(call?.followupRun.prompt).toContain("what changed?");
+    expect(call?.followupRun.prompt).toBe("");
+    expect(call?.followupRun.currentTurnContext?.text).toContain("Chat history since last reply");
+    expect(call?.followupRun.currentTurnContext?.text).toContain("what changed?");
     expect(call?.followupRun.prompt).not.toContain("[User sent media without caption]");
   });
 
@@ -768,7 +771,7 @@ describe("runPreparedReply media-only handling", () => {
     expect(result).toEqual({ text: "ok" });
     expect(vi.mocked(runReplyAgent)).toHaveBeenCalledOnce();
     const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
-    expect(call?.followupRun.prompt).toContain("webchat:local");
+    expect(call?.followupRun.currentTurnContext?.text).toContain("webchat:local");
     expect(call?.followupRun.prompt).toContain("[User sent media without caption]");
   });
 
@@ -1183,7 +1186,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const call = vi.mocked(runReplyAgent).mock.calls.at(-1)?.[0];
     expect(call?.commandBody).toContain("what does this mean?");
+    expect(call?.commandBody).not.toContain("Reply target of current user message");
     expect(call?.transcriptCommandBody).toBe("what does this mean?");
+    expect(call?.followupRun.prompt).toContain("what does this mean?");
     expect(call?.followupRun.transcriptPrompt).toBe("what does this mean?");
     expect(call?.followupRun.currentTurnContext?.text).toContain(
       "Reply target of current user message",

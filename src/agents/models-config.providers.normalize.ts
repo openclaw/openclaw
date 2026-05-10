@@ -84,6 +84,26 @@ function normalizeProviderModelsForConfig(
     : { provider, mutated };
 }
 
+export function normalizeProviderCatalogModelsForConfig(
+  providers: ModelsConfig["providers"],
+): ModelsConfig["providers"] {
+  if (!providers) {
+    return providers;
+  }
+
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderModelsForConfig(providerKey, provider);
+    if (normalized.mutated) {
+      mutated = true;
+    }
+    next[providerKey] = normalized.provider;
+  }
+
+  return mutated ? next : providers;
+}
+
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;

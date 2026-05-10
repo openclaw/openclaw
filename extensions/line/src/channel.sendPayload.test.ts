@@ -265,16 +265,16 @@ describe("line outbound sendPayload", () => {
       cfg,
     });
 
-    expect(mocks.sendMessageLine).toHaveBeenCalledWith(
-      "line:user:3",
-      "",
-      expect.objectContaining({
-        verbose: false,
-        mediaUrl: "https://example.com/img.jpg",
-        accountId: "default",
-        cfg,
-      }),
-    );
+    expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:3", "", {
+      verbose: false,
+      mediaUrl: "https://example.com/img.jpg",
+      mediaKind: undefined,
+      previewImageUrl: undefined,
+      durationMs: undefined,
+      trackingId: undefined,
+      accountId: "default",
+      cfg,
+    });
     expect(mocks.pushTextMessageWithQuickReplies).toHaveBeenCalledWith(
       "line:user:3",
       "Hello",
@@ -487,76 +487,74 @@ describe("line outbound sendPayload", () => {
     setLineRuntime(runtime);
     const cfg = { channels: { line: {} } } as OpenClawConfig;
 
-    await expect(
-      verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "line",
-        adapter: linePlugin.message!,
-        proofs: {
-          text: async () => {
-            const result = await linePlugin.message?.send?.text?.({
-              cfg,
-              to: "line:user:U123",
-              text: "hello",
-              accountId: "primary",
-            });
-            expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
-              verbose: false,
-              accountId: "primary",
-              cfg,
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
-          },
-          media: async () => {
-            const result = await linePlugin.message?.send?.media?.({
-              cfg,
-              to: "line:user:U123",
-              text: "image",
-              mediaUrl: "https://example.com/image.jpg",
-              accountId: "primary",
-            });
-            expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
-              verbose: false,
-              mediaUrl: "https://example.com/image.jpg",
-              accountId: "primary",
-              cfg,
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
-          },
-          messageSendingHooks: () => {
-            expect(linePlugin.message?.send?.text).toBeTypeOf("function");
-          },
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "line",
+      adapter: linePlugin.message!,
+      proofs: {
+        text: async () => {
+          const result = await linePlugin.message?.send?.text?.({
+            cfg,
+            to: "line:user:U123",
+            text: "hello",
+            accountId: "primary",
+          });
+          expect(mocks.pushMessageLine).toHaveBeenCalledWith("line:user:U123", "hello", {
+            verbose: false,
+            accountId: "primary",
+            cfg,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["m-text"]);
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { capability: "text", status: "verified" },
-        { capability: "media", status: "verified" },
-        { capability: "messageSendingHooks", status: "verified" },
-      ]),
+        media: async () => {
+          const result = await linePlugin.message?.send?.media?.({
+            cfg,
+            to: "line:user:U123",
+            text: "image",
+            mediaUrl: "https://example.com/image.jpg",
+            accountId: "primary",
+          });
+          expect(mocks.sendMessageLine).toHaveBeenCalledWith("line:user:U123", "", {
+            verbose: false,
+            mediaUrl: "https://example.com/image.jpg",
+            accountId: "primary",
+            cfg,
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["m-media"]);
+        },
+        messageSendingHooks: () => {
+          expect(linePlugin.message?.send?.text).toBeTypeOf("function");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "messageSendingHooks")?.status).toBe(
+      "verified",
     );
   });
 
   it("declares receive ack policies for deferred LINE webhook acknowledgement", async () => {
-    await expect(
-      verifyChannelMessageReceiveAckPolicyAdapterProofs({
-        adapterName: "line",
-        adapter: linePlugin.message!,
-        proofs: {
-          after_receive_record: () => {
-            expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
-              "after_receive_record",
-            );
-          },
-          after_agent_dispatch: () => {
-            expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
-          },
+    const proofResults = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
+      adapterName: "line",
+      adapter: linePlugin.message!,
+      proofs: {
+        after_receive_record: () => {
+          expect(linePlugin.message?.receive?.supportedAckPolicies).toContain(
+            "after_receive_record",
+          );
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { policy: "after_receive_record", status: "verified" },
-        { policy: "after_agent_dispatch", status: "verified" },
-      ]),
+        after_agent_dispatch: () => {
+          expect(linePlugin.message?.receive?.defaultAckPolicy).toBe("after_agent_dispatch");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.policy === "after_receive_record")?.status).toBe(
+      "verified",
+    );
+    expect(proofResults.find((result) => result.policy === "after_agent_dispatch")?.status).toBe(
+      "verified",
     );
   });
 });

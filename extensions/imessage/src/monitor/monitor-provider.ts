@@ -32,7 +32,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -869,9 +869,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         // Catchup bypasses the inbound debouncer so each row is awaited
         // serially and dispatch failure can hold the cursor. Split-sends
         // from before the gateway gap therefore arrive as separate turns
-        // rather than coalesced — same behavior the retired BlueBubbles
-        // catchup had. Live notifications continue to flow through the
-        // debouncer.
+        // rather than coalesced. Live notifications continue to flow through
+        // the debouncer.
         dispatchPayload: (message) => handleMessageNow(message),
         runtime,
       });

@@ -42,7 +42,6 @@ Supported top-level fields:
 | -------------------------- | ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------- |
 | `discovery`                | enabled                  | Model discovery settings for Codex app-server `model/list`.                                                                               |
 | `appServer`                | managed stdio app-server | Transport, command, auth, approval, sandbox, and timeout settings.                                                                        |
-| `codexDynamicToolsProfile` | `"native-first"`         | Use `"openclaw-compat"` to expose the full OpenClaw dynamic tool set to Codex app-server.                                                 |
 | `codexDynamicToolsLoading` | `"searchable"`           | Use `"direct"` to put OpenClaw dynamic tools directly in the initial Codex tool context.                                                  |
 | `codexDynamicToolsExclude` | `[]`                     | Additional OpenClaw dynamic tool names to omit from Codex app-server turns.                                                               |
 | `codexPlugins`             | disabled                 | Native Codex plugin/app support for migrated source-installed curated plugins. See [Native Codex plugins](/plugins/codex-native-plugins). |
@@ -211,9 +210,8 @@ isolation on local launches.
 
 ## Dynamic tools
 
-Codex dynamic tools default to the `native-first` profile and `searchable`
-loading. In that mode, OpenClaw does not expose dynamic tools that duplicate
-Codex-native workspace operations:
+Codex dynamic tools default to `searchable` loading. OpenClaw does not expose
+dynamic tools that duplicate Codex-native workspace operations:
 
 - `read`
 - `write`
