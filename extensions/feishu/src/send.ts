@@ -144,7 +144,7 @@ async function sendReplyOrFallbackDirect(
   params: {
     replyToMessageId?: string;
     replyInThread?: boolean;
-    allowTopLevelThreadReplyFallback?: boolean;
+    allowTopLevelReplyFallback?: boolean;
     content: string;
     msgType: string;
     directParams: {
@@ -161,8 +161,8 @@ async function sendReplyOrFallbackDirect(
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
 
-  const threadReplyFallbackError =
-    params.replyInThread && !params.allowTopLevelThreadReplyFallback
+  const replyTargetFallbackError =
+    params.replyInThread && params.allowTopLevelReplyFallback !== true
       ? new Error(
           "Feishu thread reply failed: reply target is unavailable and cannot safely fall back to a top-level send.",
         )
@@ -182,14 +182,14 @@ async function sendReplyOrFallbackDirect(
     if (!isWithdrawnReplyError(err)) {
       throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });
     }
-    if (threadReplyFallbackError) {
-      throw threadReplyFallbackError;
+    if (replyTargetFallbackError) {
+      throw replyTargetFallbackError;
     }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
   if (shouldFallbackFromReplyTarget(response)) {
-    if (threadReplyFallbackError) {
-      throw threadReplyFallbackError;
+    if (replyTargetFallbackError) {
+      throw replyTargetFallbackError;
     }
     return sendFallbackDirect(client, params.directParams, params.directErrorPrefix);
   }
@@ -528,8 +528,7 @@ export type SendFeishuMessageParams = {
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
-  /** Allow missing thread reply targets to fall back to a visible top-level send. */
-  allowTopLevelThreadReplyFallback?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   /** Mention target users */
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
@@ -567,7 +566,7 @@ export async function sendMessageFeishu(
     text,
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     mentions,
     accountId,
   } = params;
@@ -590,7 +589,7 @@ export async function sendMessageFeishu(
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     content,
     msgType,
     directParams,
@@ -606,21 +605,13 @@ export type SendFeishuCardParams = {
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
-  /** Allow missing thread reply targets to fall back to a visible top-level send. */
-  allowTopLevelThreadReplyFallback?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   accountId?: string;
 };
 
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
-  const {
-    cfg,
-    to,
-    card,
-    replyToMessageId,
-    replyInThread,
-    allowTopLevelThreadReplyFallback,
-    accountId,
-  } = params;
+  const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
+    params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const content = JSON.stringify(card);
 
@@ -628,7 +619,7 @@ export async function sendCardFeishu(params: SendFeishuCardParams): Promise<Feis
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     content,
     msgType: "interactive",
     directParams,
@@ -793,8 +784,7 @@ export async function sendStructuredCardFeishu(params: {
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
-  /** Allow missing thread reply targets to fall back to a visible top-level send. */
-  allowTopLevelThreadReplyFallback?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   mentions?: MentionTarget[];
   accountId?: string;
   header?: CardHeaderConfig;
@@ -806,7 +796,7 @@ export async function sendStructuredCardFeishu(params: {
     text,
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     mentions,
     accountId,
     header,
@@ -823,7 +813,7 @@ export async function sendStructuredCardFeishu(params: {
     card,
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     accountId,
   });
 }
@@ -839,8 +829,7 @@ export async function sendMarkdownCardFeishu(params: {
   replyToMessageId?: string;
   /** When true, reply creates a Feishu topic thread instead of an inline reply */
   replyInThread?: boolean;
-  /** Allow missing thread reply targets to fall back to a visible top-level send. */
-  allowTopLevelThreadReplyFallback?: boolean;
+  allowTopLevelReplyFallback?: boolean;
   /** Mention target users */
   mentions?: MentionTarget[];
   accountId?: string;
@@ -851,7 +840,7 @@ export async function sendMarkdownCardFeishu(params: {
     text,
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     mentions,
     accountId,
   } = params;
@@ -866,7 +855,7 @@ export async function sendMarkdownCardFeishu(params: {
     card,
     replyToMessageId,
     replyInThread,
-    allowTopLevelThreadReplyFallback,
+    allowTopLevelReplyFallback,
     accountId,
   });
 }
