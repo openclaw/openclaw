@@ -2,6 +2,7 @@ import { resolveAgentConfig, resolveDefaultAgentId } from "../../../agents/agent
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import { normalizeChatChannelId } from "../../../channels/ids.js";
 import { listRouteBindings } from "../../../config/bindings.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -12,6 +13,7 @@ import {
   normalizeAgentId,
 } from "../../../routing/session-key.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
+import { normalizeLowercaseStringOrEmpty } from "../../../shared/string-coerce.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
 
@@ -37,6 +39,10 @@ function hasChannels(cfg: OpenClawConfig): boolean {
   return hasRecord(cfg.channels);
 }
 
+function normalizeChannelKey(raw?: string | null): string {
+  return normalizeChatChannelId(raw) ?? normalizeLowercaseStringOrEmpty(raw);
+}
+
 function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
   if (!hasRecord(cfg.channels)) {
     return [];
@@ -48,7 +54,8 @@ function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
       }
       return !(hasRecord(value) && value.enabled === false);
     })
-    .map(([id]) => id)
+    .map(([id]) => normalizeChannelKey(id))
+    .filter(Boolean)
     .toSorted();
 }
 
@@ -56,7 +63,9 @@ function listConfiguredChannelAccountIds(cfg: OpenClawConfig, channelId: string)
   if (!hasRecord(cfg.channels)) {
     return [];
   }
-  const channel = cfg.channels[channelId];
+  const channel = Object.entries(cfg.channels).find(
+    ([id]) => normalizeChannelKey(id) === channelId,
+  )?.[1];
   if (!hasRecord(channel) || !hasRecord(channel.accounts)) {
     return [];
   }
@@ -286,7 +295,7 @@ function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
   const fullyCoveredChannels = new Set<string>();
   const coveredAccountsByChannel = new Map<string, Set<string>>();
   for (const binding of routeBindings) {
-    const channel = binding.match.channel.trim();
+    const channel = normalizeChannelKey(binding.match.channel);
     add(binding.agentId, channel);
     if (!channel) {
       continue;

@@ -725,14 +725,14 @@ describe("doctor preview warnings", () => {
         {
           agentId: "personal-agent",
           match: {
-            channel: "discord",
+            channel: "Discord",
             accountId: "personal",
           },
         },
         {
           agentId: "work-agent",
           match: {
-            channel: "discord",
+            channel: "Discord",
             accountId: "work",
           },
         },
