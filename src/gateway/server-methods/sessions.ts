@@ -103,6 +103,11 @@ import {
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
+import {
+  buildSessionsListCacheKey,
+  invalidateSessionsListResultCache,
+  loadSessionsListResultCached,
+} from "../sessions-list-result-cache.js";
 import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { resolveSessionKeyFromResolveParams } from "../sessions-resolve.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -252,6 +257,7 @@ function emitSessionsChanged(
   >,
   payload: { sessionKey?: string; reason: string; compacted?: boolean },
 ) {
+  invalidateSessionsListResultCache();
   const connIds = context.getSessionEventSubscriberConnIds();
   if (connIds.size === 0) {
     return;
@@ -691,16 +697,23 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     const p = params;
     const cfg = context.getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg, { agentId: p.agentId });
-    const listStore =
-      p.configuredAgentsOnly === true ? filterSessionStoreToConfiguredAgents(cfg, store) : store;
-    const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
-    const result = await listSessionsFromStoreAsync({
-      cfg,
-      storePath,
-      store: listStore,
-      modelCatalog,
-      opts: p,
-    });
+    const result = await loadSessionsListResultCached(
+      buildSessionsListCacheKey({ cfg, storePath, opts: p }),
+      async () => {
+        const listStore =
+          p.configuredAgentsOnly === true
+            ? filterSessionStoreToConfiguredAgents(cfg, store)
+            : store;
+        const modelCatalog = await loadOptionalSessionsListModelCatalog(context);
+        return await listSessionsFromStoreAsync({
+          cfg,
+          storePath,
+          store: listStore,
+          modelCatalog,
+          opts: p,
+        });
+      },
+    );
     respond(
       true,
       {

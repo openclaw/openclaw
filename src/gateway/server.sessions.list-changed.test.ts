@@ -1,6 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import {
+  invalidateSessionsListResultCache,
+  loadSessionsListResultCached,
+} from "./sessions-list-result-cache.js";
 import { rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
@@ -321,6 +326,87 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
   } finally {
     vi.useRealTimers();
   }
+});
+
+test("sessions.list cache is invalidated by external sessions.changed lifecycle sources", async () => {
+  await createSessionStoreDir();
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { displayName: "before" }),
+    },
+  });
+
+  const sessionsHandlers = await getSessionsHandlers();
+  const { getRuntimeConfig } = await getGatewayConfigModule();
+  const listSessions = async () => {
+    const respond = vi.fn();
+    await sessionsHandlers["sessions.list"]({
+      req: {
+        type: "req",
+        id: `req-sessions-list-cache-${respond.mock.calls.length}`,
+        method: "sessions.list",
+        params: {},
+      },
+      params: {},
+      respond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig,
+        loadGatewayModelCatalog: async () => [],
+      } as never,
+    });
+    expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
+    return respond.mock.calls[0]?.[1] as { sessions: Array<{ key: string; displayName?: string }> };
+  };
+
+  const first = await listSessions();
+  expect(first.sessions.find((session) => session.key === "agent:main:main")?.displayName).toBe(
+    "before",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry("sess-main", { displayName: "after" }),
+    },
+  });
+  const lifecycleBroadcast = createLifecycleEventBroadcastHandler({
+    broadcastToConnIds: vi.fn(),
+    sessionEventSubscribers: { getAll: () => new Set<string>() },
+  });
+  lifecycleBroadcast({ sessionKey: "agent:main:main", reason: "updated" } as never);
+
+  const second = await listSessions();
+  expect(second.sessions.find((session) => session.key === "agent:main:main")?.displayName).toBe(
+    "after",
+  );
+});
+
+test("sessions.list in-flight results do not repopulate cache after invalidation", async () => {
+  invalidateSessionsListResultCache();
+  const stale = { sessions: [{ key: "agent:main:stale" }] } as never;
+  const fresh = { sessions: [{ key: "agent:main:fresh" }] } as never;
+  const staleLoad = createDeferred<never>();
+  const freshLoad = createDeferred<never>();
+
+  const staleRequest = loadSessionsListResultCached(
+    "test-in-flight-generation",
+    () => staleLoad.promise,
+  );
+  invalidateSessionsListResultCache();
+  const freshRequest = loadSessionsListResultCached(
+    "test-in-flight-generation",
+    () => freshLoad.promise,
+  );
+
+  staleLoad.resolve(stale);
+  expect(await staleRequest).toBe(stale);
+  freshLoad.resolve(fresh);
+  expect(await freshRequest).toBe(fresh);
+
+  const fallbackLoad = vi.fn(async () => stale);
+  expect(await loadSessionsListResultCached("test-in-flight-generation", fallbackLoad)).toBe(fresh);
+  expect(fallbackLoad).not.toHaveBeenCalled();
 });
 
 test("sessions.changed mutation events include live usage metadata", async () => {

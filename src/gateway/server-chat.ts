@@ -21,6 +21,7 @@ import { loadGatewaySessionRow } from "./server-chat.load-gateway-session-row.ru
 import { persistGatewaySessionLifecycleEvent } from "./server-chat.persist-session-lifecycle.runtime.js";
 import { deriveGatewaySessionLifecycleSnapshot } from "./session-lifecycle-state.js";
 import { loadSessionEntry } from "./session-utils.js";
+import { invalidateSessionsListResultCache } from "./sessions-list-result-cache.js";
 import { formatForLog } from "./ws-log.js";
 
 export {
@@ -355,6 +356,7 @@ export function createAgentEventHandler({
 
     if (sessionKey) {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+      invalidateSessionsListResultCache();
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(
@@ -726,6 +728,7 @@ export function createAgentEventHandler({
 
     if (sessionKey && lifecyclePhase === "start") {
       void persistGatewaySessionLifecycleEvent({ sessionKey, event: evt }).catch(() => undefined);
+      invalidateSessionsListResultCache();
       const sessionEventConnIds = sessionEventSubscribers.getAll();
       if (sessionEventConnIds.size > 0) {
         broadcastToConnIds(

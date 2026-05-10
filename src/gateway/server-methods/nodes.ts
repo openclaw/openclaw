@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { getRuntimeConfig } from "../../config/io.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { listDevicePairing } from "../../infra/device-pairing.js";
+import { listDevicePairing, type DevicePairingList } from "../../infra/device-pairing.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   approveNodePairing,
@@ -86,6 +86,55 @@ const TALK_PTT_COMMANDS = new Set([
   "talk.ptt.once",
 ]);
 const talkPttEventSeqBySessionId = new Map<string, number>();
+
+const NODE_PAIRING_LIST_CACHE_TTL_MS = 1_000;
+
+type NodePairingListSnapshot = Awaited<ReturnType<typeof listNodePairing>>;
+type NodePairingListCacheEntry = {
+  expiresAt: number;
+  devicePairing: DevicePairingList;
+  nodePairing: NodePairingListSnapshot;
+};
+
+let nodePairingListCache: NodePairingListCacheEntry | null = null;
+let nodePairingListInFlight: Promise<NodePairingListCacheEntry> | null = null;
+let nodePairingListCacheGeneration = 0;
+
+function clearNodePairingListCache(): void {
+  nodePairingListCacheGeneration += 1;
+  nodePairingListCache = null;
+  nodePairingListInFlight = null;
+}
+
+async function loadNodePairingListsCached(): Promise<NodePairingListCacheEntry> {
+  const now = Date.now();
+  if (nodePairingListCache && nodePairingListCache.expiresAt > now) {
+    return nodePairingListCache;
+  }
+  if (nodePairingListInFlight) {
+    return nodePairingListInFlight;
+  }
+  const generation = nodePairingListCacheGeneration;
+  const promise = Promise.all([listDevicePairing(), listNodePairing()])
+    .then(([devicePairing, nodePairing]) => {
+      const entry = {
+        expiresAt: Date.now() + NODE_PAIRING_LIST_CACHE_TTL_MS,
+        devicePairing,
+        nodePairing,
+      } satisfies NodePairingListCacheEntry;
+      if (nodePairingListCacheGeneration === generation) {
+        nodePairingListCache = entry;
+      }
+      return entry;
+    })
+    .finally(() => {
+      if (nodePairingListCacheGeneration === generation) {
+        nodePairingListInFlight = null;
+      }
+    });
+  nodePairingListInFlight = promise;
+  return promise;
+}
 
 type NodeWakeNudgeAttempt = {
   sent: boolean;
@@ -661,6 +710,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         remoteIp: p.remoteIp,
         silent: p.silent,
       });
+      clearNodePairingListCache();
       if (result.status === "pending" && result.created) {
         context.broadcast("node.pair.requested", result.request, {
           dropIfSlow: true,
@@ -697,6 +747,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
       const approved = await approveNodePairing(requestId, { callerScopes });
+      clearNodePairingListCache();
       if (!approved) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
@@ -739,6 +790,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     const { requestId } = params as { requestId: string };
     await respondUnavailableOnThrow(respond, async () => {
       const rejected = await rejectNodePairing(requestId);
+      clearNodePairingListCache();
       if (!rejected) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown requestId"));
         return;
@@ -768,6 +820,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
     const { nodeId } = params as { nodeId: string };
     await respondUnavailableOnThrow(respond, async () => {
       const removed = await removePairedNode(nodeId);
+      clearNodePairingListCache();
       if (!removed) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -823,6 +876,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         return;
       }
       const updated = await renamePairedNode(nodeId, trimmed);
+      clearNodePairingListCache();
       if (!updated) {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
@@ -840,10 +894,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const [devicePairing, nodePairing] = await Promise.all([
-        listDevicePairing(),
-        listNodePairing(),
-      ]);
+      const { devicePairing, nodePairing } = await loadNodePairingListsCached();
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
@@ -869,10 +920,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
-      const [devicePairing, nodePairing] = await Promise.all([
-        listDevicePairing(),
-        listNodePairing(),
-      ]);
+      const { devicePairing, nodePairing } = await loadNodePairingListsCached();
       const catalog = createKnownNodeCatalog({
         pairedDevices: devicePairing.paired,
         pairedNodes: nodePairing.paired,
