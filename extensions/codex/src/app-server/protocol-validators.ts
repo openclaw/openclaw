@@ -43,11 +43,19 @@ const validateTurnCompletedNotification = ajv.compile<CodexTurnCompletedNotifica
 const validateTurnStartResponse = ajv.compile<CodexTurnStartResponse>(turnStartResponseSchema);
 
 export function assertCodexThreadStartResponse(value: unknown): CodexThreadStartResponse {
-  return assertCodexShape(validateThreadStartResponse, value, "thread/start response");
+  return assertCodexShape(
+    validateThreadStartResponse,
+    normalizeThreadResponse(value),
+    "thread/start response",
+  );
 }
 
 export function assertCodexThreadResumeResponse(value: unknown): CodexThreadResumeResponse {
-  return assertCodexShape(validateThreadResumeResponse, value, "thread/resume response");
+  return assertCodexShape(
+    validateThreadResumeResponse,
+    normalizeThreadResponse(value),
+    "thread/resume response",
+  );
 }
 
 export function assertCodexTurnStartResponse(value: unknown): CodexTurnStartResponse {
@@ -157,6 +165,32 @@ function normalizeTurnCompletedNotification(value: unknown): unknown {
   return {
     ...value,
     turn: normalizeTurn((value as { turn?: unknown }).turn),
+  };
+}
+
+function normalizeThread(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const thread = value as Record<string, unknown>;
+  // Live Codex app-server may return thread.id without sessionId or vice versa.
+  // Mirror whichever field is present so schema validation passes.
+  if (thread.id !== undefined && thread.sessionId === undefined) {
+    return { ...thread, sessionId: thread.id };
+  }
+  if (thread.sessionId !== undefined && thread.id === undefined) {
+    return { ...thread, id: thread.sessionId };
+  }
+  return value;
+}
+
+function normalizeThreadResponse(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value) || !("thread" in value)) {
+    return value;
+  }
+  return {
+    ...value,
+    thread: normalizeThread((value as { thread?: unknown }).thread),
   };
 }
 
