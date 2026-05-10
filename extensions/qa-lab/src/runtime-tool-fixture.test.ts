@@ -56,8 +56,8 @@ describe("runtime tool fixture", () => {
       },
       {
         createSession: vi.fn(async (_env, _label, key) => {
-          createdKeys.push(key!);
-          return key!;
+          createdKeys.push(key);
+          return key;
         }),
         readEffectiveTools,
         runAgentPrompt: vi.fn(async (_env, params) => {

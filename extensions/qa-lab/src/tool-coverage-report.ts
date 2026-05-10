@@ -180,7 +180,7 @@ function buildRow(params: {
   const metadata = params.group.scenarios
     .map(readScenarioRuntimeToolCoverageMetadata)
     .find((entry) => entry.required);
-  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]!);
+  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]);
   const rowMetadata = metadata ?? fallbackMetadata;
   return {
     tool: params.group.tool,
