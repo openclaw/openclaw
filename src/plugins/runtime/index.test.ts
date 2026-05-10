@@ -247,6 +247,7 @@ describe("plugin runtime command execution", () => {
           "runFile",
           "describeImageFile",
           "describeImageFileWithModel",
+          "extractStructuredWithModel",
           "describeVideoFile",
         ]);
         expect(runtime.mediaUnderstanding.transcribeAudioFile).toBe(

@@ -246,6 +246,7 @@ export type PluginRuntimeCore = {
     runFile: MediaUnderstandingRuntime["runMediaUnderstandingFile"];
     describeImageFile: MediaUnderstandingRuntime["describeImageFile"];
     describeImageFileWithModel: MediaUnderstandingRuntime["describeImageFileWithModel"];
+    extractStructuredWithModel: MediaUnderstandingRuntime["extractStructuredWithModel"];
     describeVideoFile: MediaUnderstandingRuntime["describeVideoFile"];
     transcribeAudioFile: MediaUnderstandingRuntime["transcribeAudioFile"];
   };
