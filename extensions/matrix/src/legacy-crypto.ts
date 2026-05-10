@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { loadJsonFile, writeJsonFileAtomically } from "openclaw/plugin-sdk/json-store";
+import { loadJsonFile } from "openclaw/plugin-sdk/json-store";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolveConfiguredMatrixAccountIds } from "./account-selection.js";
 import { isMatrixLegacyCryptoInspectorAvailable } from "./legacy-crypto-inspector-availability.js";
@@ -14,6 +14,7 @@ import {
   writeMatrixLegacyCryptoMigrationState,
 } from "./legacy-crypto-migration-state.js";
 import { formatMatrixErrorMessage } from "./matrix/errors.js";
+import { readMatrixRecoveryKey, writeMatrixRecoveryKey } from "./matrix/sdk/recovery-key-state.js";
 import {
   resolveLegacyMatrixFlatStoreTarget,
   resolveMatrixMigrationAccountTarget,
@@ -56,7 +57,7 @@ type MatrixLegacyCryptoPreparationResult = {
 
 type MatrixLegacyCryptoPrepareDeps = {
   inspectLegacyStore: MatrixLegacyCryptoInspector;
-  writeJsonFileAtomically: typeof writeJsonFileAtomically;
+  writeMatrixRecoveryKey: typeof writeMatrixRecoveryKey;
 };
 
 type MatrixLegacyCryptoInspectorParams = {
@@ -267,7 +268,7 @@ function resolveMatrixLegacyCryptoPlans(params: {
 }
 
 function loadStoredRecoveryKey(filePath: string): MatrixStoredRecoveryKey | null {
-  return loadJsonFile<MatrixStoredRecoveryKey>(filePath) ?? null;
+  return readMatrixRecoveryKey(filePath);
 }
 
 export function detectLegacyMatrixCrypto(params: {
@@ -308,8 +309,8 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
     "inspectorAvailable" in detection ? detection.inspectorAvailable : true;
   const warnings = [...detection.warnings];
   const changes: string[] = [];
-  const writeJsonFileAtomicallyOverride =
-    params.deps?.writeJsonFileAtomically ?? writeJsonFileAtomically;
+  const writeMatrixRecoveryKeyOverride =
+    params.deps?.writeMatrixRecoveryKey ?? writeMatrixRecoveryKey;
   if (detection.plans.length === 0) {
     if (warnings.length > 0) {
       params.log?.warn?.(
@@ -400,7 +401,7 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
         existingRecoveryKey.privateKeyBase64 !== summary.decryptionKeyBase64
       ) {
         warnings.push(
-          `Legacy Matrix backup key was found for account "${plan.accountId}", but ${plan.recoveryKeyPath} already contains a different recovery key. Leaving the existing file unchanged.`,
+          `Legacy Matrix backup key was found for account "${plan.accountId}", but SQLite state already contains a different recovery key. Leaving the existing key unchanged.`,
         );
       } else if (!existingRecoveryKey?.privateKeyBase64) {
         const payload: MatrixStoredRecoveryKey = {
@@ -410,9 +411,9 @@ export async function autoPrepareLegacyMatrixCrypto(params: {
           privateKeyBase64: summary.decryptionKeyBase64,
         };
         try {
-          await writeJsonFileAtomicallyOverride(plan.recoveryKeyPath, payload);
+          writeMatrixRecoveryKeyOverride(plan.recoveryKeyPath, payload);
           changes.push(
-            `Imported Matrix legacy backup key for account "${plan.accountId}": ${plan.recoveryKeyPath}`,
+            `Imported Matrix legacy backup key into SQLite for account "${plan.accountId}".`,
           );
           decryptionKeyImported = true;
         } catch (err) {

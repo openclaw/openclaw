@@ -543,9 +543,9 @@ sessionId}` and session key context.
 - Matrix legacy crypto migration status moved from
   `legacy-crypto-migration.json` to SQLite plugin state. Doctor imports the
   old status file; Matrix SDK IndexedDB snapshots moved from
-  `crypto-idb-snapshot.json` to SQLite plugin blobs. Recovery keys remain
-  file-backed because they are Matrix user secret material rather than
-  OpenClaw runtime cache rows.
+  `crypto-idb-snapshot.json` to SQLite plugin blobs. Matrix recovery keys and
+  credentials are SQLite plugin-state rows; their old JSON files are doctor
+  migration inputs only.
 - Memory Wiki activity logs now use SQLite plugin state instead of
   `.openclaw-wiki/log.jsonl`. The Memory Wiki migration provider imports old
   JSONL logs; wiki markdown and user vault content stay file-backed as
@@ -738,11 +738,10 @@ sessionId}` and session key context.
   code. Runtime plugin-index modules expose only SQLite-backed persistence
   options, not a JSON file path.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
-  startup verification cooldown state, and SDK IndexedDB crypto snapshots now
-  use shared SQLite plugin state/blob tables. Their legacy JSON import plan
-  lives in the Matrix plugin setup/doctor migration surface. Matrix recovery
-  keys remain explicit Matrix client files until a separate credential/secret
-  export design exists.
+  startup verification cooldown state, SDK IndexedDB crypto snapshots,
+  credentials, and recovery keys now use shared SQLite plugin state/blob
+  tables. Their legacy JSON import plan lives in the Matrix plugin setup/doctor
+  migration surface.
 - Matrix startup maintenance no longer moves legacy Matrix files. Startup only
   reports pending migration state and tells the operator to run
   `openclaw doctor --fix`; the snapshot/import/delete step remains doctor-owned.
@@ -978,13 +977,15 @@ Move these into the global database:
   `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
   doctor/setup migration imports and removes the legacy files.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
-  startup verification cooldown state, and SDK IndexedDB crypto snapshots now
-  use SQLite plugin state/blob namespaces under `matrix` (`sync-store`,
-  `storage-meta`, `thread-bindings`, `inbound-dedupe`, `startup-verification`,
-  `idb-snapshots`) instead of `bot-storage.json`, `storage-meta.json`,
-  `thread-bindings.json`, `inbound-dedupe.json`, `startup-verification.json`,
-  and `crypto-idb-snapshot.json`; the Matrix doctor/setup migration imports and
-  removes those legacy files from account-scoped Matrix storage roots.
+  startup verification cooldown state, credentials, recovery keys, and SDK
+  IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
+  `matrix` (`sync-store`, `storage-meta`, `thread-bindings`, `inbound-dedupe`,
+  `startup-verification`, `credentials`, `recovery-key`, `idb-snapshots`)
+  instead of `bot-storage.json`, `storage-meta.json`, `thread-bindings.json`,
+  `inbound-dedupe.json`, `startup-verification.json`, `credentials.json`,
+  `recovery-key.json`, and `crypto-idb-snapshot.json`; the Matrix doctor/setup
+  migration imports and removes those legacy files from account-scoped Matrix
+  storage roots.
 - Nostr bus cursors and profile publish state now use SQLite plugin state under
   `nostr` namespaces (`bus-state`, `profile-state`) instead of
   `bus-state-*.json` and `profile-state-*.json`; the Nostr doctor/setup

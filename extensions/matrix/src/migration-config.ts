@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import os from "node:os";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -16,7 +15,8 @@ import {
   resolveGlobalMatrixEnvConfig,
   resolveScopedMatrixEnvConfig,
 } from "./matrix/client/env-auth.js";
-import { resolveMatrixAccountStorageRoot, resolveMatrixCredentialsPath } from "./storage-paths.js";
+import { loadMatrixCredentials } from "./matrix/credentials-read.js";
+import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 
 type MatrixStoredCredentials = {
   homeserver: string;
@@ -105,34 +105,7 @@ function loadStoredMatrixCredentials(
   env: NodeJS.ProcessEnv,
   accountId: string,
 ): MatrixStoredCredentials | null {
-  const stateDir = resolveStateDir(env, os.homedir);
-  const credentialsPath = resolveMatrixCredentialsPath({
-    stateDir,
-    accountId: normalizeAccountId(accountId),
-  });
-  try {
-    if (!fs.existsSync(credentialsPath)) {
-      return null;
-    }
-    const parsed = JSON.parse(
-      fs.readFileSync(credentialsPath, "utf8"),
-    ) as Partial<MatrixStoredCredentials>;
-    if (
-      typeof parsed.homeserver !== "string" ||
-      typeof parsed.userId !== "string" ||
-      typeof parsed.accessToken !== "string"
-    ) {
-      return null;
-    }
-    return {
-      homeserver: parsed.homeserver,
-      userId: parsed.userId,
-      accessToken: parsed.accessToken,
-      deviceId: typeof parsed.deviceId === "string" ? parsed.deviceId : undefined,
-    };
-  } catch {
-    return null;
-  }
+  return loadMatrixCredentials(env, normalizeAccountId(accountId));
 }
 
 function credentialsMatchResolvedIdentity(

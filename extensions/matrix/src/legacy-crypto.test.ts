@@ -18,6 +18,7 @@ import {
   readMatrixLegacyCryptoMigrationState,
 } from "./legacy-crypto-migration-state.js";
 import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
+import { readMatrixRecoveryKey } from "./matrix/sdk/recovery-key-state.js";
 import { resolveMatrixAccountStorageRoot } from "./storage-paths.js";
 import {
   MATRIX_DEFAULT_ACCESS_TOKEN,
@@ -118,12 +119,9 @@ describe("matrix legacy encrypted-state migration", () => {
       expect(result.migrated).toBe(true);
       expect(result.warnings).toStrictEqual([]);
 
-      const recovery = JSON.parse(
-        fs.readFileSync(path.join(rootDir, "recovery-key.json"), "utf8"),
-      ) as {
-        privateKeyBase64: string;
-      };
-      expect(recovery.privateKeyBase64).toBe("YWJjZA==");
+      const recovery = readMatrixRecoveryKey(path.join(rootDir, "recovery-key.json"));
+      expect(recovery?.privateKeyBase64).toBe("YWJjZA==");
+      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(false);
     });
   });
 
@@ -206,7 +204,10 @@ describe("matrix legacy encrypted-state migration", () => {
       });
 
       expect(result.migrated).toBe(true);
-      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(true);
+      expect(readMatrixRecoveryKey(path.join(rootDir, "recovery-key.json"))).toMatchObject({
+        privateKeyBase64: "b3Bz",
+      });
+      expect(fs.existsSync(path.join(rootDir, "recovery-key.json"))).toBe(false);
     });
   });
 

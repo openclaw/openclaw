@@ -7,6 +7,11 @@ import {
   requiresExplicitMatrixDefaultAccount,
   resolveMatrixDefaultOrOnlyAccountId,
 } from "./account-selection.js";
+import {
+  loadMatrixCredentials,
+  normalizeMatrixCredentials,
+  saveMatrixCredentialsState,
+} from "./matrix/credentials-read.js";
 import { getMatrixRuntime } from "./runtime.js";
 import { resolveMatrixCredentialsPath } from "./storage-paths.js";
 
@@ -38,17 +43,6 @@ function resolveLegacyCredentialsTargetAccountId(cfg: OpenClawConfig): string | 
   return accountId || DEFAULT_ACCOUNT_ID;
 }
 
-function isValidMatrixCredentials(value: unknown): boolean {
-  return (
-    Boolean(value) &&
-    typeof value === "object" &&
-    !Array.isArray(value) &&
-    typeof (value as { homeserver?: unknown }).homeserver === "string" &&
-    typeof (value as { userId?: unknown }).userId === "string" &&
-    typeof (value as { accessToken?: unknown }).accessToken === "string"
-  );
-}
-
 export function autoMigrateLegacyMatrixCredentials(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -66,9 +60,9 @@ export function autoMigrateLegacyMatrixCredentials(params: {
   if (sourcePath === targetPath || !fs.existsSync(sourcePath)) {
     return { changes, warnings };
   }
-  if (fs.existsSync(targetPath)) {
+  if (loadMatrixCredentials(params.env, accountId)) {
     warnings.push(
-      `Matrix legacy credentials were not imported for account "${accountId}" because ${targetPath} already exists.`,
+      `Matrix legacy credentials were not imported for account "${accountId}" because SQLite credentials already exist.`,
     );
     return { changes, warnings };
   }
@@ -82,13 +76,14 @@ export function autoMigrateLegacyMatrixCredentials(params: {
     );
     return { changes, warnings };
   }
-  if (!isValidMatrixCredentials(parsed)) {
+  const credentials = normalizeMatrixCredentials(parsed);
+  if (!credentials) {
     warnings.push(`Matrix legacy credentials were not imported because ${sourcePath} is invalid.`);
     return { changes, warnings };
   }
 
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true, mode: 0o700 });
-  fs.renameSync(sourcePath, targetPath);
-  changes.push(`Moved Matrix legacy credentials into account "${accountId}": ${targetPath}`);
+  saveMatrixCredentialsState(credentials, params.env, accountId);
+  fs.rmSync(sourcePath, { force: true });
+  changes.push(`Imported Matrix legacy credentials into SQLite for account "${accountId}".`);
   return { changes, warnings };
 }
