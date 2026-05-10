@@ -54,10 +54,10 @@ function makeGatewayService(
   } as unknown as GatewayService;
 }
 
-function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   const call = mock.mock.calls[0];
   expect(call).toBeDefined();
-  return call?.[0] as T;
+  return call?.[0];
 }
 
 async function inspectGatewayRestartWithSnapshot(params: {
@@ -241,7 +241,7 @@ describe("inspectGatewayRestart", () => {
     });
 
     expect(snapshot.healthy).toBe(true);
-    expect(firstCallArg<{ url?: string }>(probeGateway).url).toBe("ws://127.0.0.1:18789");
+    expect((firstCallArg(probeGateway) as { url?: string }).url).toBe("ws://127.0.0.1:18789");
   });
 
   it("treats a busy port as healthy when runtime status lags but the probe succeeds", async () => {
@@ -433,17 +433,17 @@ describe("inspectGatewayRestart", () => {
     expect(snapshot.healthy).toBe(true);
     expect(snapshot.gatewayVersion).toBe("2026.4.24");
     expect(snapshot.expectedVersion).toBe("2026.4.24");
-    const authResolveInput = firstCallArg<{
+    const authResolveInput = firstCallArg(resolveGatewayProbeAuthSafeWithSecretInputs) as {
       cfg?: { gateway?: { auth?: { mode?: string; token?: string } } };
       mode?: string;
-    }>(resolveGatewayProbeAuthSafeWithSecretInputs);
+    };
     expect(authResolveInput.cfg?.gateway?.auth?.mode).toBe("token");
     expect(authResolveInput.cfg?.gateway?.auth?.token).toBe("probe-token");
     expect(authResolveInput.mode).toBe("local");
-    const probeInput = firstCallArg<{
+    const probeInput = firstCallArg(probeGateway) as {
       auth?: { token?: string; password?: string };
       env?: NodeJS.ProcessEnv;
-    }>(probeGateway);
+    };
     expect(probeInput.auth?.token).toBe("probe-token");
     expect(probeInput.auth?.password).toBeUndefined();
     expect(probeInput.env).toBe(serviceEnv);
@@ -526,7 +526,7 @@ describe("inspectGatewayRestart", () => {
       },
     ]);
     expect(snapshot.versionMismatch).toBeUndefined();
-    expect(firstCallArg<{ includeDetails?: boolean }>(probeGateway).includeDetails).toBe(true);
+    expect((firstCallArg(probeGateway) as { includeDetails?: boolean }).includeDetails).toBe(true);
 
     const { renderRestartDiagnostics } = await import("./restart-health.js");
     expect(renderRestartDiagnostics(snapshot).join("\n")).toContain(
