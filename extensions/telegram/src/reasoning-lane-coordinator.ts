@@ -57,12 +57,15 @@ function isPartialReasoningTagPrefix(text: string): boolean {
   return REASONING_TAG_PREFIXES.some((prefix) => prefix.startsWith(trimmed));
 }
 
-export type TelegramReasoningSplit = {
+type TelegramReasoningSplit = {
   reasoningText?: string;
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -81,6 +84,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
+  if (isReasoning === true) {
+    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
+  }
+
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };
   }
@@ -90,9 +97,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
   return { reasoningText, answerText };
 }
 
-export type BufferedFinalAnswer = {
+type BufferedFinalAnswer = {
   payload: ReplyPayload;
   text: string;
+  bufferedGeneration?: number;
 };
 
 export function createTelegramReasoningStepState() {
@@ -117,7 +125,14 @@ export function createTelegramReasoningStepState() {
     bufferedFinalAnswer = value;
   };
 
-  const takeBufferedFinalAnswer = (): BufferedFinalAnswer | undefined => {
+  const takeBufferedFinalAnswer = (currentGeneration?: number): BufferedFinalAnswer | undefined => {
+    if (
+      currentGeneration !== undefined &&
+      bufferedFinalAnswer?.bufferedGeneration !== undefined &&
+      bufferedFinalAnswer.bufferedGeneration !== currentGeneration
+    ) {
+      return undefined;
+    }
     const value = bufferedFinalAnswer;
     bufferedFinalAnswer = undefined;
     return value;

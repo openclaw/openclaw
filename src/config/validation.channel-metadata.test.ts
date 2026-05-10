@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
   validateConfigObjectRawWithPlugins,
@@ -73,6 +73,27 @@ function createPluginConfigSchemaRegistry(): PluginManifestRegistry {
   };
 }
 
+function createCompatPluginConfigSchemaRegistry(): PluginManifestRegistry {
+  return {
+    diagnostics: [],
+    plugins: [
+      createPluginManifestRecord({
+        id: "opik",
+        configSchema: {
+          type: "object",
+          additionalProperties: true,
+        },
+      }),
+      createPluginManifestRecord({
+        id: "brave-search",
+        contracts: {
+          webSearchProviders: ["brave"],
+        },
+      }),
+    ],
+  };
+}
+
 function createPluginManifestRecord(
   overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
 ): PluginManifestRecord {
@@ -95,10 +116,25 @@ vi.mock("../plugins/manifest-registry.js", () => ({
   resolveManifestContractPluginIds: () => [],
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
+}));
+
+vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+  loadPluginMetadataSnapshot: () => ({
+    manifestRegistry: mockLoadPluginManifestRegistry(),
+  }),
+}));
+
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
   applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
+}));
+
+vi.mock("../secrets/target-registry-data.js", () => ({
+  getCoreSecretTargetRegistry: () => [],
+  getSecretTargetRegistry: () => [],
 }));
 
 vi.mock("../channels/plugins/legacy-config.js", () => ({
@@ -119,8 +155,12 @@ function setupPluginSchemaWithRequiredDefault() {
   mockLoadPluginManifestRegistry.mockReturnValue(createPluginConfigSchemaRegistry());
 }
 
+beforeEach(() => {
+  mockLoadPluginManifestRegistry.mockClear();
+});
+
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
-  it("applies bundled channel defaults from plugin-owned schema metadata", async () => {
+  it("applies bundled channel defaults from plugin-owned schema metadata", () => {
     setupTelegramSchemaWithDefault();
 
     const result = validateConfigObjectWithPlugins({
@@ -131,18 +171,16 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });
 
 describe("validateConfigObjectRawWithPlugins channel metadata", () => {
-  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", async () => {
+  it("still injects channel AJV defaults even in raw mode — persistence safety is handled by io.ts", () => {
     // Channel and plugin AJV validation always runs with applyDefaults: true
     // (hardcoded) to avoid breaking schemas that mark defaulted fields as
-    // required (e.g., BlueBubbles enrichGroupParticipantsFromContacts).
+    // required.
     //
     // The actual protection against leaking these defaults to disk lives in
     // writeConfigFile (io.ts), which uses persistCandidate (the pre-validation
@@ -159,15 +197,13 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     if (result.ok) {
       // AJV defaults ARE injected into validated.config even in raw mode.
       // This is intentional — see comment above.
-      expect(result.config.channels?.telegram).toEqual(
-        expect.objectContaining({ dmPolicy: "pairing" }),
-      );
+      expect(result.config.channels?.telegram?.dmPolicy).toBe("pairing");
     }
   });
 });
 
 describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
-  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", async () => {
+  it("does not inject plugin AJV defaults in raw mode for plugin-owned config", () => {
     setupPluginSchemaWithRequiredDefault();
 
     const result = validateConfigObjectRawWithPlugins({
@@ -184,5 +220,79 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
     if (result.ok) {
       expect(result.config.plugins?.entries?.opik?.config).toBeUndefined();
     }
+  });
+});
+
+describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
+  it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
+
+    const result = validateConfigObjectWithPlugins({
+      plugins: {
+        allow: ["opik"],
+        entries: {
+          opik: {
+            enabled: true,
+          },
+        },
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).toHaveBeenCalledOnce();
+  });
+
+  it("uses a provided plugin metadata snapshot during plugin validation", () => {
+    const result = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["opik"],
+          entries: {
+            opik: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        pluginMetadataSnapshot: {
+          manifestRegistry: createPluginConfigSchemaRegistry(),
+        },
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
+    if (result.ok) {
+      expect(result.config.plugins?.entries?.opik?.config).toEqual({
+        workspace: "default-workspace",
+      });
+    }
+  });
+
+  it("loads a plugin metadata snapshot once during plugin validation", () => {
+    const loadPluginMetadataSnapshot = vi.fn((_config: unknown) => ({
+      manifestRegistry: createPluginConfigSchemaRegistry(),
+    }));
+
+    const result = validateConfigObjectWithPlugins(
+      {
+        plugins: {
+          allow: ["opik"],
+          entries: {
+            opik: {
+              enabled: true,
+            },
+          },
+        },
+      },
+      {
+        loadPluginMetadataSnapshot,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+    expect(loadPluginMetadataSnapshot).toHaveBeenCalledOnce();
+    expect(mockLoadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureEnv } from "../test-utils/env.js";
@@ -25,17 +28,34 @@ const inspectPortUsage = vi.fn(async (port: number) => ({
   listeners: [],
   hints: [],
 }));
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 const buildGatewayInstallPlan = vi.fn(
   async (params: {
     port: number;
     token?: string;
     env?: NodeJS.ProcessEnv;
+    wrapperPath?: string;
     existingEnvironment?: Record<string, string>;
   }) => ({
     programArguments: ["/bin/node", "cli", "gateway", "--port", String(params.port)],
     workingDirectory: process.cwd(),
     environment: {
       OPENCLAW_GATEWAY_PORT: String(params.port),
+      ...(params.wrapperPath ? { OPENCLAW_WRAPPER: params.wrapperPath } : {}),
       ...(params.token ? { OPENCLAW_GATEWAY_TOKEN: params.token } : {}),
     },
   }),
@@ -58,7 +78,9 @@ vi.mock("../gateway/probe-auth.js", () => ({
 }));
 
 vi.mock("../daemon/program-args.js", () => ({
+  OPENCLAW_WRAPPER_ENV_KEY: "OPENCLAW_WRAPPER",
   resolveGatewayProgramArguments: (opts: unknown) => resolveGatewayProgramArguments(opts),
+  resolveOpenClawWrapperPath: async (value: string | undefined) => value?.trim() || undefined,
 }));
 
 vi.mock("../daemon/service.js", async () => {
@@ -106,6 +128,7 @@ vi.mock("../commands/daemon-install-helpers.js", () => ({
     port: number;
     token?: string;
     env?: NodeJS.ProcessEnv;
+    wrapperPath?: string;
     existingEnvironment?: Record<string, string>;
   }) => buildGatewayInstallPlan(params),
 }));
@@ -139,17 +162,19 @@ function parseFirstJsonRuntimeLine<T>() {
 
 describe("daemon-cli coverage", () => {
   let envSnapshot: ReturnType<typeof captureEnv>;
+  let tmpDir: string;
 
   beforeEach(() => {
     daemonProgram = createDaemonProgram();
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-daemon-cli-"));
     envSnapshot = captureEnv([
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
       "OPENCLAW_PROFILE",
     ]);
-    process.env.OPENCLAW_STATE_DIR = "/tmp/openclaw-cli-state";
-    process.env.OPENCLAW_CONFIG_PATH = "/tmp/openclaw-cli-state/openclaw.json";
+    process.env.OPENCLAW_STATE_DIR = tmpDir;
+    process.env.OPENCLAW_CONFIG_PATH = path.join(tmpDir, "openclaw.json");
     delete process.env.OPENCLAW_GATEWAY_PORT;
     delete process.env.OPENCLAW_PROFILE;
     serviceReadCommand.mockResolvedValue(null);
@@ -160,6 +185,7 @@ describe("daemon-cli coverage", () => {
 
   afterEach(() => {
     envSnapshot.restore();
+    fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
   it("probes gateway status by default", async () => {
@@ -257,6 +283,7 @@ describe("daemon-cli coverage", () => {
     serviceReadCommand.mockResolvedValueOnce({
       programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
       environment: {
+        OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
         PATH: "/custom/go/bin:/usr/bin",
         GOPATH: "/Users/test/.local/gopath",
         GOBIN: "/Users/test/.local/gopath/bin",
@@ -270,9 +297,32 @@ describe("daemon-cli coverage", () => {
       expect.objectContaining({
         existingEnvironment: {
           PATH: "/custom/go/bin:/usr/bin",
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
           GOPATH: "/Users/test/.local/gopath",
           GOBIN: "/Users/test/.local/gopath/bin",
         },
+        env: expect.objectContaining({
+          OPENCLAW_WRAPPER: "/usr/local/bin/openclaw-doppler",
+        }),
+      }),
+    );
+  });
+
+  it("passes an explicit service wrapper into the install plan", async () => {
+    runtimeLogs.length = 0;
+    serviceIsLoaded.mockResolvedValueOnce(false);
+
+    await runDaemonCommand([
+      "daemon",
+      "install",
+      "--wrapper",
+      "/usr/local/bin/openclaw-doppler",
+      "--json",
+    ]);
+
+    expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        wrapperPath: "/usr/local/bin/openclaw-doppler",
       }),
     );
   });
@@ -290,7 +340,12 @@ describe("daemon-cli coverage", () => {
     expect(serviceStop).toHaveBeenCalledTimes(1);
     const jsonLines = runtimeLogs.filter((line) => line.trim().startsWith("{"));
     const parsed = jsonLines.map((line) => JSON.parse(line) as { action?: string; ok?: boolean });
-    expect(parsed.some((entry) => entry.action === "start" && entry.ok === true)).toBe(true);
-    expect(parsed.some((entry) => entry.action === "stop" && entry.ok === true)).toBe(true);
+    expect(
+      collectMatching(
+        parsed,
+        (entry) => Boolean(entry.ok),
+        (entry) => entry.action,
+      ),
+    ).toEqual(expect.arrayContaining(["start", "stop"]));
   });
 });

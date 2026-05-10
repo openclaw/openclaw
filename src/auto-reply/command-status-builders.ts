@@ -59,10 +59,10 @@ export function buildHelpMessage(cfg?: OpenClawConfig): string {
   lines.push("");
 
   const optionParts = [
-    "/think <level>",
+    "/think <level|default>",
     "/model <id>",
-    "/fast status|on|off",
-    "/verbose on|off",
+    "/fast status|on|off|default",
+    "/verbose on|off|full",
     "/trace on|off|raw",
   ];
   if (isCommandFlagEnabled(cfg, "config")) {

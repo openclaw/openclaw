@@ -39,9 +39,8 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Telegram](/channels/telegram)
 - [Discord](/channels/discord)
 - [Mattermost](/channels/mattermost)
-- [BlueBubbles (iMessage)](/channels/bluebubbles)
 - [QQ Bot](/channels/qqbot)
-- [iMessage (legacy)](/channels/imessage)
+- [iMessage](/channels/imessage)
 - [Groups](/channels/groups)
 - [WhatsApp group messages](/channels/group-messages)
 - [Media images](/nodes/images)
@@ -63,3 +62,8 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Gmail hooks (Pub/Sub)](/automation/cron-jobs#gmail-pubsub-integration)
 - [Security](/gateway/security)
 - [Troubleshooting](/gateway/troubleshooting)
+
+## Related
+
+- [Getting started](/start/getting-started)
+- [Docs hubs](/start/hubs)

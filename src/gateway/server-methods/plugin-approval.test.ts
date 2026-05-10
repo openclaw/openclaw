@@ -40,6 +40,11 @@ function createNoExecApprovalContext(): GatewayRequestHandlerOptions["context"] 
   } as unknown as GatewayRequestHandlerOptions["context"];
 }
 
+const invalidParamMethodCases = [
+  { method: "plugin.approval.request" },
+  { method: "plugin.approval.resolve" },
+] as const;
+
 describe("createPluginApprovalHandlers", () => {
   let manager: ExecApprovalManager<PluginApprovalRequestPayload>;
 
@@ -51,21 +56,21 @@ describe("createPluginApprovalHandlers", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns handlers for all three plugin approval methods", () => {
+  it("returns handlers for every plugin approval method", () => {
     const handlers = createPluginApprovalHandlers(manager);
-    expect(handlers).toHaveProperty("plugin.approval.request");
-    expect(handlers).toHaveProperty("plugin.approval.waitDecision");
-    expect(handlers).toHaveProperty("plugin.approval.resolve");
-    expect(typeof handlers["plugin.approval.request"]).toBe("function");
-    expect(typeof handlers["plugin.approval.waitDecision"]).toBe("function");
-    expect(typeof handlers["plugin.approval.resolve"]).toBe("function");
+    expect(Object.keys(handlers).toSorted()).toEqual([
+      "plugin.approval.list",
+      "plugin.approval.request",
+      "plugin.approval.resolve",
+      "plugin.approval.waitDecision",
+    ]);
   });
 
-  describe("plugin.approval.request", () => {
-    it("rejects invalid params", async () => {
+  describe("invalid params", () => {
+    it.each(invalidParamMethodCases)("$method rejects invalid params", async ({ method }) => {
       const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.request", {});
-      await handlers["plugin.approval.request"](opts);
+      const opts = createMockOptions(method, {});
+      await handlers[method](opts);
       expect(opts.respond).toHaveBeenCalledWith(
         false,
         undefined,
@@ -74,7 +79,9 @@ describe("createPluginApprovalHandlers", () => {
         }),
       );
     });
+  });
 
+  describe("plugin.approval.request", () => {
     it("creates and registers approval with twoPhase", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const respond = vi.fn();
@@ -322,6 +329,40 @@ describe("createPluginApprovalHandlers", () => {
         expect.objectContaining({ message: expect.stringContaining("unexpected property") }),
       );
     });
+
+    it("stores scoped allowed decisions on plugin approval requests", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "T",
+          description: "D",
+          allowedDecisions: ["allow-once", "deny", "allow-once"],
+          twoPhase: true,
+        },
+        { respond },
+      );
+
+      const handlerPromise = handlers["plugin.approval.request"](opts);
+      await vi.waitFor(() => {
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "accepted", id: expect.any(String) }),
+          undefined,
+        );
+      });
+
+      const acceptedCall = respond.mock.calls.find(
+        (call) => (call[1] as Record<string, unknown>)?.status === "accepted",
+      );
+      const approvalId = (acceptedCall?.[1] as Record<string, unknown>)?.id as string;
+      expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
+        allowedDecisions: ["allow-once", "deny"],
+      });
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
   });
 
   describe("plugin.approval.list", () => {
@@ -416,19 +457,6 @@ describe("createPluginApprovalHandlers", () => {
   });
 
   describe("plugin.approval.resolve", () => {
-    it("rejects invalid params", async () => {
-      const handlers = createPluginApprovalHandlers(manager);
-      const opts = createMockOptions("plugin.approval.resolve", {});
-      await handlers["plugin.approval.resolve"](opts);
-      expect(opts.respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: expect.any(String),
-        }),
-      );
-    });
-
     it("rejects invalid decision", async () => {
       const handlers = createPluginApprovalHandlers(manager);
       const record = manager.create({ title: "T", description: "D" }, 60_000);
@@ -461,6 +489,35 @@ describe("createPluginApprovalHandlers", () => {
         expect.objectContaining({ id: record.id, decision: "deny" }),
         { dropIfSlow: true },
       );
+    });
+
+    it("rejects decisions outside plugin approval allowed decisions", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const record = manager.create(
+        {
+          title: "T",
+          description: "D",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        60_000,
+      );
+      void manager.register(record, 60_000);
+
+      const opts = createMockOptions("plugin.approval.resolve", {
+        id: record.id,
+        decision: "allow-always",
+      });
+      await handlers["plugin.approval.resolve"](opts);
+      expect(opts.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          code: "INVALID_REQUEST",
+          message: "allow-always is unavailable for this plugin approval",
+          details: { allowedDecisions: ["allow-once", "deny"] },
+        }),
+      );
+      expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
     });
 
     it("rejects unknown approval id", async () => {

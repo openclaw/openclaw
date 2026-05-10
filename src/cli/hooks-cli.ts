@@ -1,6 +1,6 @@
 import type { Command } from "commander";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   buildWorkspaceHookStatus,
@@ -18,6 +18,7 @@ import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { formatCliCommand } from "./command-format.js";
+import { runNativeHookRelayCli, type NativeHookRelayCliOptions } from "./native-hook-relay-cli.js";
 import { runPluginInstallCommand } from "./plugins-install-command.js";
 import { runPluginUpdateCommand } from "./plugins-update-command.js";
 
@@ -468,7 +469,7 @@ export function registerHooksCli(program: Command): void {
     .option("-v, --verbose", "Show more details including missing requirements", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksList(report, opts), opts.json);
       }),
@@ -480,7 +481,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (name, opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHookInfo(report, name, opts), opts.json);
       }),
@@ -492,7 +493,7 @@ export function registerHooksCli(program: Command): void {
     .option("--json", "Output as JSON", false)
     .action(async (opts) =>
       runHooksCliAction(async () => {
-        const config = loadConfig();
+        const config = getRuntimeConfig();
         const report = buildHooksReport(config);
         writeHooksOutput(formatHooksCheck(report, opts), opts.json);
       }),
@@ -513,6 +514,19 @@ export function registerHooksCli(program: Command): void {
     .action(async (name) =>
       runHooksCliAction(async () => {
         await disableHook(name);
+      }),
+    );
+
+  hooks
+    .command("relay", { hidden: true })
+    .description("Internal native harness hook relay")
+    .requiredOption("--provider <provider>", "Native harness provider")
+    .requiredOption("--relay-id <id>", "Native hook relay id")
+    .requiredOption("--event <event>", "Native hook event")
+    .option("--timeout <ms>", "Gateway timeout in ms", "5000")
+    .action(async (opts: NativeHookRelayCliOptions) =>
+      runHooksCliAction(async () => {
+        process.exitCode = await runNativeHookRelayCli(opts);
       }),
     );
 
@@ -544,7 +558,7 @@ export function registerHooksCli(program: Command): void {
 
   hooks.action(async () =>
     runHooksCliAction(async () => {
-      const config = loadConfig();
+      const config = getRuntimeConfig();
       const report = buildHooksReport(config);
       defaultRuntime.log(formatHooksList(report, {}));
     }),

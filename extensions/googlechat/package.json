@@ -1,20 +1,22 @@
 {
   "name": "@openclaw/googlechat",
-  "version": "2026.4.20",
-  "private": true,
+  "version": "2026.5.8",
   "description": "OpenClaw Google Chat channel plugin",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "dependencies": {
     "gaxios": "7.1.4",
-    "google-auth-library": "10.6.2",
-    "zod": "^4.3.6"
+    "google-auth-library": "10.6.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.4.20"
+    "openclaw": ">=2026.5.8"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -22,9 +24,6 @@
     }
   },
   "openclaw": {
-    "bundle": {
-      "stageRuntimeDependencies": true
-    },
     "extensions": [
       "./index.ts"
     ],
@@ -73,6 +72,16 @@
       "npmSpec": "@openclaw/googlechat",
       "defaultChoice": "npm",
       "minHostVersion": ">=2026.4.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.5.8"
+    },
+    "build": {
+      "openclawVersion": "2026.5.8"
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

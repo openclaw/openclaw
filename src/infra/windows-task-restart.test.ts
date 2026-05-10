@@ -14,7 +14,7 @@ const resolveTaskScriptPathMock = vi.hoisted(() =>
 );
 
 vi.mock("node:child_process", async () => {
-  const { mockNodeBuiltinModule } = await import("../../test/helpers/node-builtin-mocks.js");
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   return mockNodeBuiltinModule(
     () => vi.importActual<typeof import("node:child_process")>("node:child_process"),
     {
@@ -110,7 +110,10 @@ describe("relaunchGatewayScheduledTask", () => {
     expect(unref).toHaveBeenCalledOnce();
 
     const scriptPath = [...createdScriptPaths][0];
-    expect(scriptPath).toBeTruthy();
+    if (scriptPath === undefined) {
+      throw new Error("expected restart helper script path");
+    }
+    expect(fs.statSync(scriptPath).isFile()).toBe(true);
     const script = fs.readFileSync(scriptPath, "utf8");
     expect(script).toContain("timeout /t 1 /nobreak >nul");
     expect(script).toContain("gateway-restart.log");

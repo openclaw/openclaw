@@ -1,7 +1,7 @@
 import { chromium } from "playwright-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import "../../test-support/browser-security-runtime.mock.js";
+import "../test-support/browser-security.mock.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserTabNotFoundError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
@@ -341,6 +341,34 @@ describe("pw-session createPageViaPlaywright navigation guard", () => {
     });
 
     expect(created.targetId).toBe("TARGET_1");
+    expect(pageGoto).toHaveBeenCalledTimes(1);
+    expect(pageClose).not.toHaveBeenCalled();
+  });
+
+  it("ignores already-handled route races during guarded navigation", async () => {
+    const { pageGoto, pageClose, getRouteHandler, mainFrame } = installBrowserMocks();
+    const route = createMockRoute({
+      continue: vi.fn(async () => {
+        throw new Error("Route is already handled");
+      }),
+    });
+    pageGoto.mockImplementationOnce(async () => {
+      await dispatchMockNavigation({
+        getRouteHandler,
+        mainFrame,
+        url: "https://example.com",
+        route,
+      });
+      return null;
+    });
+
+    const created = await createPageViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      url: "https://example.com",
+    });
+
+    expect(created.targetId).toBe("TARGET_1");
+    expect(route.continue).toHaveBeenCalledTimes(1);
     expect(pageGoto).toHaveBeenCalledTimes(1);
     expect(pageClose).not.toHaveBeenCalled();
   });

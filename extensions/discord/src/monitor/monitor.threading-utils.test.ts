@@ -1,7 +1,8 @@
-import type { Client } from "@buape/carbon";
 import type { GatewayPresenceUpdate } from "discord-api-types/v10";
 import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it } from "vitest";
+import type { Client } from "../internal/discord.js";
+import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import type { DiscordChannelConfigResolved } from "./allow-list.js";
 import {
   resolveDiscordMemberAllowed,
@@ -244,20 +245,23 @@ describe("resolveDiscordPresenceUpdate", () => {
 
   it("returns status-only presence when activity is omitted", () => {
     const presence = resolveDiscordPresenceUpdate({ status: "dnd" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("dnd");
-    expect(presence?.activities).toEqual([]);
+    expect(presence).toMatchObject({
+      status: "dnd",
+      activities: [],
+    });
   });
 
   it("defaults to custom activity type when activity is set without type", () => {
     const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).not.toBeNull();
-    expect(presence?.status).toBe("online");
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 4,
-      name: "Custom Status",
-      state: "Focus time",
+    expect(presence).toMatchObject({
+      status: "online",
+      activities: [
+        expect.objectContaining({
+          type: 4,
+          name: "Custom Status",
+          state: "Focus time",
+        }),
+      ],
     });
   });
 
@@ -267,12 +271,14 @@ describe("resolveDiscordPresenceUpdate", () => {
       activityType: 1,
       activityUrl: "https://twitch.tv/openclaw",
     });
-    expect(presence).not.toBeNull();
-    expect(presence?.activities).toHaveLength(1);
-    expect(presence?.activities[0]).toMatchObject({
-      type: 1,
-      name: "Live",
-      url: "https://twitch.tv/openclaw",
+    expect(presence).toMatchObject({
+      activities: [
+        expect.objectContaining({
+          type: 1,
+          name: "Live",
+          url: "https://twitch.tv/openclaw",
+        }),
+      ],
     });
   });
 });
@@ -291,6 +297,11 @@ describe("resolveDiscordAutoThreadContext", () => {
         createdThreadId: "thread",
         expectedNull: false,
         parentInheritanceEnabled: false,
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: undefined,
       },
       {
@@ -298,6 +309,11 @@ describe("resolveDiscordAutoThreadContext", () => {
         createdThreadId: "thread",
         expectedNull: false,
         parentInheritanceEnabled: true,
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: buildAgentSessionKey({
           agentId: "agent",
           channel: "discord",
@@ -320,18 +336,20 @@ describe("resolveDiscordAutoThreadContext", () => {
         continue;
       }
 
-      expect(context, testCase.name).not.toBeNull();
-      expect(context?.To, testCase.name).toBe("channel:thread");
-      expect(context?.From, testCase.name).toBe("discord:channel:thread");
-      expect(context?.OriginatingTo, testCase.name).toBe("channel:thread");
-      expect(context?.SessionKey, testCase.name).toBe(
-        buildAgentSessionKey({
+      expect(context, testCase.name).toMatchObject({
+        To: "channel:thread",
+        From: "discord:channel:thread",
+        OriginatingTo: "channel:thread",
+        SessionKey: buildAgentSessionKey({
           agentId: "agent",
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
         }),
-      );
+      });
       expect(context?.ParentSessionKey, testCase.name).toBe(testCase.expectedParentSessionKey);
+      expect(context?.ModelParentSessionKey, testCase.name).toBe(
+        testCase.expectedModelParentSessionKey,
+      );
     }
   });
 });
@@ -432,6 +450,7 @@ describe("maybeCreateDiscordAutoThread", () => {
       threadChannel: null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
     };
   }
 
@@ -489,6 +508,7 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
       threadChannel: overrides?.threadChannel ?? null,
       baseText: "hello",
       combinedBody: "hello",
+      cfg: EMPTY_DISCORD_TEST_CONFIG,
       replyToMode: "all" as const,
       agentId: "agent",
       channel: "discord" as const,
@@ -508,6 +528,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
         }),
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
+        }),
         expectedParentSessionKey: undefined,
       },
       {
@@ -521,6 +546,11 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
           agentId: "agent",
           channel: "discord",
           peer: { kind: "channel", id: "thread" },
+        }),
+        expectedModelParentSessionKey: buildAgentSessionKey({
+          agentId: "agent",
+          channel: "discord",
+          peer: { kind: "channel", id: "parent" },
         }),
         expectedParentSessionKey: buildAgentSessionKey({
           agentId: "agent",
@@ -562,6 +592,9 @@ describe("resolveDiscordAutoThreadReplyPlan", () => {
         expect(plan.autoThreadContext?.SessionKey, testCase.name).toBe(testCase.expectedSessionKey);
         expect(plan.autoThreadContext?.ParentSessionKey, testCase.name).toBe(
           testCase.expectedParentSessionKey,
+        );
+        expect(plan.autoThreadContext?.ModelParentSessionKey, testCase.name).toBe(
+          testCase.expectedModelParentSessionKey,
         );
       }
     }

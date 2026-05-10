@@ -49,8 +49,10 @@ function createState(): { state: DreamingState; request: ReturnType<typeof vi.fn
 
 function getConfigPatchRawPayload(request: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const patchCall = request.mock.calls.find((entry) => entry[0] === "config.patch");
-  expect(patchCall).toBeDefined();
-  const requestPayload = patchCall?.[1] as { raw?: string };
+  if (!patchCall) {
+    throw new Error("Expected config.patch request");
+  }
+  const requestPayload = patchCall[1] as { raw?: string };
   return JSON.parse(String(requestPayload.raw)) as Record<string, unknown>;
 }
 
@@ -230,7 +232,8 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.importInsights"] },
     };
     state.configSnapshot = {
@@ -365,7 +368,8 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };
     state.configSnapshot = {
@@ -400,7 +404,8 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
       features: { methods: ["wiki.palace"] },
     };
     state.configSnapshot = {
@@ -535,7 +540,8 @@ describe("dreaming controller", () => {
     const { state, request } = createState();
     state.hello = {
       type: "hello-ok",
-      protocol: 3,
+      protocol: 4,
+      auth: { role: "operator", scopes: [] },
       features: { methods: ["doctor.memory.status"] },
     };
     state.configSnapshot = {

@@ -1,23 +1,19 @@
 import type { Model } from "@mariozechner/pi-ai";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __testing as extraParamsTesting } from "./extra-params.js";
+import { createPiAiStreamSimpleMock } from "../../../test/helpers/agents/pi-ai-stream-simple-mock.js";
+import {
+  __testing as extraParamsTesting,
+  resolveAgentTransportOverride,
+  resolveExplicitSettingsTransport,
+} from "./extra-params.js";
 import { runExtraParamsCase } from "./extra-params.test-support.js";
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
-  return {
-    ...original,
-    streamSimple: vi.fn(() => ({
-      push: vi.fn(),
-      result: vi.fn(),
-    })),
-  };
-});
+vi.mock("@mariozechner/pi-ai", () => createPiAiStreamSimpleMock());
 
 beforeEach(() => {
   extraParamsTesting.setProviderRuntimeDepsForTest({
     prepareProviderExtraParams: ({ context }) => context.extraParams,
+    resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: ({ provider, context }) => {
       if (provider !== "local-provider" || context.thinkingLevel !== "off") {
         return context.streamFn;
@@ -45,6 +41,29 @@ afterEach(() => {
 });
 
 describe("extra-params: provider runtime handoff", () => {
+  it("keeps unsupported upstream transport values out of OpenClaw runtime hooks", () => {
+    const settingsManager = {
+      getGlobalSettings: () => ({}),
+      getProjectSettings: () => ({}),
+    };
+
+    expect(
+      resolveAgentTransportOverride({
+        settingsManager,
+        effectiveExtraParams: { transport: "websocket-cached" },
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveExplicitSettingsTransport({
+        settingsManager: {
+          getGlobalSettings: () => ({ transport: "auto" }),
+          getProjectSettings: () => ({}),
+        },
+        sessionTransport: "websocket-cached",
+      }),
+    ).toBeUndefined();
+  });
+
   it("passes thinking-off intent through the provider runtime wrapper seam", () => {
     const payload = runExtraParamsCase({
       applyProvider: "local-provider",

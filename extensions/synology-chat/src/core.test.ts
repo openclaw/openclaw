@@ -1,11 +1,11 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import {
   createPluginSetupWizardConfigure,
   createTestWizardPrompter,
   runSetupWizardConfigure,
-  type WizardPrompter,
-} from "../../../test/helpers/plugins/setup-wizard.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAccountIds, resolveAccount } from "./accounts.js";
 import { SynologyChatChannelConfigSchema } from "./config-schema.js";
 import {
@@ -54,6 +54,11 @@ function createSynologySetupPrompter(params: { allowedUserIds?: string } = {}) {
 }
 
 describe("synology-chat core", () => {
+  afterAll(() => {
+    vi.unstubAllEnvs();
+    process.env = { ...originalEnv };
+  });
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     process.env = { ...originalEnv };
@@ -140,8 +145,8 @@ describe("synology-chat core", () => {
 
 describe("synology-chat account resolution", () => {
   it("lists no accounts when the channel is missing", () => {
-    expect(listAccountIds({})).toEqual([]);
-    expect(listAccountIds({ channels: {} })).toEqual([]);
+    expect(listAccountIds({})).toStrictEqual([]);
+    expect(listAccountIds({ channels: {} })).toStrictEqual([]);
   });
 
   it("lists the default account when base config has a token", () => {
@@ -317,7 +322,12 @@ describe("synology-chat security helpers", () => {
     expect(checkUserAllowed("user1", ["user1", "user2"])).toBe(true);
     expect(checkUserAllowed("user3", ["user1", "user2"])).toBe(false);
 
-    expect(authorizeUserForDm("user1", "open", [])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", [])).toEqual({
+      allowed: false,
+      reason: "not-allowlisted",
+    });
+    expect(authorizeUserForDm("user1", "open", ["*"])).toEqual({ allowed: true });
+    expect(authorizeUserForDm("user1", "open", ["user1"])).toEqual({ allowed: true });
     expect(authorizeUserForDm("user1", "disabled", ["user1"])).toEqual({
       allowed: false,
       reason: "disabled",

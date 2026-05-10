@@ -15,7 +15,6 @@ type JsonSchema = {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(__dirname, "..");
 const outPaths = [
-  path.join(repoRoot, "apps", "macos", "Sources", "OpenClawProtocol", "GatewayModels.swift"),
   path.join(
     repoRoot,
     "apps",
@@ -72,6 +71,9 @@ function camelCase(input: string) {
 
 function safeName(name: string) {
   const cc = camelCase(name.replace(/-/g, "_"));
+  if (/^\d/.test(cc)) {
+    return `_${cc}`;
+  }
   if (reserved.has(cc)) {
     return `_${cc}`;
   }
@@ -152,6 +154,16 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   return isOptional ? `${base}?` : base;
 }
 
+function emitEnum(name: string, schema: JsonSchema): string {
+  const cases = schema.enum ?? [];
+  return [
+    `public enum ${name}: String, Codable, Sendable {`,
+    ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
+    "}",
+    "",
+  ].join("\n");
+}
+
 function emitStruct(name: string, schema: JsonSchema): string {
   const props = schema.properties ?? {};
   const required = new Set(schema.required ?? []);
@@ -163,7 +175,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
     const propName = safeName(key);
-    const propType = swiftType(propSchema, required.has(key));
+    const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
     if (propName !== key) {
       codingKeys.push(`        case ${propName} = "${key}"`);
@@ -177,7 +189,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
         .map(([key, prop]) => {
           const propName = safeName(key);
           const req = required.has(key);
-          return `        ${propName}: ${swiftType(prop, true)}${req ? "" : "?"}`;
+          return `        ${propName}: ${swiftType(prop, true, true)}${req ? "" : "?"}`;
         })
         .join(",\n") +
       ")\n" +
@@ -262,7 +274,16 @@ async function generate() {
   const parts: string[] = [];
   parts.push(header);
 
-  // Value structs
+  // Named enums and value structs
+  for (const [name, schema] of definitions) {
+    if (name === "GatewayFrame") {
+      continue;
+    }
+    if (schema.type === "string" && schema.enum) {
+      parts.push(emitEnum(name, schema));
+    }
+  }
+
   for (const [name, schema] of definitions) {
     if (name === "GatewayFrame") {
       continue;

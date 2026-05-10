@@ -26,6 +26,11 @@ function createRuntimeLogCapture(): { logs: string[]; runtime: RuntimeEnv } {
   return { logs, runtime };
 }
 
+function expectLogsToInclude(logs: readonly string[], text: string): void {
+  const matches = logs.filter((line) => line.includes(text));
+  expect(matches.length).toBeGreaterThan(0);
+}
+
 function createBaseJob(overrides: Partial<CronJob>): CronJob {
   const now = Date.now();
   return {
@@ -58,12 +63,11 @@ describe("printCronList", () => {
       // sessionTarget is intentionally omitted to simulate the bug
     });
 
-    // This should not throw "Cannot read properties of undefined (reading 'trim')"
-    expect(() => printCronList([jobWithUndefinedTarget], runtime)).not.toThrow();
+    printCronList([jobWithUndefinedTarget], runtime);
 
     // Verify output contains the job
     expect(logs.length).toBeGreaterThan(1);
-    expect(logs.some((line) => line.includes("test-job-id"))).toBe(true);
+    expectLogsToInclude(logs, "test-job-id");
   });
 
   it("handles job with defined sessionTarget", () => {
@@ -74,8 +78,24 @@ describe("printCronList", () => {
       sessionTarget: "isolated",
     });
 
-    expect(() => printCronList([jobWithTarget], runtime)).not.toThrow();
-    expect(logs.some((line) => line.includes("isolated"))).toBe(true);
+    printCronList([jobWithTarget], runtime);
+    expectLogsToInclude(logs, "isolated");
+  });
+
+  it("tolerates malformed rows in human-readable output", () => {
+    const { logs, runtime } = createRuntimeLogCapture();
+    const malformedJob = {
+      id: "malformed-job",
+      name: undefined,
+      enabled: true,
+      sessionTarget: undefined,
+      payload: undefined,
+      schedule: undefined,
+      state: undefined,
+    } as unknown as CronJob;
+
+    printCronList([malformedJob], runtime);
+    expectLogsToInclude(logs, "malformed-job");
   });
 
   it("shows stagger label for cron schedules", () => {
@@ -90,7 +110,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(stagger 5m)"))).toBe(true);
+    expectLogsToInclude(logs, "(stagger 5m)");
   });
 
   it("shows dash for unset agentId instead of default", () => {
@@ -208,7 +228,7 @@ describe("printCronList", () => {
     });
 
     printCronList([job], runtime);
-    expect(logs.some((line) => line.includes("(exact)"))).toBe(true);
+    expectLogsToInclude(logs, "(exact)");
   });
 });
 

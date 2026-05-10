@@ -1,10 +1,12 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildChannelTurnContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
   resolveAgentRouteMock,
+  setSynologyRuntimeConfigForTest,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
 
@@ -17,12 +19,20 @@ type _RegisteredRoute = {
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
 
 function makeStartContext<T>(cfg: T, accountId: string, abortSignal: AbortSignal) {
+  setSynologyRuntimeConfigForTest(cfg);
   return {
     cfg,
     accountId,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
     abortSignal,
   };
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
 }
 
 describe("Synology channel wiring integration", () => {
@@ -33,8 +43,10 @@ describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
+    buildChannelTurnContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
+    setSynologyRuntimeConfigForTest({});
   });
 
   it("registers real webhook handler with resolved account config and enforces allowlist", async () => {
@@ -64,7 +76,6 @@ describe("Synology channel wiring integration", () => {
     expect(registerPluginHttpRouteMock).toHaveBeenCalledTimes(1);
 
     const firstCall = registerPluginHttpRouteMock.mock.calls[0];
-    expect(firstCall).toBeTruthy();
     if (!firstCall) {
       throw new Error("Expected registerPluginHttpRoute to be called");
     }
@@ -106,6 +117,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-alpha",
               webhookPath: "/webhook/synology-alpha",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
             beta: {
               enabled: true,
@@ -113,6 +125,7 @@ describe("Synology channel wiring integration", () => {
               incomingUrl: "https://nas.example.com/incoming-beta",
               webhookPath: "/webhook/synology-beta",
               dmPolicy: "open",
+              allowedUserIds: ["*"],
             },
           },
         },
@@ -167,14 +180,12 @@ describe("Synology channel wiring integration", () => {
 
     const alphaCtx = finalizeInboundContextMock.mock.calls[0]?.[0];
     const betaCtx = finalizeInboundContextMock.mock.calls[1]?.[0];
-    expect(alphaCtx).toMatchObject({
-      AccountId: "alpha",
-      SessionKey: "agent:agent-alpha:synology-chat:alpha:direct:123",
-    });
-    expect(betaCtx).toMatchObject({
-      AccountId: "beta",
-      SessionKey: "agent:agent-beta:synology-chat:beta:direct:123",
-    });
+    const alphaContext = requireRecord(alphaCtx, "alpha inbound context");
+    expect(alphaContext.AccountId).toBe("alpha");
+    expect(alphaContext.SessionKey).toBe("agent:agent-alpha:synology-chat:alpha:direct:123");
+    const betaContext = requireRecord(betaCtx, "beta inbound context");
+    expect(betaContext.AccountId).toBe("beta");
+    expect(betaContext.SessionKey).toBe("agent:agent-beta:synology-chat:beta:direct:123");
 
     alphaAbortController.abort();
     betaAbortController.abort();

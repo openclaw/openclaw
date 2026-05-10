@@ -56,6 +56,14 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: (...args: unknown[]) => callGatewayMock(...args),
 }));
 
+function requireFirstRuntimeLog(): string {
+  const [message] = runtime.log.mock.calls[0] ?? [];
+  if (message === undefined) {
+    throw new Error("expected health command log output");
+  }
+  return String(message);
+}
+
 describe("healthCommand", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -90,11 +98,36 @@ describe("healthCommand", () => {
     await healthCommand({ json: true, timeoutMs: 5000, config: {} }, runtime as never);
 
     expect(runtime.exit).not.toHaveBeenCalled();
-    const logged = runtime.log.mock.calls[0]?.[0] as string;
-    const parsed = JSON.parse(logged) as HealthSummary;
+    const parsed = JSON.parse(requireFirstRuntimeLog()) as HealthSummary;
     expect(parsed.channels.whatsapp?.linked).toBe(true);
     expect(parsed.channels.telegram?.configured).toBe(true);
     expect(parsed.sessions.count).toBe(1);
+  });
+
+  it("passes explicit gateway credentials through to the gateway call", async () => {
+    const snapshot = createHealthSummary({
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+    });
+    callGatewayMock.mockResolvedValueOnce(snapshot);
+
+    await healthCommand(
+      {
+        json: true,
+        timeoutMs: 5000,
+        config: {},
+        token: "setup-token",
+        password: "setup-password",
+      },
+      runtime as never,
+    );
+
+    expect(callGatewayMock).toHaveBeenCalledOnce();
+    const [gatewayRequest] = callGatewayMock.mock.calls[0] ?? [];
+    expect(gatewayRequest?.method).toBe("health");
+    expect(gatewayRequest?.token).toBe("setup-token");
+    expect(gatewayRequest?.password).toBe("setup-password");
   });
 
   it("formats per-account probe timings", () => {

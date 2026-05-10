@@ -5,9 +5,10 @@ import { afterEach, describe, expect, test } from "vitest";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../agents/subagent-registry.js";
+} from "../agents/subagent-registry.test-helpers.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
+import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { listSessionsFromStore } from "./session-utils.js";
 
 function createModelDefaultsConfig(params: {
@@ -117,7 +118,8 @@ function listSingleSession(params: {
 
 describe("listSessionsFromStore search", () => {
   afterEach(() => {
-    resetSubagentRegistryForTests({ persist: false });
+    resetSubagentRegistryForTests();
+    resetAgentRunContextForTest();
   });
 
   const baseCfg = {
@@ -494,6 +496,9 @@ describe("listSessionsFromStore search", () => {
           startedAt: now - 4_000,
           model: "anthropic/claude-sonnet-4-6",
         });
+        registerAgentRunContext("run-child-live", {
+          sessionKey: "agent:main:subagent:child-live",
+        });
 
         const result = listSingleSession({
           cfg: createAnthropicContext1mConfig(),
@@ -544,6 +549,9 @@ describe("listSessionsFromStore search", () => {
           createdAt: now - 5_000,
           startedAt: now - 4_000,
           model: "openai/gpt-5.4",
+        });
+        registerAgentRunContext("run-child-live-new-model", {
+          sessionKey: "agent:main:subagent:child-live-stale-transcript",
         });
 
         const result = listSingleSession({

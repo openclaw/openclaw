@@ -11,6 +11,7 @@ import {
   buildSystemRunApprovalEnvBinding,
 } from "../../infra/system-run-approval-binding.js";
 import { resetLogger, setLoggerOverride } from "../../logging.js";
+import { projectRecentChatDisplayMessages } from "../chat-display-projection.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { validateExecApprovalRequestParams } from "../protocol/index.js";
 import { waitForAgentJob } from "./agent-job.js";
@@ -29,6 +30,16 @@ import { logsHandlers } from "./logs.js";
 vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
 
 describe("waitForAgentJob", () => {
   async function runLifecycleScenario(params: {
@@ -54,17 +65,33 @@ describe("waitForAgentJob", () => {
     return waitPromise;
   }
 
-  it("maps lifecycle end events with aborted=true to timeout", async () => {
-    const snapshot = await runLifecycleScenario({
-      runIdPrefix: "run-timeout",
-      startedAt: 100,
-      endedAt: 200,
-      aborted: true,
-    });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("timeout");
-    expect(snapshot?.startedAt).toBe(100);
-    expect(snapshot?.endedAt).toBe(200);
+  it("maps lifecycle end events with aborted=true to timeout after the retry grace window", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const snapshotPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 200, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await snapshotPromise;
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 100,
+        endedAt: 200,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("keeps non-aborted lifecycle end events as ok", async () => {
@@ -73,10 +100,112 @@ describe("waitForAgentJob", () => {
       startedAt: 300,
       endedAt: 400,
     });
-    expect(snapshot).not.toBeNull();
-    expect(snapshot?.status).toBe("ok");
-    expect(snapshot?.startedAt).toBe(300);
-    expect(snapshot?.endedAt).toBe(400);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 300,
+      endedAt: 400,
+    });
+  });
+
+  it("ignores transient aborted end events when the same run later succeeds", async () => {
+    const runId = `run-timeout-retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const waitPromise = waitForAgentJob({ runId, timeoutMs: 1_000 });
+
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 500 },
+    });
+    emitAgentEvent({
+      runId,
+      stream: "lifecycle",
+      data: { phase: "end", startedAt: 500, endedAt: 600, aborted: true },
+    });
+
+    queueMicrotask(() => {
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 500, endedAt: 700 },
+      });
+    });
+
+    const snapshot = await waitPromise;
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      startedAt: 500,
+      endedAt: 700,
+    });
+  });
+
+  it("lets a later aborted timeout replace a pending lifecycle error", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-error-then-timeout-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 800 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 800, endedAt: 900, error: "transient error" },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 800, endedAt: 1_000, aborted: true },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).toMatchObject({
+        status: "timeout",
+        startedAt: 800,
+        endedAt: 1_000,
+      });
+      expect(snapshot?.error).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets a later lifecycle error replace a pending aborted timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = `run-timeout-then-error-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const waitPromise = waitForAgentJob({ runId, timeoutMs: 20_000 });
+
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "start", startedAt: 1_100 },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_100, endedAt: 1_200, aborted: true },
+      });
+      emitAgentEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "error", startedAt: 1_100, endedAt: 1_300, error: "final error" },
+      });
+
+      await vi.advanceTimersByTimeAsync(15_000);
+      const snapshot = await waitPromise;
+      expect(snapshot).toMatchObject({
+        status: "error",
+        startedAt: 1_100,
+        endedAt: 1_300,
+        error: "final error",
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("can ignore cached snapshots and wait for fresh lifecycle events", async () => {
@@ -343,6 +472,102 @@ describe("sanitizeChatHistoryMessages", () => {
   });
 });
 
+describe("projectRecentChatDisplayMessages", () => {
+  it("keeps visible assistant progress text from mixed tool-use messages", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "fix it" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "private reasoning" },
+          {
+            type: "text",
+            text: "I will clean that up now.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-progress",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "toolCall",
+            id: "call-read",
+            name: "read",
+            arguments: { path: "AGENTS.md" },
+          },
+        ],
+        timestamp: 2,
+        __openclaw: { seq: 2 },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-read",
+        toolName: "read",
+        content: [{ type: "text", text: "file contents" }],
+        timestamp: 3,
+      },
+    ]);
+
+    expect(result[1]).toEqual({
+      role: "assistant",
+      content: [{ type: "text", text: "I will clean that up now." }],
+      timestamp: 2,
+      __openclaw: { seq: 2 },
+    });
+  });
+
+  it("keeps pure commentary assistant messages hidden", () => {
+    const result = projectRecentChatDisplayMessages([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Working...",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "msg-commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+        timestamp: 2,
+      },
+    ]);
+
+    expect(result).toEqual([
+      {
+        role: "user",
+        content: [{ type: "text", text: "status" }],
+        timestamp: 1,
+      },
+    ]);
+  });
+
+  it("applies history limits after dropping display-hidden messages", () => {
+    const result = projectRecentChatDisplayMessages(
+      [
+        { role: "user", content: "older visible", timestamp: 1 },
+        { role: "assistant", content: "older answer", timestamp: 2 },
+        { role: "assistant", content: "NO_REPLY", timestamp: 3 },
+        { role: "assistant", content: "ANNOUNCE_SKIP", timestamp: 4 },
+      ],
+      { maxMessages: 1 },
+    );
+
+    expect(result).toEqual([{ role: "assistant", content: "older answer", timestamp: 2 }]);
+  });
+});
+
 describe("resolveEffectiveChatHistoryMaxChars", () => {
   it("uses gateway.webchat.chatHistoryMaxChars when RPC maxChars is absent", () => {
     expect(
@@ -457,7 +682,7 @@ describe("sanitizeChatSendMessageInput", () => {
 });
 
 describe("gateway chat transcript writes (guardrail)", () => {
-  it("routes transcript writes through helper and SessionManager parentId append", () => {
+  it("routes transcript writes through helper and async parentId append", () => {
     const chatTs = fileURLToPath(new URL("./chat.ts", import.meta.url));
     const chatSrc = fs.readFileSync(chatTs, "utf-8");
     const helperTs = fileURLToPath(new URL("./chat-transcript-inject.ts", import.meta.url));
@@ -466,9 +691,9 @@ describe("gateway chat transcript writes (guardrail)", () => {
     expect(chatSrc.includes("fs.appendFileSync(transcriptPath")).toBe(false);
     expect(chatSrc).toContain("appendInjectedAssistantMessageToTranscript(");
 
-    expect(helperSrc.includes("fs.appendFileSync(params.transcriptPath")).toBe(false);
-    expect(helperSrc).toContain("SessionManager.open(params.transcriptPath)");
-    expect(helperSrc).toContain("appendMessage(messageBody)");
+    expect(helperSrc).toContain("appendSessionTranscriptMessage({");
+    expect(helperSrc).toContain("useRawWhenLinear: true");
+    expect(helperSrc).not.toContain("SessionManager.open(params.transcriptPath)");
   });
 });
 
@@ -622,7 +847,24 @@ describe("exec approval handlers", () => {
       },
       hasExecApprovalClients: () => true,
     };
-    return { handlers, broadcasts, respond, context };
+    return { manager, handlers, broadcasts, respond, context };
+  }
+
+  function getRequestedExecApprovalPayload(
+    broadcasts: Array<{ event: string; payload: unknown }>,
+  ): { id: string; request: Record<string, unknown> } {
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    if (!requested) {
+      throw new Error("exec approval requested broadcast missing");
+    }
+    const payload = requested.payload as { id?: unknown; request?: Record<string, unknown> };
+    if (typeof payload.id !== "string" || payload.id.length === 0) {
+      throw new Error("exec approval requested id missing");
+    }
+    return {
+      id: payload.id,
+      request: payload.request ?? {},
+    };
   }
 
   function createForwardingExecApprovalFixture(opts?: {
@@ -720,6 +962,28 @@ describe("exec approval handlers", () => {
     );
   });
 
+  it("rejects whitespace-only approval commands without trimming display text", async () => {
+    const { handlers, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        command: "   ",
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+      },
+    });
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "command is required",
+      }),
+    );
+  });
+
   it("returns pending approval details for exec.approval.get", async () => {
     const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
 
@@ -761,6 +1025,43 @@ describe("exec approval handlers", () => {
     await resolveExecApproval({
       handlers,
       id,
+      respond: resolveRespond,
+      context,
+    });
+    await requestPromise;
+  });
+
+  it("attaches shared command analysis to gateway exec approval requests", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        host: "gateway",
+        command: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+        systemRunPlan: undefined,
+        nodeId: undefined,
+      },
+    });
+
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = requested?.payload as { id?: string; request?: { commandAnalysis?: unknown } };
+    expect(request.request?.commandAnalysis).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["inline-eval"]),
+        warningLines: expect.arrayContaining(["Contains inline-eval: python3 -c"]),
+      }),
+    );
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: request.id ?? "",
       respond: resolveRespond,
       context,
     });
@@ -851,10 +1152,7 @@ describe("exec approval handlers", () => {
       params: { twoPhase: true },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const id = (requested?.payload as { id?: string })?.id ?? "";
-    expect(id).not.toBe("");
+    const { id } = getRequestedExecApprovalPayload(broadcasts);
 
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -878,7 +1176,63 @@ describe("exec approval handlers", () => {
       expect.objectContaining({ id, decision: "allow-once" }),
       undefined,
     );
-    expect(broadcasts.some((entry) => entry.event === "exec.approval.resolved")).toBe(true);
+    expect(broadcasts.map((entry) => entry.event)).toContain("exec.approval.resolved");
+  });
+
+  it("treats duplicate same-decision exec resolves as idempotent during grace", async () => {
+    const { manager, handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: { id: "approval-repeat-1", twoPhase: true },
+    });
+
+    const firstResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: firstResolveRespond,
+      context,
+    });
+    await requestPromise;
+    expect(manager.consumeAllowOnce("approval-repeat-1")).toBe(true);
+
+    const resolvedBroadcastCount = broadcasts.filter(
+      (entry) => entry.event === "exec.approval.resolved",
+    ).length;
+
+    const repeatResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      respond: repeatResolveRespond,
+      context,
+    });
+
+    const conflictingResolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-repeat-1",
+      decision: "deny",
+      respond: conflictingResolveRespond,
+      context,
+    });
+
+    expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
+      resolvedBroadcastCount,
+    );
+    expect(conflictingResolveRespond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        message: "approval already resolved",
+        details: expect.objectContaining({ reason: "APPROVAL_ALREADY_RESOLVED" }),
+      }),
+    );
   });
 
   it("rejects allow-always when the request ask mode is always", async () => {
@@ -891,9 +1245,7 @@ describe("exec approval handlers", () => {
       params: { twoPhase: true, ask: "always" },
     });
 
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    const id = (requested?.payload as { id?: string })?.id ?? "";
-    expect(id).not.toBe("");
+    const { id } = getRequestedExecApprovalPayload(broadcasts);
 
     const resolveRespond = vi.fn();
     await resolveExecApproval({
@@ -954,9 +1306,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     expect(request["envKeys"]).toEqual(["A_VAR", "Z_VAR"]);
     expect(request["systemRunBinding"]).toEqual(
       buildSystemRunApprovalBinding({
@@ -982,9 +1332,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     const envBinding = buildSystemRunApprovalEnvBinding({
       "ProgramFiles(x86)": "C:\\Program Files (x86)",
     });
@@ -1015,9 +1363,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     expect(request["envKeys"]).toEqual(
       buildSystemRunApprovalEnvBinding({ A_VAR: "a", Z_VAR: "z" }).envKeys,
     );
@@ -1045,9 +1391,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     expect(request["command"]).toBe("/usr/bin/echo ok");
     expect(request["commandPreview"]).toBeUndefined();
     expect(request["commandArgv"]).toBeUndefined();
@@ -1083,9 +1427,7 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     expect(request["command"]).toBe('./env sh -c "jq --version"');
     expect(request["commandPreview"]).toBeUndefined();
     expect((request["systemRunPlan"] as { commandPreview?: string }).commandPreview).toBe(
@@ -1112,13 +1454,80 @@ describe("exec approval handlers", () => {
         },
       },
     });
-    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
-    expect(requested).toBeTruthy();
-    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
     expect(request["command"]).toBe("bash safe\\u{200B}.sh");
     expect((request["systemRunPlan"] as { commandText?: string }).commandText).toBe(
       "bash safe\u200B.sh",
     );
+  });
+
+  it("preserves approval warning line breaks while sanitizing hidden characters", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        warningText: "Diagnostics line one\r\n\r\nOpenAI Codex harness:\nSend feedback\u200B",
+      },
+    });
+    const { request } = getRequestedExecApprovalPayload(broadcasts);
+    expect(request["warningText"]).toBe(
+      "Diagnostics line one\n\nOpenAI Codex harness:\nSend feedback\\u{200B}",
+    );
+    expect(request["warningText"]).not.toContain("\\u{A}");
+  });
+
+  it("preserves command analysis and normalizes command spans", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 5, endIndex: 11 },
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 1, endIndex: 4 },
+          { startIndex: 12, endIndex: 999 },
+          { startIndex: 11, endIndex: 11 },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    expect(requested).toEqual(expect.objectContaining({ event: "exec.approval.requested" }));
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["commandAnalysis"]).toEqual(
+      expect.objectContaining({ commandCount: 1, nestedCommandCount: 0 }),
+    );
+    expect(request["commandSpans"]).toEqual([
+      { startIndex: 0, endIndex: 2 },
+      { startIndex: 5, endIndex: 11 },
+    ]);
+  });
+
+  it("drops command spans when command display sanitization changes offsets", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+    await requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        timeoutMs: 10,
+        command: "ls\u0000 | python -c 'print(1)'",
+        commandSpans: [
+          { startIndex: 0, endIndex: 2 },
+          { startIndex: 6, endIndex: 12 },
+        ],
+      },
+    });
+    const requested = broadcasts.find((entry) => entry.event === "exec.approval.requested");
+    const request = (requested?.payload as { request?: Record<string, unknown> })?.request ?? {};
+    expect(request["command"]).not.toBe("ls\u0000 | python -c 'print(1)'");
+    expect(request["commandSpans"]).toBeUndefined();
   });
 
   it("accepts resolve during broadcast", async () => {
@@ -1378,6 +1787,74 @@ describe("exec approval handlers", () => {
     }
   });
 
+  it("resolves Control UI-style approvals by id while preserving stored turn-source metadata", async () => {
+    const { handlers, forwarder, respond, context } = createForwardingExecApprovalFixture();
+    const broadcasts: Array<{ event: string; payload: unknown }> = [];
+    const requestContext = {
+      ...context,
+      hasExecApprovalClients: () => true,
+      broadcast: (event: string, payload: unknown) => {
+        broadcasts.push({ event, payload });
+      },
+    };
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context: requestContext,
+      params: {
+        id: "approval-control-ui-multichannel",
+        twoPhase: true,
+        timeoutMs: 60_000,
+        host: "gateway",
+        nodeId: undefined,
+        systemRunPlan: undefined,
+        sessionKey: "agent:main:feishu:chat-123",
+        turnSourceChannel: "feishu",
+        turnSourceTo: "chat-123",
+        turnSourceAccountId: "work",
+        turnSourceThreadId: "thread-456",
+      },
+    });
+    await drainApprovalRequestTicks();
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id: "approval-control-ui-multichannel",
+      respond: resolveRespond,
+      context: requestContext,
+    });
+    await requestPromise;
+
+    expect(resolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+    expect(forwarder.handleResolved).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "approval-control-ui-multichannel",
+        decision: "allow-once",
+        request: expect.objectContaining({
+          sessionKey: "agent:main:feishu:chat-123",
+          turnSourceChannel: "feishu",
+          turnSourceTo: "chat-123",
+          turnSourceAccountId: "work",
+          turnSourceThreadId: "thread-456",
+        }),
+      }),
+    );
+    expect(broadcasts).toContainEqual(
+      expect.objectContaining({
+        event: "exec.approval.resolved",
+        payload: expect.objectContaining({
+          id: "approval-control-ui-multichannel",
+          request: expect.objectContaining({
+            turnSourceChannel: "feishu",
+            turnSourceTo: "chat-123",
+          }),
+        }),
+      }),
+    );
+  });
+
   it("fast-fails approvals when no approver clients and no forwarding targets", async () => {
     const { manager, handlers, forwarder, respond, context } =
       createForwardingExecApprovalFixture();
@@ -1619,10 +2096,259 @@ describe("gateway healthHandlers.status scope handling", () => {
     async ({ scopes, includeSensitive }) => {
       const respond = await runHealthStatus(scopes);
 
-      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({ includeSensitive });
+      expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+        includeSensitive,
+        includeChannelSummary: true,
+      });
       expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     },
   );
+
+  it("can skip channel summary work for liveness-only status requests", async () => {
+    const respond = vi.fn();
+
+    await healthHandlers.status({
+      req: {} as never,
+      params: { includeChannelSummary: false },
+      respond: respond as never,
+      context: {} as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(vi.mocked(statusModule.getStatusSummary)).toHaveBeenCalledWith({
+      includeSensitive: false,
+      includeChannelSummary: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+});
+
+describe("gateway healthHandlers.health cache freshness", () => {
+  let healthHandlers: typeof import("./health.js").healthHandlers;
+
+  beforeAll(async () => {
+    ({ healthHandlers } = await import("./health.js"));
+  });
+
+  it("refreshes cached health when runtime channel lifecycle has changed", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: false,
+          connected: false,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: false,
+              connected: false,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              ...cached.channels.discord.accounts.default,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              default: {
+                accountId: "default",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
+
+  it("preserves event-loop health sampled by the refresh path", async () => {
+    const eventLoop = {
+      degraded: true,
+      reasons: ["event_loop_delay" as const],
+      intervalMs: 2_000,
+      delayP99Ms: 1_500,
+      delayMaxMs: 1_800,
+      utilization: 0.2,
+      cpuCoreRatio: 0.1,
+    };
+    const replacementEventLoop = {
+      degraded: false,
+      reasons: [],
+      intervalMs: 1,
+      delayP99Ms: 0,
+      delayMaxMs: 0,
+      utilization: 0,
+      cpuCoreRatio: 0,
+    };
+    const fresh = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {},
+      channelOrder: [],
+      channelLabels: {},
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+      eventLoop,
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+    const getEventLoopHealth = vi.fn(() => replacementEventLoop);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => null,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+        getEventLoopHealth,
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(getEventLoopHealth).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ eventLoop }), undefined);
+  });
+
+  it("refreshes cached health when a runtime account is missing from the cached account summary", async () => {
+    const cached = {
+      ok: true,
+      ts: Date.now(),
+      durationMs: 1,
+      channels: {
+        discord: {
+          configured: true,
+          running: true,
+          connected: true,
+          accounts: {
+            default: {
+              accountId: "default",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+      channelOrder: ["discord"],
+      channelLabels: { discord: "Discord" },
+      heartbeatSeconds: 0,
+      defaultAgentId: "main",
+      agents: [],
+      sessions: { path: "/tmp/sessions.json", count: 0, recent: [] },
+    };
+    const fresh = {
+      ...cached,
+      ts: cached.ts + 1,
+      channels: {
+        discord: {
+          ...cached.channels.discord,
+          accounts: {
+            ...cached.channels.discord.accounts,
+            work: {
+              accountId: "work",
+              configured: true,
+              running: true,
+              connected: true,
+            },
+          },
+        },
+      },
+    };
+    const respond = vi.fn();
+    const refreshHealthSnapshot = vi.fn().mockResolvedValue(fresh);
+
+    await healthHandlers.health({
+      req: {} as never,
+      params: {} as never,
+      respond: respond as never,
+      context: {
+        getHealthCache: () => cached,
+        refreshHealthSnapshot,
+        getRuntimeSnapshot: () => ({
+          channels: {},
+          channelAccounts: {
+            discord: {
+              work: {
+                accountId: "work",
+                running: true,
+                connected: true,
+              },
+            },
+          },
+        }),
+        logHealth: { error: vi.fn() },
+      } as never,
+      client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+      isWebchatConnect: () => false,
+    });
+
+    expect(refreshHealthSnapshot).toHaveBeenCalledWith({
+      probe: false,
+      includeSensitive: false,
+    });
+    expect(respond).toHaveBeenCalledWith(true, fresh, undefined);
+  });
 });
 
 describe("logs.tail", () => {

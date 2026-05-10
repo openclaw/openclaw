@@ -75,7 +75,7 @@ Cancels a running background task.
 openclaw tasks audit [--severity <warn|error>] [--code <name>] [--limit <n>] [--json]
 ```
 
-Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task Flow records.
+Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task Flow records. Lost tasks retained until `cleanupAfter` are warnings; expired or unstamped lost tasks are errors.
 
 ### `maintenance`
 
@@ -83,7 +83,17 @@ Surfaces stale, lost, delivery-failed, or otherwise inconsistent task and Task F
 openclaw tasks maintenance [--apply] [--json]
 ```
 
-Previews or applies task and Task Flow reconciliation, cleanup stamping, and pruning.
+Previews or applies task and Task Flow reconciliation, cleanup stamping, pruning,
+and stale cron run session registry cleanup.
+For cron tasks, reconciliation uses persisted run logs/job state before marking an
+old active task `lost`, so completed cron runs do not become false audit errors
+just because the in-memory Gateway runtime state is gone. Offline CLI audit is
+not authoritative for the Gateway's process-local cron active-job set. CLI tasks
+with a run id/source id are marked `lost` when their live Gateway run context is
+gone, even if an old child-session row remains.
+When applied, maintenance also prunes `cron:<jobId>:run:<uuid>` session registry
+rows older than 7 days while preserving currently running cron jobs and leaving
+non-cron session rows untouched.
 
 ### `flow`
 
@@ -94,3 +104,8 @@ openclaw tasks flow cancel <lookup>
 ```
 
 Inspects or cancels durable Task Flow state under the task ledger.
+
+## Related
+
+- [CLI reference](/cli)
+- [Background tasks](/automation/tasks)

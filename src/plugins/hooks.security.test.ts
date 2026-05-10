@@ -147,7 +147,7 @@ describe("before_tool_call terminal block semantics", () => {
     expect(second).not.toHaveBeenCalled();
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority before-tool-call hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });
@@ -186,8 +186,37 @@ describe("before_tool_call terminal block semantics", () => {
     });
 
     await expect(runner.runBeforeToolCall(toolEvent, toolCtx)).rejects.toThrow(
-      "before_tool_call handler from failing failed: Error: boom",
+      "before_tool_call handler from failing failed: boom",
     );
+  });
+
+  it("sanitizes caught hook error logs", async () => {
+    const logger = {
+      error: vi.fn(),
+      warn: vi.fn(),
+    };
+    addStaticTestHooks(registry, {
+      hookName: "message_received",
+      hooks: [
+        {
+          pluginId: "failing",
+          result: undefined,
+          handler: () => {
+            throw new Error("boom\nforged\tsecret sk-test1234567890");
+          },
+        },
+      ],
+    });
+    const runner = createHookRunner(registry, { catchErrors: true, logger });
+
+    await runner.runMessageReceived({ from: "user-1", content: "hi" }, { channelId: "whatsapp" });
+
+    const message = String(logger.error.mock.calls[0]?.[0] ?? "");
+    expect(message).toMatch(
+      /^\[hooks\] message_received handler from failing failed: boom forged secret/,
+    );
+    expect(message).not.toContain("\n");
+    expect(message).not.toContain("sk-test1234567890");
   });
 });
 
@@ -266,7 +295,7 @@ describe("message_sending terminal cancel semantics", () => {
     expect(result?.content).toBe("second");
   });
 
-  it("stops before lower-priority throwing hooks when catchErrors is false", async () => {
+  it("stops before lower-priority message-sending hooks when catchErrors is false", async () => {
     const low = vi.fn().mockImplementation(() => {
       throw new Error("should not run");
     });

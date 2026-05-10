@@ -58,7 +58,7 @@ describe("models-config merge helpers", () => {
     } as ExistingProviderConfig;
   }
 
-  it("refreshes implicit model metadata while preserving explicit reasoning overrides", async () => {
+  it("refreshes implicit model metadata while preserving explicit reasoning overrides", () => {
     const merged = mergeProviderModels(
       {
         api: "openai-responses",
@@ -79,7 +79,6 @@ describe("models-config merge helpers", () => {
           {
             id: "gpt-5.4",
             name: "GPT-5.4",
-            input: ["image"],
             reasoning: false,
             cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 2_000_000,
@@ -89,19 +88,52 @@ describe("models-config merge helpers", () => {
       } as ProviderConfig,
     );
 
-    expect(merged.models).toEqual([
-      expect.objectContaining({
-        id: "gpt-5.4",
-        input: ["text"],
-        reasoning: false,
-        cost: { input: 123, output: 456, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 2_000_000,
-        maxTokens: 200_000,
-      }),
-    ]);
+    const model = merged.models?.[0];
+    expect(merged.models).toHaveLength(1);
+    expect(model?.id).toBe("gpt-5.4");
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.reasoning).toBe(false);
+    expect(model?.cost).toEqual({ input: 123, output: 456, cacheRead: 0, cacheWrite: 0 });
+    expect(model?.contextWindow).toBe(2_000_000);
+    expect(model?.maxTokens).toBe(200_000);
   });
 
-  it("merges explicit providers onto trimmed keys", async () => {
+  it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
+    const merged = mergeProviderModels(
+      {
+        api: "ollama",
+        models: [
+          {
+            id: "qwen3-vl:latest",
+            name: "Qwen3 VL",
+            input: ["text"],
+            reasoning: true,
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+        ],
+      } as ProviderConfig,
+      {
+        api: "ollama",
+        models: [
+          {
+            id: "qwen3-vl:latest",
+            name: "Qwen3 VL",
+            input: ["text", "image"],
+            contextWindow: 128_000,
+            maxTokens: 8192,
+          },
+        ],
+      } as ProviderConfig,
+    );
+
+    const model = merged.models?.[0];
+    expect(model?.id).toBe("qwen3-vl:latest");
+    expect(model?.input).toEqual(["text", "image"]);
+    expect(model?.reasoning).toBe(true);
+  });
+
+  it("merges explicit providers onto trimmed keys", () => {
     const merged = mergeProviders({
       explicit: {
         " custom ": {
@@ -111,12 +143,11 @@ describe("models-config merge helpers", () => {
       },
     });
 
-    expect(merged).toEqual({
-      custom: expect.objectContaining({ api: "openai-responses" }),
-    });
+    expect(Object.keys(merged)).toEqual(["custom"]);
+    expect(merged.custom?.api).toBe("openai-responses");
   });
 
-  it("keeps existing providers alongside newly configured providers in merge mode", async () => {
+  it("keeps existing providers alongside newly configured providers in merge mode", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         "custom-proxy": {
@@ -140,7 +171,7 @@ describe("models-config merge helpers", () => {
     expect(merged["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
   });
 
-  it("preserves non-empty existing apiKey and baseUrl from models.json", async () => {
+  it("preserves non-empty existing apiKey and baseUrl from models.json", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),
@@ -155,7 +186,7 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("preserves existing baseUrl after explicit provider key normalization", async () => {
+  it("preserves existing baseUrl after explicit provider key normalization", () => {
     const normalized = mergeProviders({
       explicit: {
         " custom ": createConfigProvider(),
@@ -173,7 +204,7 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("preserves implicit provider headers when explicit config adds extra headers", async () => {
+  it("preserves implicit provider headers when explicit config adds extra headers", () => {
     const merged = mergeProviderModels(
       {
         baseUrl: "https://api.example.com",
@@ -209,7 +240,7 @@ describe("models-config merge helpers", () => {
     });
   });
 
-  it("replaces stale baseUrl when model api surface changes", async () => {
+  it("replaces stale baseUrl when model api surface changes", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: {
@@ -227,15 +258,11 @@ describe("models-config merge helpers", () => {
       secretRefManagedProviders: new Set<string>(),
     });
 
-    expect(merged.custom).toEqual(
-      expect.objectContaining({
-        apiKey: preservedApiKey,
-        baseUrl: "https://config.example/v1",
-      }),
-    );
+    expect(merged.custom?.apiKey).toBe(preservedApiKey);
+    expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
 
-  it("replaces stale baseUrl when only model-level apis change", async () => {
+  it("replaces stale baseUrl when only model-level apis change", () => {
     const nextProvider = createConfigProvider();
     delete (nextProvider as { api?: string }).api;
     nextProvider.models = [createModel({ api: "openai-responses" })];
@@ -257,7 +284,7 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://config.example/v1");
   });
 
-  it("does not preserve stale plaintext apiKey when next entry is a marker", async () => {
+  it("does not preserve stale plaintext apiKey when next entry is a marker", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: {
@@ -277,7 +304,7 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.apiKey).toBe("GOOGLE_API_KEY"); // pragma: allowlist secret
   });
 
-  it("does not preserve a stale non-env marker when config returns to plaintext", async () => {
+  it("does not preserve a stale non-env marker when config returns to plaintext", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider({ apiKey: "ALLCAPS_SAMPLE" }), // pragma: allowlist secret
@@ -294,7 +321,7 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
 
-  it("uses config apiKey/baseUrl when existing values are empty", async () => {
+  it("uses config apiKey/baseUrl when existing values are empty", () => {
     const merged = mergeWithExistingProviderSecrets({
       nextProviders: {
         custom: createConfigProvider(),

@@ -6,10 +6,9 @@
  */
 
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
-import type { GatewayAccount } from "../types.js";
-import { MAX_UPLOAD_SIZE, formatFileSize } from "../utils/file-utils.js";
+import { MediaFileType, type GatewayAccount } from "../types.js";
+import { formatFileSize, getImageMimeType, getMaxUploadSize } from "../utils/file-utils.js";
 import { formatErrorMessage } from "../utils/format.js";
 import {
   parseQQBotPayload,
@@ -21,12 +20,10 @@ import {
 import { normalizePath, resolveQQBotPayloadLocalFilePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { sanitizeFileName } from "../utils/string-normalize.js";
+import { openLocalFile } from "./media-source.js";
 import {
   sendText as senderSendText,
-  sendImage as senderSendImage,
-  sendVoiceMessage as senderSendVoice,
-  sendVideoMessage as senderSendVideo,
-  sendFileMessage as senderSendFile,
+  sendMedia as senderSendMedia,
   withTokenRetry,
   buildDeliveryTarget,
   accountToCreds,
@@ -35,9 +32,14 @@ import {
 // ---- Injected dependencies ----
 
 /** TTS provider interface — injected from the outer layer. */
-export interface TTSProvider {
+interface TTSProvider {
   /** Framework TTS: text → audio file path. */
-  textToSpeech(params: { text: string; cfg: unknown; channel: string }): Promise<{
+  textToSpeech(params: {
+    text: string;
+    cfg: unknown;
+    channel: string;
+    accountId?: string;
+  }): Promise<{
     success: boolean;
     audioPath?: string;
     provider?: string;
@@ -55,7 +57,7 @@ export interface ReplyDispatcherDeps {
 
 // ---- Exported types ----
 
-export interface MessageTarget {
+interface MessageTarget {
   type: "c2c" | "guild" | "dm" | "group";
   senderId: string;
   messageId: string;
@@ -64,7 +66,7 @@ export interface MessageTarget {
   groupOpenid?: string;
 }
 
-export interface ReplyContext {
+interface ReplyContext {
   target: MessageTarget;
   account: GatewayAccount;
   cfg: unknown;
@@ -91,11 +93,7 @@ export async function sendWithTokenRetry<T>(
 // ---- Text routing ----
 
 /** Route a text message to the correct QQ target type. */
-export async function sendTextToTarget(
-  ctx: ReplyContext,
-  text: string,
-  refIdx?: string,
-): Promise<void> {
+async function sendTextToTarget(ctx: ReplyContext, text: string, refIdx?: string): Promise<void> {
   const { target, account } = ctx;
   const deliveryTarget = buildDeliveryTarget(target);
   const creds = accountToCreds(account);
@@ -271,23 +269,43 @@ function describeMediaTargetForLog(pathValue: string, isHttpUrl: boolean): strin
   }
 }
 
-async function readStructuredPayloadLocalFile(filePath: string): Promise<Buffer> {
-  const openFlags =
-    fs.constants.O_RDONLY | ("O_NOFOLLOW" in fs.constants ? fs.constants.O_NOFOLLOW : 0);
-  const handle = await fs.promises.open(filePath, openFlags);
+/**
+ * Read a local file into memory for image base64 inlining.
+ *
+ * Non-image media (video / file) should pass `source: { localPath }` to
+ * `sender.sendMedia` directly — the sender pipeline handles chunked
+ * routing once this function validates the per-type ceiling.
+ */
+async function readLocalFileForInlineBase64(
+  filePath: string,
+  fileType: MediaFileType,
+): Promise<Buffer> {
+  const opened = await openLocalFile(filePath, { maxSize: getMaxUploadSize(fileType) });
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile()) {
-      throw new Error("Path is not a regular file");
-    }
-    if (stat.size > MAX_UPLOAD_SIZE) {
-      throw new Error(
-        `File is too large (${formatFileSize(stat.size)}); QQ Bot API limit is ${formatFileSize(MAX_UPLOAD_SIZE)}`,
-      );
-    }
-    return handle.readFile();
+    return await opened.handle.readFile();
   } finally {
-    await handle.close();
+    await opened.close();
+  }
+}
+
+/**
+ * Enforce the per-{@link MediaFileType} upload ceiling before handing a
+ * local path to `sender.sendMedia`. The sender's internal `normalizeSource`
+ * uses an unlimited cap so it can accept whatever size the policy layer
+ * (outbound / reply-dispatcher) approves; the policy gate lives here.
+ *
+ * Returns the validated byte size. Throws via {@link openLocalFile} with a
+ * human-readable "File is too large" message when exceeding the ceiling.
+ */
+async function assertLocalFileWithinTypeLimit(
+  filePath: string,
+  fileType: MediaFileType,
+): Promise<number> {
+  const opened = await openLocalFile(filePath, { maxSize: getMaxUploadSize(fileType) });
+  try {
+    return opened.size;
+  } finally {
+    await opened.close();
   }
 }
 
@@ -312,19 +330,11 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
 
   if (payload.source === "file") {
     try {
-      const fileBuffer = await readStructuredPayloadLocalFile(imageUrl);
+      const fileBuffer = await readLocalFileForInlineBase64(imageUrl, MediaFileType.IMAGE);
       const base64Data = fileBuffer.toString("base64");
-      const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
-      const mimeTypes: Record<string, string> = {
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".png": "image/png",
-        ".gif": "image/gif",
-        ".webp": "image/webp",
-        ".bmp": "image/bmp",
-      };
-      const mimeType = mimeTypes[ext];
+      const mimeType = getImageMimeType(imageUrl);
       if (!mimeType) {
+        const ext = normalizeLowercaseStringOrEmpty(path.extname(imageUrl));
         log?.error(`Unsupported image format: ${ext}`);
         return;
       }
@@ -348,9 +358,13 @@ async function handleImagePayload(ctx: ReplyContext, payload: MediaPayload): Pro
       creds,
       async () => {
         if (deliveryTarget.type === "c2c" || deliveryTarget.type === "group") {
-          await senderSendImage(deliveryTarget, imageUrl, creds, {
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "image",
+            source: { url: imageUrl },
             msgId: target.messageId,
-            localPath: originalImagePath,
+            localPathForMeta: originalImagePath,
           });
         } else if (deliveryTarget.type === "dm") {
           await senderSendText(deliveryTarget, `![](${payload.path})`, creds, {
@@ -380,16 +394,25 @@ async function handleAudioPayload(
   payload: MediaPayload,
   deps?: ReplyDispatcherDeps,
 ): Promise<void> {
+  const ttsText = payload.caption || payload.path;
+  await sendTextAsVoiceReply(ctx, ttsText, deps);
+}
+
+export async function sendTextAsVoiceReply(
+  ctx: ReplyContext,
+  text: string | undefined,
+  deps?: ReplyDispatcherDeps,
+): Promise<boolean> {
   const { target, account, cfg, log } = ctx;
   if (!deps) {
     log?.error(`TTS deps not provided, cannot handle audio payload`);
-    return;
+    return false;
   }
   try {
-    const ttsText = payload.caption || payload.path;
+    const ttsText = text;
     if (!ttsText?.trim()) {
       log?.error(`Voice missing text`);
-      return;
+      return false;
     }
 
     log?.debug?.(`TTS: "${ttsText.slice(0, 50)}..."`);
@@ -397,10 +420,11 @@ async function handleAudioPayload(
       text: ttsText,
       cfg,
       channel: "qqbot",
+      accountId: account.accountId,
     });
     if (!ttsResult.success || !ttsResult.audioPath) {
       log?.error(`TTS failed: ${ttsResult.error ?? "unknown"}`);
-      return;
+      return false;
     }
 
     const providerLabel = ttsResult.provider ?? "unknown";
@@ -411,7 +435,7 @@ async function handleAudioPayload(
     const silkBase64 = await deps.tts.audioFileToSilkBase64(ttsResult.audioPath);
     if (!silkBase64) {
       log?.error(`Failed to convert TTS audio to SILK`);
-      return;
+      return false;
     }
     const silkPath = ttsResult.audioPath;
 
@@ -424,11 +448,14 @@ async function handleAudioPayload(
       creds,
       async () => {
         if (deliveryTarget.type === "c2c" || deliveryTarget.type === "group") {
-          await senderSendVoice(deliveryTarget, creds, {
-            voiceBase64: silkBase64,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "voice",
+            source: { base64: silkBase64 },
             msgId: target.messageId,
             ttsText,
-            filePath: silkPath,
+            localPathForMeta: silkPath,
           });
         } else {
           log?.error(`Voice not supported in ${deliveryTarget.type}, sending text fallback`);
@@ -439,8 +466,10 @@ async function handleAudioPayload(
       account.accountId,
     );
     log?.debug?.(`Voice message sent`);
+    return true;
   } catch (err) {
     log?.error(`TTS/voice send failed: ${formatErrorMessage(err)}`);
+    return false;
   }
 }
 
@@ -468,20 +497,27 @@ async function handleVideoPayload(ctx: ReplyContext, payload: MediaPayload): Pro
       creds,
       async () => {
         if (isHttpUrl) {
-          await senderSendVideo(deliveryTarget, creds, {
-            videoUrl: videoPath,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "video",
+            source: { url: videoPath },
             msgId: target.messageId,
           });
         } else {
-          const fileBuffer = await readStructuredPayloadLocalFile(videoPath);
-          const videoBase64 = fileBuffer.toString("base64");
+          const size = await assertLocalFileWithinTypeLimit(videoPath, MediaFileType.VIDEO);
           log?.debug?.(
-            `Read local video (${formatFileSize(fileBuffer.length)}): ${describeMediaTargetForLog(videoPath, false)}`,
+            `Video local (${formatFileSize(size)}): ${describeMediaTargetForLog(videoPath, false)}`,
           );
-          await senderSendVideo(deliveryTarget, creds, {
-            videoBase64,
+          // Hand the local path straight to the sender — `dispatchUpload`
+          // routes one-shot vs chunked based on size.
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "video",
+            source: { localPath: videoPath },
             msgId: target.messageId,
-            localPath: videoPath,
+            localPathForMeta: videoPath,
           });
         }
       },
@@ -525,19 +561,29 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
       creds,
       async () => {
         if (isHttpUrl) {
-          await senderSendFile(deliveryTarget, creds, {
-            fileUrl: filePath,
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "file",
+            source: { url: filePath },
             msgId: target.messageId,
             fileName,
           });
         } else {
-          const fileBuffer = await readStructuredPayloadLocalFile(filePath);
-          const fileBase64 = fileBuffer.toString("base64");
-          await senderSendFile(deliveryTarget, creds, {
-            fileBase64,
+          const size = await assertLocalFileWithinTypeLimit(filePath, MediaFileType.FILE);
+          log?.debug?.(
+            `File local (${formatFileSize(size)}): ${describeMediaTargetForLog(filePath, false)}`,
+          );
+          // Hand the local path straight to the sender — `dispatchUpload`
+          // routes one-shot vs chunked based on size.
+          await senderSendMedia({
+            target: deliveryTarget,
+            creds,
+            kind: "file",
+            source: { localPath: filePath },
             msgId: target.messageId,
             fileName,
-            localFilePath: filePath,
+            localPathForMeta: filePath,
           });
         }
       },

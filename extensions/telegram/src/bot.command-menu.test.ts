@@ -1,3 +1,7 @@
+import {
+  listNativeCommandSpecs,
+  listNativeCommandSpecsForConfig,
+} from "openclaw/plugin-sdk/native-command-registry";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 
@@ -9,22 +13,23 @@ const {
   telegramBotRuntimeForTest,
 } = await import("./bot.create-telegram-bot.test-harness.js");
 
-let listNativeCommandSpecs: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecs;
-let listNativeCommandSpecsForConfig: typeof import("../../../src/auto-reply/commands-registry.js").listNativeCommandSpecsForConfig;
 let normalizeTelegramCommandName: typeof import("./command-config.js").normalizeTelegramCommandName;
-let createTelegramBotBase: typeof import("./bot.js").createTelegramBot;
-let setTelegramBotRuntimeForTest: typeof import("./bot.js").setTelegramBotRuntimeForTest;
+let createTelegramBotBase: typeof import("./bot-core.js").createTelegramBotCore;
+let setTelegramBotRuntimeForTest: typeof import("./bot-core.js").setTelegramBotRuntimeForTest;
 let createTelegramBot: (
-  opts: Parameters<typeof import("./bot.js").createTelegramBot>[0],
-) => ReturnType<typeof import("./bot.js").createTelegramBot>;
+  opts: import("./bot.types.js").TelegramBotOptions,
+) => ReturnType<typeof import("./bot-core.js").createTelegramBotCore>;
 
 const loadConfig = getLoadConfigMock();
 
 function createSignal() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected command sync signal resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -44,13 +49,21 @@ function resolveSkillCommands(config: Parameters<typeof listNativeCommandSpecsFo
   >["skillCommands"];
 }
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("createTelegramBot command menu", () => {
   beforeAll(async () => {
-    ({ listNativeCommandSpecs, listNativeCommandSpecsForConfig } =
-      await import("../../../src/auto-reply/commands-registry.js"));
     ({ normalizeTelegramCommandName } = await import("./command-config.js"));
-    ({ createTelegramBot: createTelegramBotBase, setTelegramBotRuntimeForTest } =
-      await import("./bot.js"));
+    ({ createTelegramBotCore: createTelegramBotBase, setTelegramBotRuntimeForTest } =
+      await import("./bot-core.js"));
   });
 
   beforeEach(() => {
@@ -167,10 +180,13 @@ describe("createTelegramBot command menu", () => {
       description: command.description,
     }));
     const nativeStatus = native.find((command) => command.command === "status");
-    expect(nativeStatus).toBeDefined();
+    if (!nativeStatus) {
+      throw new Error("expected native Telegram status command");
+    }
     expect(registered).toContainEqual({ command: "custom_backup", description: "Git backup" });
     expect(registered).not.toContainEqual({ command: "status", description: "Custom status" });
-    expect(registered.filter((command) => command.command === "status")).toEqual([nativeStatus]);
+    expect(registered.find((command) => command.command === "status")).toEqual(nativeStatus);
+    expect(countMatching(registered, (command) => command.command === "status")).toBe(1);
     expect(errorSpy).toHaveBeenCalled();
   });
 

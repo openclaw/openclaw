@@ -137,6 +137,66 @@ describe("codex provider", () => {
     });
   });
 
+  it("pages through live discovery before building the provider catalog", async () => {
+    const listModels = vi
+      .fn()
+      .mockResolvedValueOnce({
+        models: [
+          {
+            id: "gpt-5.4",
+            model: "gpt-5.4",
+            hidden: false,
+            inputModalities: ["text", "image"],
+            supportedReasoningEfforts: ["medium"],
+          },
+        ],
+        nextCursor: "page-2",
+      })
+      .mockResolvedValueOnce({
+        models: [
+          {
+            id: "gpt-5.2",
+            model: "gpt-5.2",
+            hidden: false,
+            inputModalities: ["text"],
+            supportedReasoningEfforts: [],
+          },
+        ],
+      });
+
+    const result = await buildCodexProviderCatalog({
+      env: {},
+      listModels,
+    });
+
+    expect(listModels).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ cursor: undefined, limit: 100, sharedClient: false }),
+    );
+    expect(listModels).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ cursor: "page-2", limit: 100, sharedClient: false }),
+    );
+    expect(result.provider.models.map((model) => model.id)).toEqual(["gpt-5.4", "gpt-5.2"]);
+  });
+
+  it("reports discovery failures before using the fallback catalog", async () => {
+    const error = new Error("app-server down");
+    const onDiscoveryFailure = vi.fn();
+    const listModels = vi.fn(async () => {
+      throw error;
+    });
+
+    const result = await buildCodexProviderCatalog({
+      env: {},
+      listModels,
+      onDiscoveryFailure,
+    });
+
+    expect(onDiscoveryFailure).toHaveBeenCalledWith(error);
+    expectStaticFallbackCatalog(result);
+  });
+
   it("keeps a static fallback catalog when live discovery is explicitly disabled by env", async () => {
     const listModels = vi.fn();
 
@@ -176,7 +236,7 @@ describe("codex provider", () => {
     expect(discoveryClient.close).toHaveBeenCalledTimes(1);
   });
 
-  it("resolves arbitrary Codex app-server model ids through the codex provider", () => {
+  it("resolves arbitrary Codex app-server model ids as text-only until discovered", () => {
     const provider = buildCodexProvider();
 
     const model = provider.resolveDynamicModel?.({
@@ -190,6 +250,21 @@ describe("codex provider", () => {
       provider: "codex",
       api: "openai-codex-responses",
       baseUrl: "https://chatgpt.com/backend-api",
+      input: ["text"],
+    });
+  });
+
+  it("keeps fallback Codex app-server models image-capable", () => {
+    const provider = buildCodexProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "codex",
+      modelId: "gpt-5.5",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(model).toMatchObject({
+      id: "gpt-5.5",
       input: ["text", "image"],
     });
   });
@@ -225,6 +300,24 @@ describe("codex provider", () => {
     });
   });
 
+  it("exposes a setup auth choice for installing Codex as an external provider", async () => {
+    const provider = buildCodexProvider();
+
+    expect(provider.auth[0]).toMatchObject({
+      id: "app-server",
+      kind: "custom",
+      wizard: {
+        choiceId: "codex",
+        choiceLabel: "Codex app-server",
+        onboardingScopes: ["text-inference"],
+      },
+    });
+    await expect(provider.auth[0].run({} as never)).resolves.toMatchObject({
+      profiles: [],
+      defaultModel: "codex/gpt-5.5",
+    });
+  });
+
   it("exposes a lightweight provider-discovery entry for model list/status", async () => {
     expect(codexProviderDiscovery.id).toBe("codex");
     expect(codexProviderDiscovery.resolveSyntheticAuth?.({ provider: "codex" })).toEqual({
@@ -255,11 +348,15 @@ describe("codex provider", () => {
     ).toEqual({
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: expect.stringContaining(
-          "Quiet monitoring does not satisfy an explicit ongoing-work instruction.",
-        ),
+        interaction_style: expect.stringContaining("This is a live chat, not a memo."),
       },
     });
+    expect(
+      provider.resolveSystemPromptContribution?.({
+        provider: "codex",
+        modelId: "gpt-5.4",
+      } as never)?.sectionOverrides?.interaction_style,
+    ).not.toContain("The purpose of heartbeats is to make you feel magical and proactive.");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {

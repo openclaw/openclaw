@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import type { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import {
   applyInputProvenanceToUserMessage,
@@ -9,12 +10,77 @@ import {
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
-export type GuardedSessionManager = SessionManager & {
+type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
   clearPendingToolResults?: () => void;
 };
+
+function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
+  if (cfg?.logging?.redactSensitive === "off") {
+    return value;
+  }
+  return redactSensitiveText(value, {
+    mode: cfg?.logging?.redactSensitive,
+    patterns: cfg?.logging?.redactPatterns,
+  });
+}
+
+function redactTranscriptContentBlock(block: unknown, cfg?: OpenClawConfig): unknown {
+  if (!block || typeof block !== "object" || Array.isArray(block)) {
+    return block;
+  }
+  const source = block as Record<string, unknown>;
+  let next: Record<string, unknown> | null = null;
+  const assign = (key: string, value: string) => {
+    const redacted = redactTranscriptText(value, cfg);
+    if (redacted === value) {
+      return;
+    }
+    next ??= { ...source };
+    next[key] = redacted;
+  };
+
+  if (typeof source.text === "string") {
+    assign("text", source.text);
+  }
+  if (typeof source.thinking === "string") {
+    assign("thinking", source.thinking);
+  }
+  if (typeof source.partialJson === "string") {
+    assign("partialJson", source.partialJson);
+  }
+  return next ?? block;
+}
+
+function redactTranscriptContent(content: unknown, cfg?: OpenClawConfig): unknown {
+  if (typeof content === "string") {
+    return redactTranscriptText(content, cfg);
+  }
+  if (!Array.isArray(content)) {
+    return content;
+  }
+  let changed = false;
+  const redacted = content.map((block) => {
+    const next = redactTranscriptContentBlock(block, cfg);
+    changed ||= next !== block;
+    return next;
+  });
+  return changed ? redacted : content;
+}
+
+function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
+  const source = message as unknown as Record<string, unknown>;
+  const redactedContent = redactTranscriptContent(source.content, cfg);
+  if (redactedContent === source.content) {
+    return message;
+  }
+  return {
+    ...source,
+    content: redactedContent,
+  } as unknown as AgentMessage;
+}
 
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
@@ -29,7 +95,12 @@ export function guardSessionManager(
     contextWindowTokens?: number;
     inputProvenance?: InputProvenance;
     allowSyntheticToolResults?: boolean;
+    missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    suppressNextUserMessagePersistence?: boolean;
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -37,14 +108,31 @@ export function guardSessionManager(
   }
 
   const hookRunner = getGlobalHookRunner();
-  const beforeMessageWrite = hookRunner?.hasHooks("before_message_write")
-    ? (event: { message: import("@mariozechner/pi-agent-core").AgentMessage }) => {
-        return hookRunner.runBeforeMessageWrite(event, {
-          agentId: opts?.agentId,
-          sessionKey: opts?.sessionKey,
-        });
+  const beforeMessageWrite = (event: {
+    message: import("@mariozechner/pi-agent-core").AgentMessage;
+  }) => {
+    let message = event.message;
+    let changed = false;
+    if (hookRunner?.hasHooks("before_message_write")) {
+      const result = hookRunner.runBeforeMessageWrite(event, {
+        agentId: opts?.agentId,
+        sessionKey: opts?.sessionKey,
+      });
+      if (result?.block) {
+        return result;
       }
-    : undefined;
+      if (result?.message) {
+        message = result.message;
+        changed = true;
+      }
+    }
+    const redacted = redactTranscriptMessage(message, opts?.config);
+    if (redacted !== message) {
+      message = redacted;
+      changed = true;
+    }
+    return changed ? { message } : undefined;
+  };
 
   const transform = hookRunner?.hasHooks("tool_result_persist")
     ? (
@@ -75,6 +163,7 @@ export function guardSessionManager(
       applyInputProvenanceToUserMessage(message, opts?.inputProvenance),
     transformToolResultForPersistence: transform,
     allowSyntheticToolResults: opts?.allowSyntheticToolResults,
+    missingToolResultText: opts?.missingToolResultText,
     allowedToolNames: opts?.allowedToolNames,
     beforeMessageWriteHook: beforeMessageWrite,
     maxToolResultChars:
@@ -85,6 +174,8 @@ export function guardSessionManager(
             agentId: opts.agentId,
           })
         : undefined,
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    onUserMessagePersisted: opts?.onUserMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

@@ -29,9 +29,9 @@ export const RUNTIME_AUTH_REFRESH_MARGIN_MS = 5 * 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_RETRY_MS = 60 * 1000;
 export const RUNTIME_AUTH_REFRESH_MIN_DELAY_MS = 5 * 1000;
 
-export const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
-export const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
-export const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
+const DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS = 0;
+const DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS = 1;
+const DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS = 1;
 
 export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
   return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
@@ -86,10 +86,37 @@ export function resolveActiveErrorContext(params: {
   provider: string;
   model: string;
 } {
+  return resolveReportedModelRef(params);
+}
+
+function isEmbeddedHarnessProvider(provider: string): boolean {
+  return provider.trim().toLowerCase() === "pi";
+}
+
+export function resolveReportedModelRef(params: {
+  provider: string;
+  model: string;
+  assistant?: { provider?: string; model?: string } | null;
+}): {
+  provider: string;
+  model: string;
+} {
   const assistantProvider = params.assistant?.provider?.trim();
   const assistantModel = params.assistant?.model?.trim();
+  if (!assistantProvider) {
+    return {
+      provider: params.provider,
+      model: assistantModel || params.model,
+    };
+  }
+  if (isEmbeddedHarnessProvider(assistantProvider)) {
+    return {
+      provider: params.provider,
+      model: params.model,
+    };
+  }
   return {
-    provider: assistantProvider || params.provider,
+    provider: assistantProvider,
     model: assistantModel || params.model,
   };
 }
@@ -124,6 +151,7 @@ export function buildErrorAgentMeta(params: {
   sessionId: string;
   provider: string;
   model: string;
+  contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
   lastAssistant?: { usage?: unknown } | null;
@@ -139,6 +167,7 @@ export function buildErrorAgentMeta(params: {
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.model,
+    ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

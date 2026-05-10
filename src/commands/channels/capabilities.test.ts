@@ -12,6 +12,7 @@ const resolveDefaultAccountId = () => DEFAULT_ACCOUNT_ID;
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   replaceConfigFile: vi.fn(),
+  refreshPluginRegistryAfterConfigMutation: vi.fn(async () => undefined),
   resolveInstallableChannelPlugin: vi.fn(),
 }));
 
@@ -36,6 +37,10 @@ vi.mock("../../config/config.js", async () => {
     replaceConfigFile: mocks.replaceConfigFile,
   };
 });
+
+vi.mock("../../cli/plugins-registry-refresh.js", () => ({
+  refreshPluginRegistryAfterConfigMutation: mocks.refreshPluginRegistryAfterConfigMutation,
+}));
 
 vi.mock("../channel-setup/channel-plugin-resolution.js", () => ({
   resolveInstallableChannelPlugin: mocks.resolveInstallableChannelPlugin,
@@ -203,24 +208,27 @@ describe("channelsCapabilitiesCommand", () => {
       channelId: "whatsapp",
       plugin,
       configChanged: true,
+      pluginInstalled: true,
     });
     vi.mocked(listChannelPlugins).mockReturnValue([]);
     vi.mocked(getChannelPlugin).mockReturnValue(undefined);
 
     await channelsCapabilitiesCommand({ channel: "whatsapp" }, runtime);
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawChannel: "whatsapp",
-        allowInstall: true,
-      }),
-    );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
-        plugins: { entries: { whatsapp: { enabled: true } } },
-      }),
-      baseHash: "config-1",
+    const resolveParams = mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0];
+    expect(resolveParams?.rawChannel).toBe("whatsapp");
+    expect(resolveParams?.allowInstall).toBe(true);
+
+    const replaceParams = mocks.replaceConfigFile.mock.calls[0]?.[0];
+    expect(replaceParams?.nextConfig.plugins).toStrictEqual({
+      entries: { whatsapp: { enabled: true } },
     });
+    expect(replaceParams?.baseHash).toBe("config-1");
+
+    const refreshCalls = mocks.refreshPluginRegistryAfterConfigMutation.mock
+      .calls as unknown as Array<[{ reason?: string }]>;
+    const refreshParams = refreshCalls[0]?.[0];
+    expect(refreshParams?.reason).toBe("source-changed");
     expect(logs.join("\n")).toContain("Probe: linked");
   });
 });

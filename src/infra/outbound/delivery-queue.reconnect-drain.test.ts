@@ -8,6 +8,7 @@ import {
   enqueueDelivery,
   failDelivery,
   MAX_RETRIES,
+  markDeliveryPlatformOutcomeUnknown,
   type RecoveryLogger,
   recoverPendingDeliveries,
   withActiveDeliveryClaim,
@@ -22,6 +23,16 @@ const NO_LISTENER_ERROR = "No active DirectChat listener";
 
 function normalizeReconnectAccountIdForTest(accountId?: string | null): string {
   return (accountId ?? "").trim() || "default";
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 async function drainDirectChatReconnectPending(opts: {
@@ -147,16 +158,31 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(after.lastError).toBe("transient failure");
   });
 
-  it("does not throw if delivery fails during drain", async () => {
+  it("records retry state if delivery fails during drain", async () => {
     const log = createRecoveryLog();
     const deliver = createTransientFailureDeliver();
 
     await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
 
-    // Should not throw
     await expect(
       drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir }),
     ).resolves.toBeUndefined();
+  });
+
+  it("moves unknown-after-send entries to failed without replaying during reconnect drain", async () => {
+    const log = createRecoveryLog();
+    const deliver = vi.fn<DeliverFn>(async () => {});
+    const id = await enqueueFailedDirectChatDelivery({ accountId: "acct1", stateDir: tmpDir });
+    await markDeliveryPlatformOutcomeUnknown(id, tmpDir);
+
+    await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
+
+    expect(deliver).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(tmpDir, "delivery-queue", `${id}.json`))).toBe(false);
+    expect(fs.existsSync(path.join(tmpDir, "delivery-queue", "failed", `${id}.json`))).toBe(true);
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining("refusing blind replay without adapter reconciliation"),
+    );
   });
 
   it("skips entries where retryCount >= MAX_RETRIES", async () => {
@@ -331,7 +357,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await startupRecovery;
 
     expect(deliver).toHaveBeenCalledTimes(2);
-    expect(deliveredTargets.filter((target) => target === "+1555")).toHaveLength(1);
+    expect(countMatching(deliveredTargets, (target) => target === "+1555")).toBe(1);
     expect(startupLog.info).toHaveBeenCalledWith(
       expect.stringContaining("Recovery skipped for delivery"),
     );
@@ -350,7 +376,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     expect(deliver).toHaveBeenCalledTimes(1);
     expect(
       fs.readdirSync(path.join(tmpDir, "delivery-queue")).filter((f) => f.endsWith(".json")),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("drains backoff-eligible retries on reconnect", async () => {

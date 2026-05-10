@@ -1,3 +1,4 @@
+import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -48,15 +49,35 @@ type OriginRoutingMetadata = Pick<
 >;
 
 function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetadata {
-  return {
-    originatingChannel: items.find((item) => item.originatingChannel)?.originatingChannel,
-    originatingTo: items.find((item) => item.originatingTo)?.originatingTo,
-    originatingAccountId: items.find((item) => item.originatingAccountId)?.originatingAccountId,
+  const metadata: OriginRoutingMetadata = {};
+  for (const item of items) {
+    if (!metadata.originatingChannel && item.originatingChannel) {
+      metadata.originatingChannel = item.originatingChannel;
+    }
+    if (!metadata.originatingTo && item.originatingTo) {
+      metadata.originatingTo = item.originatingTo;
+    }
+    if (!metadata.originatingAccountId && item.originatingAccountId) {
+      metadata.originatingAccountId = item.originatingAccountId;
+    }
     // Support both number (Telegram topic) and string (Slack thread_ts) thread IDs.
-    originatingThreadId: items.find(
-      (item) => item.originatingThreadId != null && item.originatingThreadId !== "",
-    )?.originatingThreadId,
-  };
+    if (
+      metadata.originatingThreadId == null &&
+      item.originatingThreadId != null &&
+      item.originatingThreadId !== ""
+    ) {
+      metadata.originatingThreadId = item.originatingThreadId;
+    }
+    if (
+      metadata.originatingChannel &&
+      metadata.originatingTo &&
+      metadata.originatingAccountId &&
+      metadata.originatingThreadId != null
+    ) {
+      break;
+    }
+  }
+  return metadata;
 }
 
 // Keep this key aligned with the fields that affect per-message authorization or
@@ -117,8 +138,16 @@ function renderCollectItem(item: FollowupRun, idx: number): string {
 }
 
 function collectQueuedImages(items: FollowupRun[]): Pick<FollowupRun, "images" | "imageOrder"> {
-  const images = items.flatMap((item) => item.images ?? []);
-  const imageOrder = items.flatMap((item) => item.imageOrder ?? []);
+  const images: NonNullable<FollowupRun["images"]> = [];
+  const imageOrder: NonNullable<FollowupRun["imageOrder"]> = [];
+  for (const item of items) {
+    if (item.images) {
+      images.push(...item.images);
+    }
+    if (item.imageOrder) {
+      imageOrder.push(...item.imageOrder);
+    }
+  }
   return {
     ...(images.length > 0 ? { images } : {}),
     ...(imageOrder.length > 0 ? { imageOrder } : {}),
@@ -134,11 +163,8 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   if (!isRoutableChannel(channel) || !to) {
     return { cross: true };
   }
-  // Support both number (Telegram topic IDs) and string (Slack thread_ts) thread IDs.
-  const threadKey = threadId != null && threadId !== "" ? String(threadId) : "";
-  return {
-    key: [channel, to, accountId || "", threadKey].join("|"),
-  };
+  const key = channelRouteCompactKey({ channel, to, accountId, threadId });
+  return key ? { key } : { cross: true };
 }
 
 export function scheduleFollowupDrain(

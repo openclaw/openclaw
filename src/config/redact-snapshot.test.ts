@@ -32,6 +32,32 @@ function expectGatewayAuthFieldValue(
 }
 
 describe("redactConfigSnapshot", () => {
+  it("does not expose internal plugin metadata snapshot fields", () => {
+    const snapshot = {
+      ...makeSnapshot({
+        plugins: {
+          allow: ["demo"],
+        },
+      }),
+      pluginMetadataSnapshot: {
+        manifestRegistry: {
+          plugins: [
+            {
+              id: "demo",
+              rootDir: "/private/plugin/root",
+              manifestPath: "/private/plugin/root/openclaw.plugin.json",
+            },
+          ],
+          diagnostics: [],
+        },
+      },
+    };
+
+    const result = redactConfigSnapshot(snapshot);
+
+    expect("pluginMetadataSnapshot" in result).toBe(false);
+  });
+
   it("redacts common secret field patterns across config sections", () => {
     const snapshot = makeSnapshot({
       gateway: {
@@ -622,9 +648,9 @@ describe("redactConfigSnapshot", () => {
     const result = redactConfigSnapshot(snapshot);
     expect(result.raw).toBeNull();
     expect(result.parsed).toBeNull();
-    expect(result.sourceConfig).toEqual({});
-    expect(result.resolved).toEqual({});
-    expect(result.runtimeConfig).toEqual({});
+    expect(result.sourceConfig).toStrictEqual({});
+    expect(result.resolved).toStrictEqual({});
+    expect(result.runtimeConfig).toStrictEqual({});
     expect(result.sourceConfig).toBe(result.resolved);
     expect(result.runtimeConfig).toBe(result.config);
   });

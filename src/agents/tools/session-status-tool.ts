@@ -5,9 +5,10 @@ import type {
   ThinkLevel,
   VerboseLevel,
 } from "../../auto-reply/thinking.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import {
   loadSessionStore,
+  mergeSessionEntry,
   resolveStorePath,
   type SessionEntry,
   updateSessionStore,
@@ -21,7 +22,7 @@ import {
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
@@ -40,16 +41,17 @@ import {
   SESSION_STATUS_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { readStringParam } from "./common.js";
+import { normalizeToolModelOverride, readStringParam } from "./common.js";
 import {
-  createSessionVisibilityGuard,
-  shouldResolveSessionIdInput,
   createAgentToAgentPolicy,
+  createSessionVisibilityGuard,
+  resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
   resolveInternalSessionKey,
-  resolveSessionReference,
   resolveSandboxedSessionToolContext,
+  resolveSessionReference,
   resolveVisibleSessionReference,
+  shouldResolveSessionIdInput,
 } from "./sessions-helpers.js";
 
 const SessionStatusToolSchema = Type.Object({
@@ -61,12 +63,12 @@ type CommandsStatusRuntimeModule = {
   buildStatusText: (params: BuildStatusTextParams) => Promise<string>;
 };
 
-let commandsStatusRuntimePromise: Promise<CommandsStatusRuntimeModule> | null = null;
+const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntimeModule>(
+  () => import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>,
+);
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
-  commandsStatusRuntimePromise ??=
-    import("./session-status.runtime.js") as Promise<CommandsStatusRuntimeModule>;
-  return commandsStatusRuntimePromise;
+  return commandsStatusRuntimeLoader.load();
 }
 
 function resolveSessionEntry(params: {
@@ -135,6 +137,27 @@ function resolveStoreScopedRequesterKey(params: {
   return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
 }
 
+function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
+  return {
+    sessionId: "",
+    updatedAt: Date.now(),
+  };
+}
+
+function resolveImplicitCurrentSessionFallback(params: {
+  allowFallback: boolean;
+  fallbackKey: string;
+}): { key: string; entry: SessionEntry } | null {
+  const fallbackKey = params.fallbackKey.trim();
+  if (!params.allowFallback || !fallbackKey) {
+    return null;
+  }
+  return {
+    key: fallbackKey,
+    entry: synthesizeImplicitCurrentSessionEntry(),
+  };
+}
+
 function listImplicitDefaultDirectFallbackKeys(params: {
   keyRaw: string;
   mainKey: string;
@@ -160,6 +183,54 @@ function listImplicitDefaultDirectFallbackKeys(params: {
     params.mainKey,
   ];
   return [...new Set(candidates)];
+}
+
+type ActiveStatusModelIdentity = { provider?: string; model: string };
+
+function resolveActiveStatusModelIdentity(params: {
+  activeModelId?: string;
+  activeModelProvider?: string;
+  isImplicitCurrentRequest: boolean;
+  isSemanticCurrentRequest: boolean;
+  liveSessionKeys: Iterable<string | undefined>;
+  modelRaw?: string;
+  resolvedKey: string;
+}): ActiveStatusModelIdentity | undefined {
+  const activeModelId = params.activeModelId?.trim();
+  if (!activeModelId || params.modelRaw !== undefined) {
+    return undefined;
+  }
+  if (!params.isSemanticCurrentRequest && !params.isImplicitCurrentRequest) {
+    return undefined;
+  }
+  const resolvedKey = params.resolvedKey.trim();
+  const liveSessionKeys = new Set(
+    Array.from(params.liveSessionKeys, (value) => value?.trim()).filter((value): value is string =>
+      Boolean(value),
+    ),
+  );
+  if (!liveSessionKeys.has(resolvedKey)) {
+    return undefined;
+  }
+  const activeModelProvider = params.activeModelProvider?.trim();
+  return activeModelProvider
+    ? { provider: activeModelProvider, model: activeModelId }
+    : { model: activeModelId };
+}
+
+function withActiveStatusModelIdentity(
+  entry: SessionEntry,
+  identity: ActiveStatusModelIdentity,
+): SessionEntry {
+  const next: SessionEntry = {
+    ...entry,
+    model: identity.model,
+    ...(identity.provider ? { modelProvider: identity.provider } : {}),
+  };
+  delete next.providerOverride;
+  delete next.modelOverride;
+  delete next.modelOverrideSource;
+  return next;
 }
 
 function formatSessionTaskLine(params: {
@@ -200,11 +271,8 @@ async function resolveModelOverride(params: {
       isDefault: boolean;
     }
 > {
-  const raw = params.raw.trim();
+  const raw = normalizeToolModelOverride(params.raw);
   if (!raw) {
-    return { kind: "reset" };
-  }
-  if (normalizeOptionalLowercaseString(raw) === "default") {
     return { kind: "reset" };
   }
 
@@ -252,8 +320,16 @@ async function resolveModelOverride(params: {
 
 export function createSessionStatusTool(opts?: {
   agentSessionKey?: string;
+  /**
+   * The actual live run session key. When the tool is constructed with a sandbox/policy
+   * session key (e.g. a Telegram direct peer key), this allows `session_status({sessionKey:
+   * "current"})` to resolve to the live run session instead of the stale sandbox key.
+   */
+  runSessionKey?: string;
   config?: OpenClawConfig;
   sandboxed?: boolean;
+  activeModelProvider?: string;
+  activeModelId?: string;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -263,7 +339,7 @@ export function createSessionStatusTool(opts?: {
     parameters: SessionStatusToolSchema,
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
-      const cfg = opts?.config ?? loadConfig();
+      const cfg = opts?.config ?? getRuntimeConfig();
       const { mainKey, alias, effectiveRequesterKey } = resolveSandboxedSessionToolContext({
         cfg,
         agentSessionKey: opts?.agentSessionKey,
@@ -322,6 +398,32 @@ export function createSessionStatusTool(opts?: {
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // Track whether this is a semantic-current request (literal "current" or a
+      // current-client alias) BEFORE any rewrite, so visibility treats it as self.
+      const isSemanticCurrentRequest =
+        requestedKeyRaw === "current" ||
+        Boolean(
+          resolveCurrentSessionClientAlias({
+            key: requestedKeyRaw ?? "",
+            requesterInternalKey: effectiveRequesterKey,
+          }),
+        );
+
+      // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
+      // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
+      // key already is the live requester; avoid probing literal "current" through the gateway.
+      if (requestedKeyRaw === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
+        requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
+      }
+
+      const currentSessionAlias = resolveCurrentSessionClientAlias({
+        key: requestedKeyRaw ?? "",
+        requesterInternalKey: effectiveRequesterKey,
+      });
+      if (currentSessionAlias) {
+        requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
+      }
       const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;
@@ -343,7 +445,7 @@ export function createSessionStatusTool(opts?: {
         }
       };
 
-      if (requestedKeyRaw.startsWith("agent:")) {
+      if (requestedKeyRaw.startsWith("agent:") && !isSemanticCurrentRequest) {
         const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
@@ -453,12 +555,27 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
+        const fallback = resolveImplicitCurrentSessionFallback({
+          allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
+          fallbackKey:
+            isSemanticCurrentRequest && opts?.runSessionKey
+              ? opts.runSessionKey
+              : storeScopedRequesterKey,
+        });
+        if (fallback) {
+          resolved = fallback;
+          resolvedViaImplicitCurrentFallback = true;
+        }
+      }
+
+      if (!resolved) {
         const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
         throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
       }
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
       const shouldTreatVisibilityTargetAsSelf =
+        isSemanticCurrentRequest ||
         resolvedViaImplicitCurrentFallback ||
         (!resolvedViaSessionId &&
           (requestedKeyInput === "current" || resolved.key === requestedKeyInput));
@@ -498,23 +615,54 @@ export function createSessionStatusTool(opts?: {
           markLiveSwitchPending: true,
         });
         if (applied.updated) {
-          store[resolved.key] = nextEntry;
+          const persistedEntry = nextEntry.sessionId.trim()
+            ? nextEntry
+            : (() => {
+                const persistedEntryPatch: Partial<SessionEntry> = { ...nextEntry };
+                delete persistedEntryPatch.sessionId;
+                const existingEntry = store[resolved.key];
+                const existingWithValidSessionId = existingEntry?.sessionId?.trim()
+                  ? existingEntry
+                  : undefined;
+                return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
+              })();
+          store[resolved.key] = persistedEntry;
           await updateSessionStore(storePath, (nextStore) => {
-            nextStore[resolved.key] = nextEntry;
+            nextStore[resolved.key] = persistedEntry;
           });
-          resolved.entry = nextEntry;
+          resolved.entry = persistedEntry;
           changedModel = true;
         }
       }
 
-      const runtimeModelIdentity = resolveSessionModelIdentityRef(
-        cfg,
-        resolved.entry,
-        agentId,
-        `${configured.provider}/${configured.model}`,
-      );
+      const activeModelId = opts?.activeModelId?.trim();
+      const activeModelProvider = opts?.activeModelProvider?.trim();
+      const isImplicitCurrentRequest = requestedKeyParam === undefined;
+      const activeModelIdentity = resolveActiveStatusModelIdentity({
+        activeModelId,
+        activeModelProvider,
+        isImplicitCurrentRequest,
+        isSemanticCurrentRequest,
+        liveSessionKeys: [
+          opts?.runSessionKey,
+          storeScopedRequesterKey,
+          effectiveRequesterKey,
+          visibilityRequesterKey,
+        ],
+        modelRaw,
+        resolvedKey: resolved.key,
+      });
+      const runtimeModelIdentity = activeModelIdentity
+        ? activeModelIdentity
+        : resolveSessionModelIdentityRef(
+            cfg,
+            resolved.entry,
+            agentId,
+            `${configured.provider}/${configured.model}`,
+          );
       const hasExplicitModelOverride = Boolean(
-        resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim(),
+        !activeModelIdentity &&
+        (resolved.entry.providerOverride?.trim() || resolved.entry.modelOverride?.trim()),
       );
       const runtimeProviderForCard = runtimeModelIdentity.provider?.trim();
       const runtimeModelForCard = runtimeModelIdentity.model.trim();
@@ -524,8 +672,9 @@ export function createSessionStatusTool(opts?: {
       const defaultModelForCard = hasExplicitModelOverride
         ? configured.model
         : runtimeModelForCard || configured.model;
-      const statusSessionEntry =
-        !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
+      const statusSessionEntry = activeModelIdentity
+        ? withActiveStatusModelIdentity(resolved.entry, activeModelIdentity)
+        : !hasExplicitModelOverride && !runtimeProviderForCard && runtimeModelForCard
           ? { ...resolved.entry, providerOverride: "" }
           : resolved.entry;
       const providerOverrideForCard = statusSessionEntry.providerOverride?.trim();
@@ -556,6 +705,7 @@ export function createSessionStatusTool(opts?: {
           statusSessionEntry.lastChannel ??
           statusSessionEntry.origin?.provider ??
           "unknown",
+        workspaceDir: statusSessionEntry.spawnedWorkspaceDir,
         provider: providerForCard,
         model: defaultModelForCard,
         resolvedThinkLevel: statusSessionEntry.thinkingLevel as ThinkLevel | undefined,
@@ -599,6 +749,16 @@ export function createSessionStatusTool(opts?: {
       });
       const fullStatusText =
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
+      const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
+      const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+      const modelOverrideForResult =
+        modelRaw === undefined
+          ? undefined
+          : resultOverrideModel
+            ? resultOverrideProvider
+              ? `${resultOverrideProvider}/${resultOverrideModel}`
+              : resultOverrideModel
+            : null;
 
       return {
         content: [{ type: "text", text: fullStatusText }],
@@ -606,6 +766,15 @@ export function createSessionStatusTool(opts?: {
           ok: true,
           sessionKey: resolved.key,
           changedModel,
+          ...(modelRaw !== undefined
+            ? {
+                model: resultOverrideModel ?? defaultModelForCard,
+                ...((resultOverrideProvider ?? providerForCard)
+                  ? { modelProvider: resultOverrideProvider ?? providerForCard }
+                  : {}),
+                modelOverride: modelOverrideForResult,
+              }
+            : {}),
           statusText: fullStatusText,
         },
       };

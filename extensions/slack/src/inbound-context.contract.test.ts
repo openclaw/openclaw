@@ -1,9 +1,7 @@
-import {
-  createTempHomeEnv,
-  expectChannelInboundContextContract,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/testing";
-import { describe, expect, it } from "vitest";
+import { expectChannelInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
+import { describe, it } from "vitest";
 import {
   createInboundSlackTestContext,
   prepareSlackMessage,
@@ -55,8 +53,10 @@ describe("Slack inbound context contract", () => {
         opts: { source: "message" },
       });
 
-      expect(prepared).toBeTruthy();
-      expectChannelInboundContextContract(prepared!.ctxPayload);
+      if (!prepared) {
+        throw new Error("expected slack message to prepare an inbound context payload");
+      }
+      expectChannelInboundContextContract(prepared.ctxPayload);
     } finally {
       await tempHome.restore();
     }

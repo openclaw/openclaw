@@ -84,6 +84,32 @@ describe("probeGatewayStatus", () => {
     });
   });
 
+  it("preserves gateway server version from the connect probe", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.write"],
+        capability: "write_capable",
+      },
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+
+    const result = await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      timeoutMs: 5_000,
+      json: true,
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      server: { version: "2026.5.6", connId: "conn-1" },
+    });
+  });
+
   it("uses a real status RPC when requireRpc is enabled", async () => {
     callGatewayMock.mockReset();
     probeGatewayMock.mockReset();
@@ -136,6 +162,43 @@ describe("probeGatewayStatus", () => {
       timeoutMs: 5_000,
       configPath: "/tmp/openclaw-daemon/openclaw.json",
     });
+  });
+
+  it("forwards configured handshake timeout to the connect probe and status RPC", async () => {
+    callGatewayMock.mockReset();
+    probeGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValueOnce({ status: "ok" });
+    probeGatewayMock.mockResolvedValueOnce({
+      ok: true,
+      auth: {
+        role: "operator",
+        scopes: ["operator.admin"],
+        capability: "admin_capable",
+      },
+    });
+    const config = { gateway: { handshakeTimeoutMs: 30_000 } };
+
+    await probeGatewayStatus({
+      url: "ws://127.0.0.1:19191",
+      token: "temp-token",
+      config,
+      preauthHandshakeTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      requireRpc: true,
+    });
+
+    expect(probeGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        preauthHandshakeTimeoutMs: 30_000,
+        timeoutMs: 30_000,
+      }),
+    );
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        timeoutMs: 30_000,
+      }),
+    );
   });
 
   it("falls back to read-only when the status RPC succeeds but the auth probe is inconclusive", async () => {

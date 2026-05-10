@@ -16,6 +16,7 @@ import {
   type RawAXNode,
   snapshotAria,
   snapshotDom,
+  snapshotRoleViaCdp,
 } from "./cdp.js";
 
 /**
@@ -32,6 +33,16 @@ type CdpMockMessage = Parameters<CdpReplyHandler>[0];
 
 function sendCdpResult(socket: WebSocket, id: number | undefined, result: Record<string, unknown>) {
   socket.send(JSON.stringify({ id, result }));
+}
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 function replyToPageEnable(msg: CdpMockMessage, socket: WebSocket): boolean {
@@ -77,6 +88,16 @@ async function startMockWsServer(handle: CdpReplyHandler) {
         params?: Record<string, unknown>;
       };
       handle(msg, socket);
+      if (
+        msg.method === "Page.enable" ||
+        msg.method === "Runtime.enable" ||
+        msg.method === "Network.enable" ||
+        msg.method === "DOM.enable" ||
+        msg.method === "Accessibility.enable" ||
+        msg.method === "Runtime.runIfWaitingForDebugger"
+      ) {
+        socket.send(JSON.stringify({ id: msg.id, result: {} }));
+      }
     });
   });
   return {
@@ -122,7 +143,8 @@ describe("cdp internal", () => {
           return;
         }
         if (msg.method === "Page.captureScreenshot") {
-          expect(msg.params).toMatchObject({ format: "png", captureBeyondViewport: true });
+          expect(msg.params).toMatchObject({ format: "png" });
+          expect(msg.params).not.toHaveProperty("captureBeyondViewport");
           socket.send(
             JSON.stringify({
               id: msg.id,
@@ -185,7 +207,7 @@ describe("cdp internal", () => {
         }
         if (msg.method === "Runtime.evaluate") {
           // Pre-capture viewport probe + post-capture probe.
-          const isPre = events.filter((m) => m === "Runtime.evaluate").length === 1;
+          const isPre = countMatching(events, (m) => m === "Runtime.evaluate") === 1;
           socket.send(
             JSON.stringify({
               id: msg.id,
@@ -373,12 +395,12 @@ describe("cdp internal", () => {
 
   describe("formatAriaSnapshot", () => {
     it("returns an empty array when the AX tree is empty", () => {
-      expect(formatAriaSnapshot([], 100)).toEqual([]);
+      expect(formatAriaSnapshot([], 100)).toStrictEqual([]);
     });
 
     it("returns an empty array when no node has an id", () => {
       const nodes = [{ role: { value: "Role" }, name: { value: "" } }] as unknown as RawAXNode[];
-      expect(formatAriaSnapshot(nodes, 100)).toEqual([]);
+      expect(formatAriaSnapshot(nodes, 100)).toStrictEqual([]);
     });
 
     it("skips child references that are absent from the node map", () => {
@@ -470,7 +492,205 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
+    });
+  });
+
+  describe("snapshotRoleViaCdp", () => {
+    it("builds role refs, promotes cursor-interactive nodes, and appends link urls", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (msg.method === "Accessibility.enable" || msg.method === "Page.enable") {
+          socket.send(JSON.stringify({ id: msg.id, result: {} }));
+          return;
+        }
+        if (msg.method === "Accessibility.getFullAXTree") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: {
+                nodes: [
+                  {
+                    nodeId: "1",
+                    role: { value: "RootWebArea" },
+                    name: { value: "" },
+                    childIds: ["2", "3", "4"],
+                  },
+                  {
+                    nodeId: "2",
+                    role: { value: "button" },
+                    name: { value: "Save" },
+                    backendDOMNodeId: 22,
+                    childIds: [],
+                  },
+                  {
+                    nodeId: "3",
+                    role: { value: "link" },
+                    name: { value: "Docs" },
+                    backendDOMNodeId: 33,
+                    childIds: [],
+                  },
+                  {
+                    nodeId: "4",
+                    role: { value: "generic" },
+                    name: { value: "" },
+                    backendDOMNodeId: 44,
+                    childIds: [],
+                  },
+                ],
+              },
+            }),
+          );
+          return;
+        }
+        if (msg.method === "Runtime.evaluate") {
+          const expression =
+            typeof msg.params?.expression === "string" ? msg.params.expression : "";
+          if (expression.includes('querySelectorAll("*"')) {
+            socket.send(
+              JSON.stringify({
+                id: msg.id,
+                result: {
+                  result: {
+                    value: [
+                      {
+                        text: "Clickable Card",
+                        tagName: "div",
+                        hasCursorPointer: true,
+                        hasOnClick: true,
+                      },
+                    ],
+                  },
+                },
+              }),
+            );
+            return;
+          }
+          socket.send(JSON.stringify({ id: msg.id, result: { result: { value: true } } }));
+          return;
+        }
+        if (msg.method === "DOM.getDocument") {
+          socket.send(JSON.stringify({ id: msg.id, result: { root: { nodeId: 1 } } }));
+          return;
+        }
+        if (msg.method === "DOM.querySelectorAll") {
+          socket.send(JSON.stringify({ id: msg.id, result: { nodeIds: [44] } }));
+          return;
+        }
+        if (msg.method === "DOM.describeNode") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { node: { backendNodeId: 44, attributes: ["data-openclaw-cdp-ci", "0"] } },
+            }),
+          );
+          return;
+        }
+        if (msg.method === "DOM.resolveNode") {
+          socket.send(JSON.stringify({ id: msg.id, result: { object: { objectId: "link1" } } }));
+          return;
+        }
+        if (msg.method === "Runtime.callFunctionOn") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { result: { value: "https://docs.openclaw.ai/" } },
+            }),
+          );
+        }
+      });
+      wss = server.wss;
+
+      const snap = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        urls: true,
+        options: { interactive: true },
+      });
+
+      expect(snap.snapshot).toContain('- button "Save" [ref=e1]');
+      expect(snap.snapshot).toContain('- link "Docs" [ref=e2] [url=https://docs.openclaw.ai/]');
+      expect(snap.snapshot).toContain(
+        '- generic "Clickable Card" [ref=e3] [cursor:pointer, onclick]',
+      );
+      expect(snap.refs.e3?.backendDOMNodeId).toBe(44);
+    });
+
+    it("expands one level of iframe snapshots with frame metadata", async () => {
+      const server = await startMockWsServer((msg, socket) => {
+        if (
+          msg.method === "Accessibility.enable" ||
+          msg.method === "Page.enable" ||
+          msg.method === "Runtime.evaluate"
+        ) {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: msg.method === "Runtime.evaluate" ? { result: { value: [] } } : {},
+            }),
+          );
+          return;
+        }
+        if (msg.method === "Accessibility.getFullAXTree") {
+          const frameId = msg.params?.frameId;
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: {
+                nodes: frameId
+                  ? [
+                      {
+                        nodeId: "c1",
+                        role: { value: "RootWebArea" },
+                        name: { value: "" },
+                        childIds: ["c2"],
+                      },
+                      {
+                        nodeId: "c2",
+                        role: { value: "button" },
+                        name: { value: "Inside" },
+                        backendDOMNodeId: 55,
+                        childIds: [],
+                      },
+                    ]
+                  : [
+                      {
+                        nodeId: "1",
+                        role: { value: "RootWebArea" },
+                        name: { value: "" },
+                        childIds: ["2"],
+                      },
+                      {
+                        nodeId: "2",
+                        role: { value: "Iframe" },
+                        name: { value: "Child" },
+                        backendDOMNodeId: 44,
+                        childIds: [],
+                      },
+                    ],
+              },
+            }),
+          );
+          return;
+        }
+        if (msg.method === "DOM.describeNode") {
+          socket.send(
+            JSON.stringify({
+              id: msg.id,
+              result: { node: { contentDocument: { frameId: "FRAME_1" } } },
+            }),
+          );
+        }
+      });
+      wss = server.wss;
+
+      const snap = await snapshotRoleViaCdp({
+        wsUrl: server.wsUrl,
+        options: { interactive: true },
+      });
+
+      expect(snap.snapshot).toContain('- Iframe "Child" [ref=e1]');
+      expect(snap.snapshot).toContain('  - button "Inside" [ref=e2]');
+      expect(snap.refs.e1?.frameId).toBe("FRAME_1");
+      expect(snap.refs.e2?.frameId).toBe("FRAME_1");
     });
   });
 
@@ -513,7 +733,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("returns an empty nodes array when nodes is not an array", async () => {
@@ -533,7 +753,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotDom({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
   });
 
@@ -644,7 +864,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const out = await querySelector({ wsUrl: server.wsUrl, selector: "button" });
-      expect(out.matches).toEqual([]);
+      expect(out.matches).toStrictEqual([]);
     });
   });
 
@@ -753,6 +973,22 @@ describe("cdp internal", () => {
           const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
           if (msg.method === "Target.createTarget") {
             socket.send(JSON.stringify({ id: msg.id, result: { targetId: "T_BARE_WS" } }));
+            return;
+          }
+          if (msg.method === "Target.attachToTarget") {
+            socket.send(JSON.stringify({ id: msg.id, result: { sessionId: "S_BARE_WS" } }));
+            return;
+          }
+          if (
+            msg.method === "Page.enable" ||
+            msg.method === "Runtime.enable" ||
+            msg.method === "Network.enable" ||
+            msg.method === "DOM.enable" ||
+            msg.method === "Accessibility.enable" ||
+            msg.method === "Runtime.runIfWaitingForDebugger" ||
+            msg.method === "Target.detachFromTarget"
+          ) {
+            socket.send(JSON.stringify({ id: msg.id, result: {} }));
           }
         });
       });
@@ -859,7 +1095,7 @@ describe("cdp internal", () => {
       });
       wss = server.wss;
       const snap = await snapshotAria({ wsUrl: server.wsUrl });
-      expect(snap.nodes).toEqual([]);
+      expect(snap.nodes).toStrictEqual([]);
     });
 
     it("swallows a failing Runtime.enable in evaluateJavaScript", async () => {

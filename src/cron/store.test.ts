@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { loadCronStore, resolveCronStorePath, saveCronStore } from "./store.js";
+import { loadCronStore, loadCronStoreSync, resolveCronStorePath, saveCronStore } from "./store.js";
 import type { CronStoreFile } from "./types.js";
 
 let fixtureRoot = "";
@@ -63,6 +63,10 @@ async function captureRenameDestinations(action: () => Promise<void>): Promise<s
   }
 
   return renamedDestinations;
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
 }
 
 describe("resolveCronStorePath", () => {
@@ -125,6 +129,72 @@ describe("cron store", () => {
     });
   });
 
+  it("loads split cron state synchronously for task reconciliation", async () => {
+    const { storePath } = await makeStorePath();
+    await saveCronStore(storePath, makeStore("job-sync", true));
+
+    const loaded = loadCronStoreSync(storePath);
+
+    expect(loaded.jobs[0]).toMatchObject({
+      id: "job-sync",
+      state: expect.any(Object),
+      updatedAtMs: expect.any(Number),
+    });
+  });
+
+  it("compares split state identity for flat legacy cron rows", async () => {
+    const { storePath } = await makeStorePath();
+    const statePath = storePath.replace(/\.json$/, "-state.json");
+    await fs.mkdir(path.dirname(storePath), { recursive: true });
+    await fs.writeFile(
+      storePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: [
+            {
+              id: "legacy-flat-cron",
+              name: "legacy flat cron",
+              enabled: true,
+              kind: "cron",
+              cron: "*/10 * * * *",
+              tz: "UTC",
+            },
+          ],
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+    await fs.writeFile(
+      statePath,
+      JSON.stringify(
+        {
+          version: 1,
+          jobs: {
+            "legacy-flat-cron": {
+              updatedAtMs: 1,
+              scheduleIdentity: JSON.stringify({
+                version: 1,
+                enabled: true,
+                schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+              }),
+              state: { nextRunAtMs: 123 },
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    const loaded = await loadCronStore(storePath);
+
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+  });
+
   it("does not create a backup file when saving unchanged content", async () => {
     const store = await makeStorePath();
     const payload = makeStore("job-1", true);
@@ -132,7 +202,7 @@ describe("cron store", () => {
     await saveCronStore(store.storePath, payload);
     await saveCronStore(store.storePath, payload);
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
   });
 
   it("backs up previous content before replacing the store", async () => {
@@ -149,9 +219,9 @@ describe("cron store", () => {
     const backup = JSON.parse(backupRaw);
     // jobs.json now contains config-only (state stripped to {}).
     expect(current.jobs[0].id).toBe("job-2");
-    expect(current.jobs[0].state).toEqual({});
+    expect(current.jobs[0].state).toStrictEqual({});
     expect(backup.jobs[0].id).toBe("job-1");
-    expect(backup.jobs[0].state).toEqual({});
+    expect(backup.jobs[0].state).toStrictEqual({});
   });
 
   it("skips backup files for runtime-only state churn", async () => {
@@ -176,7 +246,7 @@ describe("cron store", () => {
     // jobs.json should NOT be rewritten (only runtime changed).
     const configRaw = await fs.readFile(store.storePath, "utf-8");
     const config = JSON.parse(configRaw);
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
 
     // State file should contain runtime fields.
@@ -186,8 +256,51 @@ describe("cron store", () => {
     expect(stateFile.jobs[first.jobs[0].id].state.nextRunAtMs).toBe(
       first.jobs[0].createdAtMs + 60_000,
     );
+    expect(typeof stateFile.jobs[first.jobs[0].id].scheduleIdentity).toBe("string");
 
-    await expect(fs.stat(`${store.storePath}.bak`)).rejects.toThrow();
+    await expectPathMissing(`${store.storePath}.bak`);
+  });
+
+  it("drops stale split runtime nextRunAtMs when schedule identity changes across restart", async () => {
+    const { storePath } = await makeStorePath();
+    const payload = makeStore("job-restart-drift", true);
+    const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
+    payload.jobs[0].schedule = { kind: "cron", expr: "0 6 * * *", tz: "UTC" };
+    payload.jobs[0].state = { nextRunAtMs: staleNextRunAtMs };
+
+    await saveCronStore(storePath, payload);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    config.jobs[0].schedule = { kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" };
+    await fs.writeFile(storePath, JSON.stringify(config, null, 2), "utf-8");
+
+    const loaded = await loadCronStore(storePath);
+
+    expect(loaded.jobs[0]?.schedule).toEqual({ kind: "cron", expr: "30 6 * * 0,6", tz: "UTC" });
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
+  });
+
+  it("drops stale split runtime nextRunAtMs in sync loads when schedule identity changes", async () => {
+    const { storePath } = await makeStorePath();
+    const payload = makeStore("job-sync-restart-drift", true);
+    const staleNextRunAtMs = payload.jobs[0].createdAtMs + 3_600_000;
+    payload.jobs[0].schedule = { kind: "every", everyMs: 60_000, anchorMs: 1 };
+    payload.jobs[0].state = { nextRunAtMs: staleNextRunAtMs };
+
+    await saveCronStore(storePath, payload);
+
+    const config = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
+      jobs: Array<Record<string, unknown>>;
+    };
+    config.jobs[0].schedule = { kind: "every", everyMs: 60_000, anchorMs: 2 };
+    await fs.writeFile(storePath, JSON.stringify(config, null, 2), "utf-8");
+
+    const loaded = loadCronStoreSync(storePath);
+
+    expect(loaded.jobs[0]?.schedule).toEqual({ kind: "every", everyMs: 60_000, anchorMs: 2 });
+    expect(loaded.jobs[0]?.state.nextRunAtMs).toBeUndefined();
   });
 
   it("keeps state separate for custom store paths without a json suffix", async () => {
@@ -213,7 +326,7 @@ describe("cron store", () => {
     const config = JSON.parse(await fs.readFile(storePath, "utf-8"));
     expect(Array.isArray(config.jobs)).toBe(true);
     expect(config.jobs[0].id).toBe("job-1");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
 
     const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(first.jobs[0].createdAtMs + 60_000);
@@ -265,7 +378,7 @@ describe("cron store", () => {
     const stateRawAfter = await fs.readFile(statePath, "utf-8");
 
     expect(config.jobs[0].id).toBe("job-1");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(stateRawAfter).toBe(stateRawBefore);
     expect(renamedDestinations).toContain(store.storePath);
     expect(renamedDestinations).not.toContain(statePath);
@@ -290,7 +403,7 @@ describe("cron store", () => {
     const stateFile = JSON.parse(await fs.readFile(statePath, "utf-8"));
 
     expect(config.jobs[0]).not.toHaveProperty("updatedAtMs");
-    expect(config.jobs[0].state).toEqual({});
+    expect(config.jobs[0].state).toStrictEqual({});
     expect(stateFile.jobs["job-1"].updatedAtMs).toBe(legacy.jobs[0].updatedAtMs);
     expect(stateFile.jobs["job-1"].state.nextRunAtMs).toBe(legacy.jobs[0].createdAtMs + 60_000);
   });
@@ -345,7 +458,7 @@ describe("cron store", () => {
     const loaded = await loadCronStore(store.storePath);
 
     expect(loaded.jobs[0]?.updatedAtMs).toBe(payload.jobs[0].createdAtMs);
-    expect(loaded.jobs[0]?.state).toEqual({});
+    expect(loaded.jobs[0]?.state).toStrictEqual({});
   });
 
   it("propagates unreadable state sidecar errors", async () => {

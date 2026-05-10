@@ -1,7 +1,8 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { captureEnv } from "openclaw/plugin-sdk/testing";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { handleTelegramAction, telegramActionRuntime } from "./action-runtime.js";
+import { beginTelegramInboundTurnDeliveryCorrelation } from "./inbound-turn-delivery.js";
 
 const originalTelegramActionRuntime = { ...telegramActionRuntime };
 const reactMessageTelegram = vi.fn(async () => ({ ok: true }));
@@ -355,6 +356,27 @@ describe("handleTelegramAction", () => {
       type: "text",
       text: expect.stringContaining('"ok": true'),
     });
+  });
+
+  it("marks the matching inbound turn delivered after a successful send", async () => {
+    let count = 0;
+    const end = beginTelegramInboundTurnDeliveryCorrelation("telegram-session", {
+      outboundTo: "@testchannel",
+      markInboundTurnDelivered: () => {
+        count += 1;
+      },
+    });
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        content: "Hello, Telegram!",
+      },
+      telegramConfig(),
+      { sessionKey: "telegram-session" },
+    );
+    expect(count).toBe(1);
+    end();
   });
 
   it("accepts shared send action aliases", async () => {
@@ -801,6 +823,38 @@ describe("handleTelegramAction", () => {
     );
   });
 
+  it("surfaces non-fatal delete warnings", async () => {
+    deleteMessageTelegram.mockResolvedValueOnce({
+      ok: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    } as unknown as Awaited<ReturnType<typeof deleteMessageTelegram>>);
+    const cfg = {
+      channels: { telegram: { botToken: "tok" } },
+    } as OpenClawConfig;
+
+    const result = await handleTelegramAction(
+      {
+        action: "deleteMessage",
+        chatId: "123",
+        messageId: 456,
+      },
+      cfg,
+    );
+
+    const textPayload = result.content.find((item) => item.type === "text");
+    expect(textPayload?.type).toBe("text");
+    const parsed = JSON.parse((textPayload as { type: "text"; text: string }).text) as {
+      ok: boolean;
+      deleted?: boolean;
+      warning?: string;
+    };
+    expect(parsed).toMatchObject({
+      ok: false,
+      deleted: false,
+      warning: "Message 456 was not deleted: 400: Bad Request: message can't be deleted",
+    });
+  });
+
   it("respects deleteMessage gating", async () => {
     const cfg = {
       channels: {
@@ -850,6 +904,26 @@ describe("handleTelegramAction", () => {
       cfg,
     );
     expect(sendMessageTelegram).toHaveBeenCalled();
+  });
+
+  it("uses interactive button labels as fallback text when message text is omitted", async () => {
+    await handleTelegramAction(
+      {
+        action: "sendMessage",
+        to: "@testchannel",
+        interactive: {
+          blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+        },
+      },
+      telegramConfig({ capabilities: { inlineButtons: "all" } }),
+    );
+    expect(sendMessageTelegram).toHaveBeenCalledWith(
+      "@testchannel",
+      "- Retry",
+      expect.objectContaining({
+        buttons: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      }),
+    );
   });
 
   it.each([

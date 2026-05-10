@@ -1,5 +1,7 @@
 import fs from "node:fs/promises";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { canResolveEnvSecretRefInReadOnlyPath } from "openclaw/plugin-sdk/extension-shared";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   isProviderApiKeyConfigured,
   type AuthProfileStore,
@@ -10,6 +12,10 @@ import {
   normalizeBaseUrl,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
+import {
+  normalizeSecretInputString,
+  resolveSecretInputString,
+} from "openclaw/plugin-sdk/secret-input-runtime";
 import {
   buildHostnameAllowlistPolicyFromSuffixAllowlist,
   fetchWithSsrFGuard,
@@ -34,11 +40,11 @@ const DEFAULT_TIMEOUT_MS = 5 * 60_000;
 
 export const DEFAULT_COMFY_MODEL = "workflow";
 
-export type ComfyMode = "local" | "cloud";
-export type ComfyCapability = "image" | "music" | "video";
-export type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
-export type ComfyWorkflow = Record<string, unknown>;
-export type ComfyProviderConfig = Record<string, unknown>;
+type ComfyMode = "local" | "cloud";
+type ComfyCapability = "image" | "music" | "video";
+type ComfyOutputKind = "audio" | "gifs" | "images" | "videos";
+type ComfyWorkflow = Record<string, unknown>;
+type ComfyProviderConfig = Record<string, unknown>;
 type ComfyFetchGuardParams = Parameters<typeof fetchWithSsrFGuard>[0];
 type ComfyDispatcherPolicy = ComfyFetchGuardParams["dispatcherPolicy"];
 type ComfyPromptResponse = {
@@ -66,21 +72,33 @@ type ComfyStatusResponse = {
 type ComfyNetworkPolicy = {
   apiPolicy?: SsrFPolicy;
 };
+type ComfyApiKeyResolution =
+  | {
+      status: "available";
+      apiKey: string;
+      source: string;
+    }
+  | {
+      status: "missing";
+    }
+  | {
+      status: "configured_unavailable";
+    };
 
-export type ComfySourceImage = {
+type ComfySourceImage = {
   buffer: Buffer;
   mimeType: string;
   fileName?: string;
 };
 
-export type ComfyGeneratedAsset = {
+type ComfyGeneratedAsset = {
   buffer: Buffer;
   mimeType: string;
   fileName: string;
   nodeId: string;
 };
 
-export type ComfyWorkflowResult = {
+type ComfyWorkflowResult = {
   assets: ComfyGeneratedAsset[];
   model: string;
   promptId: string;
@@ -104,8 +122,12 @@ function readConfigInteger(config: ComfyProviderConfig, key: string): number | u
 }
 
 export function getComfyConfig(cfg?: OpenClawConfig): ComfyProviderConfig {
-  const raw = cfg?.models?.providers?.comfy;
-  return isRecord(raw) ? raw : {};
+  const pluginConfig = cfg?.plugins?.entries?.comfy?.config;
+  if (isRecord(pluginConfig)) {
+    return pluginConfig;
+  }
+  const legacyConfig = cfg?.models?.providers?.comfy;
+  return isRecord(legacyConfig) ? legacyConfig : {};
 }
 
 function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProviderConfig {
@@ -116,7 +138,7 @@ function stripNestedCapabilityConfig(config: ComfyProviderConfig): ComfyProvider
   return next;
 }
 
-export function getComfyCapabilityConfig(
+function getComfyCapabilityConfig(
   config: ComfyProviderConfig,
   capability: ComfyCapability,
 ): ComfyProviderConfig {
@@ -128,14 +150,60 @@ export function getComfyCapabilityConfig(
   return { ...shared, ...nested };
 }
 
-export function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
+function resolveComfyMode(config: ComfyProviderConfig): ComfyMode {
   return normalizeOptionalString(config.mode) === "cloud" ? "cloud" : "local";
+}
+
+function resolveComfyApiKey(
+  config: ComfyProviderConfig,
+  cfg?: OpenClawConfig,
+): ComfyApiKeyResolution {
+  const resolved = resolveSecretInputString({
+    value: config.apiKey,
+    path: "plugins.entries.comfy.config.apiKey",
+    defaults: cfg?.secrets?.defaults,
+    mode: "inspect",
+  });
+  if (resolved.status === "available") {
+    const apiKey = normalizeSecretInputString(resolved.value);
+    return apiKey
+      ? {
+          status: "available",
+          apiKey,
+          source: "plugins.entries.comfy.config.apiKey",
+        }
+      : { status: "missing" };
+  }
+  if (resolved.status === "configured_unavailable") {
+    if (resolved.ref.source !== "env") {
+      return { status: "configured_unavailable" };
+    }
+    const envVarName = resolved.ref.id.trim();
+    if (
+      !canResolveEnvSecretRefInReadOnlyPath({
+        cfg,
+        provider: resolved.ref.provider,
+        id: envVarName,
+      })
+    ) {
+      return { status: "configured_unavailable" };
+    }
+    const apiKey = normalizeSecretInputString(process.env[envVarName]);
+    return apiKey
+      ? {
+          status: "available",
+          apiKey,
+          source: `plugins.entries.comfy.config.apiKey (${envVarName})`,
+        }
+      : { status: "configured_unavailable" };
+  }
+  return { status: "missing" };
 }
 
 function getRequiredConfigString(config: ComfyProviderConfig, key: string): string {
   const value = normalizeOptionalString(config[key]);
   if (!value) {
-    throw new Error(`models.providers.comfy.${key} is required`);
+    throw new Error(`plugins.entries.comfy.config.${key} is required`);
   }
   return value;
 }
@@ -158,7 +226,9 @@ async function loadComfyWorkflow(config: ComfyProviderConfig): Promise<ComfyWork
     return source.workflow;
   }
   if (!source.workflowPath) {
-    throw new Error("models.providers.comfy.<capability>.workflow or workflowPath is required");
+    throw new Error(
+      "plugins.entries.comfy.config.<capability>.workflow or workflowPath is required",
+    );
   }
 
   const resolvedPath = resolveUserPath(source.workflowPath);
@@ -235,25 +305,10 @@ async function readJsonResponse<T>(params: {
   }
 }
 
-function inferFileExtension(params: { fileName?: string; mimeType?: string }): string {
-  const normalizedMime = normalizeOptionalLowercaseString(params.mimeType);
-  if (normalizedMime?.includes("jpeg")) {
-    return "jpg";
-  }
-  if (normalizedMime?.includes("png")) {
-    return "png";
-  }
-  if (normalizedMime?.includes("webm")) {
-    return "webm";
-  }
-  if (normalizedMime?.includes("mp4")) {
-    return "mp4";
-  }
-  if (normalizedMime?.includes("mpeg")) {
-    return "mp3";
-  }
-  if (normalizedMime?.includes("wav")) {
-    return "wav";
+function resolveFileExtension(params: { fileName?: string; mimeType?: string }): string {
+  const extension = extensionForMime(params.mimeType);
+  if (extension) {
+    return extension.slice(1);
   }
   const fileName = params.fileName?.trim();
   if (!fileName) {
@@ -287,7 +342,7 @@ async function uploadInputImage(params: {
     "image",
     new Blob([toBlobBytes(params.image.buffer)], { type: params.image.mimeType }),
     normalizeOptionalString(params.image.fileName) ||
-      `input.${inferFileExtension({ mimeType: params.image.mimeType })}`,
+      `input.${resolveFileExtension({ mimeType: params.image.mimeType })}`,
   );
   form.set("type", "input");
   form.set("overwrite", "true");
@@ -536,6 +591,13 @@ export function isComfyCapabilityConfigured(params: {
   if (resolveComfyMode(capabilityConfig) === "local") {
     return true;
   }
+  const configuredApiKey = resolveComfyApiKey(capabilityConfig, params.cfg);
+  if (configuredApiKey.status === "available") {
+    return true;
+  }
+  if (configuredApiKey.status === "configured_unavailable") {
+    return false;
+  }
   return isProviderApiKeyConfigured({
     provider: "comfy",
     agentDir: params.agentDir,
@@ -577,14 +639,23 @@ export async function runComfyWorkflow(params: {
     value: params.prompt,
   });
 
+  const pluginApiKey = resolveComfyApiKey(capabilityConfig, params.cfg);
   const resolvedAuth =
     mode === "cloud"
-      ? await resolveApiKeyForProvider({
-          provider: "comfy",
-          cfg: params.cfg,
-          agentDir: params.agentDir,
-          store: params.authStore,
-        })
+      ? pluginApiKey.status === "available"
+        ? {
+            apiKey: pluginApiKey.apiKey,
+            source: pluginApiKey.source,
+            mode: "api-key" as const,
+          }
+        : pluginApiKey.status === "configured_unavailable"
+          ? null
+          : await resolveApiKeyForProvider({
+              provider: "comfy",
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+              store: params.authStore,
+            })
       : null;
   if (mode === "cloud" && !resolvedAuth?.apiKey) {
     throw new Error("Comfy Cloud API key missing");
@@ -621,7 +692,7 @@ export async function runComfyWorkflow(params: {
   if (params.inputImage) {
     if (!inputImageNodeId) {
       throw new Error(
-        "Comfy edit requests require models.providers.comfy.<capability>.inputImageNodeId to be configured",
+        "Comfy edit requests require plugins.entries.comfy.config.<capability>.inputImageNodeId to be configured",
       );
     }
     const uploadedName = await uploadInputImage({
@@ -738,7 +809,7 @@ export async function runComfyWorkflow(params: {
       mimeType: downloaded.mimeType,
       fileName:
         originalName ||
-        `${params.capability}-${assetIndex}.${inferFileExtension({ mimeType: downloaded.mimeType })}`,
+        `${params.capability}-${assetIndex}.${resolveFileExtension({ mimeType: downloaded.mimeType })}`,
       nodeId: output.nodeId,
     });
   }

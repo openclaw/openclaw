@@ -1,13 +1,21 @@
 import type { Chat, Message } from "@grammyjs/types";
 import { formatLocationText } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  resolveCommandAuthorization,
+  type CommandAuthorization,
+} from "openclaw/plugin-sdk/command-auth-native";
 import type {
+  OpenClawConfig,
+  TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
+  TelegramDmThreadReplies,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/config-types";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { expandTelegramAllowFromWithAccessGroups } from "../access-groups.js";
 import { firstDefined, normalizeAllowFrom, type NormalizedAllowFrom } from "../bot-access.js";
 import { normalizeTelegramReplyToMessageId } from "../outbound-params.js";
 import { resolveTelegramPreviewStreamMode } from "../preview-streaming.js";
@@ -23,6 +31,7 @@ import {
   resolveTelegramTextContent,
   resolveTelegramMediaPlaceholder,
   type TelegramForwardedContext,
+  type TelegramTextEntity,
 } from "./body-helpers.js";
 import type { TelegramGetChat, TelegramStreamMode } from "./types.js";
 
@@ -73,6 +82,36 @@ export type TelegramThreadSpec = {
   id?: number;
   scope: "dm" | "forum" | "none";
 };
+
+function normalizeTelegramDmThreadReplies(value: unknown): TelegramDmThreadReplies | undefined {
+  return value === "off" || value === "inbound" || value === "always" ? value : undefined;
+}
+
+export function resolveTelegramDmThreadReplies(params: {
+  accountConfig?: TelegramAccountConfig;
+  directConfig?: TelegramDirectConfig;
+}): TelegramDmThreadReplies {
+  return (
+    normalizeTelegramDmThreadReplies(params.directConfig?.threadReplies) ??
+    normalizeTelegramDmThreadReplies(params.accountConfig?.dm?.threadReplies) ??
+    "off"
+  );
+}
+
+export function shouldUseTelegramDmThreadSession(params: {
+  dmThreadId?: number;
+  accountConfig?: TelegramAccountConfig;
+  directConfig?: TelegramDirectConfig;
+  topicConfig?: TelegramTopicConfig;
+}): boolean {
+  if (params.dmThreadId == null) {
+    return false;
+  }
+  if (params.directConfig?.requireTopic === true || params.topicConfig) {
+    return true;
+  }
+  return resolveTelegramDmThreadReplies(params) !== "off";
+}
 
 export function extractTelegramForumFlag(value: unknown): boolean | undefined {
   if (!value || typeof value !== "object" || !("is_forum" in value)) {
@@ -135,8 +174,10 @@ export function withResolvedTelegramForumFlag<T extends { chat: object }>(
 }
 
 export async function resolveTelegramGroupAllowFromContext(params: {
+  cfg?: OpenClawConfig;
   chatId: string | number;
   accountId?: string;
+  senderId?: string;
   isGroup?: boolean;
   isForum?: boolean;
   messageThreadId?: number | null;
@@ -179,9 +220,15 @@ export async function resolveTelegramGroupAllowFromContext(params: {
     threadIdForConfig,
   );
   const groupAllowOverride = firstDefined(topicConfig?.allowFrom, groupConfig?.allowFrom);
+  const expandedGroupAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg: params.cfg,
+    allowFrom: groupAllowOverride ?? params.groupAllowFrom,
+    accountId,
+    senderId: params.senderId,
+  });
   // Group sender access must remain explicit (groupAllowFrom/per-group allowFrom only).
   // DM pairing store entries are not a group authorization source.
-  const effectiveGroupAllow = normalizeAllowFrom(groupAllowOverride ?? params.groupAllowFrom);
+  const effectiveGroupAllow = normalizeAllowFrom(expandedGroupAllowFrom);
   const hasGroupAllowOverride = groupAllowOverride !== undefined;
   return {
     resolvedThreadId,
@@ -337,6 +384,42 @@ export function buildTelegramGroupFrom(chatId: number | string, messageThreadId?
   return `telegram:group:${buildTelegramGroupPeerId(chatId, messageThreadId)}`;
 }
 
+export function isTelegramCommandsAllowFromConfigured(cfg: OpenClawConfig): boolean {
+  const commandsAllowFrom = cfg.commands?.allowFrom;
+  return (
+    commandsAllowFrom != null &&
+    typeof commandsAllowFrom === "object" &&
+    (Array.isArray(commandsAllowFrom.telegram) || Array.isArray(commandsAllowFrom["*"]))
+  );
+}
+
+export function resolveTelegramCommandAuthorization(params: {
+  cfg: OpenClawConfig;
+  accountId: string;
+  chatId: number;
+  isGroup: boolean;
+  resolvedThreadId?: number;
+  senderId?: string;
+  senderUsername?: string;
+}): CommandAuthorization {
+  return resolveCommandAuthorization({
+    ctx: {
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      AccountId: params.accountId,
+      ChatType: params.isGroup ? "group" : "direct",
+      From: params.isGroup
+        ? buildTelegramGroupFrom(params.chatId, params.resolvedThreadId)
+        : `telegram:${params.chatId}`,
+      SenderId: params.senderId || undefined,
+      SenderUsername: params.senderUsername || undefined,
+    },
+    cfg: params.cfg,
+    commandAuthorized: false,
+  });
+}
+
 /**
  * Build parentPeer for forum topic binding inheritance.
  * When a message comes from a forum topic, the peer ID includes the topic suffix
@@ -375,16 +458,22 @@ export type TelegramReplyTarget = {
   senderUsername?: string;
   body?: string;
   kind: "reply" | "quote";
+  source: "reply_to_message" | "external_reply";
+  quoteText?: string;
+  quotePosition?: number;
+  quoteEntities?: TelegramTextEntity[];
   /** Forward context if the reply target was itself a forwarded message (issue #9619). */
   forwardedFrom?: TelegramForwardedContext;
+  quoteSourceText?: string;
+  quoteSourceEntities?: TelegramTextEntity[];
 };
 
 export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   const reply = msg.reply_to_message;
   const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const rawQuoteText =
-    msg.quote?.text ??
-    (externalReply as (Message & { quote?: { text?: string } }) | undefined)?.quote?.text;
+  const quote =
+    msg.quote ?? (externalReply as (Message & { quote?: Message["quote"] }) | undefined)?.quote;
+  const rawQuoteText = quote?.text;
   const quoteText = resolveTelegramTextContent(rawQuoteText);
   let body = "";
   let kind: TelegramReplyTarget["kind"] = "reply";
@@ -396,15 +485,17 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
 
   const replyLike = reply ?? externalReply;
+  const rawReplyText =
+    replyLike && typeof replyLike.text === "string"
+      ? replyLike.text
+      : replyLike && typeof replyLike.caption === "string"
+        ? replyLike.caption
+        : undefined;
+  const safeReplyText = resolveTelegramTextContent(rawReplyText);
+  const replyTextParts = replyLike && safeReplyText ? getTelegramTextParts(replyLike) : undefined;
   let filteredReplyText = false;
   if (!body && replyLike) {
-    const rawReplyText =
-      typeof replyLike.text === "string"
-        ? replyLike.text
-        : typeof replyLike.caption === "string"
-          ? replyLike.caption
-          : undefined;
-    const replyBody = resolveTelegramTextContent(rawReplyText).trim();
+    const replyBody = safeReplyText.trim();
     filteredReplyText = hadUnsafeTelegramText(rawReplyText, replyBody);
     body = replyBody;
     if (!body) {
@@ -425,6 +516,13 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
   }
   const sender = replyLike ? buildSenderName(replyLike) : undefined;
   const senderLabel = sender ?? "unknown sender";
+  const source = reply ? "reply_to_message" : "external_reply";
+  const quotePosition =
+    kind === "quote" && typeof quote?.position === "number" && Number.isFinite(quote.position)
+      ? Math.trunc(quote.position)
+      : undefined;
+  const quoteEntities =
+    kind === "quote" && Array.isArray(quote?.entities) ? quote.entities : undefined;
 
   // Extract forward context from the resolved reply target (reply_to_message or external_reply).
   const forwardedFrom = replyLike ? (normalizeForwardedContext(replyLike) ?? undefined) : undefined;
@@ -436,6 +534,12 @@ export function describeReplyTarget(msg: Message): TelegramReplyTarget | null {
     senderUsername: replyLike?.from?.username ?? undefined,
     body: body || undefined,
     kind,
+    source,
+    quoteText: kind === "quote" ? quoteText : undefined,
+    quotePosition,
+    quoteEntities,
     forwardedFrom,
+    quoteSourceText: replyTextParts?.text || undefined,
+    quoteSourceEntities: replyTextParts?.entities,
   };
 }

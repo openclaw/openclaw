@@ -8,6 +8,7 @@ import {
   resolveFailoverStatus,
 } from "./failover-error.js";
 import { classifyFailoverSignal } from "./pi-embedded-helpers/errors.js";
+import { SessionWriteLockTimeoutError } from "./session-write-lock-error.js";
 
 // OpenAI 429 example shape: https://help.openai.com/en/articles/5955604-how-can-i-solve-429-too-many-requests-errors
 const OPENAI_RATE_LIMIT_MESSAGE =
@@ -43,6 +44,9 @@ const GROQ_TOO_MANY_REQUESTS_MESSAGE =
   "429 Too Many Requests: Too many requests were sent in a given timeframe.";
 const GROQ_SERVICE_UNAVAILABLE_MESSAGE =
   "503 Service Unavailable: The server is temporarily unable to handle the request due to overloading or maintenance.";
+// Structured OpenAI-compatible server_error payload shape seen in Codex/OpenAI runs.
+const OPENAI_SERVER_ERROR_PAYLOAD =
+  'Codex error: {"type":"error","error":{"type":"server_error","code":"server_error","message":"An error occurred while processing your request."},"sequence_number":2}';
 
 describe("failover-error", () => {
   it("infers failover reason from HTTP status", () => {
@@ -73,8 +77,105 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 408 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 410 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 499 })).toBe("timeout");
-    expect(resolveFailoverReasonFromError({ status: 400 })).toBe("format");
-    expect(resolveFailoverReasonFromError({ status: 422 })).toBe("format");
+    // 400/422 with no body returns null — avoids triggering a compaction loop
+    // when the provider returns an empty or wrapper-only 400/422 (e.g.
+    // transient proxy issue).
+    expect(resolveFailoverReasonFromError({ status: 400 })).toBeNull();
+    expect(resolveFailoverReasonFromError({ status: 422 })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "400 status code (no body)",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "HTTP 422: No body",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "HTTP 422: No response body",
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Error: HTTP 422: No response body",
+      }),
+    ).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "400 status code (no body)" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "HTTP 422: No body" })).toBeNull();
+    expect(resolveFailoverReasonFromError({ message: "HTTP 422: No response body" })).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        message: "outer wrapper",
+        cause: {
+          status: 422,
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+        cause: {
+          status: 422,
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "check open ai req parameter error",
+        cause: new Error("No response body"),
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+        error: {
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        message: "Unprocessable Entity",
+        cause: {
+          message: "Unprocessable Entity",
+          error: {
+            message: "HTTP 422: No response body",
+          },
+        },
+      }),
+    ).toBeNull();
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        error: {
+          message: "missing required property",
+        },
+        cause: {},
+      }),
+    ).toBe("format");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 422,
+        error: {
+          message: "missing required property",
+        },
+        cause: {
+          message: "HTTP 422: No response body",
+        },
+      }),
+    ).toBe("format");
     // Transient server errors (500/502/503/504) should trigger failover as timeout.
     expect(resolveFailoverReasonFromError({ status: 500 })).toBe("timeout");
     expect(resolveFailoverReasonFromError({ status: 502 })).toBe("timeout");
@@ -85,6 +186,14 @@ describe("failover-error", () => {
     expect(resolveFailoverReasonFromError({ status: 523 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 524 })).toBeNull();
     expect(resolveFailoverReasonFromError({ status: 529 })).toBe("overloaded");
+  });
+
+  it("stops on cyclic cause chains", () => {
+    const first: { cause?: unknown } = {};
+    const second: { cause?: unknown } = { cause: first };
+    first.cause = second;
+
+    expect(resolveFailoverReasonFromError(first)).toBeNull();
   });
 
   it("treats session-specific HTTP 410s differently from generic 410s", () => {
@@ -254,7 +363,93 @@ describe("failover-error", () => {
     ).toBe("overloaded");
   });
 
-  it("classifies provider-scoped generic upstream errors for failover", () => {
+  it("does not classify session lock wait errors as model timeout failover", () => {
+    const sessionLockError = new SessionWriteLockTimeoutError({
+      timeoutMs: 10_000,
+      owner: "pid=37121",
+      lockPath: "/tmp/openclaw/session.jsonl.lock",
+    });
+    expect(resolveFailoverReasonFromError(sessionLockError)).toBeNull();
+    expect(isTimeoutError(sessionLockError)).toBe(false);
+
+    const wrappedLockError = Object.assign(new Error("operation timed out"), {
+      name: "AbortError",
+      cause: sessionLockError,
+    });
+    expect(resolveFailoverReasonFromError(wrappedLockError)).toBeNull();
+    expect(isTimeoutError(wrappedLockError)).toBe(false);
+
+    const abortWrappedLockError = Object.assign(new Error("request was aborted"), {
+      name: "AbortError",
+      cause: sessionLockError,
+    });
+    expect(resolveFailoverReasonFromError(abortWrappedLockError)).toBeNull();
+    expect(isTimeoutError(abortWrappedLockError)).toBe(false);
+  });
+
+  it("keeps explicit provider failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 429,
+        code: "RESOURCE_EXHAUSTED",
+        message: "upstream quota pressure",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("keeps inferred HTTP failover metadata authoritative over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "HTTP 429: upstream quota pressure",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBe("rate_limit");
+  });
+
+  it("does not treat generic abort codes as explicit failover metadata over nested session lock text", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        name: "AbortError",
+        code: "ABORT_ERR",
+        message: "The operation was aborted",
+        cause: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+      }),
+    ).toBeNull();
+  });
+
+  it("does not let cause-based failover classification bypass wrapper session lock suppression", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "wrapper",
+        reason: new SessionWriteLockTimeoutError({
+          timeoutMs: 10_000,
+          owner: "pid=37121",
+          lockPath: "/tmp/openclaw/session.jsonl.lock",
+        }),
+        cause: new Error("operation timed out"),
+      }),
+    ).toBeNull();
+  });
+
+  it("classifies bare pi-ai stream wrapper as timeout regardless of provider (#71620)", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
         provider: "anthropic",
@@ -263,24 +458,28 @@ describe("failover-error", () => {
     ).toBe("timeout");
     expect(
       resolveFailoverReasonFromError({
+        provider: "google",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+    expect(
+      resolveFailoverReasonFromError({
+        provider: "openrouter",
+        message: "An unknown error occurred",
+      }),
+    ).toBe("timeout");
+  });
+
+  it("classifies openrouter-scoped upstream errors for failover", () => {
+    expect(
+      resolveFailoverReasonFromError({
         provider: "openrouter",
         message: "Provider returned error",
       }),
     ).toBe("timeout");
   });
 
-  it("does not classify provider-scoped upstream errors without the matching provider", () => {
-    expect(
-      resolveFailoverReasonFromError({
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
-    expect(
-      resolveFailoverReasonFromError({
-        provider: "openrouter",
-        message: "An unknown error occurred",
-      }),
-    ).toBeNull();
+  it("does not classify openrouter-scoped upstream errors without the matching provider", () => {
     expect(
       resolveFailoverReasonFromError({
         message: "Provider returned error",
@@ -404,6 +603,33 @@ describe("failover-error", () => {
         message: "LLM error: monthly limit reached",
       }),
     ).toBe("rate_limit");
+  });
+
+  it("treats Chinese provider network/server errors as timeout for failover", () => {
+    // ZhipuAI/GLM error code 1234: "网络错误" — real production error
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          "LLM error 1234: 网络错误，错误id：202603281427587491f4467f1c4712，请联系客服。 (request_id: 202603281427587491f4467f1c4712)",
+      }),
+    ).toBe("timeout");
+    // JSON payload variant
+    expect(
+      resolveFailoverReasonFromError({
+        message:
+          '{"error":{"code":"1234","message":"网络错误，错误id：abc123，请联系客服。"},"request_id":"abc123"}',
+      }),
+    ).toBe("timeout");
+    // Generic Chinese server errors
+    expect(resolveFailoverReasonFromError({ message: "系统错误，请稍后重试" })).toBe("timeout");
+    expect(resolveFailoverReasonFromError({ message: "服务器内部错误" })).toBe("timeout");
+  });
+
+  it("treats Chinese provider auth errors as auth for failover", () => {
+    // ZhipuAI/GLM 403: "您无权访问glm-5.1" — real production error
+    expect(resolveFailoverReasonFromError({ message: "403 您无权访问glm-5.1。" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "认证失败" })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ message: "鉴权失败，请检查API Key" })).toBe("auth");
   });
 
   it("treats overloaded provider payloads as overloaded", () => {
@@ -620,13 +846,13 @@ describe("failover-error", () => {
         "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
     });
 
-    expect(describeFailoverError(err)).toMatchObject({
-      message: "LLM request failed: provider rejected the request schema.",
-      rawError:
-        "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
-      reason: "format",
-      status: 400,
-    });
+    const description = describeFailoverError(err);
+    expect(description.message).toBe("LLM request failed: provider rejected the request schema.");
+    expect(description.rawError).toBe(
+      "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.",
+    );
+    expect(description.reason).toBe("format");
+    expect(description.status).toBe(400);
   });
 
   it("coerces JSON-wrapped OpenRouter stealth-model 404s into FailoverError", () => {
@@ -641,6 +867,10 @@ describe("failover-error", () => {
 
   it("maps overloaded to a 503 fallback status", () => {
     expect(resolveFailoverStatus("overloaded")).toBe(503);
+  });
+
+  it("maps server_error to a 500 fallback status", () => {
+    expect(resolveFailoverStatus("server_error")).toBe(500);
   });
 
   it("coerces format errors with a 400 status", () => {
@@ -748,5 +978,73 @@ describe("failover-error", () => {
     const described = describeFailoverError(123);
     expect(described.message).toBe("123");
     expect(described.reason).toBeUndefined();
+  });
+
+  it("classifies OpenAI-compatible server_error payloads at the error boundary", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+    expect(
+      resolveFailoverReasonFromError({
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      }),
+    ).toBe("server_error");
+
+    const err = coerceToFailoverError(
+      {
+        status: 500,
+        message: OPENAI_SERVER_ERROR_PAYLOAD,
+      },
+      { provider: "openai-codex", model: "gpt-5.4" },
+    );
+    expect(err?.reason).toBe("server_error");
+    expect(err?.status).toBe(500);
+  });
+
+  it("keeps explicit 4xx classification ahead of server_error markers", () => {
+    const payload = '{"type":"error","error":{"type":"server_error","code":"server_error"}}';
+
+    expect(resolveFailoverReasonFromError({ status: 401, message: payload })).toBe("auth");
+    expect(resolveFailoverReasonFromError({ status: 402, message: payload })).toBe("billing");
+    expect(resolveFailoverReasonFromError({ status: 422, message: payload })).toBe("format");
+    expect(resolveFailoverReasonFromError(`402 Payment Required ${payload}`)).toBe("billing");
+  });
+
+  it("propagates sessionId/lane/provider attribution through FailoverError (#42713)", () => {
+    const err = new FailoverError("all fallbacks exhausted", {
+      reason: "rate_limit",
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      profileId: "profile-2",
+      sessionId: "session:browser-abcd",
+      lane: "answer",
+      status: 429,
+    });
+    expect(err.sessionId).toBe("session:browser-abcd");
+    expect(err.lane).toBe("answer");
+    const description = describeFailoverError(err);
+    expect(description.provider).toBe("anthropic");
+    expect(description.model).toBe("claude-opus-4-6");
+    expect(description.profileId).toBe("profile-2");
+    expect(description.sessionId).toBe("session:browser-abcd");
+    expect(description.lane).toBe("answer");
+    expect(description.reason).toBe("rate_limit");
+    expect(description.status).toBe(429);
+  });
+
+  it("coerceToFailoverError carries sessionId/lane from context (#42713)", () => {
+    const err = coerceToFailoverError("rate limit exceeded", {
+      provider: "openai",
+      model: "gpt-5",
+      profileId: "p1",
+      sessionId: "session:browser-1234",
+      lane: "draft",
+    });
+    expect(err?.sessionId).toBe("session:browser-1234");
+    expect(err?.lane).toBe("draft");
+    expect(err?.provider).toBe("openai");
   });
 });

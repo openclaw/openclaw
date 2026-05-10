@@ -1,8 +1,11 @@
 import {
   type AgentApprovalEventData,
+  formatApprovalDisplayPath,
   type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { formatCodexDisplayText } from "../command-formatters.js";
 import {
+  approvalRequestExplicitlyUnavailable,
   mapExecDecisionToOutcome,
   requestPluginApproval,
   type AppServerApprovalOutcome,
@@ -13,6 +16,36 @@ import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 const PERMISSION_DESCRIPTION_MAX_LENGTH = 700;
 const PERMISSION_SAMPLE_LIMIT = 2;
 const PERMISSION_VALUE_MAX_LENGTH = 48;
+const COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH = 80;
+const APPROVAL_PREVIEW_SCAN_MAX_LENGTH = 4096;
+const APPROVAL_PREVIEW_OMITTED = "[preview truncated or unsafe content omitted]";
+const ANSI_OSC_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b]|\u009d)[^\u001b\u009c\u0007]*(?:\u0007|\u001b\\|\u009c)`,
+  "g",
+);
+const ANSI_CONTROL_SEQUENCE_RE = new RegExp(
+  String.raw`(?:\u001b\[[0-?]*[ -/]*[@-~]|\u009b[0-?]*[ -/]*[@-~]|\u001b[@-Z\\-_])`,
+  "g",
+);
+const CONTROL_CHARACTER_RE = new RegExp(String.raw`[\u0000-\u001f\u007f-\u009f]+`, "g");
+const INVISIBLE_FORMATTING_CONTROL_RE = new RegExp(
+  String.raw`[\u00ad\u034f\u061c\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff\ufe00-\ufe0f\u{e0100}-\u{e01ef}]`,
+  "gu",
+);
+const DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE = new RegExp(
+  String.raw`(?:\u001b\][^\u001b\u009c\u0007]*|\u009d[^\u001b\u009c\u0007]*|\u001b\[[0-?]*[ -/]*|\u009b[0-?]*[ -/]*|\u001b)$`,
+);
+
+type ApprovalPreviewSource = {
+  value: string;
+  clipped: boolean;
+};
+
+type SanitizedApprovalPreview = {
+  text?: string;
+  omitted: boolean;
+};
+
 export async function handleCodexAppServerApprovalRequest(params: {
   method: string;
   requestParams: JsonValue | undefined;
@@ -70,8 +103,8 @@ export async function handleCodexAppServerApprovalRequest(params: {
       message: "Codex app-server approval requested.",
     });
 
-    const decision = Object.prototype.hasOwnProperty.call(requestResult, "decision")
-      ? requestResult.decision
+    const decision = approvalRequestExplicitlyUnavailable(requestResult)
+      ? null
       : await waitForPluginApprovalDecision({ approvalId, signal: params.signal });
     const outcome = mapExecDecisionToOutcome(decision);
 
@@ -105,7 +138,9 @@ export async function handleCodexAppServerApprovalRequest(params: {
       ...approvalEventScope(params.method, cancelled ? "cancelled" : "denied"),
       message: cancelled
         ? "Codex app-server approval cancelled because the run stopped."
-        : `Codex app-server approval route failed: ${formatErrorMessage(error)}`,
+        : `Codex app-server approval route failed: ${formatCodexDisplayText(
+            formatErrorMessage(error),
+          )}`,
     });
     return buildApprovalResponse(
       params.method,
@@ -161,8 +196,20 @@ function buildApprovalContext(params: {
     readString(params.requestParams, "itemId") ??
     readString(params.requestParams, "callId") ??
     readString(params.requestParams, "approvalId");
-  const command = readCommand(params.requestParams);
-  const reason = readString(params.requestParams, "reason");
+  const commandDetailLines =
+    params.method === "item/commandExecution/requestApproval"
+      ? describeCommandApprovalDetails(params.requestParams)
+      : [];
+  const commandPreview = sanitizeApprovalPreview(
+    readDisplayCommandPreview(params.requestParams),
+    commandDetailLines.length > 0 ? COMMAND_PREVIEW_WITH_DETAILS_MAX_LENGTH : 180,
+  );
+  const reasonPreview = sanitizeApprovalPreview(
+    readStringPreview(params.requestParams, "reason"),
+    180,
+  );
+  const command = commandPreview.text;
+  const reason = reasonPreview.text;
   const kind = approvalKindForMethod(params.method);
   const permissionLines =
     params.method === "item/permissions/requestApproval"
@@ -179,14 +226,22 @@ function buildApprovalContext(params: {
   const subject =
     permissionLines[0] ??
     (command
-      ? `Command: ${truncate(command, 180)}`
-      : reason
-        ? `Reason: ${truncate(reason, 180)}`
-        : `Request method: ${params.method}`);
+      ? `Command: ${formatApprovalPreviewSubject(command, commandPreview.omitted)}`
+      : commandPreview.omitted
+        ? `Command: ${APPROVAL_PREVIEW_OMITTED}`
+        : reason
+          ? `Reason: ${formatApprovalPreviewSubject(reason, reasonPreview.omitted)}`
+          : reasonPreview.omitted
+            ? `Reason: ${APPROVAL_PREVIEW_OMITTED}`
+            : `Request method: ${params.method}`);
   const description =
     permissionLines.length > 0
       ? joinDescriptionLinesWithinLimit(permissionLines, PERMISSION_DESCRIPTION_MAX_LENGTH)
-      : [subject, params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`]
+      : [
+          subject,
+          ...commandDetailLines,
+          params.paramsForRun.sessionKey && `Session: ${params.paramsForRun.sessionKey}`,
+        ]
           .filter(Boolean)
           .join("\n");
   return {
@@ -205,7 +260,9 @@ function buildApprovalContext(params: {
     eventDetails: {
       ...(itemId ? { itemId } : {}),
       ...(command ? { command } : {}),
+      ...(commandPreview.omitted ? { commandPreviewOmitted: true } : {}),
       ...(reason ? { reason } : {}),
+      ...(reasonPreview.omitted ? { reasonPreviewOmitted: true } : {}),
     },
   };
 }
@@ -215,15 +272,23 @@ function commandApprovalDecision(
   outcome: AppServerApprovalOutcome,
 ): JsonValue {
   if (outcome === "cancelled") {
-    return "cancel";
+    return commandRejectionDecision(requestParams, "cancel");
   }
   if (outcome === "denied" || outcome === "unavailable") {
-    return "decline";
+    return commandRejectionDecision(requestParams, "decline");
   }
-  if (outcome === "approved-session" && hasAvailableDecision(requestParams, "acceptForSession")) {
-    return "acceptForSession";
+  if (outcome === "approved-session") {
+    if (hasAvailableDecision(requestParams, "acceptForSession")) {
+      return "acceptForSession";
+    }
+    const amendmentDecision = findAvailableCommandAmendmentDecision(requestParams);
+    if (amendmentDecision) {
+      return amendmentDecision;
+    }
   }
-  return "accept";
+  return hasAvailableDecision(requestParams, "accept")
+    ? "accept"
+    : commandRejectionDecision(requestParams, "decline");
 }
 
 function fileChangeApprovalDecision(outcome: AppServerApprovalOutcome): JsonValue {
@@ -257,6 +322,35 @@ function unsupportedApprovalResponse(): JsonValue {
 
 function describeRequestedPermissions(requestParams: JsonObject | undefined): string[] {
   const permissions = requestedPermissions(requestParams);
+  return describePermissionProfile(permissions, "Permissions");
+}
+
+function describeCommandApprovalDetails(requestParams: JsonObject | undefined): string[] {
+  const lines: string[] = [];
+  const additionalPermissions = isJsonObject(requestParams?.additionalPermissions)
+    ? requestParams.additionalPermissions
+    : undefined;
+  if (additionalPermissions) {
+    lines.push(...describePermissionProfile(additionalPermissions, "Additional permissions"));
+  }
+  const execpolicySummary = summarizeStringArray(
+    requestParams?.proposedExecpolicyAmendment,
+    "Proposed exec policy",
+    sanitizePermissionScalar,
+  );
+  if (execpolicySummary) {
+    lines.push(execpolicySummary);
+  }
+  const networkAmendmentSummary = summarizeNetworkPolicyAmendments(
+    requestParams?.proposedNetworkPolicyAmendments,
+  );
+  if (networkAmendmentSummary) {
+    lines.push(networkAmendmentSummary);
+  }
+  return lines;
+}
+
+function describePermissionProfile(permissions: JsonObject, label: string): string[] {
   const lines: string[] = [];
   const kinds: string[] = [];
   const risks = new Set<string>();
@@ -267,48 +361,70 @@ function describeRequestedPermissions(requestParams: JsonObject | undefined): st
     kinds.push("fileSystem");
   }
   if (kinds.length > 0) {
-    lines.push(`Permissions: ${kinds.join(", ")}`);
+    lines.push(`${label}: ${kinds.join(", ")}`);
   }
+  let networkSummary: string | undefined;
   if (isJsonObject(permissions.network)) {
-    const networkSummary = summarizePermissionRecord(permissions.network, risks, [
-      {
-        key: "allowHosts",
-        label: "allowHosts",
-        sanitize: sanitizePermissionHostValue,
-        risksFor: permissionHostRisks,
-      },
-    ]);
-    if (networkSummary) {
-      lines.push(`Network ${networkSummary}`);
-    }
+    const summaries = [
+      summarizeNetworkEnabledPermission(permissions.network, risks),
+      summarizePermissionRecord(permissions.network, risks, [
+        {
+          key: "allowHosts",
+          label: "allowHosts",
+          sanitize: sanitizePermissionHostValue,
+          risksFor: permissionHostRisks,
+        },
+      ]),
+    ].filter((summary): summary is string => Boolean(summary));
+    networkSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
+  let fileSystemSummary: string | undefined;
   if (isJsonObject(permissions.fileSystem)) {
-    const fileSystemSummary = summarizePermissionRecord(permissions.fileSystem, risks, [
-      {
-        key: "roots",
-        label: "roots",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-      {
-        key: "readPaths",
-        label: "readPaths",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-      {
-        key: "writePaths",
-        label: "writePaths",
-        sanitize: sanitizePermissionPathValue,
-        risksFor: permissionPathRisks,
-      },
-    ]);
-    if (fileSystemSummary) {
-      lines.push(`File system ${fileSystemSummary}`);
-    }
+    const summaries = [
+      summarizePermissionRecord(permissions.fileSystem, risks, [
+        {
+          key: "read",
+          label: "read",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "write",
+          label: "write",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "roots",
+          label: "roots",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "readPaths",
+          label: "readPaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+        {
+          key: "writePaths",
+          label: "writePaths",
+          sanitize: sanitizePermissionPathValue,
+          risksFor: permissionPathRisks,
+        },
+      ]),
+      summarizeFileSystemEntries(permissions.fileSystem, risks),
+    ].filter((summary): summary is string => Boolean(summary));
+    fileSystemSummary = summaries.length > 0 ? summaries.join("; ") : undefined;
   }
   if (risks.size > 0) {
     lines.push(`High-risk targets: ${[...risks].join(", ")}`);
+  }
+  if (networkSummary) {
+    lines.push(`Network ${networkSummary}`);
+  }
+  if (fileSystemSummary) {
+    lines.push(`File system ${fileSystemSummary}`);
   }
   return lines;
 }
@@ -319,6 +435,55 @@ type PermissionArrayDescriptor = {
   sanitize: (value: string) => string;
   risksFor: (value: string) => readonly string[];
 };
+
+function summarizeNetworkEnabledPermission(
+  permission: JsonObject,
+  risks: Set<string>,
+): string | undefined {
+  const enabled = permission.enabled;
+  if (typeof enabled !== "boolean") {
+    return undefined;
+  }
+  if (enabled) {
+    risks.add("network access");
+  }
+  return `enabled: ${enabled}`;
+}
+
+function summarizeFileSystemEntries(
+  permission: JsonObject,
+  risks: Set<string>,
+): string | undefined {
+  const entries = permission.entries;
+  if (!Array.isArray(entries)) {
+    return undefined;
+  }
+  const samples: string[] = [];
+  let count = 0;
+  for (const entry of entries) {
+    const item = isJsonObject(entry) ? entry : undefined;
+    const path = typeof item?.path === "string" ? item.path.trim() : "";
+    const access = typeof item?.access === "string" ? item.access.trim() : "";
+    if (!path || !access) {
+      continue;
+    }
+    count += 1;
+    if (access !== "none") {
+      for (const risk of permissionPathRisks(path)) {
+        risks.add(risk);
+      }
+    }
+    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+      samples.push(`${sanitizePermissionScalar(access)} ${sanitizePermissionPathValue(path)}`);
+    }
+  }
+  if (count === 0) {
+    return undefined;
+  }
+  const remaining = count - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `entries: ${samples.join(", ")}${remainderSuffix}`;
+}
 
 function summarizePermissionRecord(
   permission: JsonObject,
@@ -361,6 +526,53 @@ function summarizePermissionArray(
   return `${descriptor.label}: ${sampleValues.join(", ")}${remainderSuffix}`;
 }
 
+function summarizeStringArray(
+  value: JsonValue | undefined,
+  label: string,
+  sanitize: (value: string) => string,
+): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const values = value
+    .filter((entry): entry is string => typeof entry === "string")
+    .map((entry) => sanitize(entry))
+    .filter(Boolean);
+  if (values.length === 0) {
+    return undefined;
+  }
+  const samples = values.slice(0, PERMISSION_SAMPLE_LIMIT);
+  const remaining = values.length - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `${label}: ${samples.join(", ")}${remainderSuffix}`;
+}
+
+function summarizeNetworkPolicyAmendments(value: JsonValue | undefined): string | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const samples: string[] = [];
+  let count = 0;
+  for (const entry of value) {
+    const amendment = isJsonObject(entry) ? entry : undefined;
+    const host = typeof amendment?.host === "string" ? amendment.host : "";
+    const action = typeof amendment?.action === "string" ? amendment.action : "";
+    if (!host || !action) {
+      continue;
+    }
+    count += 1;
+    if (samples.length < PERMISSION_SAMPLE_LIMIT) {
+      samples.push(`${sanitizePermissionScalar(action)} ${sanitizePermissionHostValue(host)}`);
+    }
+  }
+  if (count === 0) {
+    return undefined;
+  }
+  const remaining = count - samples.length;
+  const remainderSuffix = remaining > 0 ? ` (+${remaining} more)` : "";
+  return `Proposed network policy: ${samples.join(", ")}${remainderSuffix}`;
+}
+
 function readStringArray(record: JsonObject, key: string): string[] {
   const value = record[key];
   return Array.isArray(value)
@@ -379,21 +591,14 @@ function sanitizePermissionHostValue(value: string): string {
 }
 
 function sanitizePermissionPathValue(value: string): string {
-  const normalized = sanitizePermissionScalar(value);
-  const homeCompacted = normalized
-    .replace(/^\/home\/[^/]+(?=\/|$)/, "~")
-    .replace(/^\/Users\/[^/]+(?=\/|$)/, "~")
-    .replace(/^[A-Za-z]:\\Users\\[^\\]+(?=\\|$)/, "~");
-  return truncate(homeCompacted, PERMISSION_VALUE_MAX_LENGTH);
+  return truncate(
+    formatApprovalDisplayPath(sanitizePermissionScalar(value)),
+    PERMISSION_VALUE_MAX_LENGTH,
+  );
 }
 
 function sanitizePermissionScalar(value: string): string {
-  let sanitized = "";
-  for (let index = 0; index < value.length; index += 1) {
-    const code = value.charCodeAt(index);
-    sanitized += code < 32 || code === 127 ? " " : value[index];
-  }
-  return sanitized.replace(/\s+/g, " ").trim();
+  return sanitizeVisibleScalar(value);
 }
 
 function permissionHostRisks(value: string): string[] {
@@ -409,13 +614,10 @@ function permissionHostRisks(value: string): string[] {
 }
 
 function permissionPathRisks(value: string): string[] {
-  const normalized = sanitizePermissionPathValue(value);
+  const normalized = sanitizePermissionScalar(value);
   const risks: string[] = [];
   if (normalized === "/" || normalized === "\\" || /^[A-Za-z]:[\\/]*$/.test(normalized)) {
     risks.push("filesystem root");
-  }
-  if (normalized === "~" || normalized === "~/" || normalized === "~\\") {
-    risks.push("home directory");
   }
   return risks;
 }
@@ -457,6 +659,39 @@ function hasAvailableDecision(requestParams: JsonObject | undefined, decision: s
     return true;
   }
   return available.includes(decision);
+}
+
+function findAvailableCommandAmendmentDecision(
+  requestParams: JsonObject | undefined,
+): JsonValue | undefined {
+  const available = requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return undefined;
+  }
+  return available.find(
+    (entry): entry is JsonObject =>
+      isJsonObject(entry) &&
+      (isJsonObject(entry.acceptWithExecpolicyAmendment) ||
+        isJsonObject(entry.applyNetworkPolicyAmendment)),
+  );
+}
+
+function commandRejectionDecision(
+  requestParams: JsonObject | undefined,
+  preferred: "decline" | "cancel",
+): JsonValue {
+  const available = requestParams?.availableDecisions;
+  if (!Array.isArray(available)) {
+    return preferred;
+  }
+  if (available.includes(preferred)) {
+    return preferred;
+  }
+  const alternate = preferred === "decline" ? "cancel" : "decline";
+  if (available.includes(alternate)) {
+    return alternate;
+  }
+  return preferred;
 }
 
 function approvalResolutionMessage(outcome: AppServerApprovalOutcome): string {
@@ -507,18 +742,70 @@ function isSupportedAppServerApprovalMethod(method: string): boolean {
 }
 
 function emitApprovalEvent(params: EmbeddedRunAttemptParams, data: AgentApprovalEventData): void {
-  params.onAgentEvent?.({ stream: "approval", data: data as unknown as Record<string, unknown> });
+  void params.onAgentEvent?.({
+    stream: "approval",
+    data: data as unknown as Record<string, unknown>,
+  });
 }
 
-function readCommand(record: JsonObject | undefined): string | undefined {
+function readDisplayCommandPreview(
+  record: JsonObject | undefined,
+): ApprovalPreviewSource | undefined {
+  const actionCommand = readCommandActionsPreview(record);
+  if (actionCommand) {
+    return actionCommand;
+  }
+  return readCommandPreview(record);
+}
+
+function readCommandActionsPreview(
+  record: JsonObject | undefined,
+): ApprovalPreviewSource | undefined {
+  const actions = record?.commandActions;
+  if (!Array.isArray(actions)) {
+    return undefined;
+  }
+  let source: ApprovalPreviewSource | undefined;
+  for (const action of actions) {
+    const command = isJsonObject(action) ? readString(action, "command") : undefined;
+    if (!command) {
+      continue;
+    }
+    source = appendPreviewPart(source, command, " && ");
+    if (source.clipped) {
+      break;
+    }
+  }
+  return source;
+}
+
+function readCommandPreview(record: JsonObject | undefined): ApprovalPreviewSource | undefined {
   const command = record?.command;
   if (typeof command === "string") {
-    return command;
+    return previewSource(command);
   }
-  if (Array.isArray(command) && command.every((part) => typeof part === "string")) {
-    return command.join(" ");
+  if (!Array.isArray(command)) {
+    return undefined;
   }
-  return undefined;
+  let source: ApprovalPreviewSource | undefined;
+  for (const part of command) {
+    if (typeof part !== "string") {
+      return undefined;
+    }
+    source = appendPreviewPart(source, part, " ");
+    if (source.clipped) {
+      break;
+    }
+  }
+  return source;
+}
+
+function readStringPreview(
+  record: JsonObject | undefined,
+  key: string,
+): ApprovalPreviewSource | undefined {
+  const value = readString(record, key);
+  return value === undefined ? undefined : previewSource(value);
 }
 
 function readString(record: JsonObject | undefined, key: string): string | undefined {
@@ -528,6 +815,56 @@ function readString(record: JsonObject | undefined, key: string): string | undef
 
 function truncate(value: string, maxLength: number): string {
   return value.length <= maxLength ? value : `${value.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function previewSource(value: string): ApprovalPreviewSource {
+  return {
+    value: value.slice(0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
+    clipped: value.length > APPROVAL_PREVIEW_SCAN_MAX_LENGTH,
+  };
+}
+
+function appendPreviewPart(
+  source: ApprovalPreviewSource | undefined,
+  part: string,
+  separator: string,
+): ApprovalPreviewSource {
+  const prefix = source?.value ? `${source.value}${separator}` : "";
+  const value = `${prefix}${part}`;
+  const clipped = source?.clipped === true || value.length > APPROVAL_PREVIEW_SCAN_MAX_LENGTH;
+  return {
+    value: value.slice(0, APPROVAL_PREVIEW_SCAN_MAX_LENGTH),
+    clipped,
+  };
+}
+
+function sanitizeApprovalPreview(
+  source: ApprovalPreviewSource | undefined,
+  maxLength: number,
+): SanitizedApprovalPreview {
+  if (!source || !source.value) {
+    return { omitted: false };
+  }
+  const rawPreview = source.value.replace(DANGLING_TERMINAL_SEQUENCE_SUFFIX_RE, "");
+  const sanitized = sanitizeVisibleScalar(rawPreview);
+  if (!sanitized) {
+    return { omitted: true };
+  }
+  return { text: formatCodexDisplayText(truncate(sanitized, maxLength)), omitted: source.clipped };
+}
+
+function sanitizeVisibleScalar(value: string): string {
+  return value
+    .replace(ANSI_OSC_SEQUENCE_RE, "")
+    .replace(ANSI_CONTROL_SEQUENCE_RE, "")
+    .replace(INVISIBLE_FORMATTING_CONTROL_RE, " ")
+    .replace(CONTROL_CHARACTER_RE, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function formatApprovalPreviewSubject(text: string, omitted: boolean): string {
+  return omitted ? `${text} ${APPROVAL_PREVIEW_OMITTED}` : text;
 }
 
 function joinDescriptionLinesWithinLimit(lines: string[], maxLength: number): string {

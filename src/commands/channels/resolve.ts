@@ -4,8 +4,15 @@ import type {
   ChannelResolveResult,
 } from "../../channels/plugins/types.adapters.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
-import { loadConfig, readConfigFileSnapshot, replaceConfigFile } from "../../config/config.js";
+import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
+import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
+import {
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../../config/config.js";
 import { danger } from "../../globals.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
@@ -113,7 +120,7 @@ function formatResolveResult(result: ResolveResult): string {
 
 export async function channelsResolveCommand(opts: ChannelsResolveOptions, runtime: RuntimeEnv) {
   const sourceSnapshotPromise = readConfigFileSnapshot().catch(() => null);
-  const loadedRaw = loadConfig();
+  const loadedRaw = getRuntimeConfig();
   let { effectiveConfig: cfg } = await resolveCommandConfigWithSecrets({
     config: loadedRaw,
     commandName: "channels resolve",
@@ -124,7 +131,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   });
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
-    throw new Error("At least one entry is required.");
+    throw new Error(
+      `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
+    );
   }
 
   const explicitChannel = opts.channel?.trim();
@@ -133,16 +142,45 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
         cfg,
         runtime,
         rawChannel: explicitChannel,
-        allowInstall: true,
+        allowInstall: false,
         supports: (plugin) => Boolean(plugin.resolver?.resolveTargets),
       })
     : null;
+  if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
+    throw new Error(
+      `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
+    );
+  }
   if (resolvedExplicit?.configChanged) {
     cfg = resolvedExplicit.cfg;
-    await replaceConfigFile({
-      nextConfig: cfg,
-      baseHash: (await sourceSnapshotPromise)?.hash,
-    });
+    const shouldMovePluginInstalls = Boolean(
+      cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
+    );
+    if (shouldMovePluginInstalls) {
+      const committed = await commitConfigWithPendingPluginInstalls({
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+      cfg = committed.config;
+      await refreshPluginRegistryAfterConfigMutation({
+        config: cfg,
+        reason: "source-changed",
+        installRecords: committed.installRecords,
+        logger: { warn: (message) => runtime.log(message) },
+      });
+    } else {
+      await replaceConfigFile({
+        nextConfig: cfg,
+        baseHash: (await sourceSnapshotPromise)?.hash,
+      });
+      if (resolvedExplicit.pluginInstalled) {
+        await refreshPluginRegistryAfterConfigMutation({
+          config: cfg,
+          reason: "source-changed",
+          logger: { warn: (message) => runtime.log(message) },
+        });
+      }
+    }
   }
 
   const selection = explicitChannel
@@ -158,7 +196,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     (selection.channel ? getChannelPlugin(selection.channel) : undefined);
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
-    throw new Error(`Channel ${channelText} does not support resolve.`);
+    throw new Error(
+      `Channel ${channelText} does not support resolve. Run ${formatCliCommand("openclaw channels capabilities --channel " + channelText)} to inspect supported actions.`,
+    );
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 

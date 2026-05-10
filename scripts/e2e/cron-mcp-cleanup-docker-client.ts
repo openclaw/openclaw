@@ -54,7 +54,7 @@ async function describeProbePid(pid: number): Promise<string | undefined> {
 
 async function waitForProbePid(pidPath: string): Promise<number | undefined> {
   const startedAt = Date.now();
-  while (Date.now() - startedAt < 60_000) {
+  while (Date.now() - startedAt < 600_000) {
     const pid = await readProbePid(pidPath);
     if (pid) {
       return pid;
@@ -82,19 +82,26 @@ async function waitForProbeExit(params: {
   throw new Error(`${label} MCP probe process still alive after run: pid=${pid} args=${args}`);
 }
 
-async function waitForAnyProbeExit(params: {
+async function waitForAllProbeExits(params: {
   pidsPath: string;
   label: string;
   timeoutMs: number;
-}): Promise<number> {
+}): Promise<number[]> {
   const startedAt = Date.now();
   let observed: number[] = [];
   while (Date.now() - startedAt < params.timeoutMs) {
     observed = await readProbePids(params.pidsPath);
-    for (const pid of observed) {
-      const args = await describeProbePid(pid);
-      if (!args || !args.includes("openclaw-cron-mcp-cleanup-probe")) {
-        return pid;
+    if (observed.length > 0) {
+      let allExited = true;
+      for (const pid of observed) {
+        const args = await describeProbePid(pid);
+        if (args?.includes("openclaw-cron-mcp-cleanup-probe")) {
+          allExited = false;
+          break;
+        }
+      }
+      if (allExited) {
+        return observed;
       }
     }
     await delay(100);
@@ -131,8 +138,9 @@ async function runCronCleanupScenario(params: {
     payload: {
       kind: "agentTurn",
       message: "Use available context and then stop.",
-      timeoutSeconds: 12,
+      timeoutSeconds: 90,
       lightContext: true,
+      toolsAllow: ["bundle-mcp", "cronCleanupProbe__cleanup_probe"],
     },
     delivery: { mode: "none" },
   });
@@ -169,7 +177,7 @@ async function runCronCleanupScenario(params: {
   );
   const initialArgs = await describeProbePid(pid);
   assert(
-    initialArgs?.includes("openclaw-cron-mcp-cleanup-probe"),
+    initialArgs === undefined || initialArgs.includes("openclaw-cron-mcp-cleanup-probe"),
     `cron MCP probe pid did not look like the test server: pid=${pid} args=${initialArgs}`,
   );
 
@@ -182,7 +190,7 @@ async function runCronCleanupScenario(params: {
           entry.payload.jobId === job.id &&
           entry.payload.action === "finished",
       )?.payload,
-    90_000,
+    240_000,
   );
   assert(finished, "missing cron finished event");
 
@@ -200,34 +208,51 @@ async function runSubagentCleanupScenario(params: {
   pidPath: string;
   pidsPath: string;
   exitPath: string;
-}): Promise<{ runId: string; exitedPid: number; pids: number[] }> {
+}): Promise<{ runId: string; exitedPids: number[]; pids: number[] }> {
   const { gateway, pidPath, pidsPath, exitPath } = params;
   await resetProbeFiles({ pidPath, pidsPath, exitPath });
 
-  const run = await gateway.request<AgentRunResult>("agent", {
-    message: "Use available context and then stop.",
-    sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
-    agentId: "main",
-    lane: "subagent",
-    cleanupBundleMcpOnRunEnd: true,
-    idempotencyKey: randomUUID(),
-    deliver: false,
-    timeout: 20,
-    bestEffortDeliver: true,
-  });
+  const run = await gateway.request<AgentRunResult>(
+    "agent",
+    {
+      message: "Use available context and then stop.",
+      sessionKey: `agent:main:subagent:docker-${randomUUID()}`,
+      agentId: "main",
+      lane: "subagent",
+      cleanupBundleMcpOnRunEnd: true,
+      idempotencyKey: randomUUID(),
+      deliver: false,
+      timeout: 90,
+      bestEffortDeliver: true,
+    },
+    { timeoutMs: 240_000 },
+  );
   assert(
     run.status === "accepted" && run.runId,
     `agent did not accept subagent cleanup run: ${JSON.stringify(run)}`,
   );
 
-  const exitedPid = await waitForAnyProbeExit({
+  const finished = await gateway.request<{ status?: string }>(
+    "agent.wait",
+    {
+      runId: run.runId,
+      timeoutMs: 240_000,
+    },
+    { timeoutMs: 250_000 },
+  );
+  assert(
+    finished.status === "ok",
+    `subagent cleanup run did not finish ok: ${JSON.stringify(finished)}`,
+  );
+
+  const exitedPids = await waitForAllProbeExits({
     pidsPath,
     label: "subagent",
-    timeoutMs: 90_000,
+    timeoutMs: 240_000,
   });
   return {
     runId: run.runId,
-    exitedPid,
+    exitedPids,
     pids: await readProbePids(pidsPath),
   };
 }

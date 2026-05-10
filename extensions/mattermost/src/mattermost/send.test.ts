@@ -1,5 +1,5 @@
+import { expectProvidedCfgSkipsRuntimeLoad } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { expectProvidedCfgSkipsRuntimeLoad } from "../../../../test/helpers/plugins/send-config.js";
 
 let parseMattermostTarget: typeof import("./send.js").parseMattermostTarget;
 let sendMessageMattermost: typeof import("./send.js").sendMessageMattermost;
@@ -38,7 +38,11 @@ vi.mock("../../runtime-api.js", () => ({
   loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("./runtime-api.js", () => ({
+  loadOutboundMediaFromUrl: mockState.loadOutboundMediaFromUrl,
+}));
+
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: (cfg: unknown) => {
     if (cfg) {
       return cfg;
@@ -209,14 +213,19 @@ describe("sendMessageMattermost", () => {
       throw new Error("Mattermost runtime not initialized");
     });
 
-    await expect(
-      sendMessageMattermost("channel:town-square", "hello", {
-        cfg: providedCfg,
-        accountId: "work",
-      }),
-    ).resolves.toEqual({
+    const result = await sendMessageMattermost("channel:town-square", "hello", {
+      cfg: providedCfg,
+      accountId: "work",
+    });
+
+    expect(result).toMatchObject({
       messageId: "post-1",
       channelId: "town-square",
+      receipt: {
+        primaryPlatformMessageId: "post-1",
+        platformMessageIds: ["post-1"],
+        parts: [expect.objectContaining({ platformMessageId: "post-1", kind: "text" })],
+      },
     });
     expect(mockState.loadConfig).not.toHaveBeenCalled();
   });
@@ -314,11 +323,11 @@ describe("sendMessageMattermost", () => {
     });
 
     expect(mockState.fetchMattermostUser).toHaveBeenCalledWith({}, userId);
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledWith(
-      {},
-      ["bot-user", userId],
-      expect.any(Object),
-    );
+    const dmRetryCall = mockState.createMattermostDirectChannelWithRetry.mock.calls[0];
+    expect(dmRetryCall?.[0]).toEqual({});
+    expect(dmRetryCall?.[1]).toEqual(["bot-user", userId]);
+    expect(Object.keys(dmRetryCall?.[2] ?? {})).toEqual(["onRetry"]);
+    expect(dmRetryCall?.[2]?.onRetry).toBeTypeOf("function");
     expect(mockState.uploadMattermostFile).toHaveBeenCalledWith(
       {},
       expect.objectContaining({
@@ -483,6 +492,10 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(params.channelId).toBe("dm-channel-id");
     expect(res.channelId).toBe("dm-channel-id");
     expect(res.messageId).toBe("post-id");
+    expect(res.receipt).toMatchObject({
+      primaryPlatformMessageId: "post-id",
+      platformMessageIds: ["post-id"],
+    });
   });
 
   it("falls back to channel id when user lookup returns 404", async () => {

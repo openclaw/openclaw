@@ -1,8 +1,15 @@
-"channel: bluebubbles":
+"plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
-          - "extensions/bluebubbles/**"
-          - "docs/channels/bluebubbles.md"
+          - "extensions/azure-speech/**"
+          - "docs/providers/azure-speech.md"
+          - "docs/tools/tts.md"
+"plugin: file-transfer":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/file-transfer/**"
+          - "docs/nodes/index.md"
+          - "docs/plugins/sdk-runtime.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -29,6 +36,22 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: migrate-hermes":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-hermes/**"
+          - "docs/cli/migrate.md"
+"plugin: migrate-claude":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/migrate-claude/**"
+          - "docs/cli/migrate.md"
+          - "docs/install/migrating-claude.md"
+"plugin: bonjour":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/bonjour/**"
+          - "docs/gateway/bonjour.md"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
@@ -90,6 +113,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: synology-chat":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/synology-chat/**"
+          - "docs/channels/synology-chat.md"
 "channel: telegram":
   - changed-files:
       - any-glob-to-any-file:
@@ -162,7 +190,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-          - "docs.acp.md"
 
 "cli":
   - changed-files:
@@ -185,10 +212,10 @@
           - "Dockerfile"
           - "Dockerfile.*"
           - "docker-compose.yml"
-          - "docker-setup.sh"
-          - "setup-podman.sh"
           - ".dockerignore"
+          - "deploy/fly.private.toml"
           - "scripts/docker/setup.sh"
+          - "scripts/docker/sandbox/Dockerfile*"
           - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
@@ -211,8 +238,11 @@
 "security":
   - changed-files:
       - any-glob-to-any-file:
+          - ".github/workflows/opengrep-*.yml"
+          - ".semgrepignore"
           - "docs/cli/security.md"
           - "docs/gateway/security.md"
+          - "security/**"
 
 "extensions: copilot-proxy":
   - changed-files:
@@ -222,6 +252,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diagnostics-otel/**"
+"extensions: diagnostics-prometheus":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/diagnostics-prometheus/**"
 "extensions: llm-task":
   - changed-files:
       - any-glob-to-any-file:
@@ -242,6 +276,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: oc-path":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/oc-path/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
@@ -274,10 +312,20 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/byteplus/**"
+"extensions: cerebras":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/cerebras/**"
+          - "docs/providers/cerebras.md"
 "extensions: deepseek":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/deepseek/**"
+"extensions: deepinfra":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/deepinfra/**"
+          - "docs/providers/deepinfra.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -302,6 +350,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/huggingface/**"
+"extensions: inworld":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/inworld/**"
+          - "docs/providers/inworld.md"
 "extensions: kilocode":
   - changed-files:
       - any-glob-to-any-file:
@@ -310,6 +363,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lmstudio/**"
+"extensions: litellm":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/litellm/**"
+          - "docs/providers/litellm.md"
 "extensions: openai":
   - changed-files:
       - any-glob-to-any-file:
@@ -346,6 +404,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qianfan/**"
+"extensions: senseaudio":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/senseaudio/**"
+          - "docs/providers/senseaudio.md"
 "extensions: synthetic":
   - changed-files:
       - any-glob-to-any-file:
@@ -362,6 +425,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/together/**"
+"extensions: tts-local-cli":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/tts-local-cli/**"
+          - "docs/tools/tts.md"
 "extensions: venice":
   - changed-files:
       - any-glob-to-any-file:
@@ -382,3 +450,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/fal/**"
+"extensions: gradium":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gradium/**"

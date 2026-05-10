@@ -9,6 +9,7 @@ import {
   handleMessageEnd,
   handleMessageUpdate,
   hasAssistantVisibleReply,
+  readPendingToolMediaReply,
   recordPendingAssistantReplyDirectives,
   resolveSilentReplyFallbackText,
 } from "./pi-embedded-subscribe.handlers.messages.js";
@@ -80,6 +81,8 @@ function createMessageEndContext(
     emitBlockReply?: ReturnType<typeof vi.fn>;
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
+    warn?: ReturnType<typeof vi.fn>;
+    builtinToolNames?: ReadonlySet<string>;
     state?: Record<string, unknown>;
   } = {},
 ) {
@@ -108,6 +111,11 @@ function createMessageEndContext(
         final: false,
         inlineCode: createInlineCodeState(),
       },
+      partialBlockState: {
+        thinking: false,
+        final: false,
+        inlineCode: createInlineCodeState(),
+      },
       lastStreamedAssistant: undefined,
       lastStreamedAssistantCleaned: undefined,
       lastReasoningSent: undefined,
@@ -117,7 +125,8 @@ function createMessageEndContext(
     noteLastAssistant: vi.fn(),
     recordAssistantUsage: vi.fn(),
     commitAssistantUsage: vi.fn(),
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), warn: params.warn ?? vi.fn() },
+    builtinToolNames: params.builtinToolNames,
     stripBlockTags: (text: string) => text,
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
     emitBlockReply: params.emitBlockReply ?? vi.fn(),
@@ -252,7 +261,7 @@ describe("pending assistant reply directives", () => {
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate text signatures", () => {
   it("treats phased textSignature item changes as assistant-message boundaries", () => {
     const flushBlockReplyBuffer = vi.fn();
     const resetAssistantMessageState = vi.fn();
@@ -369,7 +378,49 @@ describe("consumePendingToolMediaIntoReply", () => {
       mediaUrls: ["/tmp/a.png", "/tmp/b.png"],
       audioAsVoice: undefined,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+  });
+
+  it("does not append queued image tool media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/generated.png"],
+      pendingToolAudioAsVoice: false,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["./selected.png"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["./selected.png"],
+    });
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
+  });
+
+  it("does not append queued voice media when the reply already names media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: true,
+    };
+
+    expect(
+      consumePendingToolMediaIntoReply(state, {
+        text: "done",
+        mediaUrls: ["/tmp/assistant-provided.opus"],
+      }),
+    ).toEqual({
+      text: "done",
+      mediaUrls: ["/tmp/assistant-provided.opus"],
+    });
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
+    expect(state.pendingToolAudioAsVoice).toBe(false);
+    expect(state.pendingToolTrustedLocalMedia).toBe(false);
   });
 
   it("preserves reasoning replies without consuming queued media", () => {
@@ -394,6 +445,21 @@ describe("consumePendingToolMediaIntoReply", () => {
 });
 
 describe("consumePendingToolMediaReply", () => {
+  it("reads a media-only reply without consuming queued tool media", () => {
+    const state = {
+      pendingToolMediaUrls: ["/tmp/reply.opus"],
+      pendingToolAudioAsVoice: true,
+      pendingToolTrustedLocalMedia: false,
+    };
+
+    expect(readPendingToolMediaReply(state)).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+    expect(state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(state.pendingToolAudioAsVoice).toBe(true);
+  });
+
   it("builds a media-only reply for orphaned tool media", () => {
     const state = {
       pendingToolMediaUrls: ["/tmp/reply.opus"],
@@ -405,12 +471,12 @@ describe("consumePendingToolMediaReply", () => {
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
     });
-    expect(state.pendingToolMediaUrls).toEqual([]);
+    expect(state.pendingToolMediaUrls).toStrictEqual([]);
     expect(state.pendingToolAudioAsVoice).toBe(false);
   });
 });
 
-describe("handleMessageUpdate", () => {
+describe("handleMessageUpdate commentary phase", () => {
   it("suppresses commentary-phase partial delivery and text_end flush", async () => {
     const onAgentEvent = vi.fn();
     const onPartialReply = vi.fn();
@@ -518,13 +584,12 @@ describe("handleMessageUpdate", () => {
     );
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "Done.",
-      },
-    });
+    const event = onAgentEvent.mock.calls[0]?.[0] as
+      | { stream?: string; data?: { text?: string; delta?: string } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("Done.");
   });
 
   it("contains synchronous text_end flush failures", async () => {
@@ -546,6 +611,67 @@ describe("handleMessageUpdate", () => {
 });
 
 describe("handleMessageEnd", () => {
+  it("warns when assistant text only pretends to call a registered tool", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        provider: "ollama",
+        model: "qwen-local",
+        content: [{ type: "text", text: '{"name":"read","arguments":{"path":"README.md"}}' }],
+        stopReason: "stop",
+      },
+    } as never);
+
+    const warnCall = warn.mock.calls[0];
+    expect(warnCall?.[0]).toBe(
+      "Assistant reply looks like a tool call, but no structured tool invocation was emitted; treating it as text.",
+    );
+    const metadata = warnCall?.[1] as
+      | {
+          runId?: string;
+          sessionId?: string;
+          provider?: string;
+          model?: string;
+          pattern?: string;
+          toolName?: string;
+          registeredTool?: boolean;
+        }
+      | undefined;
+    expect(metadata?.runId).toBe("run-1");
+    expect(metadata?.sessionId).toBe("session-1");
+    expect(metadata?.provider).toBe("ollama");
+    expect(metadata?.model).toBe("qwen-local");
+    expect(metadata?.pattern).toBe("json_tool_call");
+    expect(metadata?.toolName).toBe("read");
+    expect(metadata?.registeredTool).toBe(true);
+  });
+
+  it("does not warn when the assistant emitted a structured tool call", () => {
+    const warn = vi.fn();
+    const ctx = createMessageEndContext({
+      warn,
+      builtinToolNames: new Set(["read"]),
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      },
+    } as never);
+
+    expect(warn).not.toHaveBeenCalled();
+  });
+
   it("suppresses commentary-phase replies from user-visible output", () => {
     const onAgentEvent = vi.fn();
     const emitBlockReply = vi.fn();
@@ -713,13 +839,12 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(onAgentEvent).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent.mock.calls[0]?.[0]).toMatchObject({
-      stream: "assistant",
-      data: {
-        text: "Done.",
-        delta: "",
-        replace: true,
-      },
-    });
+    const event = onAgentEvent.mock.calls[0]?.[0] as
+      | { stream?: string; data?: { text?: string; delta?: string; replace?: boolean } }
+      | undefined;
+    expect(event?.stream).toBe("assistant");
+    expect(event?.data?.text).toBe("Done.");
+    expect(event?.data?.delta).toBe("");
+    expect(event?.data?.replace).toBe(true);
   });
 });

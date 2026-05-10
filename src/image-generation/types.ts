@@ -1,5 +1,6 @@
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import type { MediaNormalizationEntry } from "../media-generation/normalization.types.js";
 
 export type GeneratedImageAsset = {
@@ -16,7 +17,9 @@ export type ImageGenerationQuality = "low" | "medium" | "high" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
-export type ImageGenerationOpenAIBackground = "transparent" | "opaque" | "auto";
+export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
+
+export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
 export type ImageGenerationOpenAIModeration = "low" | "auto";
 
@@ -31,12 +34,13 @@ export type ImageGenerationProviderOptions = {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-export type ImageGenerationIgnoredOverrideKey =
+type ImageGenerationIgnoredOverrideKey =
   | "size"
   | "aspectRatio"
   | "resolution"
   | "quality"
-  | "outputFormat";
+  | "outputFormat"
+  | "background";
 
 export type ImageGenerationIgnoredOverride = {
   key: ImageGenerationIgnoredOverrideKey;
@@ -69,8 +73,10 @@ export type ImageGenerationRequest = {
   resolution?: ImageGenerationResolution;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
+  background?: ImageGenerationBackground;
   inputImages?: ImageGenerationSourceImage[];
   providerOptions?: ImageGenerationProviderOptions;
+  ssrfPolicy?: SsrFPolicy;
 };
 
 export type ImageGenerationResult = {
@@ -79,27 +85,28 @@ export type ImageGenerationResult = {
   metadata?: Record<string, unknown>;
 };
 
-export type ImageGenerationModeCapabilities = {
+type ImageGenerationModeCapabilities = {
   maxCount?: number;
   supportsSize?: boolean;
   supportsAspectRatio?: boolean;
   supportsResolution?: boolean;
 };
 
-export type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
+type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
   enabled: boolean;
   maxInputImages?: number;
 };
 
-export type ImageGenerationGeometryCapabilities = {
+type ImageGenerationGeometryCapabilities = {
   sizes?: string[];
   aspectRatios?: string[];
   resolutions?: ImageGenerationResolution[];
 };
 
-export type ImageGenerationOutputCapabilities = {
+type ImageGenerationOutputCapabilities = {
   qualities?: ImageGenerationQuality[];
   formats?: ImageGenerationOutputFormat[];
+  backgrounds?: ImageGenerationBackground[];
 };
 
 export type ImageGenerationNormalization = {

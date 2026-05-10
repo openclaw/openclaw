@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   resetCliAuthEpochTestDeps,
@@ -11,10 +11,18 @@ describe("resolveCliAuthEpoch", () => {
     resetCliAuthEpochTestDeps();
   });
 
+  function expectCliAuthEpoch(
+    epoch: Awaited<ReturnType<typeof resolveCliAuthEpoch>>,
+    label = "auth epoch",
+  ): asserts epoch is string {
+    expect(epoch, label).toEqual(expect.stringMatching(/\S/));
+  }
+
   it("returns undefined when no local or auth-profile credentials exist", async () => {
     setCliAuthEpochTestDeps({
       readClaudeCliCredentialsCached: () => null,
       readCodexCliCredentialsCached: () => null,
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
         profiles: {},
@@ -50,7 +58,7 @@ describe("resolveCliAuthEpoch", () => {
     expires = 2;
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
   });
 
@@ -69,9 +77,73 @@ describe("resolveCliAuthEpoch", () => {
     token = "token-b";
     const second = await resolveCliAuthEpoch({ provider: "claude-cli" });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
+  });
+
+  it("keeps gemini cli oauth epochs stable through token rotation and flips on account change", async () => {
+    let access = "gemini-access-a";
+    let refresh = "gemini-refresh-a";
+    let expires = 1;
+    let accountId: string | undefined = "google-account-1";
+    let email: string | undefined = "user-a@example.com";
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access,
+        refresh,
+        expires,
+        ...(accountId ? { accountId } : {}),
+        ...(email ? { email } : {}),
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+    access = "gemini-access-b";
+    refresh = "gemini-refresh-b";
+    expires = 2;
+    const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expectCliAuthEpoch(first);
+    // Access and refresh rotation must not shift the epoch while the lifted
+    // Google-account identity is stable.
+    expect(second).toBe(first);
+
+    email = "user-b@example.com";
+    const third = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expectCliAuthEpoch(third);
+    expect(third).not.toBe(second);
+
+    accountId = "google-account-2";
+    const fourth = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expectCliAuthEpoch(fourth);
+    expect(fourth).not.toBe(third);
+  });
+
+  it("falls back to the identity-less oauth epoch when gemini id_token is absent", async () => {
+    let refresh = "gemini-refresh-a";
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "google-gemini-cli",
+        access: "gemini-access",
+        refresh,
+        expires: 1,
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+    refresh = "gemini-refresh-b";
+    const second = await resolveCliAuthEpoch({ provider: "google-gemini-cli" });
+
+    expectCliAuthEpoch(first);
+    // Without lifted identity, the epoch is a provider-keyed constant that
+    // survives token rotation — same fallback as the Claude CLI OAuth branch.
+    expect(second).toBe(first);
   });
 
   it("keeps oauth auth-profile epochs stable across token refreshes", async () => {
@@ -89,6 +161,7 @@ describe("resolveCliAuthEpoch", () => {
       },
     };
     setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
     });
 
@@ -114,8 +187,87 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:work",
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
+  });
+
+  it("keeps oauth auth-profile epochs stable across profile id aliases for the same account", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-a",
+          refresh: "refresh-a",
+          expires: 1,
+          email: "user@example.com",
+        },
+        "anthropic:work-alias": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-b",
+          refresh: "refresh-b",
+          expires: 2,
+          email: "user@example.com",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work-alias",
+    });
+
+    expectCliAuthEpoch(first);
+    expect(second).toBe(first);
+  });
+
+  it("keeps identity-less oauth auth-profile epochs scoped to the profile id", async () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-a",
+          refresh: "refresh-a",
+          expires: 1,
+        },
+        "anthropic:personal": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "access-b",
+          refresh: "refresh-b",
+          expires: 2,
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:work",
+    });
+    const second = await resolveCliAuthEpoch({
+      provider: "google-gemini-cli",
+      authProfileId: "anthropic:personal",
+    });
+
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
+    expect(second).not.toBe(first);
   });
 
   it("changes oauth auth-profile epochs when the account identity changes", async () => {
@@ -133,6 +285,7 @@ describe("resolveCliAuthEpoch", () => {
       },
     };
     setCliAuthEpochTestDeps({
+      readGeminiCliCredentialsCached: () => null,
       loadAuthProfileStoreForRuntime: () => store,
     });
 
@@ -158,8 +311,8 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "anthropic:work",
     });
 
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
+    expectCliAuthEpoch(first);
+    expectCliAuthEpoch(second);
     expect(second).not.toBe(first);
   });
 
@@ -223,12 +376,12 @@ describe("resolveCliAuthEpoch", () => {
       authProfileId: "openai:work",
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
     expect(third).toBe(second);
     expect(fourth).toBe(third);
-    expect(fifth).toBeDefined();
-    expect(sixth).toBeDefined();
+    expectCliAuthEpoch(fifth);
+    expectCliAuthEpoch(sixth);
     expect(fifth).not.toBe(fourth);
     expect(sixth).not.toBe(fifth);
   });
@@ -285,10 +438,34 @@ describe("resolveCliAuthEpoch", () => {
       skipLocalCredential: true,
     });
 
-    expect(first).toBeDefined();
+    expectCliAuthEpoch(first);
     expect(second).toBe(first);
     expect(third).toBe(second);
-    expect(fourth).toBeDefined();
+    expectCliAuthEpoch(fourth);
     expect(fourth).not.toBe(third);
+  });
+
+  it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
+    const readCodexCliCredentialsCached = vi.fn(() => ({
+      type: "oauth" as const,
+      provider: "openai-codex" as const,
+      access: "local-access",
+      refresh: "local-refresh",
+      expires: 1,
+    }));
+    setCliAuthEpochTestDeps({
+      readCodexCliCredentialsCached,
+      loadAuthProfileStoreForRuntime: () => ({
+        version: 1,
+        profiles: {},
+      }),
+    });
+
+    await resolveCliAuthEpoch({ provider: "codex-cli" });
+
+    expect(readCodexCliCredentialsCached).toHaveBeenCalledWith({
+      ttlMs: 5000,
+      allowKeychainPrompt: false,
+    });
   });
 });

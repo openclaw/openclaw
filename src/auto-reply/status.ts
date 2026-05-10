@@ -50,22 +50,24 @@ export function buildToolsMessage(
   result: EffectiveToolInventoryResult,
   options?: { verbose?: boolean },
 ): string {
-  const groups = result.groups
-    .map((group) => ({
-      label: group.label,
-      tools: sortToolsMessageItems(
-        group.tools.map((tool) => ({
-          id: normalizeToolName(tool.id),
-          name: tool.label,
-          description: tool.description || "Tool",
-          rawDescription: tool.rawDescription || tool.description || "Tool",
-          source: tool.source,
-          pluginId: tool.pluginId,
-          channelId: tool.channelId,
-        })),
-      ),
-    }))
-    .filter((group) => group.tools.length > 0);
+  const groups: Array<{ label: string; tools: ToolsMessageItem[] }> = [];
+  for (const group of result.groups) {
+    const tools: ToolsMessageItem[] = [];
+    for (const tool of group.tools) {
+      tools.push({
+        id: normalizeToolName(tool.id),
+        name: tool.label,
+        description: tool.description || "Tool",
+        rawDescription: tool.rawDescription || tool.description || "Tool",
+        source: tool.source,
+        pluginId: tool.pluginId,
+        channelId: tool.channelId,
+      });
+    }
+    if (tools.length > 0) {
+      groups.push({ label: group.label, tools: sortToolsMessageItems(tools) });
+    }
+  }
 
   if (groups.length === 0) {
     const lines = [
@@ -89,13 +91,23 @@ export function buildToolsMessage(
       }
       continue;
     }
-    lines.push(`  ${group.tools.map((tool) => formatCompactToolEntry(tool)).join(", ")}`);
+    const compactTools: string[] = [];
+    for (const tool of group.tools) {
+      compactTools.push(formatCompactToolEntry(tool));
+    }
+    lines.push(`  ${compactTools.join(", ")}`);
   }
 
   if (verbose) {
     lines.push("", "Tool availability depends on this agent's configuration.");
   } else {
     lines.push("", "Use /tools verbose for descriptions.");
+  }
+  if (result.notices?.length) {
+    lines.push("", "Notes");
+    for (const notice of result.notices) {
+      lines.push(`  ${notice.message}`);
+    }
   }
   return lines.join("\n");
 }

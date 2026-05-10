@@ -13,6 +13,7 @@ import {
   resolveTelegramForumFlag,
   resolveTelegramForumThreadId,
   resetTelegramForumFlagCacheForTest,
+  shouldUseTelegramDmThreadSession,
 } from "./helpers.js";
 
 describe("resolveTelegramForumThreadId", () => {
@@ -125,6 +126,33 @@ describe("buildTelegramThreadParams", () => {
   });
 });
 
+describe("shouldUseTelegramDmThreadSession", () => {
+  it("keeps incidental DM thread ids flat by default", () => {
+    expect(shouldUseTelegramDmThreadSession({ dmThreadId: 42 })).toBe(false);
+  });
+
+  it("uses DM thread sessions for explicit or topic-required configs", () => {
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { threadReplies: "inbound" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        directConfig: { requireTopic: true },
+      }),
+    ).toBe(true);
+    expect(
+      shouldUseTelegramDmThreadSession({
+        dmThreadId: 42,
+        topicConfig: { agentId: "support" },
+      }),
+    ).toBe(true);
+  });
+});
+
 describe("buildTelegramRoutingTarget", () => {
   it.each([
     {
@@ -197,7 +225,6 @@ describe("normalizeForwardedContext", () => {
         date: 123,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Ada Lovelace (@ada)");
     expect(ctx?.fromType).toBe("user");
     expect(ctx?.fromId).toBe("42");
@@ -210,7 +237,6 @@ describe("normalizeForwardedContext", () => {
     const ctx = normalizeForwardedContext({
       forward_origin: { type: "hidden_user", sender_user_name: "Hidden Name", date: 456 },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Hidden Name");
     expect(ctx?.fromType).toBe("hidden_user");
     expect(ctx?.fromTitle).toBe("Hidden Name");
@@ -232,7 +258,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 42,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Tech News (Editor)");
     expect(ctx?.fromType).toBe("channel");
     expect(ctx?.fromId).toBe("-1001234");
@@ -257,7 +282,6 @@ describe("normalizeForwardedContext", () => {
         author_signature: "Admin",
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("Discussion Group (Admin)");
     expect(ctx?.fromType).toBe("chat");
     expect(ctx?.fromId).toBe("-1005678");
@@ -277,7 +301,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBe("New Sig");
     expect(ctx?.from).toBe("My Channel (New Sig)");
   });
@@ -292,7 +315,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.fromSignature).toBeUndefined();
     expect(ctx?.from).toBe("Updates");
   });
@@ -306,7 +328,6 @@ describe("normalizeForwardedContext", () => {
         message_id: 1,
       },
     } as any);
-    expect(ctx).not.toBeNull();
     expect(ctx?.from).toBe("News");
     expect(ctx?.fromSignature).toBeUndefined();
     expect(ctx?.fromChatType).toBe("channel");
@@ -336,11 +357,11 @@ describe("describeReplyTarget", () => {
         from: { id: 42, first_name: "Alice", is_bot: false },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.body).toBe("Original message");
     expect(result?.sender).toBe("Alice");
     expect(result?.id).toBe("1");
     expect(result?.kind).toBe("reply");
+    expect(result?.source).toBe("reply_to_message");
   });
 
   it("handles non-string reply text gracefully (issue #27201)", () => {
@@ -464,15 +485,14 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.body).toBe("This is the forwarded content");
     expect(result?.id).toBe("2");
-    // The reply target's forwarded context should be included
-    expect(result?.forwardedFrom).toBeDefined();
-    expect(result?.forwardedFrom?.from).toBe("Bob Smith (@bobsmith)");
-    expect(result?.forwardedFrom?.fromType).toBe("user");
-    expect(result?.forwardedFrom?.fromId).toBe("999");
-    expect(result?.forwardedFrom?.date).toBe(500);
+    expect(result?.forwardedFrom).toMatchObject({
+      from: "Bob Smith (@bobsmith)",
+      fromType: "user",
+      fromId: "999",
+      date: 500,
+    });
   });
 
   it("extracts forwarded context from channel forward in reply_to_message", () => {
@@ -495,11 +515,39 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
-    expect(result?.forwardedFrom).toBeDefined();
-    expect(result?.forwardedFrom?.from).toBe("Tech News (Editor)");
-    expect(result?.forwardedFrom?.fromType).toBe("channel");
-    expect(result?.forwardedFrom?.fromMessageId).toBe(456);
+    expect(result?.forwardedFrom).toMatchObject({
+      from: "Tech News (Editor)",
+      fromType: "channel",
+      fromMessageId: 456,
+    });
+  });
+
+  it("marks top-level quote metadata on external replies as external targets", () => {
+    const result = describeReplyTarget({
+      message_id: 5,
+      date: 1300,
+      chat: { id: 1, type: "private" },
+      text: "Comment on forwarded message",
+      quote: {
+        text: "quoted slice",
+        position: 4,
+        entities: [{ type: "italic", offset: 0, length: 6 }],
+      },
+      external_reply: {
+        message_id: 4,
+        date: 1200,
+        chat: { id: 1, type: "private" },
+        text: "Forwarded from elsewhere",
+        from: { id: 123, first_name: "Eve", is_bot: false },
+      },
+    } as any);
+
+    expect(result?.id).toBe("4");
+    expect(result?.kind).toBe("quote");
+    expect(result?.source).toBe("external_reply");
+    expect(result?.quoteText).toBe("quoted slice");
+    expect(result?.quotePosition).toBe(4);
+    expect(result?.quoteEntities).toEqual([{ type: "italic", offset: 0, length: 6 }]);
   });
 
   it("extracts forwarded context from external_reply", () => {
@@ -526,7 +574,6 @@ describe("describeReplyTarget", () => {
         },
       },
     } as any);
-    expect(result).not.toBeNull();
     expect(result?.id).toBe("4");
     expect(result?.forwardedFrom?.from).toBe("Eve Stone (@eve)");
     expect(result?.forwardedFrom?.fromType).toBe("user");
@@ -569,7 +616,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 
   it("preserves normal caption text", () => {
@@ -592,7 +639,7 @@ describe("getTelegramTextParts — binary caption filtering (#66647)", () => {
       message_id: 1,
     } as any);
     expect(result.text).toBe("");
-    expect(result.entities).toEqual([]);
+    expect(result.entities).toStrictEqual([]);
   });
 });
 

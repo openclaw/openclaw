@@ -4,6 +4,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 let mockStore: AuthProfileStore;
+let mockAgentStore: AuthProfileStore | undefined;
 let mockAllowedProfiles: string[];
 const loadModelCatalogMock = vi.fn<() => Promise<ModelCatalogEntry[]>>(async () => []);
 
@@ -22,7 +23,19 @@ vi.mock("../../agents/model-auth.js", () => ({
     const raw = cfg.models?.providers?.[provider]?.apiKey;
     return typeof raw === "string" && raw.trim().length > 0 && raw !== "ollama-local";
   },
-  resolveEnvApiKey: (provider: string) => {
+  resolveEnvApiKey: (
+    provider: string,
+    _env?: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "workspace-cloud") {
+      return options?.workspaceDir === "/tmp/workspace"
+        ? {
+            source: "workspace cloud credentials",
+            apiKey: "workspace-cloud-local-credentials",
+          }
+        : null;
+    }
     const keys =
       provider === "anthropic"
         ? ["ANTHROPIC_API_KEY", "ANTHROPIC_OAUTH_TOKEN"]
@@ -61,9 +74,14 @@ vi.mock("./shared.js", () => ({
 }));
 
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: () => mockStore,
-  listProfilesForProvider: (_store: AuthProfileStore, provider: string) =>
-    Object.entries(mockStore.profiles)
+  externalCliDiscoveryScoped: (params: Record<string, unknown> = {}) => ({
+    mode: "scoped",
+    ...params,
+  }),
+  ensureAuthProfileStore: (agentDir?: string) =>
+    agentDir === "/tmp/coder-agent" && mockAgentStore ? mockAgentStore : mockStore,
+  listProfilesForProvider: (store: AuthProfileStore, provider: string) =>
+    Object.entries(store.profiles)
       .filter(
         ([, profile]) =>
           typeof profile.provider === "string" && profile.provider.toLowerCase() === provider,
@@ -186,6 +204,7 @@ describe("buildProbeTargets reason codes", () => {
         anthropic: ["anthropic:default"],
       },
     };
+    mockAgentStore = undefined;
     mockAllowedProfiles = [];
     loadModelCatalogMock.mockReset();
     loadModelCatalogMock.mockResolvedValue([]);
@@ -252,8 +271,8 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
-      expect(plan.targets).toEqual([]);
-      expect(plan.results).toEqual([]);
+      expect(plan.targets).toStrictEqual([]);
+      expect(plan.results).toStrictEqual([]);
     });
   });
 
@@ -265,15 +284,11 @@ describe("buildProbeTargets reason codes", () => {
     };
     await withClearedAnthropicEnv(async () => {
       const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
-      expect(plan.results).toEqual([]);
+      expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "anthropic",
-          source: "models.json",
-          label: "models.json",
-        }),
-      );
+      expect(plan.targets[0]?.provider).toBe("anthropic");
+      expect(plan.targets[0]?.source).toBe("models.json");
+      expect(plan.targets[0]?.label).toBe("models.json");
     });
   });
 
@@ -310,16 +325,105 @@ describe("buildProbeTargets reason codes", () => {
         },
       });
 
-      expect(plan.results).toEqual([]);
+      expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toHaveLength(1);
-      expect(plan.targets[0]).toEqual(
-        expect.objectContaining({
-          provider: "zai",
-          model: { provider: "zai", model: "glm-4.7" },
-          source: "models.json",
-          label: "models.json",
-        }),
-      );
+      expect(plan.targets[0]?.provider).toBe("zai");
+      expect(plan.targets[0]?.model).toStrictEqual({ provider: "zai", model: "glm-4.7" });
+      expect(plan.targets[0]?.source).toBe("models.json");
+      expect(plan.targets[0]?.label).toBe("models.json");
     });
+  });
+
+  it("uses workspace-scoped auth evidence when building env probe targets", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    loadModelCatalogMock.mockResolvedValue([
+      { provider: "workspace-cloud", id: "workspace-model", name: "Workspace Model" },
+    ]);
+
+    const withoutWorkspace = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      providers: ["workspace-cloud"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+    const withWorkspace = await buildProbeTargets({
+      cfg: {} as OpenClawConfig,
+      workspaceDir: "/tmp/workspace",
+      providers: ["workspace-cloud"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(withoutWorkspace.targets).toStrictEqual([]);
+    expect(withWorkspace.targets).toHaveLength(1);
+    expect(withWorkspace.targets[0]?.provider).toBe("workspace-cloud");
+    expect(withWorkspace.targets[0]?.source).toBe("env");
+    expect(withWorkspace.targets[0]?.label).toBe("env");
+    expect(withWorkspace.targets[0]?.model).toStrictEqual({
+      provider: "workspace-cloud",
+      model: "workspace-model",
+    });
+  });
+
+  it("uses the requested agent auth store when building profile probe targets", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    mockAgentStore = {
+      version: 1,
+      profiles: {
+        "anthropic:coder": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "sk-ant-coder-profile",
+        },
+      },
+      order: {},
+    };
+
+    const { defaultPlan, agentPlan } = await withClearedAnthropicEnv(async () => ({
+      defaultPlan: await buildProbeTargets({
+        cfg: {} as OpenClawConfig,
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      }),
+      agentPlan: await buildProbeTargets({
+        cfg: {} as OpenClawConfig,
+        agentDir: "/tmp/coder-agent",
+        providers: ["anthropic"],
+        modelCandidates: ["anthropic/claude-sonnet-4-6"],
+        options: {
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 16,
+        },
+      }),
+    }));
+
+    expect(defaultPlan.targets).toStrictEqual([]);
+    expect(agentPlan.results).toStrictEqual([]);
+    expect(agentPlan.targets).toHaveLength(1);
+    expect(agentPlan.targets[0]?.provider).toBe("anthropic");
+    expect(agentPlan.targets[0]?.profileId).toBe("anthropic:coder");
+    expect(agentPlan.targets[0]?.source).toBe("profile");
   });
 });

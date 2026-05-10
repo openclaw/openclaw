@@ -1,5 +1,5 @@
+import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { findLegacyConfigIssues } from "../config/legacy.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -24,6 +24,30 @@ function hasLegacyInternalHookHandlers(raw: unknown): boolean {
   const handlers = (raw as { hooks?: { internal?: { handlers?: unknown } } })?.hooks?.internal
     ?.handlers;
   return Array.isArray(handlers) && handlers.length > 0;
+}
+
+function collectInvalidHookTransformsDirWarnings(
+  cfg: OpenClawConfig,
+  configPath: string,
+): string[] {
+  const transformsDir = cfg.hooks?.transformsDir?.trim();
+  if (!transformsDir) {
+    return [];
+  }
+  const configDir = path.dirname(configPath);
+  const transformsRoot = path.join(configDir, "hooks", "transforms");
+  const resolved = path.isAbsolute(transformsDir)
+    ? path.resolve(transformsDir)
+    : path.resolve(transformsRoot, transformsDir);
+  const relative = path.relative(transformsRoot, resolved);
+  const escapesRoot =
+    relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative);
+  if (!escapesRoot) {
+    return [];
+  }
+  return [
+    `- hooks.transformsDir: ${transformsDir} is outside ${transformsRoot}. Hook transform modules must live under ${transformsRoot}; move custom transforms there or remove hooks.transformsDir.`,
+  ];
 }
 
 function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
@@ -52,6 +76,9 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   let pendingChanges = false;
   let fixHints: string[] = [];
   const doctorFixCommand = formatCliCommand("openclaw doctor --fix");
+  const sourceMeta = (snapshot.sourceConfig as { meta?: { lastTouchedVersion?: unknown } })?.meta;
+  const sourceLastTouchedVersion =
+    typeof sourceMeta?.lastTouchedVersion === "string" ? sourceMeta.lastTouchedVersion : undefined;
 
   const legacyStep = applyLegacyCompatibilityStep({
     snapshot,
@@ -60,19 +87,14 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
     }
-    const { collectRelevantDoctorPluginIds, listPluginDoctorLegacyConfigRules } =
-      await import("../plugins/doctor-contract-registry.js");
-    return findLegacyConfigIssues(
-      snapshot.parsed,
-      snapshot.parsed,
-      listPluginDoctorLegacyConfigRules({
-        pluginIds: collectRelevantDoctorPluginIds(snapshot.parsed),
-      }),
-    );
+    const { findDoctorLegacyConfigIssues } =
+      await import("./doctor/shared/legacy-config-issues.js");
+    return findDoctorLegacyConfigIssues(snapshot.parsed, snapshot.parsed);
   })();
   const seenLegacyIssues = new Set(
     snapshot.legacyIssues.map((issue) => `${issue.path}:${issue.message}`),
@@ -111,6 +133,10 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
       "Legacy config keys detected",
     );
   }
+  const hookTransformsDirWarnings = collectInvalidHookTransformsDirWarnings(cfg, snapshot.path);
+  if (hookTransformsDirWarnings.length > 0) {
+    note(sanitizeDoctorNote(hookTransformsDirWarnings.join("\n")), "Doctor warnings");
+  }
 
   const normalized = normalizeCompatibilityConfigValues(candidate);
   if (normalized.changes.length > 0) {
@@ -135,15 +161,17 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  if (params.runtime && params.prompter) {
-    const { maybeRepairBundledPluginRuntimeDeps } =
-      await import("./doctor-bundled-plugin-runtime-deps.js");
-    await maybeRepairBundledPluginRuntimeDeps({
-      runtime: params.runtime,
-      prompter: params.prompter,
-      config: candidate,
-      includeConfiguredChannels: true,
-    });
+  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
+    await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
+  const pluginToolAllowlistWarnings = [
+    ...collectPluginToolAllowlistWarnings({
+      cfg: candidate,
+      env: process.env,
+    }),
+    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
+  ];
+  if (pluginToolAllowlistWarnings.length > 0) {
+    note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
 
   const hasConfiguredChannels = collectConfiguredChannelIds(candidate).length > 0;
@@ -232,9 +260,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
-  if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -255,5 +289,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     path: snapshot.path ?? CONFIG_PATH,
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
+    ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };
 }

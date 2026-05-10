@@ -8,8 +8,13 @@ import {
   createAttachedChannelResultAdapter,
   type ChannelOutboundAdapter,
 } from "openclaw/plugin-sdk/channel-send-result";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { resolveOutboundSendDep, sanitizeForPlainText } from "openclaw/plugin-sdk/infra-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
+import { sendTextMediaPayload } from "openclaw/plugin-sdk/reply-payload";
+import {
+  normalizeWhatsAppOutboundPayload,
+  normalizeWhatsAppPayloadText,
+} from "./outbound-media-contract.js";
 import { WHATSAPP_LEGACY_OUTBOUND_SEND_DEP_KEYS } from "./outbound-send-deps.js";
 import { lookupInboundMessageMetaForTarget } from "./quoted-message.js";
 import { toWhatsappJid } from "./text-runtime.js";
@@ -26,6 +31,7 @@ type WhatsAppSendTextOptions = {
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
   gifPlayback?: boolean;
+  audioAsVoice?: boolean;
   accountId?: string;
   quotedMessageKey?: {
     id: string;
@@ -34,6 +40,7 @@ type WhatsAppSendTextOptions = {
     participant?: string;
     messageText?: string;
   };
+  preserveLeadingWhitespace?: boolean;
 };
 type WhatsAppSendMessage = (
   to: string,
@@ -75,14 +82,29 @@ function resolveQuoteLookupAccountId(cfg?: OpenClawConfig, accountId?: string | 
   });
 }
 
+type WhatsAppOutboundBaseCore = Pick<
+  ChannelOutboundAdapter,
+  | "deliveryMode"
+  | "chunker"
+  | "chunkerMode"
+  | "textChunkLimit"
+  | "sanitizeText"
+  | "deliveryCapabilities"
+  | "pollMaxOptions"
+  | "resolveTarget"
+  | "sendText"
+  | "sendMedia"
+  | "sendPoll"
+>;
+
 export function createWhatsAppOutboundBase({
   chunker,
   sendMessageWhatsApp,
   sendPollWhatsApp,
   shouldLogVerbose,
   resolveTarget,
-  normalizeText = (text) => text ?? "",
-  skipEmptyText = false,
+  normalizeText = normalizeWhatsAppPayloadText,
+  skipEmptyText = true,
 }: CreateWhatsAppOutboundBaseParams): Pick<
   ChannelOutboundAdapter,
   | "deliveryMode"
@@ -90,8 +112,10 @@ export function createWhatsAppOutboundBase({
   | "chunkerMode"
   | "textChunkLimit"
   | "sanitizeText"
+  | "deliveryCapabilities"
   | "pollMaxOptions"
   | "resolveTarget"
+  | "sendPayload"
   | "sendText"
   | "sendMedia"
   | "sendPoll"
@@ -116,12 +140,19 @@ export function createWhatsAppOutboundBase({
     };
   };
 
-  return {
+  const outbound: WhatsAppOutboundBaseCore = {
     deliveryMode: "gateway",
     chunker,
     chunkerMode: "text",
     textChunkLimit: 4000,
-    sanitizeText: ({ text }) => sanitizeForPlainText(text),
+    sanitizeText: ({ text }) => normalizeText(text),
+    deliveryCapabilities: {
+      durableFinal: {
+        text: true,
+        replyTo: true,
+        messageSendingHooks: true,
+      },
+    },
     pollMaxOptions: 12,
     resolveTarget,
     ...createAttachedChannelResultAdapter({
@@ -157,6 +188,7 @@ export function createWhatsAppOutboundBase({
         mediaAccess,
         mediaLocalRoots,
         mediaReadFile,
+        audioAsVoice,
         accountId,
         deps,
         gifPlayback,
@@ -179,6 +211,7 @@ export function createWhatsAppOutboundBase({
           mediaAccess,
           mediaLocalRoots,
           mediaReadFile,
+          ...(audioAsVoice === undefined ? {} : { audioAsVoice }),
           accountId: accountId ?? undefined,
           gifPlayback,
           quotedMessageKey,
@@ -191,5 +224,30 @@ export function createWhatsAppOutboundBase({
           cfg,
         }),
     }),
+  };
+  return {
+    ...outbound,
+    sendPayload: async (ctx) => {
+      if (ctx.payload.isError === true) {
+        return { channel: "whatsapp", messageId: "" };
+      }
+      const payload = normalizeWhatsAppOutboundPayload(ctx.payload, { normalizeText });
+      if (!payload.text && !(payload.mediaUrl || payload.mediaUrls?.length)) {
+        if (ctx.payload.interactive || ctx.payload.presentation || ctx.payload.channelData) {
+          throw new Error(
+            "WhatsApp sendPayload does not support structured-only payloads without text or media.",
+          );
+        }
+        return { channel: "whatsapp", messageId: "" };
+      }
+      return await sendTextMediaPayload({
+        channel: "whatsapp",
+        ctx: {
+          ...ctx,
+          payload,
+        },
+        adapter: outbound,
+      });
+    },
   };
 }

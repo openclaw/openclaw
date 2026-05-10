@@ -77,6 +77,7 @@ export function shouldAllowSilentLocalPairing(params: {
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
+  isNativeAppUi?: boolean;
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
   if (params.locality === "remote") {
@@ -92,16 +93,18 @@ export function shouldAllowSilentLocalPairing(params: {
   ) {
     return true;
   }
-  // metadata-upgrade auto-approves only for shared-secret loopback CLI clients.
-  // On those paths the connection has already proved possession of a token or
-  // password over loopback, so allowing the pinned platform/deviceFamily to be
-  // refreshed on reconnect matches the "Reconnects can update access metadata"
-  // comment in message-handler.ts. Browser / Control-UI clients keep the
-  // existing approval-required flow — metadata pinning there is a real
-  // anti-tampering surface.
+  // metadata-upgrade auto-approves only for non-browser local reconnects that
+  // already proved possession of local/shared credentials. Direct-local
+  // metadata refresh is limited to first-party native app UI clients, covering
+  // same-host app reconnects after OS version metadata changes while keeping
+  // node-host, Browser, and Control-UI metadata pinning on the explicit approval path.
   if (
     params.reason === "metadata-upgrade" &&
-    (params.locality === "cli_container_local" ||
+    !params.hasBrowserOriginHeader &&
+    !params.isControlUi &&
+    !params.isWebchat &&
+    ((params.locality === "direct_local" && params.isNativeAppUi === true) ||
+      params.locality === "cli_container_local" ||
       params.locality === "shared_secret_loopback_local")
   ) {
     return true;
@@ -259,13 +262,19 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   if (!isBackendClient) {
     return false;
   }
+  const isLocal =
+    params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
+  if (!isLocal || params.hasBrowserOriginHeader) {
+    return false;
+  }
+  // No-auth local backend: scoped bypass — not shared secret, but local-only
+  // device-less operation is safe when auth.mode is explicitly "none".
+  if (params.authMethod === "none") {
+    return true;
+  }
   const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (
-    params.locality === "direct_local" &&
-    !params.hasBrowserOriginHeader &&
-    ((params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth)
-  );
+  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {
@@ -333,7 +342,7 @@ export function resolveDeviceSignaturePayloadVersion(params: {
   return null;
 }
 
-export function resolveAuthProvidedKind(
+function resolveAuthProvidedKind(
   connectAuth: HandshakeConnectAuth | null | undefined,
 ): AuthProvidedKind {
   return connectAuth?.password

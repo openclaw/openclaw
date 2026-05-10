@@ -35,8 +35,10 @@ export const ChatHistoryParamsSchema = Type.Object(
 export const ChatSendParamsSchema = Type.Object(
   {
     sessionKey: ChatSendSessionKeyString,
+    sessionId: Type.Optional(NonEmptyString),
     message: Type.String(),
     thinking: Type.Optional(Type.String()),
+    fastMode: Type.Optional(Type.Boolean()),
     deliver: Type.Optional(Type.Boolean()),
     originatingChannel: Type.Optional(Type.String()),
     originatingTo: Type.Optional(Type.String()),
@@ -72,6 +74,7 @@ export const ChatEventSchema = Type.Object(
   {
     runId: NonEmptyString,
     sessionKey: NonEmptyString,
+    spawnedBy: Type.Optional(NonEmptyString),
     seq: Type.Integer({ minimum: 0 }),
     state: Type.Union([
       Type.Literal("delta"),

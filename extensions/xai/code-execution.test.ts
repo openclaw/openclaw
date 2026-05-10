@@ -1,4 +1,4 @@
-import { withFetchPreconnect } from "openclaw/plugin-sdk/testing";
+import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 
@@ -63,6 +63,28 @@ describe("xai code_execution tool", () => {
     });
 
     expect(tool?.name).toBe("code_execution");
+  });
+
+  it("enables code_execution from an xAI auth profile and uses it for requests", async () => {
+    const mockFetch = installCodeExecutionFetch();
+    const tool = createCodeExecutionTool({
+      config: {},
+      auth: {
+        hasAuthForProvider: (providerId) => providerId === "xai",
+        resolveApiKeyForProvider: async (providerId) =>
+          providerId === "xai" ? "xai-profile-key" : undefined, // pragma: allowlist secret
+      },
+    });
+
+    expect(tool?.name).toBe("code_execution");
+    await tool?.execute?.("code-execution:auth-profile", {
+      task: "Sum [20, 22]",
+    });
+
+    const request = mockFetch.mock.calls[0]?.[1] as RequestInit | undefined;
+    expect((request?.headers as Record<string, string> | undefined)?.Authorization).toBe(
+      "Bearer xai-profile-key",
+    );
   });
 
   it("uses the xAI Responses code_interpreter tool", async () => {

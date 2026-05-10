@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   addQaCredentialSet,
+  diagnoseQaCredentialBroker,
   listQaCredentialSets,
   QaCredentialAdminError,
   removeQaCredentialSet,
@@ -13,6 +14,14 @@ function jsonResponse(payload: unknown, status = 200) {
       "content-type": "application/json",
     },
   });
+}
+
+function requireFirstFetchInput(fetchImpl: ReturnType<typeof vi.fn>): RequestInfo | URL {
+  const input = fetchImpl.mock.calls[0]?.[0] as RequestInfo | URL | undefined;
+  if (!input) {
+    throw new Error("expected fetch input");
+  }
+  return input;
 }
 
 describe("qa credential admin runtime", () => {
@@ -111,7 +120,9 @@ describe("qa credential admin runtime", () => {
       fetchImpl,
     });
 
-    expect(fetchImpl.mock.calls[0]?.[0]).toBe("http://127.0.0.1:3210/qa-credentials/v1/admin/list");
+    expect(requireFirstFetchInput(fetchImpl)).toBe(
+      "http://127.0.0.1:3210/qa-credentials/v1/admin/list",
+    );
   });
 
   it("rejects unsafe endpoint-prefix overrides", async () => {
@@ -203,5 +214,43 @@ describe("qa credential admin runtime", () => {
       includePayload: true,
       limit: 5,
     });
+  });
+
+  it("doctors credential broker env without exposing secret values", async () => {
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      jsonResponse({
+        status: "ok",
+        count: 1,
+        credentials: [
+          {
+            credentialId: "cred-2",
+            kind: "telegram",
+            status: "active",
+            createdAtMs: 100,
+            updatedAtMs: 100,
+            lastLeasedAtMs: 50,
+          },
+        ],
+      }),
+    );
+
+    const result = await diagnoseQaCredentialBroker({
+      siteUrl: "https://first-schnauzer-821.convex.site",
+      env: {
+        OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
+        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+      },
+      fetchImpl,
+    });
+
+    expect(result.status).toBe("pass");
+    expect(JSON.stringify(result)).not.toContain("ci-secret");
+    expect(JSON.stringify(result)).not.toContain("maint-secret");
+    expect(result.checks).toContainEqual(
+      expect.objectContaining({
+        name: "broker admin/list",
+        status: "pass",
+      }),
+    );
   });
 });

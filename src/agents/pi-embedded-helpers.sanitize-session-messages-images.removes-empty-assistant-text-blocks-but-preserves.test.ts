@@ -85,6 +85,24 @@ function expectSingleAssistantContentEntry(
   expectEntry((content as Array<{ type?: string; text?: string }>)[0] ?? {});
 }
 
+function expectContentBlock(
+  block:
+    | { type?: string; text?: string; thinking?: string; thought_signature?: string }
+    | undefined,
+  expected: { type: string; text?: string; thinking?: string; thought_signature?: string },
+) {
+  expect(block?.type).toBe(expected.type);
+  if (expected.text !== undefined) {
+    expect(block?.text).toBe(expected.text);
+  }
+  if (expected.thinking !== undefined) {
+    expect(block?.thinking).toBe(expected.thinking);
+  }
+  if (expected.thought_signature !== undefined) {
+    expect(block?.thought_signature).toBe(expected.thought_signature);
+  }
+}
+
 describe("sanitizeSessionMessagesImages", () => {
   it("keeps tool call + tool result IDs unchanged by default", async () => {
     const input = makeToolCallResultPairInput();
@@ -116,8 +134,10 @@ describe("sanitizeSessionMessagesImages", () => {
     const out = await sanitizeSessionMessagesImages(input, "test");
     const assistant = out[0] as { content?: Array<Record<string, unknown>> };
     const toolCall = assistant.content?.find((b) => b.type === "toolCall");
-    expect(toolCall).toBeTruthy();
-    expect("input" in (toolCall ?? {})).toBe(false);
+    if (toolCall === undefined) {
+      throw new Error("expected preserved tool call");
+    }
+    expect("input" in toolCall).toBe(false);
   });
 
   it("removes empty assistant text blocks but preserves tool calls", async () => {
@@ -220,7 +240,7 @@ describe("sanitizeSessionMessagesImages", () => {
     expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
   });
-  it("keeps empty assistant error messages", async () => {
+  it("drops empty assistant error messages", async () => {
     const input = castAgentMessages([
       { role: "user", content: "hello", timestamp: nextTimestamp() } satisfies UserMessage,
       {
@@ -233,10 +253,68 @@ describe("sanitizeSessionMessagesImages", () => {
 
     const out = await sanitizeSessionMessagesImages(input, "test");
 
-    expect(out).toHaveLength(3);
+    expect(out).toHaveLength(1);
     expect(out[0]?.role).toBe("user");
-    expect(out[1]?.role).toBe("assistant");
-    expect(out[2]?.role).toBe("assistant");
+  });
+  it("removes empty text blocks from user and tool result messages", async () => {
+    const input = [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "" },
+          { type: "text", text: "hello" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies UserMessage,
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [
+          { type: "text", text: "   " },
+          { type: "text", text: "result" },
+        ],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect(out[0]?.role).toBe("user");
+    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "hello" },
+    ]);
+    expect(out[1]?.role).toBe("toolResult");
+    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "result" },
+    ]);
+  });
+  it("uses a non-empty placeholder when user or tool result content becomes empty", async () => {
+    const input = [
+      {
+        role: "user",
+        content: [{ type: "text", text: "" }],
+        timestamp: nextTimestamp(),
+      } satisfies UserMessage,
+      {
+        role: "toolResult",
+        toolCallId: "tool-1",
+        toolName: "read",
+        isError: false,
+        content: [{ type: "text", text: "   " }],
+        timestamp: nextTimestamp(),
+      } satisfies ToolResultMessage,
+    ];
+
+    const out = await sanitizeSessionMessagesImages(input, "test");
+
+    expect((out[0] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "[empty content omitted]" },
+    ]);
+    expect((out[1] as { content?: Array<{ text?: string }> }).content).toEqual([
+      { type: "text", text: "[empty content omitted]" },
+    ]);
   });
   it("leaves non-assistant messages unchanged", async () => {
     const input = [
@@ -338,19 +416,38 @@ describe("sanitizeSessionMessagesImages", () => {
       expect(content?.map((block) => block.type)).toEqual([
         "thinking",
         "text",
-        "text",
         "redacted_thinking",
         "text",
       ]);
-      expect(content?.[0]).toMatchObject({
+      expectContentBlock(content?.[0], {
         type: "thinking",
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "" });
-      expect(content?.[3]).toMatchObject({
+      expectContentBlock(content?.[1], { type: "text", text: "visible" });
+      expectContentBlock(content?.[2], {
         type: "redacted_thinking",
         thought_signature: "sig-2",
+      });
+    });
+
+    it("drops empty assistant text blocks in images-only mode", async () => {
+      const input = castAgentMessages([
+        makeOpenAiResponsesAssistantMessage(
+          [
+            { type: "text", text: " " },
+            { type: "text", text: "visible" },
+          ],
+          "stop",
+        ),
+      ]);
+
+      const out = await sanitizeSessionMessagesImages(input, "test", {
+        sanitizeMode: "images-only",
+      });
+
+      expectSingleAssistantContentEntry(out, (entry) => {
+        expect(entry.text).toBe("visible");
       });
     });
   });

@@ -1,9 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { clearSessionStoreCacheForTest } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
 import { slackApprovalCapability, slackNativeApprovalAdapter } from "./approval-native.js";
 
 function buildConfig(
@@ -308,7 +308,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(originTarget).toBeNull();
-    expect(dmTargets).toEqual([]);
+    expect(dmTargets).toStrictEqual([]);
   });
 
   it("skips native delivery when the request is bound to another Slack account", async () => {
@@ -347,7 +347,7 @@ describe("slack native approval adapter", () => {
     });
 
     expect(originTarget).toBeNull();
-    expect(dmTargets).toEqual([]);
+    expect(dmTargets).toStrictEqual([]);
   });
 
   it("suppresses generic slack fallback only for slack-originated approvals", () => {

@@ -10,7 +10,7 @@ function expectSlackConfigIssue(config: unknown, path: string) {
   const res = SlackConfigSchema.safeParse(config);
   expect(res.success).toBe(false);
   if (!res.success) {
-    expect(res.error.issues.some((issue) => issue.path.join(".").includes(path))).toBe(true);
+    expect(res.error.issues.map((issue) => issue.path.join("."))).toContain(path);
   }
 }
 
@@ -61,6 +61,35 @@ describe("slack config schema", () => {
       userToken: "xoxp-any",
       userTokenReadOnly: false,
     });
+  });
+
+  it("accepts Socket Mode ping/pong transport tuning", () => {
+    expectSlackConfigValid({
+      mode: "socket",
+      socketMode: {
+        clientPingTimeout: 15_000,
+        serverPingTimeout: 45_000,
+        pingPongLoggingEnabled: true,
+      },
+      accounts: {
+        ops: {
+          socketMode: {
+            clientPingTimeout: 20_000,
+          },
+        },
+      },
+    });
+  });
+
+  it("rejects invalid Socket Mode ping/pong transport tuning", () => {
+    expectSlackConfigIssue(
+      {
+        socketMode: {
+          clientPingTimeout: 0,
+        },
+      },
+      "socketMode.clientPingTimeout",
+    );
   });
 
   it("accepts account-level user token config", () => {

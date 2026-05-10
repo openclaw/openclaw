@@ -1,9 +1,6 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { generateConversationLabel } from "openclaw/plugin-sdk/reply-runtime";
-export {
-  AUTO_TOPIC_LABEL_DEFAULT_PROMPT,
-  resolveAutoTopicLabelConfig,
-} from "./auto-topic-label-config.js";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { generateConversationLabel } from "openclaw/plugin-sdk/reply-dispatch-runtime";
+export { resolveAutoTopicLabelConfig } from "./auto-topic-label-config.js";
 
 export async function generateTelegramTopicLabel(params: {
   userMessage: string;

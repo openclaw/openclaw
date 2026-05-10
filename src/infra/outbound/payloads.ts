@@ -31,6 +31,8 @@ export type NormalizedOutboundPayload = {
   delivery?: ReplyPayloadDelivery;
   interactive?: InteractiveReply;
   channelData?: Record<string, unknown>;
+  /** Hook-only content for audio-only TTS payloads. Never used as channel text/caption. */
+  hookContent?: string;
 };
 
 export type OutboundPayloadJson = {
@@ -45,6 +47,7 @@ export type OutboundPayloadJson = {
 };
 
 export type OutboundPayloadPlan = {
+  sourceIndex: number;
   payload: ReplyPayload;
   parts: ReturnType<typeof resolveSendableOutboundReplyParts>;
   hasPresentation: boolean;
@@ -65,6 +68,7 @@ type OutboundPayloadPlanContext = {
    * (see `pending-spawn-query.ts`).
    */
   hasPendingSpawnedChildren?: boolean;
+  extractMarkdownImages?: boolean;
 };
 
 export type OutboundPayloadMirror = {
@@ -127,13 +131,20 @@ type PreparedOutboundPayloadPlanEntry = {
   isSilent: boolean;
 };
 
+type IndexedPreparedOutboundPayloadPlanEntry = PreparedOutboundPayloadPlanEntry & {
+  sourceIndex: number;
+};
+
 function createOutboundPayloadPlanEntry(
   payload: ReplyPayload,
+  context: Pick<OutboundPayloadPlanContext, "extractMarkdownImages"> = {},
 ): PreparedOutboundPayloadPlanEntry | null {
   if (shouldSuppressReasoningPayload(payload)) {
     return null;
   }
-  const parsed = parseReplyDirectives(payload.text ?? "");
+  const parsed = parseReplyDirectives(payload.text ?? "", {
+    extractMarkdownImages: context.extractMarkdownImages,
+  });
   const explicitMediaUrls = payload.mediaUrls ?? parsed.mediaUrls;
   const explicitMediaUrl = payload.mediaUrl ?? parsed.mediaUrl;
   const mergedMedia = mergeMediaUrls(
@@ -189,13 +200,15 @@ export function createOutboundPayloadPlan(
   });
   const hasPendingSpawnedChildren =
     context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
-  const prepared: PreparedOutboundPayloadPlanEntry[] = [];
-  for (const payload of payloads) {
-    const entry = createOutboundPayloadPlanEntry(payload);
+  const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
+  for (const [sourceIndex, payload] of payloads.entries()) {
+    const entry = createOutboundPayloadPlanEntry(payload, {
+      extractMarkdownImages: context.extractMarkdownImages,
+    });
     if (!entry) {
       continue;
     }
-    prepared.push(entry);
+    prepared.push({ ...entry, sourceIndex });
   }
   const hasVisibleNonSilentContent = prepared.some((entry) => {
     if (entry.isSilent) {
@@ -211,6 +224,7 @@ export function createOutboundPayloadPlan(
   for (const entry of prepared) {
     if (!entry.isSilent) {
       plan.push({
+        sourceIndex: entry.sourceIndex,
         payload: entry.payload,
         parts: resolveSendableOutboundReplyParts(entry.payload),
         hasPresentation: entry.hasPresentation,
@@ -235,6 +249,7 @@ export function createOutboundPayloadPlan(
         continue;
       }
       plan.push({
+        sourceIndex: entry.sourceIndex,
         payload: visibleSilentPayload,
         parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
         hasPresentation: entry.hasPresentation,
@@ -243,18 +258,19 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    const rewrittenPayload: ReplyPayload = {
+    const visibleSilentPayload: ReplyPayload = {
       ...entry.payload,
       text: resolveSilentReplyRewriteText({
         seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
       }),
     };
-    if (!isRenderablePayload(rewrittenPayload)) {
+    if (!isRenderablePayload(visibleSilentPayload)) {
       continue;
     }
     plan.push({
-      payload: rewrittenPayload,
-      parts: resolveSendableOutboundReplyParts(rewrittenPayload),
+      sourceIndex: entry.sourceIndex,
+      payload: visibleSilentPayload,
+      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
       hasPresentation: entry.hasPresentation,
       hasInteractive: entry.hasInteractive,
       hasChannelData: entry.hasChannelData,
@@ -333,6 +349,7 @@ export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
+  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
   return {
     text: parts.text,
     mediaUrls: parts.mediaUrls,
@@ -341,6 +358,7 @@ export function summarizeOutboundPayloadForTransport(
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
+    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 

@@ -18,6 +18,8 @@ const hoisted = vi.hoisted(() => ({
   discoverModelsMock: vi.fn(),
   fetchMock: vi.fn(),
   registerProviderStreamForModelMock: vi.fn(),
+  prepareProviderDynamicModelMock: vi.fn(async () => {}),
+  resolveModelWithRegistryMock: vi.fn(),
 }));
 const {
   completeMock,
@@ -29,7 +31,20 @@ const {
   discoverModelsMock,
   fetchMock,
   registerProviderStreamForModelMock,
+  prepareProviderDynamicModelMock,
+  resolveModelWithRegistryMock,
 } = hoisted;
+
+type ResolveModelWithRegistryTestParams = {
+  modelRegistry: { find: (provider: string, modelId: string) => unknown };
+  provider: string;
+  modelId: string;
+};
+
+type AuthRequestCall = {
+  profileId?: string;
+  store?: unknown;
+};
 
 vi.mock("@mariozechner/pi-ai", async () => {
   const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
@@ -63,10 +78,22 @@ vi.mock("../agents/pi-model-discovery-runtime.js", () => ({
   discoverModels: discoverModelsMock,
 }));
 
+vi.mock("../plugins/provider-runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../plugins/provider-runtime.js")>(
+    "../plugins/provider-runtime.js",
+  )),
+  prepareProviderDynamicModel: prepareProviderDynamicModelMock,
+}));
+
+vi.mock("../agents/pi-embedded-runner/model.js", () => ({
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
+}));
+
 const { describeImageWithModel } = await import("./image.js");
 
 describe("describeImageWithModel", () => {
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
@@ -93,9 +120,24 @@ describe("describeImageWithModel", () => {
         baseUrl: "https://api.minimax.io/anthropic",
       })),
     });
+    resolveModelWithRegistryMock.mockImplementation(
+      // Delegate to modelRegistry.find so tests that override discoverModelsMock
+      // automatically get the right model through resolveModelWithRegistry.
+      ({ modelRegistry, provider, modelId }: ResolveModelWithRegistryTestParams) =>
+        modelRegistry.find(provider, modelId),
+    );
   });
 
+  function getApiKeyForModelCall(index = 0): AuthRequestCall {
+    const call = (getApiKeyForModelMock.mock.calls as unknown[][])[index];
+    if (!call) {
+      throw new Error(`Expected getApiKeyForModel call ${index}`);
+    }
+    return call[0] as AuthRequestCall;
+  }
+
   it("routes minimax-portal image models through the MiniMax VLM endpoint", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const authStore = { version: 1, profiles: {} };
     const result = await describeImageWithModel({
       cfg: {},
@@ -115,27 +157,27 @@ describe("describeImageWithModel", () => {
       model: "MiniMax-VL-01",
     });
     expect(ensureOpenClawModelsJsonMock).toHaveBeenCalled();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store: authStore }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.store).toBe(authStore);
     expect(requireApiKeyMock).toHaveBeenCalled();
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("minimax-portal", "oauth-test");
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.minimax.io/v1/coding_plan/vlm",
-      expect.objectContaining({
-        method: "POST",
-        headers: {
-          Authorization: "Bearer oauth-test",
-          "Content-Type": "application/json",
-          "MM-API-Source": "OpenClaw",
-        },
-        body: JSON.stringify({
-          prompt: "Describe the image.",
-          image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
-        }),
-        signal: expect.any(AbortSignal),
+    const [fetchUrl, fetchOptions] = fetchMock.mock.calls[0] ?? [];
+    expect(fetchUrl).toBe("https://api.minimax.io/v1/coding_plan/vlm");
+    expect(fetchOptions).toEqual({
+      method: "POST",
+      headers: {
+        Authorization: "Bearer oauth-test",
+        "Content-Type": "application/json",
+        "MM-API-Source": "OpenClaw",
+      },
+      body: JSON.stringify({
+        prompt: "Describe the image.",
+        image_url: `data:image/png;base64,${Buffer.from("png-bytes").toString("base64")}`,
       }),
-    );
+      signal: fetchOptions?.signal,
+    });
+    expect(fetchOptions?.signal).toBeInstanceOf(AbortSignal);
+    expect(timeoutSpy).toHaveBeenCalledWith(1000);
     expect(completeMock).not.toHaveBeenCalled();
   });
 
@@ -174,18 +216,116 @@ describe("describeImageWithModel", () => {
       text: "generic ok",
       model: "custom-vision",
     });
-    expect(registerProviderStreamForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: expect.objectContaining({
-          provider: "minimax-portal",
-          id: "custom-vision",
-        }),
-        cfg: {},
-        agentDir: "/tmp/openclaw-agent",
-      }),
-    );
+    const [streamRequest] = registerProviderStreamForModelMock.mock.calls[0] ?? [];
+    expect(streamRequest).toEqual({
+      model: {
+        provider: "minimax-portal",
+        id: "custom-vision",
+        input: ["text", "image"],
+        baseUrl: "https://api.minimax.io/anthropic",
+      },
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
     expect(completeMock).toHaveBeenCalledOnce();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves configured image models when discovery has not registered the provider", async () => {
+    const registryFind = vi.fn(() => null);
+    discoverModelsMock.mockReturnValue({ find: registryFind });
+    resolveModelWithRegistryMock.mockImplementationOnce(
+      ({ provider, modelId }: ResolveModelWithRegistryTestParams) => ({
+        provider,
+        id: modelId,
+        api: "anthropic-messages",
+        input: ["text", "image"],
+        baseUrl: "http://127.0.0.1:1234",
+      }),
+    );
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "anthropic-messages",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "local vision ok" }],
+    });
+
+    const result = await describeImageWithModel({
+      cfg: {
+        models: {
+          providers: {
+            lmstudio: {
+              api: "anthropic-messages",
+              baseUrl: "http://127.0.0.1:1234",
+              models: [
+                {
+                  id: "google/gemma-4-e2b",
+                  name: "google/gemma-4-e2b",
+                  input: ["text", "image"],
+                  reasoning: false,
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 131_072,
+                  maxTokens: 4096,
+                },
+              ],
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/openclaw-agent",
+      provider: "lmstudio",
+      model: "google/gemma-4-e2b",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(result).toEqual({
+      text: "local vision ok",
+      model: "google/gemma-4-e2b",
+    });
+    expect(registryFind).not.toHaveBeenCalled();
+    const [resolveRequest] = resolveModelWithRegistryMock.mock.calls[0] ?? [];
+    expect(resolveRequest?.provider).toBe("lmstudio");
+    expect(resolveRequest?.modelId).toBe("google/gemma-4-e2b");
+    expect(resolveRequest?.agentDir).toBe("/tmp/openclaw-agent");
+    expect(resolveRequest?.cfg.models?.providers?.lmstudio?.baseUrl).toBe("http://127.0.0.1:1234");
+    expect(prepareProviderDynamicModelMock).not.toHaveBeenCalled();
+    expect(completeMock).toHaveBeenCalledOnce();
+  });
+
+  it("reports the resolved model input when an image model is text-only", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "lmstudio",
+        id: "text-only",
+        api: "openai-completions",
+        input: ["text"],
+        baseUrl: "http://127.0.0.1:1234",
+      })),
+    });
+
+    await expect(
+      describeImageWithModel({
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+        provider: "lmstudio",
+        model: "text-only",
+        buffer: Buffer.from("png-bytes"),
+        fileName: "image.png",
+        mime: "image/png",
+        prompt: "Describe the image.",
+        timeoutMs: 1000,
+      }),
+    ).rejects.toThrow(
+      "Model does not support images: lmstudio/text-only (resolved lmstudio/text-only input: text)",
+    );
+    expect(completeMock).not.toHaveBeenCalled();
   });
 
   it("passes image prompt as system instructions for codex image requests", async () => {
@@ -224,29 +364,36 @@ describe("describeImageWithModel", () => {
       model: "gpt-5.4",
     });
     expect(completeMock).toHaveBeenCalledOnce();
-    expect(completeMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "openai-codex",
-        id: "gpt-5.4",
-      }),
-      expect.objectContaining({
-        systemPrompt: "Describe the image.",
-        messages: [
-          expect.objectContaining({
-            role: "user",
-            content: [
-              expect.objectContaining({
-                type: "image",
-                mimeType: "image/png",
-              }),
-            ],
-          }),
-        ],
-      }),
-      expect.any(Object),
-    );
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.messages?.[0]?.content).toHaveLength(1);
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected image completion call");
+    }
+    const [completionModel, context, options] = firstCall;
+    expect(completionModel).toEqual({
+      provider: "openai-codex",
+      id: "gpt-5.4",
+      input: ["text", "image"],
+      baseUrl: "https://chatgpt.com/backend-api",
+    });
+    expect(context.systemPrompt).toBe("Describe the image.");
+    expect(context.messages).toHaveLength(1);
+    expect(Object.keys(options).toSorted()).toEqual(["apiKey", "maxTokens", "signal", "timeoutMs"]);
+    expect(options.apiKey).toBe("oauth-test");
+    expect(options.maxTokens).toBe(512);
+    expect(options.signal).toBeInstanceOf(AbortSignal);
+    expect(options.timeoutMs).toBeGreaterThan(0);
+    expect(options.timeoutMs).toBeLessThanOrEqual(1000);
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected image completion user message");
+    }
+    expect(userMessage.role).toBe("user");
+    expect(userMessage.content).toHaveLength(1);
+    expect(userMessage.content[0]).toEqual({
+      type: "image",
+      data: Buffer.from("png-bytes").toString("base64"),
+      mimeType: "image/png",
+    });
   });
 
   it("places OpenRouter image prompts in user content before images", async () => {
@@ -285,14 +432,23 @@ describe("describeImageWithModel", () => {
       text: "openrouter ok",
       model: "google/gemini-2.5-flash",
     });
-    const [, context] = completeMock.mock.calls[0] ?? [];
-    expect(context?.systemPrompt).toBeUndefined();
-    expect(context?.messages?.[0]?.content).toEqual([
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected OpenRouter image completion call");
+    }
+    const [, context] = firstCall;
+    expect(context.systemPrompt).toBeUndefined();
+    const userMessage = context.messages[0];
+    if (!userMessage) {
+      throw new Error("expected OpenRouter image completion user message");
+    }
+    expect(userMessage.content).toEqual([
       { type: "text", text: "Describe the image." },
-      expect.objectContaining({
+      {
         type: "image",
+        data: Buffer.from("png-bytes").toString("base64"),
         mimeType: "image/png",
-      }),
+      },
     ]);
   });
 
@@ -399,19 +555,87 @@ describe("describeImageWithModel", () => {
         model: model.id,
       });
       expect(completeMock).toHaveBeenCalledTimes(2);
-      const [, , retryOptions] = completeMock.mock.calls[1] ?? [];
-      expect(retryOptions?.onPayload).toEqual(expect.any(Function));
-      const retryPayload = await retryOptions?.onPayload?.(
+      const retryCall = completeMock.mock.calls[1];
+      if (!retryCall) {
+        throw new Error("Expected retry image completion call");
+      }
+      const [retryModel, , retryOptions] = retryCall;
+      if (!retryOptions?.onPayload) {
+        throw new Error("expected retry payload mapper");
+      }
+      const retryPayload = await retryOptions.onPayload(
         {
           reasoning: { effort: "high", summary: "auto" },
           reasoning_effort: "high",
           include: ["reasoning.encrypted_content"],
         },
-        completeMock.mock.calls[1]?.[0],
+        retryModel,
       );
       expect(retryPayload).toEqual(expectedRetryPayload);
     },
   );
+
+  it("rejects when a generic image completion ignores the abort signal", async () => {
+    vi.useFakeTimers();
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockImplementation(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    const firstCall = completeMock.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("Expected timed image completion call");
+    }
+    const [, , options] = firstCall;
+    if (!options?.signal) {
+      throw new Error("Expected image completion abort signal");
+    }
+    expect(options.signal.aborted).toBe(true);
+    expect(options.timeoutMs).toBe(25);
+  });
+
+  it("rejects when image runtime setup exceeds the request timeout", async () => {
+    vi.useFakeTimers();
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(() => new Promise(() => {}));
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 25,
+    });
+
+    const assertion = expect(result).rejects.toThrow("image description timed out after 25ms");
+    await vi.advanceTimersByTimeAsync(25);
+    await assertion;
+    expect(completeMock).not.toHaveBeenCalled();
+  });
 
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
@@ -453,11 +677,8 @@ describe("describeImageWithModel", () => {
       model: "gemini-3-flash-preview",
     });
     expect(findMock).toHaveBeenCalledOnce();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "google:default",
-      }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 
@@ -501,11 +722,8 @@ describe("describeImageWithModel", () => {
       model: "gemini-3.1-flash-lite-preview",
     });
     expect(findMock).toHaveBeenCalledOnce();
-    expect(getApiKeyForModelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        profileId: "google:default",
-      }),
-    );
+    const authRequest = getApiKeyForModelCall();
+    expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
 });

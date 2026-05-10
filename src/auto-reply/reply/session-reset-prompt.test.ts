@@ -50,9 +50,8 @@ describe("buildBareSessionResetPrompt", () => {
     // 2026-03-03 14:00 UTC = 2026-03-03 09:00 EST
     const nowMs = Date.UTC(2026, 2, 3, 14, 0, 0);
     const prompt = buildBareSessionResetPrompt(cfg, nowMs);
-    expect(prompt).toContain(
-      "Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York) / 2026-03-03 14:00 UTC",
-    );
+    expect(prompt).toContain("Current time: Tuesday, March 3rd, 2026 - 9:00 AM (America/New_York)");
+    expect(prompt).toContain("Reference UTC: 2026-03-03 14:00 UTC");
   });
 
   it("does not append a duplicate current time line", () => {
@@ -116,7 +115,7 @@ describe("buildBareSessionResetPrompt", () => {
     expect(pending.prompt).not.toContain("while bootstrap is still pending for this workspace");
   });
 
-  it("suppresses bootstrap mode when bare reset has no bootstrap file access", async () => {
+  it("uses limited bootstrap mode when bare reset has no bootstrap file access", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-reset-no-file-access-");
     await fs.writeFile(path.join(workspaceDir, "BOOTSTRAP.md"), "ritual", "utf8");
 
@@ -125,9 +124,10 @@ describe("buildBareSessionResetPrompt", () => {
       hasBootstrapFileAccess: false,
     });
 
-    expect(pending.bootstrapMode).toBe("none");
-    expect(pending.shouldPrependStartupContext).toBe(true);
-    expect(pending.prompt).toContain("Execute your Session Startup sequence now");
-    expect(pending.prompt).not.toContain("while bootstrap is still pending for this workspace");
+    expect(pending.bootstrapMode).toBe("limited");
+    expect(pending.shouldPrependStartupContext).toBe(false);
+    expect(pending.prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
+    expect(pending.prompt).toContain("while bootstrap is still pending for this workspace");
+    expect(pending.prompt).not.toContain("Execute your Session Startup sequence now");
   });
 });

@@ -1,8 +1,8 @@
-import { describe, expect, it } from "vitest";
 import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
-} from "../../../test/helpers/plugins/directory.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { describe, expect, it } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { zaloPlugin } from "./channel.js";
 
@@ -43,7 +43,7 @@ describe("zalo directory", () => {
         limit: undefined,
         runtime: runtimeEnv,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   }
 
   it("lists peers from allowFrom", async () => {

@@ -4,7 +4,6 @@ import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import "./test-helpers/fast-core-tools.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -23,6 +22,29 @@ function requireGatewayTool(agentSessionKey?: string) {
     ...(agentSessionKey ? { agentSessionKey } : {}),
     config: { commands: { restart: true } },
   });
+}
+
+function collectActionValues(schema: unknown, values: Set<string>): void {
+  if (!schema || typeof schema !== "object") {
+    return;
+  }
+
+  const record = schema as Record<string, unknown>;
+  if (typeof record.const === "string") {
+    values.add(record.const);
+  }
+  if (Array.isArray(record.enum)) {
+    for (const value of record.enum) {
+      if (typeof value === "string") {
+        values.add(value);
+      }
+    }
+  }
+  if (Array.isArray(record.anyOf)) {
+    for (const variant of record.anyOf) {
+      collectActionValues(variant, values);
+    }
+  }
 }
 
 function expectConfigMutationCall(params: {
@@ -91,13 +113,30 @@ describe("gateway tool", () => {
     });
   });
 
-  it("marks gateway as owner-only", async () => {
+  it("marks gateway as owner-only", () => {
     const tool = requireGatewayTool();
     expect(tool.ownerOnly).toBe(true);
   });
 
+  it("exposes restart and config actions in the gateway tool schema", () => {
+    const tool = requireGatewayTool();
+    const parameters = tool.parameters as {
+      properties?: Record<string, unknown>;
+    };
+    const values = new Set<string>();
+    collectActionValues(parameters.properties?.action, values);
+
+    expect([...values]).toEqual(
+      expect.arrayContaining(["restart", "config.get", "config.patch", "config.apply"]),
+    );
+  });
+
   it("schedules SIGUSR1 restart", async () => {
     const kill = vi.spyOn(process, "kill").mockImplementation(() => true);
+    const restartSignalKillCalls = () =>
+      kill.mock.calls.filter(
+        ([pid, signal]) => pid === process.pid && (signal === "SIGUSR1" || signal === undefined),
+      );
     const sigusr1Handler = vi.fn();
     process.on("SIGUSR1", sigusr1Handler);
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-test-"));
@@ -119,13 +158,13 @@ describe("gateway tool", () => {
             delayMs: 0,
           });
 
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
           expect(sigusr1Handler).not.toHaveBeenCalled();
           await vi.waitFor(() => expect(sigusr1Handler).toHaveBeenCalledTimes(1), {
             interval: 1,
             timeout: 1_000,
           });
-          expect(kill).not.toHaveBeenCalled();
+          expect(restartSignalKillCalls()).toHaveLength(0);
 
           const sentinelPath = path.join(stateDir, "restart-sentinel.json");
           const raw = await fs.readFile(sentinelPath, "utf-8");
@@ -147,16 +186,48 @@ describe("gateway tool", () => {
   });
 
   it("passes config.apply through gateway call", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      if (method === "config.apply") {
+        return {
+          ok: true,
+          path: "/tmp/openclaw.json",
+          config: { agents: { defaults: { systemPromptOverride: "You are a terse assistant." } } },
+          restart: { ok: true, config: "nested field preserved" },
+        };
+      }
+      return { ok: true };
+    });
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
     const raw =
       '{\n  agents: { defaults: { systemPromptOverride: "You are a terse assistant." } },\n  tools: { exec: { ask: "on-miss", security: "allowlist" } }\n}\n';
-    await tool.execute("call2", {
+    const result = await tool.execute("call2", {
       action: "config.apply",
       raw,
     });
 
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        path: "/tmp/openclaw.json",
+        restart: { ok: true, config: "nested field preserved" },
+      },
+    });
     expectConfigMutationCall({
       callGatewayTool: vi.mocked(callGatewayTool),
       action: "config.apply",
@@ -166,15 +237,47 @@ describe("gateway tool", () => {
   });
 
   it("passes config.patch through gateway call", async () => {
+    vi.mocked(callGatewayTool).mockImplementation(async (method: string) => {
+      if (method === "config.get") {
+        return {
+          hash: "hash-1",
+          config: {
+            tools: {
+              exec: {
+                ask: "on-miss",
+                security: "allowlist",
+              },
+            },
+          },
+        };
+      }
+      if (method === "config.patch") {
+        return {
+          ok: true,
+          noop: true,
+          path: "/tmp/openclaw.json",
+          config: { channels: { telegram: { groups: {} } } },
+        };
+      }
+      return { ok: true };
+    });
     const sessionKey = "agent:main:whatsapp:dm:+15555550123";
     const tool = requireGatewayTool(sessionKey);
 
     const raw = '{\n  channels: { telegram: { groups: { "*": { requireMention: false } } } }\n}\n';
-    await tool.execute("call4", {
+    const result = await tool.execute("call4", {
       action: "config.patch",
       raw,
     });
 
+    expect(result.details).toEqual({
+      ok: true,
+      result: {
+        ok: true,
+        noop: true,
+        path: "/tmp/openclaw.json",
+      },
+    });
     expectConfigMutationCall({
       callGatewayTool: vi.mocked(callGatewayTool),
       action: "config.patch",
@@ -604,12 +707,14 @@ describe("gateway tool", () => {
     await tool.execute("call3", {
       action: "update.run",
       note: "test update",
+      continuationMessage: "Report the update result after restart.",
     });
 
     expect(callGatewayTool).toHaveBeenCalledWith(
       "update.run",
       expect.any(Object),
       expect.objectContaining({
+        continuationMessage: "Report the update result after restart.",
         note: "test update",
         sessionKey,
       }),
@@ -617,12 +722,12 @@ describe("gateway tool", () => {
     const updateCall = vi
       .mocked(callGatewayTool)
       .mock.calls.find((call) => call[0] === "update.run");
-    expect(updateCall).toBeDefined();
-    if (updateCall) {
-      const [, opts, params] = updateCall;
-      expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
-      expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
+    if (updateCall === undefined) {
+      throw new Error("expected update.run gateway call");
     }
+    const [, opts, params] = updateCall;
+    expect(opts).toMatchObject({ timeoutMs: 20 * 60_000 });
+    expect(params).toMatchObject({ timeoutMs: 20 * 60_000 });
   });
 
   it("returns a path-scoped schema lookup result", async () => {

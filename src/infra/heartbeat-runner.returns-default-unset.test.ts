@@ -119,14 +119,22 @@ function resolveWhatsAppTargetForTest(params: {
   allowFrom: Array<string | number> | null | undefined;
 }) {
   const trimmed = params.to?.trim() ?? "";
-  const allowListRaw = (params.allowFrom ?? [])
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
-    .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTargetForTest(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  const allowList: string[] = [];
+  let hasWildcard = false;
+  for (const entry of params.allowFrom ?? []) {
+    const raw = String(entry).trim();
+    if (!raw) {
+      continue;
+    }
+    if (raw === "*") {
+      hasWildcard = true;
+      continue;
+    }
+    const normalized = normalizeWhatsAppTargetForTest(raw);
+    if (normalized) {
+      allowList.push(normalized);
+    }
+  }
   const normalizedTarget = normalizeWhatsAppTargetForTest(trimmed);
 
   if (!normalizedTarget) {
@@ -314,10 +322,20 @@ describe("isHeartbeatEnabledForAgent", () => {
     expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
   });
 
-  it("falls back to default agent when no explicit heartbeat entries", () => {
+  it("uses global heartbeat defaults for all agents when no explicit heartbeat entries exist", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: { heartbeat: { every: "30m" } },
+        list: [{ id: "main" }, { id: "ops" }],
+      },
+    };
+    expect(isHeartbeatEnabledForAgent(cfg, "main")).toBe(true);
+    expect(isHeartbeatEnabledForAgent(cfg, "ops")).toBe(true);
+  });
+
+  it("falls back to default agent when no heartbeat config exists", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
         list: [{ id: "main" }, { id: "ops" }],
       },
     };
@@ -1124,19 +1142,25 @@ describe("runHeartbeatOnce", () => {
     typedCases<{
       name: string;
       caseDir: string;
-      replies: Array<{ text: string }>;
+      replies: Array<{ text: string; isReasoning?: boolean }>;
       expectedTexts: string[];
     }>([
       {
-        name: "reasoning + final payload",
+        name: "legacy-prefixed reasoning + final payload",
         caseDir: "hb-reasoning",
         replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "Final alert" }],
         expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
       },
       {
-        name: "reasoning + HEARTBEAT_OK",
+        name: "raw flagged reasoning + final payload",
+        caseDir: "hb-reasoning-raw",
+        replies: [{ text: "Because it helps", isReasoning: true }, { text: "Final alert" }],
+        expectedTexts: ["Reasoning:\n_Because it helps_", "Final alert"],
+      },
+      {
+        name: "raw flagged reasoning + HEARTBEAT_OK",
         caseDir: "hb-reasoning-heartbeat-ok",
-        replies: [{ text: "Reasoning:\n_Because it helps_" }, { text: "HEARTBEAT_OK" }],
+        replies: [{ text: "Because it helps", isReasoning: true }, { text: "HEARTBEAT_OK" }],
         expectedTexts: ["Reasoning:\n_Because it helps_"],
       },
     ]),
@@ -1379,6 +1403,11 @@ describe("runHeartbeatOnce", () => {
       .mockResolvedValue({ messageId: "m1", toJid: "jid" });
     const res = await runHeartbeatOnce({
       cfg,
+      ...(params.reason === "wake"
+        ? { source: "hook" as const, intent: "immediate" as const }
+        : params.reason === "interval"
+          ? { source: "interval" as const, intent: "scheduled" as const }
+          : {}),
       reason: params.reason,
       deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
     });
@@ -1402,6 +1431,152 @@ describe("runHeartbeatOnce", () => {
     } finally {
       replySpy.mockRestore();
     }
+  });
+
+  it("keeps non-task HEARTBEAT.md context while stripping blank-line-separated task blocks", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-tasks-context");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      `# Keep this header
+
+Remember escalation policy.
+
+tasks:
+  - name: inbox
+    interval: 5m
+    prompt: Check urgent inbox items
+
+  - name: calendar
+    interval: 5m
+    prompt: Check calendar changes
+
+Some global directive after tasks.
+
+- Keep this top-level directive too.
+`,
+      "utf-8",
+    );
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { every: "5m", target: "whatsapp" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveMainSessionKey(cfg)]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    const replySpy = vi.fn().mockResolvedValue({ text: "Handled due heartbeat tasks" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
+    expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
+    expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
+    expect(calledCtx.Body).toContain("# Keep this header");
+    expect(calledCtx.Body).toContain("Remember escalation policy.");
+    expect(calledCtx.Body).toContain("Some global directive after tasks.");
+    expect(calledCtx.Body).toContain("- Keep this top-level directive too.");
+    expect(calledCtx.Body).not.toContain("name: inbox");
+    expect(calledCtx.Body).not.toContain("name: calendar");
+    replySpy.mockReset();
+  });
+
+  it("strips documented unindented task entries while keeping following top-level bullets", async () => {
+    const tmpDir = await createCaseDir("openclaw-hb-unindented-tasks-context");
+    const storePath = path.join(tmpDir, "sessions.json");
+    const workspaceDir = path.join(tmpDir, "workspace");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "HEARTBEAT.md"),
+      `# Keep this header
+
+tasks:
+- name: inbox
+  interval: 5m
+  prompt: Check urgent inbox items
+
+- name: calendar
+  interval: 5m
+  prompt: Check calendar changes
+
+- Keep this top-level directive after tasks.
+`,
+      "utf-8",
+    );
+
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          workspace: workspaceDir,
+          heartbeat: { every: "5m", target: "whatsapp" },
+        },
+      },
+      channels: { whatsapp: { allowFrom: ["*"] } },
+      session: { store: storePath },
+    };
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        [resolveMainSessionKey(cfg)]: {
+          sessionId: "sid",
+          updatedAt: Date.now(),
+          lastChannel: "whatsapp",
+          lastTo: "120363401234567890@g.us",
+        },
+      }),
+    );
+    const replySpy = vi.fn().mockResolvedValue({ text: "Handled due heartbeat tasks" });
+    const sendWhatsApp = vi
+      .fn<
+        (to: string, text: string, opts?: unknown) => Promise<{ messageId: string; toJid: string }>
+      >()
+      .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+    const res = await runHeartbeatOnce({
+      cfg,
+      deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+    });
+
+    expect(res.status).toBe("ran");
+    expect(replySpy).toHaveBeenCalledTimes(1);
+    const calledCtx = replySpy.mock.calls[0]?.[0] as { Body?: string };
+    expect(calledCtx.Body).toContain("- inbox: Check urgent inbox items");
+    expect(calledCtx.Body).toContain("- calendar: Check calendar changes");
+    expect(calledCtx.Body).toContain("Additional context from HEARTBEAT.md");
+    expect(calledCtx.Body).toContain("# Keep this header");
+    expect(calledCtx.Body).toContain("- Keep this top-level directive after tasks.");
+    expect(calledCtx.Body).not.toContain("name: inbox");
+    expect(calledCtx.Body).not.toContain("name: calendar");
+    expect(calledCtx.Body).not.toContain("interval: 5m");
+    expect(calledCtx.Body).not.toContain("prompt: Check urgent");
+    replySpy.mockReset();
   });
 
   it("applies HEARTBEAT.md gating rules across file states and triggers", async () => {
@@ -1580,6 +1755,8 @@ describe("runHeartbeatOnce", () => {
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "interval",
+        intent: "scheduled",
         reason: "interval",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });
@@ -1635,6 +1812,8 @@ describe("runHeartbeatOnce", () => {
     try {
       const res = await runHeartbeatOnce({
         cfg,
+        source: "exec-event",
+        intent: "event",
         reason: "exec-event",
         deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
       });

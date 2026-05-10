@@ -20,6 +20,15 @@ const hookMocks = vi.hoisted(() => ({
 }));
 
 const beforeToolCallMocks = vi.hoisted(() => ({
+  BeforeToolCallBlockedError: class BeforeToolCallBlockedError extends Error {
+    reason: string;
+
+    constructor(reason: string) {
+      super(reason);
+      this.name = "BeforeToolCallBlockedError";
+      this.reason = reason;
+    }
+  },
   consumeAdjustedParamsForToolCall: vi.fn((_: string): unknown => undefined),
   isToolWrappedWithBeforeToolCallHook: vi.fn(() => false),
   runBeforeToolCallHook: vi.fn(async ({ params }: { params: unknown }) => ({
@@ -88,7 +97,14 @@ async function loadFreshAfterToolCallModulesForTest() {
     emitAgentItemEvent: vi.fn(),
   }));
   vi.doMock("./pi-tools.before-tool-call.js", () => ({
+    BeforeToolCallBlockedError: beforeToolCallMocks.BeforeToolCallBlockedError,
+    buildBlockedToolResult: ({ reason }: { reason: string }) => ({
+      content: [{ type: "text", text: reason }],
+      details: { status: "blocked", deniedReason: "plugin-before-tool-call", reason },
+    }),
     consumeAdjustedParamsForToolCall: beforeToolCallMocks.consumeAdjustedParamsForToolCall,
+    isBeforeToolCallBlockedError: (error: unknown) =>
+      error instanceof beforeToolCallMocks.BeforeToolCallBlockedError,
     isToolWrappedWithBeforeToolCallHook: beforeToolCallMocks.isToolWrappedWithBeforeToolCallHook,
     runBeforeToolCallHook: beforeToolCallMocks.runBeforeToolCallHook,
   }));
@@ -212,7 +228,7 @@ describe("after_tool_call fires exactly once in embedded runs", () => {
 
     const call = (hookMocks.runner.runAfterToolCall as ReturnType<typeof vi.fn>).mock.calls[0];
     const event = call?.[0] as { error?: unknown } | undefined;
-    expect(event?.error).toBeDefined();
+    expect(event?.error).toBe("tool failed");
   });
 
   it("uses before_tool_call adjusted params for after_tool_call payload", async () => {

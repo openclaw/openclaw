@@ -1,9 +1,16 @@
 {
   "id": "qqbot",
+  "activation": {
+    "onStartup": false
+  },
   "channels": ["qqbot"],
+  "contracts": {
+    "tools": ["qqbot_channel_api", "qqbot_remind"]
+  },
   "channelEnvVars": {
     "qqbot": ["QQBOT_APP_ID", "QQBOT_CLIENT_SECRET"]
   },
+  "enabledByDefault": true,
   "skills": ["./skills"],
   "configSchema": {
     "type": "object",
@@ -90,6 +97,10 @@
                     "type": "string",
                     "enum": ["off", "partial"],
                     "default": "partial"
+                  },
+                  "c2cStreamApi": {
+                    "type": "boolean",
+                    "description": "Use QQ C2C official stream_messages API (single-message typing-style updates)."
                   }
                 }
               }
@@ -135,6 +146,10 @@
                 "type": "string",
                 "enum": ["off", "partial"],
                 "default": "partial"
+              },
+              "c2cStreamApi": {
+                "type": "boolean",
+                "description": "Use QQ C2C official stream_messages API (single-message typing-style updates)."
               }
             }
           }

@@ -1,4 +1,4 @@
-import { resolveOpenClawAgentDir } from "../../agents/agent-paths.js";
+import { resolveDefaultAgentDir } from "../../agents/agent-scope.js";
 import {
   type AuthHealthSummary,
   type AuthProfileHealthStatus,
@@ -7,9 +7,12 @@ import {
   buildAuthHealthSummary,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
-import { ensureAuthProfileStore } from "../../agents/auth-profiles.js";
+import {
+  ensureAuthProfileStore,
+  externalCliDiscoveryForConfigStatus,
+} from "../../agents/auth-profiles.js";
 import { normalizeProviderId } from "../../agents/provider-id.js";
-import { loadConfig, type OpenClawConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { isSecretRef } from "../../config/types.secrets.js";
 import { loadProviderUsageSummary } from "../../infra/provider-usage.load.js";
 import { PROVIDER_LABELS, resolveUsageProviderId } from "../../infra/provider-usage.shared.js";
@@ -20,9 +23,6 @@ import { formatForLog } from "../ws-log.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const log = createSubsystemLogger("models-auth-status");
-
-/** The `ts` sentinel the UI uses to distinguish "never loaded" from "load failed". */
-export const MODEL_AUTH_STATUS_NEVER_LOADED = 0;
 
 /**
  * Models-auth status wire types. Mirrored in ui/src/ui/types.ts via an
@@ -106,6 +106,8 @@ function providerDisplayName(provider: string): string {
  * where a healthy OAuth sits alongside an expired/missing bearer token.
  * For the dashboard's OAuth-health signal, token profiles are a separate
  * concern — we want "is OAuth healthy?", not "is every credential healthy?"
+ * It also consumes the provider's effective profile subset when auth order
+ * excludes stale inventory from the runtime credential path.
  *
  * `expectsOAuth` surfaces the configured-OAuth-but-no-oauth-profile case as
  * `missing` instead of silently falling back to the provider's rollup (which
@@ -124,7 +126,8 @@ export function aggregateOAuthStatus(
   expiresAt?: number;
   remainingMs?: number;
 } {
-  const oauth = prov.profiles.filter((p) => p.type === "oauth");
+  const profiles = prov.effectiveProfiles ?? prov.profiles;
+  const oauth = profiles.filter((p) => p.type === "oauth");
   if (oauth.length === 0) {
     if (expectsOAuth) {
       return { status: "missing" };
@@ -282,7 +285,7 @@ function resolveConfiguredProviders(cfg: OpenClawConfig): {
 }
 
 export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
-  "models.authStatus": async ({ params, respond }) => {
+  "models.authStatus": async ({ params, respond, context }) => {
     const now = Date.now();
     const bypassCache = Boolean((params as { refresh?: boolean } | undefined)?.refresh);
     if (!bypassCache && cached && now - cached.ts < CACHE_TTL_MS) {
@@ -290,9 +293,11 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      const cfg = loadConfig();
-      const agentDir = resolveOpenClawAgentDir();
-      const store = ensureAuthProfileStore(agentDir);
+      const cfg = context.getRuntimeConfig();
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const store = ensureAuthProfileStore(agentDir, {
+        externalCli: externalCliDiscoveryForConfigStatus({ cfg }),
+      });
       const configured = resolveConfiguredProviders(cfg);
       const authHealth: AuthHealthSummary = buildAuthHealthSummary({
         store,

@@ -16,11 +16,14 @@ describe("resolveMcpTransportConfig", () => {
       connectionTimeoutMs: 12_345,
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "stdio",
       transportType: "stdio",
       command: "node",
       args: ["./server.mjs"],
+      env: undefined,
+      cwd: undefined,
+      description: "node ./server.mjs",
       connectionTimeoutMs: 12_345,
     });
   });
@@ -76,10 +79,15 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "stdio",
+      transportType: "stdio",
       command: "node",
+      args: undefined,
       env: {},
+      cwd: undefined,
+      description: "node",
+      connectionTimeoutMs: 30_000,
     });
   });
 
@@ -144,10 +152,29 @@ describe("resolveMcpTransportConfig", () => {
       transport: "streamable-http",
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       kind: "http",
       transportType: "streamable-http",
       url: "https://mcp.example.com/http",
+      headers: undefined,
+      description: "https://mcp.example.com/http",
+      connectionTimeoutMs: 30_000,
+    });
+  });
+
+  it("treats CLI-native http type as streamable HTTP for compatibility", () => {
+    const resolved = resolveMcpTransportConfig("probe", {
+      url: "https://mcp.example.com/http",
+      type: "http",
+    });
+
+    expect(resolved).toEqual({
+      kind: "http",
+      transportType: "streamable-http",
+      url: "https://mcp.example.com/http",
+      headers: undefined,
+      description: "https://mcp.example.com/http",
+      connectionTimeoutMs: 30_000,
     });
   });
 });

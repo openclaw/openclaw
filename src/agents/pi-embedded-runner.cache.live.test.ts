@@ -121,12 +121,17 @@ async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[
     throw new Error("live cache trace file not initialized");
   }
   const raw = await fs.readFile(liveCacheTraceFile, "utf8").catch(() => "");
-  return raw
-    .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
-    .map((line) => JSON.parse(line) as CacheTraceEvent)
-    .filter((event) => event.sessionId === sessionId);
+  const events: CacheTraceEvent[] = [];
+  for (const rawLine of raw.split("\n")) {
+    const line = rawLine.trim();
+    if (line.length > 0) {
+      const event = JSON.parse(line) as CacheTraceEvent;
+      if (event.sessionId === sessionId) {
+        events.push(event);
+      }
+    }
+  }
+  return events;
 }
 
 async function expectCacheTraceStages(
@@ -457,11 +462,11 @@ async function runToolOnlyTurn(params: {
     text = extractAssistantText(response);
   }
 
-  expect(toolCall).toBeTruthy();
   expect(text.length).toBe(0);
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected tool call");
   }
+  expect(toolCall.name).toBe(params.tool.name);
 
   return {
     prompt,
@@ -917,7 +922,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high cache-read rates across repeated embedded-runner turns",
+      "keeps high OpenAI cache-read rates across repeated embedded-runner turns",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-embedded`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1008,7 +1013,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      "keeps OpenAI cache reuse when structured system context only changes by whitespace and line endings",
       async () => {
         const sessionId = `${OPENAI_SESSION_ID}-structured-normalization`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1201,7 +1206,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps high cache-read rates across repeated embedded-runner turns",
+      "keeps high Anthropic cache-read rates across repeated embedded-runner turns",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-embedded`;
         const warmup = await runEmbeddedCacheProbe({
@@ -1300,7 +1305,7 @@ describeCacheLive("pi embedded runner prompt caching (live)", () => {
     );
 
     it(
-      "keeps cache reuse when structured system context only changes by whitespace and line endings",
+      "keeps Anthropic cache reuse when structured system context only changes by whitespace and line endings",
       async () => {
         const sessionId = `${ANTHROPIC_SESSION_ID}-structured-normalization`;
         const warmup = await runEmbeddedCacheProbe({

@@ -2,6 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { describe, expect, test, vi } from "vitest";
 import { z } from "zod";
+import { shouldRetryInitialMcpGatewayConnect } from "./channel-bridge.js";
 import { createOpenClawChannelMcpServer, OpenClawChannelBridge } from "./channel-server.js";
 import { extractAttachmentsFromMessage } from "./channel-shared.js";
 
@@ -24,6 +25,7 @@ const ClaudePermissionNotificationSchema = z.object({
 async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | "on" | "off" }) {
   const serverHarness = await createOpenClawChannelMcpServer({
     claudeChannelMode: params?.claudeChannelMode ?? "auto",
+    config: {} as never,
     verbose: false,
   });
   const client = new Client({ name: "mcp-test-client", version: "1.0.0" });
@@ -72,9 +74,67 @@ async function flushMcpNotifications() {
   await Promise.resolve();
 }
 
+function gatewayRequestError(retryable: boolean): Error {
+  return Object.assign(new Error(retryable ? "gateway busy" : "auth failed"), {
+    name: "GatewayClientRequestError",
+    retryable,
+  });
+}
+
 describe("openclaw channel mcp server", () => {
+  test("keeps initial MCP gateway connection alive through transient connect errors", () => {
+    expect(
+      shouldRetryInitialMcpGatewayConnect(new Error("gateway request timeout for connect")),
+    ).toBe(true);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(true))).toBe(true);
+    expect(shouldRetryInitialMcpGatewayConnect(gatewayRequestError(false))).toBe(false);
+  });
+
   describe("gateway-backed flows", () => {
     describe("gateway integration", () => {
+      test("returns conversation and message payloads in primary MCP content", async () => {
+        const sessionKey = "agent:main:telegram:direct:123";
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string) => {
+            if (method === "sessions.list") {
+              return {
+                sessions: [
+                  {
+                    key: sessionKey,
+                    deliveryContext: { channel: "telegram", to: "123" },
+                    lastMessagePreview: "hello",
+                  },
+                ],
+              };
+            }
+            if (method === "sessions.get") {
+              return {
+                messages: [{ id: "msg-1", role: "assistant", content: "hello from transcript" }],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const conversations = (await mcp.client.callTool({
+            name: "conversations_list",
+            arguments: {},
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(conversations.content?.[0]?.text).toContain(`"sessionKey": "${sessionKey}"`);
+          expect(conversations.content?.[0]?.text).toContain(`"lastMessagePreview": "hello"`);
+
+          const messages = (await mcp.client.callTool({
+            name: "messages_read",
+            arguments: { session_key: sessionKey },
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(messages.content?.[0]?.text).toContain(`"id": "msg-1"`);
+          expect(messages.content?.[0]?.text).toContain("hello from transcript");
+        } finally {
+          await mcp.close();
+        }
+      });
+
       test("lists conversations and reads messages", async () => {
         const sessionKey = "agent:main:main";
         const gatewayRequest = vi.fn(async (method: string) => {
@@ -93,7 +153,7 @@ describe("openclaw channel mcp server", () => {
               ],
             };
           }
-          if (method === "chat.history") {
+          if (method === "sessions.get") {
             return {
               messages: [
                 {
@@ -157,6 +217,55 @@ describe("openclaw channel mcp server", () => {
             }),
           ]),
         );
+      });
+
+      test("serializes conversation and message payloads into MCP primary content", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string) => {
+            if (method === "sessions.list") {
+              return {
+                sessions: [
+                  {
+                    key: "agent:main:telegram:direct:123",
+                    channel: "telegram",
+                    deliveryContext: { to: "123" },
+                    lastMessagePreview: "hello",
+                  },
+                ],
+              };
+            }
+            if (method === "sessions.get") {
+              return {
+                messages: [
+                  {
+                    id: "msg-1",
+                    role: "assistant",
+                    content: [{ type: "text", text: "full transcript text" }],
+                  },
+                ],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const conversations = (await mcp.client.callTool({
+            name: "conversations_list",
+            arguments: {},
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(conversations.content?.[0]?.text).toContain('"sessionKey"');
+          expect(conversations.content?.[0]?.text).toContain('"lastMessagePreview": "hello"');
+
+          const messages = (await mcp.client.callTool({
+            name: "messages_read",
+            arguments: { session_key: "agent:main:telegram:direct:123" },
+          })) as { content?: Array<{ type: string; text?: string }> };
+          expect(messages.content?.[0]?.text).toContain('"id": "msg-1"');
+          expect(messages.content?.[0]?.text).toContain("full transcript text");
+        } finally {
+          await mcp.close();
+        }
       });
 
       test("emits Claude channel and permission notifications", async () => {
@@ -306,7 +415,47 @@ describe("openclaw channel mcp server", () => {
       );
     });
 
-    test("lists routed sessions that only expose modern channel fields", async () => {
+    test("gets one conversation through sessions.describe without broad listing", async () => {
+      const bridge = new OpenClawChannelBridge({} as never, {
+        claudeChannelMode: "off",
+        verbose: false,
+      });
+      const gatewayRequest = vi.fn(async (method: string) => {
+        if (method === "sessions.describe") {
+          return {
+            session: {
+              key: "agent:main:main",
+              deliveryContext: {
+                channel: "telegram",
+                to: "-100123",
+                accountId: "acct-1",
+              },
+              lastMessagePreview: "latest message",
+            },
+          };
+        }
+        throw new Error(`unexpected gateway method ${method}`);
+      });
+
+      attachReadyGateway(bridge, gatewayRequest);
+
+      await expect(bridge.getConversation("agent:main:main")).resolves.toEqual(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          channel: "telegram",
+          to: "-100123",
+          accountId: "acct-1",
+          lastMessagePreview: "latest message",
+        }),
+      );
+      expect(gatewayRequest).toHaveBeenCalledWith("sessions.describe", {
+        key: "agent:main:main",
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      });
+    });
+
+    test("lists routed sessions from deliveryContext without mirrored route fields", async () => {
       const bridge = new OpenClawChannelBridge({} as never, {
         claudeChannelMode: "off",
         verbose: false,
@@ -315,20 +464,18 @@ describe("openclaw channel mcp server", () => {
         sessions: [
           {
             key: "agent:main:channel-field",
-            channel: "telegram",
             deliveryContext: {
+              channel: "telegram",
               to: "-100111",
             },
           },
           {
             key: "agent:main:origin-field",
-            origin: {
-              provider: "imessage",
+            deliveryContext: {
+              channel: "imessage",
+              to: "+15551230000",
               accountId: "imessage-default",
               threadId: "thread-7",
-            },
-            deliveryContext: {
-              to: "+15551230000",
             },
           },
         ],

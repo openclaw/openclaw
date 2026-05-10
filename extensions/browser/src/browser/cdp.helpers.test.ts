@@ -159,6 +159,7 @@ function createProfile(overrides: Partial<ResolvedBrowserProfile>): ResolvedBrow
     driver: "openclaw",
     attachOnly: false,
     ...overrides,
+    headless: overrides.headless ?? false,
   };
 }
 
@@ -232,7 +233,7 @@ describe("CDP reachability policy", () => {
     expect(resolveCdpReachabilityPolicy(profile, browserPolicy)).toEqual({
       allowedHostnames: ["172.29.128.1"],
     });
-    expect(browserPolicy).toEqual({});
+    expect(browserPolicy).toStrictEqual({});
     await expect(
       assertBrowserNavigationAllowed({
         url: "http://172.29.128.1/",

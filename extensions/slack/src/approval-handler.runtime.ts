@@ -8,11 +8,9 @@ import type {
 } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { createChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import { buildChannelApprovalNativeTargetKey } from "openclaw/plugin-sdk/approval-native-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import {
-  buildApprovalInteractiveReplyFromActionDescriptors,
-  type ExecApprovalRequest,
-} from "openclaw/plugin-sdk/infra-runtime";
+import { buildApprovalInteractiveReplyFromActionDescriptors } from "openclaw/plugin-sdk/approval-reply-runtime";
+import type { ExecApprovalRequest } from "openclaw/plugin-sdk/approval-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { logError, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   isSlackExecApprovalClientEnabled,
@@ -21,6 +19,7 @@ import {
 } from "./exec-approvals.js";
 import { resolveSlackReplyBlocks } from "./reply-blocks.js";
 import { sendMessageSlack } from "./send.js";
+import { truncateSlackText } from "./truncate.js";
 
 type SlackBlock = Block | KnownBlock;
 type SlackPendingApproval = {
@@ -31,6 +30,10 @@ type SlackPendingDelivery = {
   text: string;
   blocks: SlackBlock[];
 };
+
+const SLACK_CONTEXT_ELEMENTS_MAX = 10;
+const SLACK_CHAT_UPDATE_TEXT_LIMIT = 4000;
+const SLACK_TEXT_OBJECT_MAX = 3000;
 
 type SlackExecApprovalConfig = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["channels"]>["slack"]>["execApprovals"]
@@ -79,7 +82,35 @@ function formatSlackMetadataLine(label: string, value: string): string {
 }
 
 function buildSlackMetadataLines(metadata: readonly { label: string; value: string }[]): string[] {
-  return metadata.map((item) => formatSlackMetadataLine(item.label, item.value));
+  const lines: string[] = [];
+  for (const item of metadata) {
+    lines.push(formatSlackMetadataLine(item.label, item.value));
+  }
+  return lines;
+}
+
+function buildSlackMetadataContextElements(metadata: readonly { label: string; value: string }[]) {
+  const lines = buildSlackMetadataLines(metadata);
+  const visibleLineCount =
+    lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
+  const elements: Array<{ type: "mrkdwn"; text: string }> = [];
+  for (let index = 0; index < visibleLineCount; index += 1) {
+    const line = lines[index];
+    if (line === undefined) {
+      continue;
+    }
+    elements.push({
+      type: "mrkdwn",
+      text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+    });
+  }
+  if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
+    elements.push({
+      type: "mrkdwn",
+      text: `…+${lines.length - visibleLineCount} more`,
+    });
+  }
+  return elements;
 }
 
 function resolveSlackApprovalDecisionLabel(
@@ -102,11 +133,11 @@ function buildSlackPendingApprovalText(view: ExecApprovalPendingView): string {
     buildSlackCodeBlock(view.commandText),
     ...metadataLines,
   ];
-  return lines.filter(Boolean).join("\n");
+  return lines.join("\n");
 }
 
 function buildSlackPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBlock[] {
-  const metadataLines = buildSlackMetadataLines(view.metadata);
+  const metadataElements = buildSlackMetadataContextElements(view.metadata);
   const interactiveBlocks =
     resolveSlackReplyBlocks({
       text: "",
@@ -127,14 +158,11 @@ function buildSlackPendingApprovalBlocks(view: ExecApprovalPendingView): SlackBl
         text: `*Command*\n${buildSlackCodeBlock(truncateSlackMrkdwn(view.commandText, 2600))}`,
       },
     },
-    ...(metadataLines.length > 0
+    ...(metadataElements.length > 0
       ? [
           {
             type: "context",
-            elements: metadataLines.map((line) => ({
-              type: "mrkdwn" as const,
-              text: line,
-            })),
+            elements: metadataElements,
           } satisfies SlackBlock,
         ]
       : []),
@@ -216,7 +244,7 @@ async function updateMessage(params: {
     await params.app.client.chat.update({
       channel: params.channelId,
       ts: params.messageTs,
-      text: params.text,
+      text: truncateSlackText(params.text, SLACK_CHAT_UPDATE_TEXT_LIMIT),
       blocks: params.blocks,
     });
   } catch (err) {

@@ -9,7 +9,7 @@ import type {
   ChannelMessageToolDiscovery,
   ChannelMessageToolSchemaContribution,
 } from "openclaw/plugin-sdk/channel-contract";
-import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { TelegramActionConfig } from "openclaw/plugin-sdk/config-types";
 import { readStringValue } from "openclaw/plugin-sdk/text-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import {
@@ -160,6 +160,7 @@ function describeTelegramMessageTool({
 
 export const telegramMessageActions: ChannelMessageActionAdapter = {
   describeMessageTool: describeTelegramMessageTool,
+  resolveExecutionMode: () => "gateway",
   resolveCliActionRequest: ({ action, args }) => {
     if (action !== "thread-create") {
       return { action, args };
@@ -176,7 +177,15 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
   extractToolSend: ({ args }) => {
     return extractToolSend(args, "sendMessage");
   },
-  handleAction: async ({ action, params, cfg, accountId, mediaLocalRoots, toolContext }) => {
+  handleAction: async ({
+    action,
+    params,
+    cfg,
+    accountId,
+    mediaLocalRoots,
+    sessionKey,
+    toolContext,
+  }) => {
     const telegramAction = resolveTelegramMessageActionName(action);
     if (!telegramAction) {
       throw new Error(`Unsupported Telegram action: ${action}`);
@@ -193,7 +202,7 @@ export const telegramMessageActions: ChannelMessageActionAdapter = {
           : {}),
       },
       cfg,
-      { mediaLocalRoots },
+      { mediaLocalRoots, sessionKey },
     );
   },
 };

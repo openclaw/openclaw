@@ -32,7 +32,7 @@ describe("scripts/run-vitest", () => {
         OPENCLAW_VITEST_ENABLE_MAGLEV: "1",
         PATH: "/usr/bin",
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("parses the optional no-output timeout env", () => {
@@ -55,6 +55,74 @@ describe("scripts/run-vitest", () => {
       env: { PATH: "/usr/bin" },
       detached: false,
       stdio: ["inherit", "pipe", "pipe"],
+    });
+  });
+
+  it("reenables local check policy for local Vitest children", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_LOCAL_CHECK: "1",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("preserves explicit local-check disablement in CI", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          CI: "true",
+          OPENCLAW_LOCAL_CHECK: "0",
+          PATH: "/usr/bin",
+        },
+        "linux",
+      ).env,
+    ).toEqual({
+      CI: "true",
+      OPENCLAW_LOCAL_CHECK: "0",
+      PATH: "/usr/bin",
+    });
+  });
+
+  it("caps native Rust worker pools for serial Vitest runs", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+          PATH: "/usr/bin",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_TEST_PROJECTS_SERIAL: "1",
+      PATH: "/usr/bin",
+      RAYON_NUM_THREADS: "1",
+      TOKIO_WORKER_THREADS: "1",
+    });
+  });
+
+  it("keeps explicit native Rust worker pool settings", () => {
+    expect(
+      resolveVitestSpawnParams(
+        {
+          OPENCLAW_VITEST_MAX_WORKERS: "2",
+          PATH: "/usr/bin",
+          RAYON_NUM_THREADS: "8",
+          TOKIO_WORKER_THREADS: "6",
+        },
+        "darwin",
+      ).env,
+    ).toEqual({
+      OPENCLAW_VITEST_MAX_WORKERS: "2",
+      PATH: "/usr/bin",
+      RAYON_NUM_THREADS: "8",
+      TOKIO_WORKER_THREADS: "6",
     });
   });
 

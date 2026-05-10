@@ -82,9 +82,37 @@ describe("CronToolSchema", () => {
     expect(patchStagger?.description).toBe("Random jitter in ms (kind=cron)");
   });
 
-  it("job.delivery exposes mode, channel, to, bestEffort, accountId, failureDestination", () => {
+  it("describes cron expressions as local wall-clock time in the supplied timezone", () => {
+    const jobExpr = propertyAt(schemaRecord, "job.schedule.expr");
+    const patchExpr = propertyAt(schemaRecord, "patch.schedule.expr");
+    const jobTz = propertyAt(schemaRecord, "job.schedule.tz");
+    const patchTz = propertyAt(schemaRecord, "patch.schedule.tz");
+
+    for (const prop of [jobExpr, patchExpr]) {
+      expect(prop?.description).toMatch(/wall-clock time/i);
+      expect(prop?.description).toMatch(/do not convert/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toContain("0 18 * * *");
+      expect(prop?.description).toContain("Asia/Shanghai");
+    }
+    for (const prop of [jobTz, patchTz]) {
+      expect(prop?.description).toMatch(/wall-clock fields/i);
+      expect(prop?.description).toContain("Gateway host local timezone");
+      expect(prop?.description).toContain("Asia/Shanghai");
+    }
+  });
+
+  it("job.delivery exposes mode, channel, to, threadId, bestEffort, accountId, failureDestination", () => {
     expect(keysAt(schemaRecord, "job.delivery")).toEqual(
-      ["accountId", "bestEffort", "channel", "failureDestination", "mode", "to"].toSorted(),
+      [
+        "accountId",
+        "bestEffort",
+        "channel",
+        "failureDestination",
+        "mode",
+        "threadId",
+        "to",
+      ].toSorted(),
     );
   });
 
@@ -126,9 +154,9 @@ describe("CronToolSchema", () => {
     );
   });
 
-  it("job.failureAlert exposes after, channel, to, cooldownMs, mode, accountId", () => {
+  it("job.failureAlert exposes after, channel, to, cooldownMs, includeSkipped, mode, accountId", () => {
     expect(keysAt(schemaRecord, "job.failureAlert")).toEqual(
-      ["accountId", "after", "channel", "cooldownMs", "mode", "to"].toSorted(),
+      ["accountId", "after", "channel", "cooldownMs", "includeSkipped", "mode", "to"].toSorted(),
     );
   });
 

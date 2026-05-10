@@ -1,10 +1,9 @@
 import { setTimeout as scheduleNativeTimeout } from "node:timers";
 import { setTimeout as sleep } from "node:timers/promises";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { AcpSessionRuntimeOptions, SessionAcpMeta } from "../../config/sessions/types.js";
 import { resetHeartbeatWakeStateForTests } from "../../infra/heartbeat-wake.js";
-import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { withTempDir } from "../../test-helpers/temp-dir.js";
 import type { AcpRuntime, AcpRuntimeCapabilities } from "../runtime/types.js";
 
@@ -34,14 +33,17 @@ vi.mock("../runtime/registry.js", () => ({
   requireAcpRuntimeBackend: (backendId?: string) => hoisted.requireAcpRuntimeBackendMock(backendId),
 }));
 
-let AcpSessionManager: typeof import("./manager.js").AcpSessionManager;
-let AcpRuntimeError: typeof import("../runtime/errors.js").AcpRuntimeError;
-let resetAcpSessionManagerForTests: typeof import("./manager.js").__testing.resetAcpSessionManagerForTests;
-let findTaskByRunId: typeof import("../../tasks/task-registry.js").findTaskByRunId;
-let resetTaskRegistryForTests: typeof import("../../tasks/task-registry.js").resetTaskRegistryForTests;
-let resetTaskFlowRegistryForTests: typeof import("../../tasks/task-flow-registry.js").resetTaskFlowRegistryForTests;
-let installInMemoryTaskRegistryRuntime: typeof import("../../test-utils/task-registry-runtime.js").installInMemoryTaskRegistryRuntime;
-let configureTaskFlowRegistryRuntime: typeof import("../../tasks/task-flow-registry.store.js").configureTaskFlowRegistryRuntime;
+const {
+  AcpSessionManager,
+  __testing: { resetAcpSessionManagerForTests },
+} = await import("./manager.js");
+const { AcpRuntimeError } = await import("../runtime/errors.js");
+const { findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js");
+const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+const { configureTaskFlowRegistryRuntime } =
+  await import("../../tasks/task-flow-registry.store.js");
+const { installInMemoryTaskRegistryRuntime } =
+  await import("../../test-utils/task-registry-runtime.js");
 
 const baseCfg = {
   acp: {
@@ -85,10 +87,13 @@ async function flushMicrotasks(rounds = 3): Promise<void> {
 }
 
 function createDeferred(): { promise: Promise<void>; resolve: () => void } {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((next) => {
     resolve = next;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -105,7 +110,15 @@ function createRuntime(): {
   setConfigOption: ReturnType<typeof vi.fn>;
 } {
   const ensureSession = vi.fn(
-    async (input: { sessionKey: string; agent: string; mode: "persistent" | "oneshot" }) => ({
+    async (input: {
+      sessionKey: string;
+      agent: string;
+      mode: "persistent" | "oneshot";
+      model?: string;
+      thinking?: string;
+      cwd?: string;
+      resumeSessionId?: string;
+    }) => ({
       sessionKey: input.sessionKey,
       backend: "acpx",
       runtimeSessionName: `${input.sessionKey}:${input.mode}:runtime`,
@@ -201,20 +214,6 @@ function extractRuntimeOptionsFromUpserts(): Array<AcpSessionRuntimeOptions | un
 }
 
 describe("AcpSessionManager", () => {
-  beforeAll(async () => {
-    ({
-      AcpSessionManager,
-      __testing: { resetAcpSessionManagerForTests },
-    } = await import("./manager.js"));
-    ({ AcpRuntimeError } = await import("../runtime/errors.js"));
-    ({ findTaskByRunId, resetTaskRegistryForTests } = await import("../../tasks/task-registry.js"));
-    ({ resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js"));
-    ({ configureTaskFlowRegistryRuntime } =
-      await import("../../tasks/task-flow-registry.store.js"));
-    ({ installInMemoryTaskRegistryRuntime } =
-      await import("../../test-utils/task-registry-runtime.js"));
-  });
-
   beforeEach(() => {
     resetAcpSessionManagerForTests();
     vi.useRealTimers();
@@ -237,7 +236,6 @@ describe("AcpSessionManager", () => {
     } else {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
-    resetSystemEventsForTest();
     resetHeartbeatWakeStateForTests();
     resetTaskRegistryForTests({ persist: false });
     resetTaskFlowRegistryForTests({ persist: false });
@@ -318,7 +316,32 @@ describe("AcpSessionManager", () => {
         yield {
           type: "text_delta" as const,
           stream: "output" as const,
-          text: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
+          text: "Write failed: ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "permission ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "denied for ",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "/root/",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "oc-acp-write-",
+        };
+        yield {
+          type: "text_delta" as const,
+          stream: "output" as const,
+          text: "should-fail.txt.",
         };
         yield { type: "done" as const };
       });
@@ -375,6 +398,90 @@ describe("AcpSessionManager", () => {
         progressSummary: "Write failed: permission denied for /root/oc-acp-write-should-fail.txt.",
         terminalOutcome: "blocked",
         terminalSummary: "Permission denied for /root/oc-acp-write-should-fail.txt.",
+      });
+    });
+  }, 300_000);
+
+  it("preserves token-streamed ACP progress boundaries in parented task summaries", async () => {
+    await withAcpManagerTaskStateDir(async () => {
+      const runtimeState = createRuntime();
+      const chunks = [
+        "현재 ",
+        "작업 ",
+        "디",
+        "렉토",
+        "리는 ",
+        "/home/",
+        "by",
+        "kim",
+        "0119/",
+        ".open",
+        "claw/",
+        "workspace",
+        "\n\t",
+        "입니다",
+      ];
+      runtimeState.runTurn.mockImplementation(async function* () {
+        for (const text of chunks) {
+          yield {
+            type: "text_delta" as const,
+            stream: "output" as const,
+            text,
+          };
+        }
+        yield { type: "done" as const };
+      });
+      hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+        id: "acpx",
+        runtime: runtimeState.runtime,
+      });
+      hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+        const sessionKey = (paramsUnknown as { sessionKey?: string }).sessionKey;
+        if (sessionKey === "agent:codex:acp:child-1") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "child-1",
+              updatedAt: Date.now(),
+              spawnedBy: "agent:quant:telegram:quant:direct:822430204",
+              label: "Korean path",
+            },
+            acp: readySessionMeta(),
+          };
+        }
+        if (sessionKey === "agent:quant:telegram:quant:direct:822430204") {
+          return {
+            sessionKey,
+            storeSessionKey: sessionKey,
+            entry: {
+              sessionId: "parent-1",
+              updatedAt: Date.now(),
+            },
+          };
+        }
+        return null;
+      });
+
+      const manager = new AcpSessionManager();
+      await manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:child-1",
+        text: "Print the current directory in Korean",
+        mode: "prompt",
+        requestId: "direct-parented-korean-path-run",
+      });
+      await flushMicrotasks();
+
+      expect(findTaskByRunId("direct-parented-korean-path-run")).toMatchObject({
+        runtime: "acp",
+        ownerKey: "agent:quant:telegram:quant:direct:822430204",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child-1",
+        label: "Korean path",
+        task: "Print the current directory in Korean",
+        status: "succeeded",
+        progressSummary: "현재 작업 디렉토리는 /home/bykim0119/.openclaw/workspace 입니다",
       });
     });
   }, 300_000);
@@ -1066,6 +1173,82 @@ describe("AcpSessionManager", () => {
     );
   });
 
+  it("passes persisted model runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:model-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions: {
+            model: "openai-codex/gpt-5.4",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-model",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        model: "openai-codex/gpt-5.4",
+      }),
+    );
+  });
+
+  it("passes persisted thinking runtime options into ensureSession after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:thinking-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: {
+          ...readySessionMeta(),
+          runtimeOptions: {
+            thinking: "high",
+          },
+        },
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-thinking",
+    });
+
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey,
+        thinking: "high",
+      }),
+    );
+  });
+
   it("does not resume persisted ACP identity for oneshot sessions after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
@@ -1310,6 +1493,7 @@ describe("AcpSessionManager", () => {
       acp: readySessionMeta({
         runtimeOptions: {
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
         },
       }),
     });
@@ -1322,12 +1506,21 @@ describe("AcpSessionManager", () => {
       mode: "persistent",
       runtimeOptions: {
         model: "openai-codex/gpt-5.4",
+        thinking: "high",
       },
     });
 
     expect(extractRuntimeOptionsFromUpserts()).toContainEqual({
       model: "openai-codex/gpt-5.4",
+      thinking: "high",
     });
+    expect(runtimeState.ensureSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: "agent:codex:acp:session-a",
+        model: "openai-codex/gpt-5.4",
+        thinking: "high",
+      }),
+    );
   });
 
   it("preserves runtimeOptions cwd when initializeSession cwd is omitted", async () => {
@@ -1471,6 +1664,44 @@ describe("AcpSessionManager", () => {
     expect(closeResult.runtimeNotice).toBe("Could not initialize ACP session runtime.");
     expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
       sessionKey: "agent:claude:acp:session-1",
+    });
+  });
+
+  it("treats unsupported close controls as recoverable during discard cleanup", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.close.mockRejectedValueOnce(
+      new AcpRuntimeError(
+        "ACP_BACKEND_UNSUPPORTED_CONTROL",
+        'ACP backend "acpx" does not support session/close.',
+      ),
+    );
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:openclaw:acp:session-1",
+      storeSessionKey: "agent:openclaw:acp:session-1",
+      acp: readySessionMeta({
+        agent: "openclaw",
+      }),
+    });
+
+    const manager = new AcpSessionManager();
+    const closeResult = await manager.closeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:openclaw:acp:session-1",
+      reason: "terminal-task-cleanup",
+      allowBackendUnavailable: true,
+      discardPersistentState: true,
+      clearMeta: true,
+    });
+
+    expect(closeResult.runtimeClosed).toBe(false);
+    expect(closeResult.runtimeNotice).toContain("does not support session/close");
+    expect(closeResult.metaCleared).toBe(true);
+    expect(runtimeState.prepareFreshSession).toHaveBeenCalledWith({
+      sessionKey: "agent:openclaw:acp:session-1",
     });
   });
 
@@ -1955,6 +2186,44 @@ describe("AcpSessionManager", () => {
     expect(states.at(-1)).toBe("error");
   });
 
+  it("rejects ACP streams that end without a terminal done event", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:codex:acp:session-1",
+      storeSessionKey: "agent:codex:acp:session-1",
+      acp: readySessionMeta(),
+    });
+    runtimeState.runTurn.mockImplementation(async function* () {
+      yield {
+        type: "text_delta" as const,
+        stream: "output" as const,
+        text: "Starting work...",
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await expect(
+      manager.runTurn({
+        cfg: baseCfg,
+        sessionKey: "agent:codex:acp:session-1",
+        text: "do work",
+        mode: "prompt",
+        requestId: "run-1",
+      }),
+    ).rejects.toMatchObject({
+      code: "ACP_TURN_FAILED",
+      message: "ACP turn ended without a terminal done event.",
+    });
+
+    const states = extractStatesFromUpserts();
+    expect(states).toContain("running");
+    expect(states.at(-1)).toBe("error");
+  });
+
   it("marks the session as errored when runtime ensure fails before turn start", async () => {
     const runtimeState = createRuntime();
     runtimeState.ensureSession.mockRejectedValue(new Error("acpx exited with code 1"));
@@ -2167,9 +2436,10 @@ describe("AcpSessionManager", () => {
       }),
     );
     expect(options.runtimeMode).toBe("plan");
-    expect(extractRuntimeOptionsFromUpserts().some((entry) => entry?.runtimeMode === "plan")).toBe(
-      true,
+    const persistedRuntimeModes = extractRuntimeOptionsFromUpserts().map(
+      (entry) => entry?.runtimeMode,
     );
+    expect(persistedRuntimeModes).toContain("plan");
   });
 
   it("reapplies persisted controls on next turn after runtime option updates", async () => {
@@ -2305,6 +2575,91 @@ describe("AcpSessionManager", () => {
     expect(runtimeState.getStatus).toHaveBeenCalledTimes(1);
     expect(currentMeta.identity?.acpxSessionId).toBe("acpx-fresh");
     expect(currentMeta.identity?.agentSessionId).toBe("agent-fresh");
+  });
+
+  it("reconciles oneshot ACP identity from runtime status before closing after a turn", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.ensureSession.mockResolvedValue({
+      sessionKey: "agent:codex:acp:session-1",
+      backend: "acpx",
+      runtimeSessionName: "runtime-1",
+      backendSessionId: "acpx-oneshot",
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=done",
+      backendSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+      details: { status: "done" },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+
+    let currentMeta: SessionAcpMeta | undefined;
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const sessionKey =
+        (paramsUnknown as { sessionKey?: string }).sessionKey ?? "agent:codex:acp:session-1";
+      return {
+        sessionKey,
+        storeSessionKey: sessionKey,
+        acp: currentMeta,
+      };
+    });
+    hoisted.upsertAcpSessionMetaMock.mockImplementation(async (paramsUnknown: unknown) => {
+      const params = paramsUnknown as {
+        mutate: (
+          current: SessionAcpMeta | undefined,
+          entry: { acp?: SessionAcpMeta } | undefined,
+        ) => SessionAcpMeta | null | undefined;
+      };
+      const next = params.mutate(currentMeta, { acp: currentMeta });
+      if (next) {
+        currentMeta = next;
+      }
+      return {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        acp: currentMeta,
+      };
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.initializeSession({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      agent: "codex",
+      mode: "oneshot",
+    });
+
+    expect(currentMeta?.identity).toMatchObject({
+      state: "pending",
+      acpxSessionId: "acpx-oneshot",
+      source: "ensure",
+    });
+
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:codex:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.getStatus).toHaveBeenCalledTimes(2);
+    expect(runtimeState.close).toHaveBeenCalledWith({
+      handle: expect.objectContaining({
+        backendSessionId: "acpx-oneshot",
+        agentSessionId: "agent-oneshot",
+      }),
+      reason: "oneshot-complete",
+    });
+    expect(currentMeta?.identity).toMatchObject({
+      state: "resolved",
+      acpxSessionId: "acpx-oneshot",
+      agentSessionId: "agent-oneshot",
+      source: "status",
+    });
   });
 
   it("reconciles pending ACP identities during startup scan", async () => {
@@ -2603,6 +2958,7 @@ describe("AcpSessionManager", () => {
         runtimeOptions: {
           runtimeMode: "plan",
           model: "openai-codex/gpt-5.4",
+          thinking: "high",
           permissionProfile: "strict",
           timeoutSeconds: 120,
         },
@@ -2631,6 +2987,12 @@ describe("AcpSessionManager", () => {
     );
     expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
       expect.objectContaining({
+        key: "thinking",
+        value: "high",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
         key: "approval_policy",
         value: "strict",
       }),
@@ -2639,6 +3001,117 @@ describe("AcpSessionManager", () => {
       expect.objectContaining({
         key: "timeout",
         value: "120",
+      }),
+    );
+  });
+
+  it("maps persisted thinking runtime options to advertised effort config keys before running turns", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_mode", "session/set_config_option", "session/status"],
+      configOptionKeys: ["mode", "model", "effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "claude" }),
+        runtimeOptions: {
+          thinking: "high",
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thinking",
+      }),
+    );
+  });
+
+  it("maps persisted runtime options to backend-advertised aliases before running turns", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["model", "thought_level", "permissions", "timeout_seconds"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:gemini:acp:session-1",
+      storeSessionKey: "agent:gemini:acp:session-1",
+      acp: {
+        ...readySessionMeta({ agent: "gemini" }),
+        runtimeOptions: {
+          model: "gemini-3-flash-preview",
+          thinking: "high",
+          permissionProfile: "strict",
+          timeoutSeconds: 120,
+        },
+      },
+    });
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg: baseCfg,
+      sessionKey: "agent:gemini:acp:session-1",
+      text: "do work",
+      mode: "prompt",
+      requestId: "run-1",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thought_level",
+        value: "high",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "permissions",
+        value: "strict",
+      }),
+    );
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "timeout_seconds",
+        value: "120",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "thinking",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "approval_policy",
+      }),
+    );
+    expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "timeout",
       }),
     );
   });
@@ -2746,6 +3219,144 @@ describe("AcpSessionManager", () => {
     ).rejects.toMatchObject({
       code: "ACP_BACKEND_UNSUPPORTED_CONTROL",
     });
+  });
+
+  it("maps explicit thinking config updates to advertised effort keys", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "thinking",
+      value: "high",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
+  });
+
+  it("maps thinking config updates using status config options when capabilities omit keys", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+    });
+    runtimeState.getStatus.mockResolvedValue({
+      summary: "status=alive",
+      details: {
+        configOptions: [{ id: "mode" }, { id: "model" }, { id: "effort" }],
+      },
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "thinking",
+      value: "high",
+    });
+
+    expect(runtimeState.getStatus).toHaveBeenCalled();
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
+  });
+
+  it("persists explicit native effort config updates as canonical thinking options", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["effort"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "effort",
+      value: "high",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "effort",
+        value: "high",
+      }),
+    );
+    expect(nextOptions).toEqual({ thinking: "high" });
+  });
+
+  it("persists explicit native permission_mode config updates as canonical permission profiles", async () => {
+    const runtimeState = createRuntime();
+    runtimeState.getCapabilities.mockResolvedValue({
+      controls: ["session/set_config_option", "session/status"],
+      configOptionKeys: ["permission_mode"],
+    });
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    hoisted.readAcpSessionEntryMock.mockReturnValue({
+      sessionKey: "agent:claude:acp:session-1",
+      storeSessionKey: "agent:claude:acp:session-1",
+      acp: readySessionMeta({ agent: "claude" }),
+    });
+
+    const manager = new AcpSessionManager();
+    const nextOptions = await manager.setSessionConfigOption({
+      cfg: baseCfg,
+      sessionKey: "agent:claude:acp:session-1",
+      key: "permission_mode",
+      value: "strict",
+    });
+
+    expect(runtimeState.setConfigOption).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "permission_mode",
+        value: "strict",
+      }),
+    );
+    expect(nextOptions).toEqual({ permissionProfile: "strict" });
   });
 
   it("rejects invalid runtime option values before backend controls run", async () => {

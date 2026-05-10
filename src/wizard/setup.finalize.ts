@@ -52,6 +52,7 @@ type FinalizeOnboardingOptions = {
 type OnboardSearchModule = typeof import("../commands/onboard-search.js");
 
 let onboardSearchModulePromise: Promise<OnboardSearchModule> | undefined;
+const HATCH_TUI_TIMEOUT_MS = 5 * 60 * 1000;
 
 function loadOnboardSearchModule(): Promise<OnboardSearchModule> {
   onboardSearchModulePromise ??= import("../commands/onboard-search.js");
@@ -63,6 +64,7 @@ export async function finalizeSetupWizard(
 ): Promise<{ launchedTui: boolean }> {
   const { flow, opts, baseConfig, nextConfig, settings, prompter, runtime } = options;
   let gatewayProbe: { ok: boolean; detail?: string } = { ok: true };
+  let resolvedGatewayPassword = "";
 
   const withWizardProgress = async <T>(
     label: string,
@@ -236,22 +238,67 @@ export async function finalizeSetupWizard(
     }
   }
 
+  if (settings.authMode === "password") {
+    try {
+      resolvedGatewayPassword =
+        (await resolveSetupSecretInputString({
+          config: nextConfig,
+          value: nextConfig.gateway?.auth?.password,
+          path: "gateway.auth.password",
+          env: process.env,
+        })) ?? "";
+    } catch (error) {
+      await prompter.note(
+        [
+          "Could not resolve gateway.auth.password SecretRef for setup auth.",
+          formatErrorMessage(error),
+        ].join("\n"),
+        "Gateway auth",
+      );
+    }
+  }
+
   if (!opts.skipHealth) {
     const probeLinks = resolveControlUiLinks({
       bind: nextConfig.gateway?.bind ?? "loopback",
       port: settings.port,
       customBindHost: nextConfig.gateway?.customBindHost,
       basePath: undefined,
+      tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
     // Daemon install/restart can briefly flap the WS; wait a bit so health check doesn't false-fail.
     gatewayProbe = await waitForGatewayReachable({
       url: probeLinks.wsUrl,
-      token: settings.gatewayToken,
+      token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+      password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
       deadlineMs: 15_000,
     });
     if (gatewayProbe.ok) {
       try {
-        await healthCommand({ json: false, timeoutMs: 10_000 }, runtime);
+        const healthConfig: OpenClawConfig =
+          settings.authMode === "token" && settings.gatewayToken
+            ? {
+                ...nextConfig,
+                gateway: {
+                  ...nextConfig.gateway,
+                  auth: {
+                    ...nextConfig.gateway?.auth,
+                    mode: "token",
+                    token: settings.gatewayToken,
+                  },
+                },
+              }
+            : nextConfig;
+        await healthCommand(
+          {
+            json: false,
+            timeoutMs: 10_000,
+            config: healthConfig,
+            token: settings.authMode === "token" ? settings.gatewayToken : undefined,
+            password: settings.authMode === "password" ? resolvedGatewayPassword : undefined,
+          },
+          runtime,
+        );
       } catch (err) {
         runtime.error(formatHealthCheckFailure(err));
         await prompter.note(
@@ -319,32 +366,12 @@ export async function finalizeSetupWizard(
     port: settings.port,
     customBindHost: settings.customBindHost,
     basePath: controlUiBasePath,
+    tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
   });
   const authedUrl =
     settings.authMode === "token" && settings.gatewayToken
       ? `${links.httpUrl}#token=${encodeURIComponent(settings.gatewayToken)}`
       : links.httpUrl;
-  let resolvedGatewayPassword = "";
-  if (settings.authMode === "password") {
-    try {
-      resolvedGatewayPassword =
-        (await resolveSetupSecretInputString({
-          config: nextConfig,
-          value: nextConfig.gateway?.auth?.password,
-          path: "gateway.auth.password",
-          env: process.env,
-        })) ?? "";
-    } catch (error) {
-      await prompter.note(
-        [
-          "Could not resolve gateway.auth.password SecretRef for setup auth.",
-          formatErrorMessage(error),
-        ].join("\n"),
-        "Gateway auth",
-      );
-    }
-  }
-
   if (opts.skipHealth || !gatewayProbe.ok) {
     gatewayProbe = await probeGatewayReachable({
       url: links.wsUrl,
@@ -389,12 +416,11 @@ export async function finalizeSetupWizard(
     if (hasBootstrap) {
       await prompter.note(
         [
-          "This is the defining action that makes your agent you.",
-          "Please take your time.",
-          "The more you tell it, the better the experience will be.",
-          'We will send: "Wake up, my friend!"',
+          "Your workspace is ready.",
+          'The first Terminal chat run will send: "Wake up, my friend!"',
+          "Edit BOOTSTRAP.md later to change how the agent introduces itself.",
         ].join("\n"),
-        "Start TUI (best option!)",
+        "Start your agent",
       );
     }
 
@@ -414,13 +440,13 @@ export async function finalizeSetupWizard(
     }
 
     const hatchOptions: { value: "tui" | "web" | "later"; label: string }[] = [
-      { value: "tui", label: "Hatch in Terminal (recommended)" },
-      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Open the Web UI" }] : []),
-      { value: "later", label: "Do this later" },
+      { value: "tui", label: "Terminal chat (recommended)" },
+      ...(gatewayProbe.ok ? [{ value: "web" as const, label: "Browser Control UI" }] : []),
+      { value: "later", label: "Set up later" },
     ];
 
     hatchChoice = await prompter.select({
-      message: "How do you want to hatch your bot?",
+      message: "Choose your first chat surface",
       options: hatchOptions,
       initialValue: "tui",
     });
@@ -432,6 +458,7 @@ export async function finalizeSetupWizard(
           local: true,
           deliver: false,
           message: hasBootstrap ? "Wake up, my friend!" : undefined,
+          timeoutMs: HATCH_TUI_TIMEOUT_MS,
         });
       } finally {
         restoreTerminalState("post-setup tui", { resumeStdinIfPaused: true });

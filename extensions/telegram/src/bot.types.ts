@@ -1,6 +1,7 @@
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramBotInfo } from "./bot-info.js";
 import type { TelegramTransport } from "./fetch.js";
 
 export type TelegramBotOptions = {
@@ -14,8 +15,12 @@ export type TelegramBotOptions = {
   replyToMode?: ReplyToMode;
   proxyFetch?: typeof fetch;
   config?: OpenClawConfig;
+  /** Bot identity returned by the startup getMe probe. Avoids a duplicate grammY init getMe before polling. */
+  botInfo?: TelegramBotInfo;
   /** Signal to abort in-flight Telegram API fetch requests (e.g. getUpdates) on shutdown. */
   fetchAbortSignal?: AbortSignal;
+  /** Minimum grammY client timeout when timeoutSeconds is configured on long-polling bots. */
+  minimumClientTimeoutSeconds?: number;
   updateOffset?: {
     lastUpdateId?: number | null;
     onUpdateId?: (updateId: number) => void | Promise<void>;

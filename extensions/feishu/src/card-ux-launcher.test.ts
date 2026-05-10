@@ -1,5 +1,5 @@
-import { describe, expect, it, vi, beforeEach } from "vitest";
-import { createRuntimeEnv } from "../../../test/helpers/plugins/runtime-env.js";
+import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterAll, describe, expect, it, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import {
   expectFirstSentCardUsesFillWidthOnly,
@@ -19,6 +19,11 @@ vi.mock("./send.js", () => ({
 
 describe("feishu quick-action launcher", () => {
   const cfg: ClawdbotConfig = {};
+
+  afterAll(() => {
+    vi.doUnmock("./send.js");
+    vi.resetModules();
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();

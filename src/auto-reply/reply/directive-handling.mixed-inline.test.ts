@@ -6,8 +6,10 @@ import { parseInlineDirectives } from "./directive-handling.parse.js";
 import { persistInlineDirectives } from "./directive-handling.persist.js";
 
 vi.mock("../../agents/agent-scope.js", () => ({
+  listAgentEntries: vi.fn(() => []),
   resolveAgentConfig: vi.fn(() => ({})),
   resolveAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveSessionAgentIds: vi.fn(() => ({ requestedAgentId: "main", sessionAgentId: "main" })),
   resolveSessionAgentId: vi.fn(() => "main"),
   resolveDefaultAgentId: vi.fn(() => "main"),
 }));
@@ -83,6 +85,7 @@ describe("mixed inline directives", () => {
       agentCfg: cfg.agents?.defaults,
       modelState: {
         resolveDefaultThinkingLevel: async () => "off",
+        resolveThinkingCatalog: async () => [],
         allowedModelKeys: new Set(),
         allowedModelCatalog: [],
         resetModelOverride: false,
@@ -156,6 +159,7 @@ describe("mixed inline directives", () => {
       agentCfg: cfg.agents?.defaults,
       modelState: {
         resolveDefaultThinkingLevel: async () => "off",
+        resolveThinkingCatalog: async () => [],
         allowedModelKeys: new Set(),
         allowedModelCatalog: [],
         resetModelOverride: false,

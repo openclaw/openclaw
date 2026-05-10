@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { setPluginToolMeta } from "../../plugins/tools.js";
+import { providerAliasCases } from "../test-helpers/provider-alias-cases.js";
 import type { AnyAgentTool } from "../tools/common.js";
 import { applyFinalEffectiveToolPolicy } from "./effective-tool-policy.js";
 
@@ -15,6 +16,26 @@ function makeTool(name: string, ownerOnly = false): AnyAgentTool {
 }
 
 describe("applyFinalEffectiveToolPolicy", () => {
+  it.each(providerAliasCases)(
+    "applies canonical tools.byProvider deny policy to bundled tools for alias %s",
+    (alias, canonical) => {
+      const filtered = applyFinalEffectiveToolPolicy({
+        bundledTools: [makeTool("mcp__bundle__exec"), makeTool("mcp__bundle__read")],
+        config: {
+          tools: {
+            byProvider: {
+              [canonical]: { deny: ["mcp__bundle__exec"] },
+            },
+          },
+        },
+        modelProvider: alias,
+        warn: () => {},
+      });
+
+      expect(filtered.map((tool) => tool.name)).toEqual(["mcp__bundle__read"]);
+    },
+  );
+
   it("filters bundled tools through the configured allowlist", () => {
     const filtered = applyFinalEffectiveToolPolicy({
       bundledTools: [makeTool("mcp__bundle__fs_delete"), makeTool("mcp__bundle__fs_read")],
@@ -42,7 +63,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("drops caller-provided groupId when it disagrees with session-derived group context", () => {
@@ -105,7 +126,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("unknown entries"))).toBe(false);
+    expect(warnings.filter((message) => message.includes("unknown entries"))).toStrictEqual([]);
   });
 
   it("still warns on genuinely unknown entries in the bundled pass", () => {
@@ -116,7 +137,7 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: (message) => warnings.push(message),
     });
 
-    expect(warnings.some((w) => w.includes("totally-made-up-tool"))).toBe(true);
+    expect(warnings.filter((message) => message.includes("totally-made-up-tool"))).toHaveLength(1);
   });
 
   it("keeps bundle MCP tools in the coding profile via plugin metadata", () => {
@@ -142,6 +163,6 @@ describe("applyFinalEffectiveToolPolicy", () => {
       warn: () => {},
     });
 
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 });

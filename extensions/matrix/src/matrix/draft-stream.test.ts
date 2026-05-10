@@ -64,7 +64,12 @@ const sendModuleMocks = vi.hoisted(() => {
         messageId: eventId ?? "unknown",
         roomId,
         primaryMessageId: eventId ?? "unknown",
-        messageIds: eventId ? [eventId] : [],
+        receipt: {
+          ...(eventId ? { primaryPlatformMessageId: eventId } : {}),
+          platformMessageIds: eventId ? [eventId] : [],
+          parts: eventId ? [{ platformMessageId: eventId, kind: "text" as const, index: 0 }] : [],
+          sentAt: 123,
+        },
       };
     },
   );
@@ -130,7 +135,9 @@ vi.mock("./send.js", () => ({
   sendSingleTextMessageMatrix: sendModuleMocks.sendSingleTextMessageMatrix,
 }));
 const runtimeStub = {
-  config: { loadConfig: () => loadConfigMock() },
+  config: {
+    current: () => loadConfigMock(),
+  },
   channel: {
     text: {
       resolveTextChunkLimit: (cfg: unknown, channel: unknown, accountId?: unknown) =>

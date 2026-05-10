@@ -6,9 +6,7 @@ read_when:
 title: "Tools invoke API"
 ---
 
-# Tools Invoke (HTTP)
-
-OpenClaw’s Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
+OpenClaw's Gateway exposes a simple HTTP endpoint for invoking a single tool directly. It is always enabled and uses Gateway auth plus tool policy. Like the OpenAI-compatible `/v1/*` surface, shared-secret bearer auth is treated as trusted operator access for the whole gateway.
 
 - `POST /tools/invoke`
 - Same port as the Gateway (WS + HTTP multiplex): `http://<gateway-host>:<port>/tools/invoke`
@@ -34,8 +32,8 @@ Notes:
 - When `gateway.auth.mode="token"`, use `gateway.auth.token` (or `OPENCLAW_GATEWAY_TOKEN`).
 - When `gateway.auth.mode="password"`, use `gateway.auth.password` (or `OPENCLAW_GATEWAY_PASSWORD`).
 - When `gateway.auth.mode="trusted-proxy"`, the HTTP request must come from a
-  configured non-loopback trusted proxy source; same-host loopback proxies do
-  not satisfy this mode.
+  configured trusted proxy source; same-host loopback proxies require explicit
+  `gateway.auth.trustedProxy.allowLoopback = true`.
 - If `gateway.auth.rateLimit` is configured and too many auth failures occur, the endpoint returns `429` with `Retry-After`.
 
 ## Security boundary (important)
@@ -99,23 +97,24 @@ If a tool is not allowed by policy, the endpoint returns **404**.
 Important boundary notes:
 
 - Exec approvals are operator guardrails, not a separate authorization boundary for this HTTP endpoint. If a tool is reachable here via Gateway auth + tool policy, `/tools/invoke` does not add an extra per-call approval prompt.
+- If `exec` is reachable here, treat it as a mutating shell surface. Denying `write`, `edit`, `apply_patch`, or HTTP filesystem-write tools does not make shell execution read-only.
 - Do not share Gateway bearer credentials with untrusted callers. If you need separation across trust boundaries, run separate gateways (and ideally separate OS users/hosts).
 
 Gateway HTTP also applies a hard deny list by default (even if session policy allows the tool):
 
-- `exec` — direct command execution (RCE surface)
-- `spawn` — arbitrary child process creation (RCE surface)
-- `shell` — shell command execution (RCE surface)
-- `fs_write` — arbitrary file mutation on the host
-- `fs_delete` — arbitrary file deletion on the host
-- `fs_move` — arbitrary file move/rename on the host
-- `apply_patch` — patch application can rewrite arbitrary files
-- `sessions_spawn` — session orchestration; spawning agents remotely is RCE
-- `sessions_send` — cross-session message injection
-- `cron` — persistent automation control plane
-- `gateway` — gateway control plane; prevents reconfiguration via HTTP
-- `nodes` — node command relay can reach system.run on paired hosts
-- `whatsapp_login` — interactive setup requiring terminal QR scan; hangs on HTTP
+- `exec` - direct command execution (RCE surface)
+- `spawn` - arbitrary child process creation (RCE surface)
+- `shell` - shell command execution (RCE surface)
+- `fs_write` - arbitrary file mutation on the host
+- `fs_delete` - arbitrary file deletion on the host
+- `fs_move` - arbitrary file move/rename on the host
+- `apply_patch` - patch application can rewrite arbitrary files
+- `sessions_spawn` - session orchestration; spawning agents remotely is RCE
+- `sessions_send` - cross-session message injection
+- `cron` - persistent automation control plane
+- `gateway` - gateway control plane; prevents reconfiguration via HTTP
+- `nodes` - node command relay can reach system.run on paired hosts
+- `whatsapp_login` - interactive setup requiring terminal QR scan; hangs on HTTP
 
 You can customize this deny list via `gateway.tools`:
 
@@ -159,3 +158,8 @@ curl -sS http://127.0.0.1:18789/tools/invoke \
     "args": {}
   }'
 ```
+
+## Related
+
+- [Gateway protocol](/gateway/protocol)
+- [Tools and plugins](/tools)

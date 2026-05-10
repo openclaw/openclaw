@@ -3,6 +3,7 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
@@ -13,7 +14,6 @@ import {
   resolveAgentOutboundTarget,
 } from "../../infra/outbound/agent-delivery.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import { buildOutboundResultEnvelope } from "../../infra/outbound/envelope.js";
 import {
   createOutboundPayloadPlan,
@@ -23,10 +23,11 @@ import {
   projectOutboundPayloadPlanForOutbound,
 } from "../../infra/outbound/payloads.js";
 import type { OutboundSessionContext } from "../../infra/outbound/session-context.js";
-import type { RuntimeEnv } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { isNestedAgentLane } from "../lanes.js";
-import type { AgentCommandOpts } from "./types.js";
+import type { EmbeddedPiRunMeta } from "../pi-embedded-runner/types.js";
+import type { AgentCommandOpts, AgentCommandResultMetaOverrides } from "./types.js";
 
 type RunResult = Awaited<ReturnType<(typeof import("../pi-embedded.js"))["runEmbeddedPiAgent"]>>;
 
@@ -67,6 +68,19 @@ function logNestedOutput(
     }
     runtime.log(`${prefix} ${line}`);
   }
+}
+
+function mergeResultMetaOverrides(
+  meta: EmbeddedPiRunMeta,
+  overrides: AgentCommandResultMetaOverrides | undefined,
+): EmbeddedPiRunMeta & AgentCommandResultMetaOverrides {
+  if (!overrides) {
+    return meta;
+  }
+  return {
+    ...meta,
+    ...overrides,
+  };
 }
 
 async function normalizeReplyMediaPathsForDelivery(params: {
@@ -321,28 +335,27 @@ export async function deliverAgentCommandResult(params: {
       : normalizedReplyPayloads;
   const outboundPayloadPlan = createOutboundPayloadPlan(mediaNormalizedReplyPayloads);
   const normalizedPayloads = projectOutboundPayloadPlanForJson(outboundPayloadPlan);
+  const resultMeta = mergeResultMetaOverrides(result.meta, opts.resultMetaOverrides);
   if (opts.json) {
-    runtime.log(
-      JSON.stringify(
-        buildOutboundResultEnvelope({
-          payloads: normalizedPayloads,
-          meta: result.meta,
-        }),
-        null,
-        2,
-      ),
+    writeRuntimeJson(
+      runtime,
+      buildOutboundResultEnvelope({
+        payloads: normalizedPayloads,
+        meta: resultMeta,
+      }),
     );
     if (!deliver) {
-      return { payloads: normalizedPayloads, meta: result.meta };
+      return { payloads: normalizedPayloads, meta: resultMeta };
     }
   }
 
   if (!payloads || payloads.length === 0) {
-    runtime.log("No reply from agent.");
-    return { payloads: [], meta: result.meta };
+    return { payloads: [], meta: resultMeta };
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
+  let deliverySucceeded = false;
+  let deliveryHadError = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
       return;
@@ -357,6 +370,10 @@ export async function deliverAgentCommandResult(params: {
     }
     runtime.log(output);
   };
+  const markDeliveryError = (err: unknown) => {
+    deliveryHadError = true;
+    logDeliveryError(err);
+  };
   if (!deliver) {
     for (const payload of deliveryPayloads) {
       logPayload(payload);
@@ -364,7 +381,7 @@ export async function deliverAgentCommandResult(params: {
   }
   if (deliver && deliveryChannel && !isInternalMessageChannel(deliveryChannel)) {
     if (deliveryTarget) {
-      await deliverOutboundPayloads({
+      const send = await sendDurableMessageBatch({
         cfg,
         channel: deliveryChannel,
         to: deliveryTarget,
@@ -374,12 +391,20 @@ export async function deliverAgentCommandResult(params: {
         replyToId: resolvedReplyToId ?? null,
         threadId: resolvedThreadTarget ?? null,
         bestEffort: bestEffortDeliver,
-        onError: (err) => logDeliveryError(err),
+        durability: bestEffortDeliver ? "best_effort" : "required",
+        onError: markDeliveryError,
         onPayload: logPayload,
         deps: createOutboundSendDeps(deps),
       });
+      if (!bestEffortDeliver && (send.status === "failed" || send.status === "partial_failed")) {
+        throw send.error;
+      }
+      if (send.status === "failed" || send.status === "partial_failed") {
+        deliveryHadError = true;
+      }
+      deliverySucceeded = !deliveryHadError;
     }
   }
 
-  return { payloads: normalizedPayloads, meta: result.meta };
+  return { payloads: normalizedPayloads, meta: resultMeta, deliverySucceeded };
 }

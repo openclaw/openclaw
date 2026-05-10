@@ -6,15 +6,20 @@ read_when:
 title: "Xiaomi MiMo"
 ---
 
-Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw uses the Xiaomi
-OpenAI-compatible endpoint with API-key authentication.
+Xiaomi MiMo is the API platform for **MiMo** models. OpenClaw includes a bundled `xiaomi` plugin that registers both an OpenAI-compatible chat provider and a speech (TTS) provider against the same `XIAOMI_API_KEY`.
 
-| Property | Value                           |
-| -------- | ------------------------------- |
-| Provider | `xiaomi`                        |
-| Auth     | `XIAOMI_API_KEY`                |
-| API      | OpenAI-compatible               |
-| Base URL | `https://api.xiaomimimo.com/v1` |
+| Property        | Value                                    |
+| --------------- | ---------------------------------------- |
+| Provider id     | `xiaomi`                                 |
+| Plugin          | bundled, `enabledByDefault: true`        |
+| Auth env var    | `XIAOMI_API_KEY`                         |
+| Onboarding flag | `--auth-choice xiaomi-api-key`           |
+| Direct CLI flag | `--xiaomi-api-key <key>`                 |
+| Contracts       | chat completions + `speechProviders`     |
+| API             | OpenAI-compatible (`openai-completions`) |
+| Base URL        | `https://api.xiaomimimo.com/v1`          |
+| Default model   | `xiaomi/mimo-v2-flash`                   |
+| TTS default     | `mimo-v2.5-tts`, voice `mimo_default`    |
 
 ## Getting started
 
@@ -52,6 +57,46 @@ OpenAI-compatible endpoint with API-key authentication.
 <Tip>
 The default model ref is `xiaomi/mimo-v2-flash`. The provider is injected automatically when `XIAOMI_API_KEY` is set or an auth profile exists.
 </Tip>
+
+## Text-to-speech
+
+The bundled `xiaomi` plugin also registers Xiaomi MiMo as a speech provider for
+`messages.tts`. It calls Xiaomi's chat-completions TTS contract with the text as
+an `assistant` message and optional style guidance as a `user` message.
+
+| Property | Value                                    |
+| -------- | ---------------------------------------- |
+| TTS id   | `xiaomi` (`mimo` alias)                  |
+| Auth     | `XIAOMI_API_KEY`                         |
+| API      | `POST /v1/chat/completions` with `audio` |
+| Default  | `mimo-v2.5-tts`, voice `mimo_default`    |
+| Output   | MP3 by default; WAV when configured      |
+
+```json5
+{
+  messages: {
+    tts: {
+      auto: "always",
+      provider: "xiaomi",
+      providers: {
+        xiaomi: {
+          apiKey: "xiaomi_api_key",
+          model: "mimo-v2.5-tts",
+          voice: "mimo_default",
+          format: "mp3",
+          style: "Bright, natural, conversational tone.",
+        },
+      },
+    },
+  },
+}
+```
+
+Supported built-in voices include `mimo_default`, `default_zh`, `default_en`,
+`Mia`, `Chloe`, `Milo`, and `Dean`. `mimo-v2-tts` is supported for older MiMo
+TTS accounts; the default uses the current MiMo-V2.5 TTS model. For voice-note
+targets such as Feishu and Telegram, OpenClaw transcodes Xiaomi output to 48kHz
+Opus with `ffmpeg` before delivery.
 
 ## Config example
 

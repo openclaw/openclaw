@@ -1,15 +1,17 @@
 import type { Message, UserFromGetMe } from "@grammyjs/types";
+import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {
   listChatCommands,
   maybeResolveTextAlias,
   normalizeCommandBody,
 } from "openclaw/plugin-sdk/command-auth";
-import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/infra-runtime";
-import { isAbortRequestText } from "openclaw/plugin-sdk/reply-runtime";
-import { isBtwRequestText } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  isAbortRequestText,
+  isBtwRequestText,
+} from "openclaw/plugin-sdk/command-primitives-runtime";
 import { resolveTelegramForumThreadId } from "./bot/helpers.js";
 
-export type TelegramSequentialKeyContext = {
+type TelegramSequentialKeyContext = {
   chat?: { id?: number };
   me?: UserFromGetMe;
   message?: Message;

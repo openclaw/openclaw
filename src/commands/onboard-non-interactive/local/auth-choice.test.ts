@@ -126,14 +126,79 @@ describe("applyNonInteractiveAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(
       "custom-models-custom-local/local-large",
     );
-    expect(resolveNonInteractiveApiKey).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "custom-models-custom-local",
-        flagName: "--custom-api-key",
-        envVar: "CUSTOM_API_KEY",
-        envVarName: "CUSTOM_API_KEY",
-        secretInputMode: "ref",
-      }),
-    );
+    expect(resolveNonInteractiveApiKey).toHaveBeenCalledOnce();
+    const [apiKeyParams] = resolveNonInteractiveApiKey.mock.calls[0] ?? [];
+    expect(apiKeyParams?.provider).toBe("custom-models-custom-local");
+    expect(apiKeyParams?.flagName).toBe("--custom-api-key");
+    expect(apiKeyParams?.envVar).toBe("CUSTOM_API_KEY");
+    expect(apiKeyParams?.envVarName).toBe("CUSTOM_API_KEY");
+    expect(apiKeyParams?.secretInputMode).toBe("ref");
+  });
+
+  it("marks non-interactive custom provider models as image-capable when requested", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+        customImageInput: true,
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
+  });
+
+  it("infers image-capable non-interactive custom provider models by known model id", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+      "image",
+    ]);
+  });
+
+  it("honors explicit text-only override for known custom vision models", async () => {
+    const runtime = createRuntime();
+    const nextConfig = { agents: { defaults: {} } } as OpenClawConfig;
+    resolveNonInteractiveApiKey.mockResolvedValueOnce(undefined);
+
+    const result = await applyNonInteractiveAuthChoice({
+      nextConfig,
+      authChoice: "custom-api-key",
+      opts: {
+        customBaseUrl: "https://models.custom.local/v1",
+        customModelId: "gpt-4o",
+        customImageInput: false,
+      } as never,
+      runtime: runtime as never,
+      baseConfig: nextConfig,
+    });
+
+    expect(result?.models?.providers?.["custom-models-custom-local"]?.models?.[0]?.input).toEqual([
+      "text",
+    ]);
   });
 });

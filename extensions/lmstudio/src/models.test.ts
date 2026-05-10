@@ -2,11 +2,13 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
+  normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
+  resolveLmstudioReasoningCompat,
   resolveLmstudioReasoningCapability,
   resolveLmstudioServerBase,
 } from "./models.js";
@@ -19,6 +21,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 describe("lmstudio-models", () => {
@@ -67,8 +74,10 @@ describe("lmstudio-models", () => {
     contextLength: number,
   ) => {
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    const loadInit = loadCall?.[1] as RequestInit;
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
@@ -87,6 +96,37 @@ describe("lmstudio-models", () => {
     );
     expect(resolveLmstudioServerBase("localhost:1234/api/v1")).toBe("http://localhost:1234");
     expect(resolveLmstudioInferenceBase("localhost:1234/api/v1")).toBe("http://localhost:1234/v1");
+  });
+
+  it("marks configured LM Studio endpoints as trusted private-network model targets", () => {
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://192.168.1.10:1234",
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://192.168.1.10:1234/v1",
+      request: { allowPrivateNetwork: true },
+      models: [],
+    });
+
+    expect(
+      normalizeLmstudioProviderConfig({
+        baseUrl: "http://gpu-box.local:1234/v1",
+        request: {
+          allowPrivateNetwork: false,
+          headers: { "X-Proxy-Auth": "token" },
+        },
+        models: [],
+      }),
+    ).toEqual({
+      baseUrl: "http://gpu-box.local:1234/v1",
+      request: {
+        allowPrivateNetwork: false,
+        headers: { "X-Proxy-Auth": "token" },
+      },
+      models: [],
+    });
   });
 
   it("resolves reasoning capability for supported and unsupported options", () => {
@@ -111,6 +151,57 @@ describe("lmstudio-models", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  it("maps LM Studio binary reasoning options into OpenAI-compatible effort compat", () => {
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["off", "on"],
+            default: "on",
+          },
+        },
+      }),
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+      reasoningEffortMap: expect.objectContaining({
+        off: "none",
+        none: "none",
+        adaptive: "xhigh",
+        max: "xhigh",
+      }),
+    });
+
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["low", "medium", "high"],
+            default: "low",
+          },
+        },
+      }),
+    ).toEqual({
+      supportsReasoningEffort: true,
+      supportedReasoningEfforts: ["low", "medium", "high"],
+      reasoningEffortMap: expect.objectContaining({
+        adaptive: "high",
+        max: "high",
+      }),
+    });
+
+    expect(
+      resolveLmstudioReasoningCompat({
+        capabilities: {
+          reasoning: {
+            allowed_options: ["off"],
+            default: "off",
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 
   it("discovers llm models and maps metadata", async () => {
@@ -173,7 +264,17 @@ describe("lmstudio-models", () => {
       reasoning: true,
       input: ["text", "image"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      compat: { supportsUsageInStreaming: true },
+      compat: {
+        supportsUsageInStreaming: true,
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+        reasoningEffortMap: expect.objectContaining({
+          off: "none",
+          none: "none",
+          adaptive: "xhigh",
+          max: "xhigh",
+        }),
+      },
       contextWindow: 262144,
       contextTokens: LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH,
       maxTokens: SELF_HOSTED_DEFAULT_MAX_TOKENS,
@@ -262,8 +363,10 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    expect(loadCall?.[1]).toMatchObject({
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    expect(loadCall[1]).toMatchObject({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -275,7 +378,7 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall![1] as RequestInit;
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

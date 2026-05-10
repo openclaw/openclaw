@@ -1,10 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   expectLifecyclePatch,
   expectPendingUntilAbort,
   startAccountAndTrackLifecycle,
   waitForStartedMocks,
-} from "../../../test/helpers/plugins/start-account-lifecycle.js";
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedZaloAccount } from "./accounts.js";
 
 const hoisted = vi.hoisted(() => ({
@@ -48,6 +48,17 @@ vi.mock("./channel.runtime.js", () => ({
 
 import { zaloPlugin } from "./channel.js";
 
+type ZaloGateway = NonNullable<typeof zaloPlugin.gateway>;
+type ZaloStartAccount = NonNullable<ZaloGateway["startAccount"]>;
+
+function requireStartAccount(): ZaloStartAccount {
+  const startAccount = zaloPlugin.gateway?.startAccount;
+  if (!startAccount) {
+    throw new Error("Expected Zalo gateway startAccount");
+  }
+  return startAccount;
+}
+
 function buildAccount(): ResolvedZaloAccount {
   return {
     accountId: "default",
@@ -76,7 +87,7 @@ describe("zaloPlugin gateway.startAccount", () => {
     );
 
     const { abort, patches, task, isSettled } = startAccountAndTrackLifecycle({
-      startAccount: zaloPlugin.gateway!.startAccount!,
+      startAccount: requireStartAccount(),
       account: buildAccount(),
     });
 

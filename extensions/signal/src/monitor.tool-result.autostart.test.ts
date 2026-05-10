@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { describe, expect, it, vi } from "vitest";
 import type { SignalDaemonExitEvent } from "./daemon.js";
 import {
@@ -157,7 +157,7 @@ describe("monitorSignalProvider autostart", () => {
     setSignalAutoStartConfig();
     const abortController = new AbortController();
     let exited = false;
-    let resolveExit!: (value: SignalDaemonExitEvent) => void;
+    let resolveExit: ((value: SignalDaemonExitEvent) => void) | undefined;
     const exitedPromise = new Promise<SignalDaemonExitEvent>((resolve) => {
       resolveExit = resolve;
     });
@@ -166,6 +166,9 @@ describe("monitorSignalProvider autostart", () => {
         return;
       }
       exited = true;
+      if (!resolveExit) {
+        throw new Error("Expected signal daemon exit resolver to be initialized");
+      }
       resolveExit({ source: "process", code: null, signal: "SIGTERM" });
     });
     spawnSignalDaemonMock.mockReturnValueOnce(

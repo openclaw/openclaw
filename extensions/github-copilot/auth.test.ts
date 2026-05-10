@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureAuthProfileStoreMock = vi.hoisted(() => vi.fn());
 const listProfilesForProviderMock = vi.hoisted(() => vi.fn());
@@ -11,11 +11,17 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   listProfilesForProvider: listProfilesForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/secret-input-runtime", () => ({
   resolveRequiredConfiguredSecretRefInputString: resolveRequiredConfiguredSecretRefInputStringMock,
 }));
 
 import { resolveFirstGithubToken } from "./auth.js";
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/provider-auth");
+  vi.doUnmock("openclaw/plugin-sdk/secret-input-runtime");
+  vi.resetModules();
+});
 
 describe("resolveFirstGithubToken", () => {
   beforeEach(() => {

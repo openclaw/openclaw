@@ -1,33 +1,26 @@
 declare module "pdfjs-dist/legacy/build/pdf.mjs" {
-  export type TextItem = {
-    str: string;
+  import type {
+    DocumentInitParameters,
+    PDFDocumentLoadingTask,
+    TypedArray,
+  } from "pdfjs-dist/types/src/display/api.js";
+
+  export type LegacyDocumentInitParameters = DocumentInitParameters & {
+    disableWorker?: boolean;
   };
 
-  export type TextMarkedContent = {
-    type?: string;
-  };
+  export function getDocument(
+    src?: string | URL | TypedArray | ArrayBuffer | LegacyDocumentInitParameters,
+  ): PDFDocumentLoadingTask;
 
-  export type TextContent = {
-    items: Array<TextItem | TextMarkedContent>;
-  };
-
-  export type Viewport = {
-    width: number;
-    height: number;
-  };
-
-  export type PDFPageProxy = {
-    getTextContent(): Promise<TextContent>;
-    getViewport(params: { scale: number }): Viewport;
-    render(params: { canvas: unknown; viewport: Viewport }): { promise: Promise<void> };
-  };
-
-  export type PDFDocumentProxy = {
-    numPages: number;
-    getPage(pageNumber: number): Promise<PDFPageProxy>;
-  };
-
-  export function getDocument(params: { data: Uint8Array; disableWorker?: boolean }): {
-    promise: Promise<PDFDocumentProxy>;
-  };
+  export type {
+    DocumentInitParameters,
+    PDFDocumentLoadingTask,
+    PDFDocumentProxy,
+    PDFPageProxy,
+    TextContent,
+    TextItem,
+    TypedArray,
+  } from "pdfjs-dist/types/src/display/api.js";
+  export type { PageViewport } from "pdfjs-dist/types/src/display/display_utils.js";
 }

@@ -10,7 +10,20 @@ type QaMemorySearchResult = {
   results?: Array<{ snippet?: string; text?: string; path?: string }>;
 };
 
+type QaCronJob = {
+  delivery?: { mode?: string };
+  description?: string;
+  id?: string;
+  name?: string;
+  payload?: { kind?: string; message?: string; text?: string; lightContext?: boolean };
+  sessionTarget?: string;
+  state?: { nextRunAtMs?: number };
+};
+
 const ANSI_ESCAPE_PATTERN = new RegExp(String.raw`\x1B\[[0-?]*[ -/]*[@-~]`, "g");
+const MANAGED_DREAMING_CRON_MARKER = "[managed-by=memory-core.short-term-promotion]";
+const MANAGED_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
+const MANAGED_DREAMING_PROMPT = "__openclaw_memory_core_short_term_promotion_dream__";
 
 function stripAnsiCodes(text: string) {
   return text.replace(ANSI_ESCAPE_PATTERN, "");
@@ -60,7 +73,7 @@ async function runQaCli(
     "gateway" | "repoRoot" | "primaryModel" | "alternateModel" | "providerMode"
   >,
   args: string[],
-  opts?: { timeoutMs?: number; json?: boolean },
+  opts?: { timeoutMs?: number; json?: boolean; env?: NodeJS.ProcessEnv },
 ) {
   const stdout: Buffer[] = [];
   const stderr: Buffer[] = [];
@@ -69,7 +82,10 @@ async function runQaCli(
   await new Promise<void>((resolve, reject) => {
     const child = spawn(nodeExecPath, [distEntryPath, ...args], {
       cwd: env.gateway.tempRoot,
-      env: env.gateway.runtimeEnv,
+      env: {
+        ...env.gateway.runtimeEnv,
+        ...opts?.env,
+      },
       stdio: ["ignore", "pipe", "pipe"],
     });
     const timeout = setTimeout(() => {
@@ -176,14 +192,32 @@ async function listCronJobs(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
     },
     { timeoutMs: 30_000 },
   )) as {
-    jobs?: Array<{
-      id?: string;
-      name?: string;
-      payload?: { kind?: string; text?: string };
-      state?: { nextRunAtMs?: number };
-    }>;
+    jobs?: QaCronJob[];
   };
   return payload.jobs ?? [];
+}
+
+function isManagedDreamingCronJob(job: QaCronJob) {
+  if (job.description?.includes(MANAGED_DREAMING_CRON_MARKER)) {
+    return true;
+  }
+  if (job.name !== MANAGED_DREAMING_CRON_NAME) {
+    return false;
+  }
+  if (job.payload?.kind === "systemEvent" && job.payload.text === MANAGED_DREAMING_PROMPT) {
+    return true;
+  }
+  return (
+    job.payload?.kind === "agentTurn" &&
+    job.payload.message === MANAGED_DREAMING_PROMPT &&
+    job.payload.lightContext === true &&
+    job.sessionTarget === "isolated" &&
+    job.delivery?.mode === "none"
+  );
+}
+
+function findManagedDreamingCronJob(jobs: readonly QaCronJob[]) {
+  return jobs.find(isManagedDreamingCronJob);
 }
 
 async function readDoctorMemoryStatus(env: Pick<QaSuiteRuntimeEnv, "gateway">) {
@@ -269,6 +303,8 @@ async function runAgentPrompt(
 
 export {
   forceMemoryIndex,
+  findManagedDreamingCronJob,
+  isManagedDreamingCronJob,
   listCronJobs,
   readDoctorMemoryStatus,
   runAgentPrompt,

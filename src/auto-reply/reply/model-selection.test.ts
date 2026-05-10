@@ -17,13 +17,43 @@ vi.mock("../../agents/model-catalog.runtime.js", () => ({
   ]),
 }));
 
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../../channels/plugins/session-conversation.js", () => ({
   resolveSessionParentSessionKey: (sessionKey?: string) =>
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,
 }));
 
+const authProfileStoreMock = vi.hoisted(() => {
+  let store = { version: 1, profiles: {} } as {
+    version: 1;
+    profiles: Record<string, { type: "api_key"; provider: string; key: string }>;
+  };
+  const ensureAuthProfileStore = vi.fn(() => store);
+  return {
+    get store() {
+      return store;
+    },
+    set store(next) {
+      store = next;
+    },
+    ensureAuthProfileStore,
+    reset() {
+      store = { version: 1, profiles: {} };
+      ensureAuthProfileStore.mockClear();
+    },
+  };
+});
+
+vi.mock("../../agents/auth-profiles.runtime.js", () => ({
+  ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
+}));
+
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
+  authProfileStoreMock.reset();
 });
 
 const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
@@ -205,6 +235,47 @@ describe("createModelSelectionState catalog loading", () => {
 
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
+
+  it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "openai:work": { type: "api_key", provider: "openai", key: "sk-test" },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      authProfileOverride: "openai:work",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    await createModelSelectionState({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      agentCfg: undefined,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.5",
+      hasModelDirective: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    expect(sessionEntry.authProfileOverride).toBe("openai:work");
+    expect(sessionStore.main.authProfileOverride).toBe("openai:work");
+  });
 });
 
 describe("resolveContextTokens", () => {
@@ -220,6 +291,32 @@ describe("resolveContextTokens", () => {
     });
 
     expect(result).toBe(1_000_000);
+  });
+
+  it("treats agent contextTokens as a cap, not an expansion beyond the model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("openai/gpt-5.5", 272_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 1_000_000 },
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+
+    expect(result).toBe(272_000);
+  });
+
+  it("allows agent contextTokens to lower a larger model window", () => {
+    MODEL_CONTEXT_TOKEN_CACHE.set("qwen/qwen3.6-plus", 1_000_000);
+
+    const result = resolveContextTokens({
+      cfg: {} as OpenClawConfig,
+      agentCfg: { contextTokens: 180_000 },
+      provider: "qwen",
+      model: "qwen3.6-plus",
+    });
+
+    expect(result).toBe(180_000);
   });
 });
 
@@ -557,6 +654,7 @@ describe("createModelSelectionState respects session model override", () => {
     });
 
     expect(state.resetModelOverride).toBe(true);
+    expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
   });
@@ -600,7 +698,7 @@ describe("createModelSelectionState respects session model override", () => {
   });
 });
 
-describe("createModelSelectionState auto-failover override self-healing", () => {
+describe("createModelSelectionState auto-failover overrides", () => {
   const defaultProvider = "mac-studio";
   const defaultModel = "MiniMax-M2.7-MLX";
   const sessionKey = "agent:main:telegram:direct:1";
@@ -632,26 +730,22 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
     return { state, sessionEntry, sessionStore };
   }
 
-  it("clears auto-failover override and retries the configured primary", async () => {
+  it("preserves auto-failover overrides across turns until reset", async () => {
     const { state, sessionStore } = await resolveStateWithOverride({
       providerOverride: "openrouter",
       modelOverride: "minimax/minimax-m2.7",
       modelOverrideSource: "auto",
     });
 
-    // Provider/model should revert to the configured primary, not the fallback.
-    expect(state.provider).toBe(defaultProvider);
-    expect(state.model).toBe(defaultModel);
-    // The auto override should be cleared from session state.
-    expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
-    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
-    expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
-    // resetModelOverride must NOT be set — it triggers a "Model override not allowed"
-    // system event which is incorrect for auto-heal (the override was valid).
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openrouter");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
     expect(state.resetModelOverride).toBe(false);
   });
 
-  it("clears a disallowed auto-failover override without reporting an allowlist reset", async () => {
+  it("still clears disallowed auto-failover overrides through allowlist validation", async () => {
     const cfg = {
       agents: {
         defaults: {
@@ -682,18 +776,13 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe(defaultProvider);
-    expect(state.model).toBe(defaultModel);
-    expect(state.resetModelOverride).toBe(false);
+    expect(state.resetModelOverride).toBe(true);
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.modelOverrideSource).toBeUndefined();
   });
 
-  it("resets in-memory provider/model even when caller pre-loaded the fallback", async () => {
-    // Simulates get-reply-directives.ts preloading provider/model from stored override
-    // before calling createModelSelectionState. Our fix must update those in-memory
-    // values so the current turn retries the primary, not the fallback.
+  it("keeps pre-loaded fallback provider/model for an auto-failover override", async () => {
     const cfg = {} as OpenClawConfig;
     const sessionEntry = makeEntry({
       providerOverride: "openrouter",
@@ -709,14 +798,14 @@ describe("createModelSelectionState auto-failover override self-healing", () => 
       sessionKey,
       defaultProvider,
       defaultModel,
-      // Caller already preloaded fallback values from stored override
       provider: "openrouter",
       model: "minimax/minimax-m2.7",
       hasModelDirective: false,
     });
 
-    expect(state.provider).toBe(defaultProvider);
-    expect(state.model).toBe(defaultModel);
+    expect(state.provider).toBe("openrouter");
+    expect(state.model).toBe("minimax/minimax-m2.7");
+    expect(sessionStore[sessionKey]?.modelOverrideSource).toBe("auto");
     expect(state.resetModelOverride).toBe(false);
   });
 

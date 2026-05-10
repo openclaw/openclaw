@@ -234,17 +234,115 @@ describe("cdp.helpers internal", () => {
     it("rejects in-flight pending calls when the socket closes mid-call", async () => {
       const server = await startWsServer();
       wss = server.wss;
+      let callbackCount = 0;
+      let connectionCount = 0;
       server.wss.on("connection", (socket) => {
+        connectionCount += 1;
         socket.on("message", () => {
           // Defer close so the pending entry is definitely registered.
           setTimeout(() => socket.close(), 10);
         });
       });
       await expect(
-        withCdpSocket(server.url, async (send) => {
-          await send("Test.willClose");
-        }),
+        withCdpSocket(
+          server.url,
+          async (send) => {
+            callbackCount += 1;
+            await send("Test.willClose");
+          },
+          { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+        ),
       ).rejects.toThrow(/CDP socket closed/);
+      expect(callbackCount).toBe(1);
+      expect(connectionCount).toBe(1);
+    });
+
+    it("retries websocket failures before any CDP command is sent", async () => {
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (_info, cb) => {
+          if (rejectedHandshakes === 0) {
+            rejectedHandshakes += 1;
+            cb(false, 503, "try later");
+            return;
+          }
+          cb(true);
+        },
+      });
+      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      const port = (wss.address() as { port: number }).port;
+      let callbackCount = 0;
+      wss.on("connection", (socket) => {
+        socket.on("message", (raw) => {
+          const msg = JSON.parse(rawDataToString(raw)) as { id?: number; method?: string };
+          socket.send(JSON.stringify({ id: msg.id, result: { echoed: msg.method } }));
+        });
+      });
+
+      const result = await withCdpSocket<{ echoed?: string }>(
+        `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+        async (send) => {
+          callbackCount += 1;
+          return (await send("Test.afterOpen")) as { echoed?: string };
+        },
+        { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+      );
+
+      expect(result.echoed).toBe("Test.afterOpen");
+      expect(rejectedHandshakes).toBe(1);
+      expect(callbackCount).toBe(1);
+    });
+
+    it("does not retry rate-limited websocket handshakes", async () => {
+      let rejectedHandshakes = 0;
+      wss = new WebSocketServer({
+        port: 0,
+        host: "127.0.0.1",
+        verifyClient: (_info, cb) => {
+          rejectedHandshakes += 1;
+          cb(false, 429, "too many requests");
+        },
+      });
+      await new Promise<void>((resolve) => wss?.once("listening", () => resolve()));
+      const port = (wss.address() as { port: number }).port;
+
+      await expect(
+        withCdpSocket(
+          `ws://127.0.0.1:${port}/devtools/browser/TEST`,
+          async (send) => {
+            await send("Test.neverRuns");
+          },
+          { handshakeRetries: 2, handshakeRetryDelayMs: 1, handshakeMaxRetryDelayMs: 1 },
+        ),
+      ).rejects.toThrow(/429/);
+      expect(rejectedHandshakes).toBe(1);
+    });
+
+    it("rejects and closes the socket when a CDP command exceeds its timeout", async () => {
+      const server = await startWsServer();
+      wss = server.wss;
+      let closed = false;
+      server.wss.on("connection", (socket) => {
+        socket.on("message", () => {
+          // Intentionally leave the command unanswered.
+        });
+        socket.on("close", () => {
+          closed = true;
+        });
+      });
+
+      await expect(
+        withCdpSocket(
+          server.url,
+          async (send) => {
+            await send("Page.captureScreenshot");
+          },
+          { commandTimeoutMs: 5 },
+        ),
+      ).rejects.toThrow(/CDP command Page\.captureScreenshot timed out after 5ms/);
+      await vi.waitFor(() => expect(closed).toBe(true));
     });
   });
 
@@ -256,7 +354,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket("ws://127.0.0.1:1/devtools/browser/NO", async () => {
           return "unreachable";
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/ECONNREFUSED|CDP socket closed/);
     });
 
     it("wraps a non-Error callback throw before closing the socket", async () => {
@@ -340,7 +438,7 @@ describe("cdp.helpers internal", () => {
         withCdpSocket(server.url, async (send) => {
           await send("Test.boom");
         }),
-      ).rejects.toThrow();
+      ).rejects.toThrow(/CDP socket closed|WebSocket was closed/i);
     });
 
     // The non-Error branch of the `err instanceof Error ? ... : new Error(String(err))`
@@ -357,9 +455,11 @@ describe("openCdpWebSocket option handling", () => {
   it("clamps a non-finite handshakeTimeoutMs to the default", () => {
     // Exercises the Number.isFinite false side of the handshake-timeout
     // ternary in openCdpWebSocket.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       handshakeTimeoutMs: Number.NaN,
     });
+    expect(ws.url).toBe(url);
     // Ensure we don't leak the socket even though we never await it.
     ws.once("error", () => {});
     ws.close();
@@ -368,9 +468,11 @@ describe("openCdpWebSocket option handling", () => {
   it("honours an explicit, finite handshakeTimeoutMs", () => {
     // Exercises the truthy side of the handshake-timeout ternary: both
     // typeof === "number" AND Number.isFinite must be true.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       handshakeTimeoutMs: 500,
     });
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });
@@ -378,16 +480,20 @@ describe("openCdpWebSocket option handling", () => {
   it("omits the direct-loopback agent for non-loopback targets", () => {
     // Exercises the falsy side of `agent ? { agent } : {}` — the loopback
     // agent helper returns undefined for non-loopback hosts.
-    const ws = openCdpWebSocket("ws://93.184.216.34:9222/devtools/browser/X");
+    const url = "ws://93.184.216.34:9222/devtools/browser/X";
+    const ws = openCdpWebSocket(url);
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });
 
   it("injects custom headers when opts.headers is a non-empty object", () => {
     // Exercises the truthy side of `Object.keys(headers).length ? ... : {}`.
-    const ws = openCdpWebSocket("ws://127.0.0.1:1/devtools/browser/X", {
+    const url = "ws://127.0.0.1:1/devtools/browser/X";
+    const ws = openCdpWebSocket(url, {
       headers: { "X-Custom": "abc" },
     });
+    expect(ws.url).toBe(url);
     ws.once("error", () => {});
     ws.close();
   });

@@ -38,21 +38,30 @@ export type DiscoveryConfig = {
   mdns?: MdnsDiscoveryConfig;
 };
 
-export type CanvasHostConfig = {
-  enabled?: boolean;
-  /** Directory to serve (default: ~/.openclaw/workspace/canvas). */
-  root?: string;
-  /** HTTP port to listen on (default: 18793). */
-  port?: number;
-  /** Enable live-reload file watching + WS reloads (default: true). */
-  liveReload?: boolean;
-};
-
 export type TalkProviderConfig = {
   /** Provider API key (optional; provider-specific env fallback may apply). */
   apiKey?: SecretInput;
   /** Provider-owned Talk config fields. */
   [key: string]: unknown;
+};
+
+export type TalkRealtimeConfig = {
+  /** Active realtime voice provider. */
+  provider?: string;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, TalkProviderConfig>;
+  /** Provider model override for realtime sessions. */
+  model?: string;
+  /** Provider voice override for realtime sessions. */
+  voice?: string;
+  /** Additional system instructions appended to realtime Talk sessions. */
+  instructions?: string;
+  /** Realtime execution mode. */
+  mode?: "realtime" | "stt-tts" | "transcription";
+  /** Byte/session transport. */
+  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  /** Tool/agent strategy for realtime sessions. */
+  brain?: "agent-consult" | "direct-tools" | "none";
 };
 
 export type ResolvedTalkConfig = {
@@ -67,6 +76,22 @@ export type TalkConfig = {
   provider?: string;
   /** Provider-specific Talk config keyed by provider id. */
   providers?: Record<string, TalkProviderConfig>;
+  /** Realtime Talk provider, model, voice, mode, transport, and brain config. */
+  realtime?: TalkRealtimeConfig;
+  /** Optional thinking level override for the agent run behind Talk realtime consults. */
+  consultThinkingLevel?:
+    | "off"
+    | "minimal"
+    | "low"
+    | "medium"
+    | "high"
+    | "xhigh"
+    | "adaptive"
+    | "max";
+  /** Optional fast mode override for the agent run behind Talk realtime consults. */
+  consultFastMode?: boolean;
+  /** BCP 47 locale id used for Talk speech recognition on device nodes. */
+  speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */
   interruptOnSpeech?: boolean;
   /** Milliseconds of user silence before Talk mode sends the transcript after a pause. */
@@ -97,6 +122,8 @@ export type GatewayControlUiConfig = {
    * Default off; prefer hosted /__openclaw__/canvas or /__openclaw__/a2ui content.
    */
   allowExternalEmbedUrls?: boolean;
+  /** Optional max-width for grouped Control UI chat messages (default: min(900px, 68%)). */
+  chatMessageMaxWidth?: string;
   /** Allowed browser origins for Control UI/WebChat websocket connections. */
   allowedOrigins?: string[];
   /**
@@ -139,6 +166,12 @@ export type GatewayTrustedProxyConfig = {
    * Example: ["nick@example.com", "admin@company.org"]
    */
   allowUsers?: string[];
+  /**
+   * Allow loopback proxy sources (127.0.0.1, ::1) in trusted-proxy mode.
+   * Default false; enable only when a same-host reverse proxy is the intended
+   * trust boundary and direct Gateway access is otherwise locked down.
+   */
+  allowLoopback?: boolean;
 };
 
 export type GatewayAuthConfig = {
@@ -177,6 +210,13 @@ export type GatewayTailscaleConfig = {
   mode?: GatewayTailscaleMode;
   /** Reset serve/funnel configuration on shutdown. */
   resetOnExit?: boolean;
+  /**
+   * When `mode="serve"` and an externally configured Tailscale Funnel route
+   * already covers the gateway port, skip re-applying `tailscale serve` on
+   * startup. Lets operators manage Funnel exposure outside OpenClaw without
+   * losing it across gateway restarts.
+   */
+  preserveFunnel?: boolean;
 };
 
 export type GatewayRemoteConfig = {
@@ -206,10 +246,11 @@ export type GatewayReloadConfig = {
   /** Debounce window for config reloads (ms). Default: 300. */
   debounceMs?: number;
   /**
-   * Maximum time (ms) to wait for in-flight operations to complete before
-   * forcing a SIGUSR1 restart. Default: 300000 (5 minutes).
-   * Lower values risk aborting active subagent LLM calls.
-   * @see https://github.com/openclaw/openclaw/issues/47711
+   * Optional maximum time (ms) to wait for in-flight operations to complete
+   * before forcing a restart. Absent uses the gateway's default bounded wait;
+   * 0 waits indefinitely and logs periodic still-pending warnings.
+   * Lower positive values risk aborting active subagent LLM calls.
+   * @see https://github.com/openclaw/openclaw/issues/65485
    */
   deferralTimeoutMs?: number;
 };
@@ -363,6 +404,15 @@ export type GatewayPushConfig = {
   apns?: GatewayPushApnsConfig;
 };
 
+export type GatewayNodePairingConfig = {
+  /**
+   * Opt-in CIDR/IP allowlist for auto-approving first-time node-role pairing.
+   * Only applies to fresh node pairing requests with no requested scopes.
+   * Default: unset/disabled.
+   */
+  autoApproveCidrs?: string[];
+};
+
 export type GatewayNodesConfig = {
   /** Browser routing policy for node-hosted browser proxies. */
   browser?: {
@@ -371,6 +421,8 @@ export type GatewayNodesConfig = {
     /** Pin to a specific node id/name (optional). */
     node?: string;
   };
+  /** Pairing policy for node-role gateway clients. */
+  pairing?: GatewayNodePairingConfig;
   /** Additional node.invoke commands to allow on the gateway. */
   allowCommands?: string[];
   /** Commands to deny even if they appear in the defaults or node claims. */
@@ -433,6 +485,11 @@ export type GatewayConfig = {
   tools?: GatewayToolsConfig;
   /** WebChat display/history settings. */
   webchat?: GatewayWebchatConfig;
+  /**
+   * Pre-auth Gateway WebSocket handshake timeout in milliseconds.
+   * Env var OPENCLAW_HANDSHAKE_TIMEOUT_MS takes precedence. Default: 15000.
+   */
+  handshakeTimeoutMs?: number;
   /**
    * Channel health monitor interval in minutes.
    * Periodically checks channel health and restarts unhealthy channels.

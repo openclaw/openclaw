@@ -8,13 +8,18 @@ import {
   buildThreadAwareOutboundSessionRoute,
   createChatChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
+import { createChannelMessageAdapterFromOutbound } from "openclaw/plugin-sdk/channel-message";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
+import {
+  createAttachedChannelResultAdapter,
+  type ChannelOutboundAdapter,
+} from "openclaw/plugin-sdk/channel-send-result";
 import {
   createChannelDirectoryAdapter,
   createRuntimeDirectoryLiveAdapter,
 } from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-runtime";
+import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";
 import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
 import {
   createComputedAccountStatusAdapter,
@@ -24,6 +29,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   resolveDefaultSlackAccountId,
   resolveSlackAccount,
+  resolveSlackAccountAllowFrom,
   resolveSlackReplyToMode,
   type ResolvedSlackAccount,
 } from "./accounts.js";
@@ -61,6 +67,7 @@ import {
   slackConfigAdapter,
 } from "./shared.js";
 import { parseSlackTarget } from "./target-parsing.js";
+import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { buildSlackThreadingToolContext } from "./threading-tool-context.js";
 
 // Lazy SDK loaders. The dynamic import is hidden behind a string-literal
@@ -218,7 +225,7 @@ async function resolveSlackSendContext(params: {
   const token = getTokenForOperation(account, "write");
   const botToken = account.botToken?.trim();
   const tokenOverride = token && token !== botToken ? token : undefined;
-  const threadTsValue = params.replyToId ?? params.threadId;
+  const threadTsValue = resolveSlackThreadTsValue(params);
   return { send, threadTsValue, tokenOverride };
 }
 
@@ -355,6 +362,121 @@ const resolveSlackAllowlistNames = createAccountScopedAllowlistNameResolver({
     (await loadSlackResolveUsersModule()).resolveSlackUserAllowlist({ token, entries }),
 });
 
+const slackChannelOutbound: ChannelOutboundAdapter = {
+  deliveryMode: "direct",
+  chunker: null,
+  textChunkLimit: SLACK_TEXT_LIMIT,
+  deliveryCapabilities: {
+    durableFinal: {
+      text: true,
+      media: true,
+      payload: true,
+      replyTo: true,
+      thread: true,
+      messageSendingHooks: true,
+    },
+  },
+  shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
+  shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
+    shouldSuppressLocalSlackExecApprovalPrompt({
+      cfg,
+      accountId,
+      payload,
+    }),
+  sendPayload: async (ctx) => {
+    const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+      cfg: ctx.cfg,
+      accountId: ctx.accountId ?? undefined,
+      deps: ctx.deps,
+      replyToId: ctx.replyToId,
+      threadId: ctx.threadId,
+    });
+    const { slackOutbound } = await loadSlackOutboundAdapterModule();
+    return await slackOutbound.sendPayload!({
+      ...ctx,
+      replyToId: threadTsValue,
+      threadId: null,
+      deps: {
+        ...ctx.deps,
+        slack: async (
+          to: Parameters<SlackSendFn>[0],
+          text: Parameters<SlackSendFn>[1],
+          opts: Parameters<SlackSendFn>[2],
+        ) =>
+          await send(to, text, {
+            ...opts,
+            ...(tokenOverride ? { token: tokenOverride } : {}),
+          }),
+      },
+    });
+  },
+  ...createAttachedChannelResultAdapter({
+    channel: "slack",
+    sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
+      const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+        cfg,
+        accountId: accountId ?? undefined,
+        deps,
+        replyToId,
+        threadId,
+      });
+      return await send(to, text, {
+        cfg,
+        threadTs: threadTsValue,
+        accountId: accountId ?? undefined,
+        ...(tokenOverride ? { token: tokenOverride } : {}),
+      });
+    },
+    sendMedia: async ({
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      accountId,
+      deps,
+      replyToId,
+      threadId,
+      cfg,
+    }) => {
+      const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
+        cfg,
+        accountId: accountId ?? undefined,
+        deps,
+        replyToId,
+        threadId,
+      });
+      return await send(to, text, {
+        cfg,
+        mediaUrl,
+        mediaLocalRoots,
+        threadTs: threadTsValue,
+        accountId: accountId ?? undefined,
+        ...(tokenOverride ? { token: tokenOverride } : {}),
+      });
+    },
+  }),
+};
+
+const slackMessageAdapter = createChannelMessageAdapterFromOutbound({
+  id: "slack",
+  outbound: slackChannelOutbound,
+  live: {
+    capabilities: {
+      draftPreview: true,
+      previewFinalization: true,
+      progressUpdates: true,
+      nativeStreaming: true,
+    },
+    finalizer: {
+      capabilities: {
+        finalEdit: true,
+        normalFallback: true,
+        discardPending: true,
+      },
+    },
+  },
+});
+
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
   ResolvedSlackAccount,
   SlackProbe
@@ -370,7 +492,8 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         resolveAccount: resolveSlackAccount,
         normalize: ({ cfg, accountId, values }) =>
           slackConfigAdapter.formatAllowFrom!({ cfg, accountId, allowFrom: values }),
-        resolveDmAllowFrom: (account) => account.config.allowFrom ?? account.config.dm?.allowFrom,
+        resolveDmAllowFrom: (account, { cfg }) =>
+          resolveSlackAccountAllowFrom({ cfg, accountId: account.accountId }),
         resolveGroupPolicy: (account) => account.groupPolicy,
         resolveGroupOverrides: resolveSlackAllowlistGroupOverrides,
       }),
@@ -382,6 +505,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
       resolveToolPolicy: resolveSlackGroupToolPolicy,
     },
     messaging: {
+      targetPrefixes: ["slack"],
       normalizeTarget: normalizeSlackMessagingTarget,
       resolveDeliveryTarget: ({ conversationId, parentConversationId }) => {
         const parent = parentConversationId?.trim();
@@ -430,6 +554,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         (await loadSlackDirectoryConfigModule()).listSlackDirectoryGroupsFromConfig(params),
       ...createRuntimeDirectoryLiveAdapter({
         getRuntime: loadSlackDirectoryLiveModule,
+        self: (runtime) => runtime.getSlackDirectorySelfLive,
         listPeersLive: (runtime) => runtime.listSlackDirectoryPeersLive,
         listGroupsLive: (runtime) => runtime.listSlackDirectoryGroupsLive,
       }),
@@ -485,6 +610,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
           await resolveSlackHandleAction()
         )(action, cfg as OpenClawConfig, toolContext as SlackActionContext | undefined),
     }),
+    message: slackMessageAdapter,
     status: createComputedAccountStatusAdapter<ResolvedSlackAccount, SlackProbe>({
       defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
       buildChannelSummary: async ({ snapshot }) => {
@@ -608,99 +734,18 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
     allowExplicitReplyTagsWhenOff: false,
     buildToolContext: (params) => buildSlackThreadingToolContext(params),
     resolveAutoThreadId: ({ to, toolContext, replyToId }) =>
-      replyToId
+      normalizeSlackThreadTsCandidate(replyToId)
         ? undefined
-        : resolveSlackAutoThreadId({
-            to,
-            toolContext,
-          }),
+        : normalizeSlackThreadTsCandidate(
+            resolveSlackAutoThreadId({
+              to,
+              toolContext,
+            }),
+          ),
     resolveReplyTransport: ({ threadId, replyToId }) => ({
-      replyToId: replyToId ?? (threadId != null && threadId !== "" ? String(threadId) : undefined),
+      replyToId: resolveSlackThreadTsValue({ replyToId, threadId }),
       threadId: null,
     }),
   },
-  outbound: {
-    base: {
-      deliveryMode: "direct",
-      chunker: null,
-      textChunkLimit: SLACK_TEXT_LIMIT,
-      shouldTreatDeliveredTextAsVisible: shouldTreatSlackDeliveredTextAsVisible,
-      shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload }) =>
-        shouldSuppressLocalSlackExecApprovalPrompt({
-          cfg,
-          accountId,
-          payload,
-        }),
-      sendPayload: async (ctx) => {
-        const { send, tokenOverride } = await resolveSlackSendContext({
-          cfg: ctx.cfg,
-          accountId: ctx.accountId ?? undefined,
-          deps: ctx.deps,
-          replyToId: ctx.replyToId,
-          threadId: ctx.threadId,
-        });
-        const { slackOutbound } = await loadSlackOutboundAdapterModule();
-        return await slackOutbound.sendPayload!({
-          ...ctx,
-          deps: {
-            ...ctx.deps,
-            slack: async (
-              to: Parameters<SlackSendFn>[0],
-              text: Parameters<SlackSendFn>[1],
-              opts: Parameters<SlackSendFn>[2],
-            ) =>
-              await send(to, text, {
-                ...opts,
-                ...(tokenOverride ? { token: tokenOverride } : {}),
-              }),
-          },
-        });
-      },
-    },
-    attachedResults: {
-      channel: "slack",
-      sendText: async ({ to, text, accountId, deps, replyToId, threadId, cfg }) => {
-        const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
-          cfg,
-          accountId: accountId ?? undefined,
-          deps,
-          replyToId,
-          threadId,
-        });
-        return await send(to, text, {
-          cfg,
-          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
-          accountId: accountId ?? undefined,
-          ...(tokenOverride ? { token: tokenOverride } : {}),
-        });
-      },
-      sendMedia: async ({
-        to,
-        text,
-        mediaUrl,
-        mediaLocalRoots,
-        accountId,
-        deps,
-        replyToId,
-        threadId,
-        cfg,
-      }) => {
-        const { send, threadTsValue, tokenOverride } = await resolveSlackSendContext({
-          cfg,
-          accountId: accountId ?? undefined,
-          deps,
-          replyToId,
-          threadId,
-        });
-        return await send(to, text, {
-          cfg,
-          mediaUrl,
-          mediaLocalRoots,
-          threadTs: threadTsValue != null ? String(threadTsValue) : undefined,
-          accountId: accountId ?? undefined,
-          ...(tokenOverride ? { token: tokenOverride } : {}),
-        });
-      },
-    },
-  },
+  outbound: slackChannelOutbound,
 });

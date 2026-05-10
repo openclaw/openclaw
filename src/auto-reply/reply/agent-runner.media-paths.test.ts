@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TemplateContext } from "../templating.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createMockFollowupRun, createMockTypingController } from "./test-helpers.js";
@@ -42,9 +42,14 @@ vi.mock("../../agents/pi-embedded.js", () => ({
   waitForEmbeddedPiRunEnd: waitForEmbeddedPiRunEndMock,
 }));
 
+vi.mock("../../agents/pi-embedded-runner/runs.js", () => ({
+  queueEmbeddedPiMessage: queueEmbeddedPiMessageMock,
+}));
+
 vi.mock("./queue.js", () => ({
   enqueueFollowupRun: enqueueFollowupRunMock,
   refreshQueuedFollowupSession: refreshQueuedFollowupSessionMock,
+  resolvePiSteeringModeForQueueMode: (mode: string) => (mode === "queue" ? "one-at-a-time" : "all"),
   scheduleFollowupDrain: scheduleFollowupDrainMock,
 }));
 
@@ -117,8 +122,11 @@ function makeRunReplyAgentParams(
 }
 
 describe("runReplyAgent media path normalization", () => {
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeAll(async () => {
+    ({ runReplyAgent } = await import("./agent-runner.js"));
+  });
+
+  beforeEach(() => {
     runEmbeddedPiAgentMock.mockReset();
     runWithModelFallbackMock.mockReset();
     abortEmbeddedPiRunMock.mockReset();
@@ -155,7 +163,6 @@ describe("runReplyAgent media path normalization", () => {
         model,
       }),
     );
-    ({ runReplyAgent } = await import("./agent-runner.js"));
   });
 
   afterEach(() => {
@@ -196,7 +203,35 @@ describe("runReplyAgent media path normalization", () => {
     );
   });
 
-  it("shares one media cache between direct block media and final payload filtering", async () => {
+  it("maps steer queue modes to Pi steering drain modes", async () => {
+    queueEmbeddedPiMessageMock.mockReturnValue(true);
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "steer" } as QueueSettings,
+        shouldSteer: true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
+      steeringMode: "all",
+    });
+
+    await runReplyAgent(
+      makeRunReplyAgentParams({
+        resolvedQueue: { mode: "queue" } as QueueSettings,
+        shouldSteer: true,
+        isStreaming: true,
+      }),
+    );
+
+    expect(queueEmbeddedPiMessageMock).toHaveBeenLastCalledWith("session", "generate chart", {
+      steeringMode: "one-at-a-time",
+    });
+  });
+
+  it("shares one media cache between block accumulation and final payload delivery", async () => {
     let stagedIndex = 0;
     resolveOutboundAttachmentFromUrlMock.mockImplementation(async (mediaUrl: string) => {
       stagedIndex += 1;
@@ -234,17 +269,15 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(result).toBeUndefined();
-    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
-    expect(onBlockReply).toHaveBeenCalledTimes(1);
     expect(onBlockReply).toHaveBeenCalledWith({
-      text: undefined,
+      text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
-      replyToCurrent: undefined,
       replyToId: "msg-1",
       replyToTag: false,
       audioAsVoice: false,
     });
+    expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not create a second media context inside runAgentTurnWithFallback when onBlockReply is provided", async () => {

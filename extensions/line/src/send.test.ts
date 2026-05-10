@@ -1,4 +1,4 @@
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   pushMessageMock,
@@ -50,7 +50,7 @@ vi.mock("@line/bot-sdk", () => ({
   messagingApi: { MessagingApiClient: MessagingApiClientMock },
 }));
 
-vi.mock("openclaw/plugin-sdk/config-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   requireRuntimeConfig: requireRuntimeConfigMock,
 }));
 
@@ -62,7 +62,7 @@ vi.mock("./channel-access-token.js", () => ({
   resolveLineChannelAccessToken: resolveLineChannelAccessTokenMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/infra-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", () => ({
   recordChannelActivity: recordChannelActivityMock,
 }));
 
@@ -95,6 +95,17 @@ const LINE_TEST_CFG = {
 describe("LINE send helpers", () => {
   beforeAll(async () => {
     sendModule = await import("./send.js");
+  });
+
+  afterAll(() => {
+    vi.doUnmock("@line/bot-sdk");
+    vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
+    vi.doUnmock("./accounts.js");
+    vi.doUnmock("./channel-access-token.js");
+    vi.doUnmock("openclaw/plugin-sdk/channel-activity-runtime");
+    vi.doUnmock("openclaw/plugin-sdk/runtime-env");
+    vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+    vi.resetModules();
   });
 
   beforeEach(() => {
@@ -165,7 +176,8 @@ describe("LINE send helpers", () => {
       direction: "outbound",
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: pushed image to U123");
-    expect(result).toEqual({ messageId: "push", chatId: "U123" });
+    expect(result).toMatchObject({ messageId: "push", chatId: "U123" });
+    expect(result.receipt.primaryPlatformMessageId).toBe("push");
   });
 
   it("replies when reply token is provided", async () => {
@@ -193,7 +205,10 @@ describe("LINE send helpers", () => {
       ],
     });
     expect(logVerboseMock).toHaveBeenCalledWith("line: replied to C1");
-    expect(result).toEqual({ messageId: "reply", chatId: "C1" });
+    expect(result).toMatchObject({ messageId: "reply", chatId: "C1" });
+    expect(result.receipt.primaryPlatformMessageId).toBe("reply");
+    expect(result.receipt.threadId).toBe("C1");
+    expect(result.receipt.parts[0]?.kind).toBe("media");
   });
 
   it("sends video with explicit image preview URL", async () => {

@@ -3,13 +3,16 @@ import type {
   ProviderReplaySessionEntry,
   ProviderSanitizeReplayHistoryContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { describe, expect, it } from "vitest";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
   requireRegisteredProvider,
-} from "../../test/helpers/plugins/provider-registration.js";
-import { createCapturedThinkingConfigStream } from "../../test/helpers/plugins/stream-hooks.js";
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
+import type { RealtimeVoiceProviderPlugin } from "openclaw/plugin-sdk/realtime-voice";
+import { describe, expect, it } from "vitest";
 import { registerGoogleGeminiCliProvider } from "./gemini-cli-provider.js";
+import googlePlugin from "./index.js";
 import { registerGoogleProvider } from "./provider-registration.js";
 
 const googleProviderPlugin = {
@@ -91,51 +94,54 @@ describe("google provider plugin hooks", () => {
     expect(customEntries[0]?.customType).toBe("google-turn-ordering-bootstrap");
   });
 
-  it("owns Gemini CLI tool schema normalization", async () => {
+  it("owns Gemini tool schema normalization for direct and CLI providers", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
       id: "google",
       name: "Google Provider",
     });
-    const provider = requireRegisteredProvider(providers, "google-gemini-cli");
+    const providerIds = ["google", "google-gemini-cli"] as const;
 
-    const [tool] =
-      provider.normalizeToolSchemas?.({
-        provider: "google-gemini-cli",
-        tools: [
-          {
-            name: "write_file",
-            description: "Write a file",
-            parameters: {
-              type: "object",
-              additionalProperties: false,
-              properties: {
-                path: { type: "string", pattern: "^src/" },
+    for (const providerId of providerIds) {
+      const provider = requireRegisteredProvider(providers, providerId);
+      const [tool] =
+        provider.normalizeToolSchemas?.({
+          provider: providerId,
+          tools: [
+            {
+              name: "write_file",
+              description: "Write a file",
+              parameters: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  path: { type: "string", pattern: "^src/" },
+                },
               },
             },
-          },
-        ],
-      } as never) ?? [];
+          ],
+        } as never) ?? [];
 
-    expect(tool).toMatchObject({
-      name: "write_file",
-      parameters: {
-        type: "object",
-        properties: {
-          path: { type: "string" },
+      expect(tool).toMatchObject({
+        name: "write_file",
+        parameters: {
+          type: "object",
+          properties: {
+            path: { type: "string" },
+          },
         },
-      },
-    });
-    expect(tool?.parameters).not.toHaveProperty("additionalProperties");
-    expect(
-      (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
-    ).not.toHaveProperty("pattern");
-    expect(
-      provider.inspectToolSchemas?.({
-        provider: "google-gemini-cli",
-        tools: [tool],
-      } as never),
-    ).toEqual([]);
+      });
+      expect(tool?.parameters).not.toHaveProperty("additionalProperties");
+      expect(
+        (tool?.parameters as { properties?: { path?: Record<string, unknown> } })?.properties?.path,
+      ).not.toHaveProperty("pattern");
+      expect(
+        provider.inspectToolSchemas?.({
+          provider: providerId,
+          tools: [tool],
+        } as never),
+      ).toEqual([]);
+    }
   });
 
   it("wires google-thinking stream hooks for direct and Gemini CLI providers", async () => {
@@ -180,6 +186,42 @@ describe("google provider plugin hooks", () => {
     runCase(cliProvider, "google-gemini-cli");
   });
 
+  it("advertises adaptive thinking for Gemini dynamic thinking", async () => {
+    const { providers } = await registerProviderPlugin({
+      plugin: googleProviderPlugin,
+      id: "google",
+      name: "Google Provider",
+    });
+    const provider = requireRegisteredProvider(providers, "google");
+    if (!provider.resolveThinkingProfile) {
+      throw new Error("expected Google provider thinking profile resolver");
+    }
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
+    const gemini3Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-3.1-pro-preview",
+    } as never);
+    const gemini25Profile = resolveThinkingProfile({
+      provider: "google",
+      modelId: "gemini-2.5-flash",
+    } as never);
+
+    expect(gemini3Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "low" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+    expect(gemini25Profile?.levels).toEqual([
+      { id: "off" },
+      { id: "minimal" },
+      { id: "low" },
+      { id: "medium" },
+      { id: "adaptive" },
+      { id: "high" },
+    ]);
+  });
+
   it("shares Gemini replay and stream hooks across Google provider variants", async () => {
     const { providers } = await registerProviderPlugin({
       plugin: googleProviderPlugin,
@@ -191,5 +233,29 @@ describe("google provider plugin hooks", () => {
 
     expect(googleProvider.buildReplayPolicy).toBe(cliProvider.buildReplayPolicy);
     expect(googleProvider.wrapStreamFn).toBe(cliProvider.wrapStreamFn);
+  });
+
+  it("buffers early realtime audio while the lazy Google bridge loads", () => {
+    let realtimeProvider: RealtimeVoiceProviderPlugin | undefined;
+    googlePlugin.register(
+      createTestPluginApi({
+        registerRealtimeVoiceProvider(provider) {
+          realtimeProvider = provider;
+        },
+      }),
+    );
+
+    const bridge = realtimeProvider?.createBridge({
+      providerConfig: { apiKey: "gemini-key" },
+      onAudio() {},
+      onClearAudio() {},
+    });
+
+    if (!bridge) {
+      throw new Error("expected Google realtime bridge");
+    }
+    expect(bridge.sendAudio(Buffer.alloc(160))).toBeUndefined();
+    expect(bridge.setMediaTimestamp(20)).toBeUndefined();
+    expect(bridge.sendUserMessage?.("hello")).toBeUndefined();
   });
 });

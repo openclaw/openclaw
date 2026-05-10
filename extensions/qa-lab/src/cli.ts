@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { collectString } from "./cli-options.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
+import { registerMantisCli } from "./mantis/cli.js";
 import {
   DEFAULT_QA_LIVE_PROVIDER_MODE,
   formatQaProviderModeHelp,
@@ -37,6 +38,7 @@ async function runQaSuite(opts: {
   fastMode?: boolean;
   thinking?: string;
   allowFailures?: boolean;
+  enabledPluginIds?: string[];
   cliAuthMode?: string;
   parityPack?: string;
   scenarioIds?: string[];
@@ -140,6 +142,16 @@ async function runQaCredentialsList(opts: {
   await runtime.runQaCredentialsListCommand(opts);
 }
 
+async function runQaCredentialsDoctor(opts: {
+  actorId?: string;
+  endpointPrefix?: string;
+  json?: boolean;
+  siteUrl?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaCredentialsDoctorCommand(opts);
+}
+
 async function runQaUi(opts: {
   repoRoot?: string;
   host?: string;
@@ -214,6 +226,7 @@ export function registerQaLabCli(program: Command) {
   const qa = program
     .command("qa")
     .description("Run private QA automation flows and launch the QA debugger");
+  registerMantisCli(qa);
 
   qa.command("run")
     .description("Run the bundled QA self-check and write a Markdown report")
@@ -238,6 +251,12 @@ export function registerQaLabCli(program: Command) {
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option(
+      "--enable-plugin <id>",
+      "Enable an extra bundled plugin in the QA gateway config (repeatable)",
+      collectString,
+      [],
+    )
     .option("--concurrency <count>", "Scenario worker concurrency", (value: string) =>
       Number(value),
     )
@@ -268,6 +287,7 @@ export function registerQaLabCli(program: Command) {
         cliAuthMode?: string;
         parityPack?: string;
         scenario?: string[];
+        enablePlugin?: string[];
         concurrency?: number;
         allowFailures?: boolean;
         fast?: boolean;
@@ -291,6 +311,7 @@ export function registerQaLabCli(program: Command) {
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
           scenarioIds: opts.scenario,
+          enabledPluginIds: opts.enablePlugin,
           concurrency: opts.concurrency,
           allowFailures: opts.allowFailures,
           image: opts.image,
@@ -433,6 +454,24 @@ export function registerQaLabCli(program: Command) {
   const credentials = qa
     .command("credentials")
     .description("Manage pooled Convex live credentials used by QA lanes");
+
+  credentials
+    .command("doctor")
+    .description("Check Convex credential broker env and admin reachability")
+    .option("--site-url <url>", "Override OPENCLAW_QA_CONVEX_SITE_URL")
+    .option("--endpoint-prefix <path>", "Override OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX")
+    .option("--actor-id <id>", "Optional admin actor id to include in broker audit events")
+    .option("--json", "Emit machine-readable JSON output", false)
+    .action(
+      async (opts: {
+        siteUrl?: string;
+        endpointPrefix?: string;
+        actorId?: string;
+        json?: boolean;
+      }) => {
+        await runQaCredentialsDoctor(opts);
+      },
+    );
 
   credentials
     .command("add")

@@ -2,20 +2,29 @@ import { mkdirSync, rmSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryEmbeddingProviders as clearRegistry,
-  listMemoryEmbeddingProviders as listRegisteredAdapters,
+  listRegisteredMemoryEmbeddingProviderAdapters as listRegisteredAdapters,
   registerMemoryEmbeddingProvider as registerAdapter,
-} from "../../../../src/plugins/memory-embedding-providers.js";
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { EMBEDDING_PROBE_CACHE_TTL_MS } from "./manager.js";
 import {
   DEFAULT_LOCAL_MODEL,
   registerBuiltInMemoryEmbeddingProviders,
 } from "./provider-adapters.js";
+
+// This suite performs real sqlite/media indexing and can exceed the global
+// timeout when it shares a packed CI extension shard.
+vi.setConfig({ testTimeout: 240_000 });
+
+afterAll(() => {
+  vi.resetConfig();
+});
 
 let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
@@ -111,11 +120,25 @@ vi.mock("./embeddings.js", () => {
   };
 });
 
-describe("memory index", () => {
+describe("memory embedding provider registration", () => {
+  beforeEach(() => {
+    vi.useRealTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    clearRegistry();
+  });
+
   it("registers the builtin local embedding provider", () => {
+    clearRegistry();
+    registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
+
     const adapter = listRegisteredAdapters().find((entry) => entry.id === "local");
 
-    expect(adapter).toBeDefined();
+    if (!adapter) {
+      throw new Error("expected local embedding provider adapter to be registered");
+    }
     expect(adapter).toEqual(
       expect.objectContaining({
         id: "local",
@@ -123,7 +146,9 @@ describe("memory index", () => {
       }),
     );
   });
+});
 
+describe("memory index", () => {
   let fixtureRoot = "";
   let workspaceDir = "";
   let memoryDir = "";
@@ -148,12 +173,15 @@ describe("memory index", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
+    await Promise.all(Array.from(managersForCleanup).map((manager) => manager.close()));
     await closeAllMemorySearchManagers();
     clearRegistry();
     managersForCleanup.clear();
   });
 
   beforeEach(async () => {
+    vi.useRealTimers();
     // Perf: most suites don't need atomic swap behavior for full reindexes.
     // Keep atomic reindex tests on the safe path.
     vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
@@ -247,11 +275,10 @@ describe("memory index", () => {
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
   ): MemoryIndexManager {
-    expect(result.manager).not.toBeNull();
     if (!result.manager) {
       throw new Error(missingMessage);
     }
-    return result.manager as MemoryIndexManager;
+    return result.manager as unknown as MemoryIndexManager;
   }
 
   async function getPersistentManager(cfg: TestCfg): Promise<MemoryIndexManager> {
@@ -304,7 +331,7 @@ describe("memory index", () => {
     return manager.status().fts?.available ? manager : null;
   }
 
-  it.skip("indexes memory files and searches", async () => {
+  it("indexes memory files and searches", async () => {
     const cfg = createCfg({
       storePath: indexMainPath,
       hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
@@ -349,13 +376,17 @@ describe("memory index", () => {
     expect(embedBatchInputCalls).toBeGreaterThan(0);
 
     const imageResults = await manager.search("image");
-    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
+    expect(imageResults.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/diagram\.png$/),
+    );
 
     const audioResults = await manager.search("audio");
-    expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
+    expect(audioResults.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/meeting\.wav$/),
+    );
   });
 
-  it.skip("finds keyword matches via hybrid search when query embedding is zero", async () => {
+  it("finds keyword matches via hybrid search when query embedding is zero", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -364,7 +395,7 @@ describe("memory index", () => {
     );
   });
 
-  it.skip("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
+  it("preserves keyword-only hybrid hits when minScore exceeds text weight", async () => {
     await expectHybridKeywordSearchFindsMemory(
       createCfg({
         storePath: indexMainPath,
@@ -381,7 +412,136 @@ describe("memory index", () => {
     const status = manager.status();
     expect(status.vector?.enabled).toBe(true);
     expect(typeof status.vector?.available).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBe(available);
     expect(status.vector?.available).toBe(available);
+  });
+
+  it("probes sqlite vector store availability without initializing embeddings", async () => {
+    forceNoProvider = true;
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-vector-store-only.sqlite"),
+      vectorEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+
+    const available = await manager.probeVectorStoreAvailability?.();
+    const status = manager.status();
+
+    expect(providerCalls).toStrictEqual([]);
+    expect(typeof status.vector?.storeAvailable).toBe("boolean");
+    expect(status.vector?.storeAvailable).toBe(available);
+    expect(status.vector?.semanticAvailable).toBeUndefined();
+    expect(status.vector?.available).toBeUndefined();
+  });
+
+  it("caches embedding probe readiness across transient status managers", async () => {
+    const cfg = createCfg({ storePath: path.join(workspaceDir, "index-probe-cache.sqlite") });
+    const first = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(first);
+
+    await expect(first.probeEmbeddingAvailability()).resolves.toEqual({ ok: true });
+    expect(embedBatchCalls).toBe(1);
+    await first.close();
+
+    const second = requireManager(
+      await getMemorySearchManager({ cfg, agentId: "main", purpose: "status" }),
+    );
+    managersForCleanup.add(second);
+
+    const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    expect(cachedBeforeProbe).toMatchObject({
+      ok: true,
+      checked: true,
+      cached: true,
+    });
+    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
+    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
+    if (
+      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
+      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
+    ) {
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
+        EMBEDDING_PROBE_CACHE_TTL_MS,
+      );
+    }
+    await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
+      expect.objectContaining({ ok: true, cached: true }),
+    );
+    expect(embedBatchCalls).toBe(1);
+
+    const cached = second.getCachedEmbeddingAvailability?.();
+    expect((cached?.cacheExpiresAtMs ?? 0) - (cached?.checkedAtMs ?? 0)).toBe(
+      EMBEDDING_PROBE_CACHE_TTL_MS,
+    );
+  });
+
+  it("streams embedding cache rows during safe reindex", async () => {
+    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
+    type EmbeddingCacheRow = {
+      provider: string;
+      model: string;
+      provider_key: string;
+      hash: string;
+      embedding: string;
+      dims: number | null;
+      updated_at: number;
+    };
+    type StatementWithAll = {
+      all: () => EmbeddingCacheRow[];
+    };
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-cache-seed-stream.sqlite"),
+      cacheEnabled: true,
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test" });
+
+    // Safe reindex streams cache rows from the original database and writes
+    // them into a temporary database, so the SELECT spy belongs on this handle.
+    const sourceDb = (
+      manager as unknown as {
+        db: {
+          prepare: (sql: string) => unknown;
+        };
+      }
+    ).db;
+    const originalPrepare = sourceDb.prepare.bind(sourceDb);
+    const cachedRows = (
+      originalPrepare(
+        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+      ) as StatementWithAll
+    ).all();
+    expect(cachedRows.length).toBeGreaterThan(0);
+
+    const beforeCalls = embedBatchCalls;
+    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
+      if (
+        sql.includes(
+          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
+        )
+      ) {
+        return {
+          all: () => {
+            throw new Error("embedding cache seed must stream rows via iterate()");
+          },
+          iterate: () => cachedRows[Symbol.iterator](),
+        };
+      }
+      return originalPrepare(sql);
+    });
+
+    try {
+      (manager as unknown as { dirty: boolean }).dirty = true;
+      await manager.sync({ reason: "test", force: true });
+    } finally {
+      prepareSpy.mockRestore();
+    }
+
+    expect(embedBatchCalls).toBe(beforeCalls);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {

@@ -1,16 +1,16 @@
 import { describe, expect, it } from "vitest";
+import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
   extractElevatedDirective,
-  extractExecDirective,
-  extractQueueDirective,
   extractReasoningDirective,
-  extractReplyToTag,
   extractTraceDirective,
   extractThinkDirective,
   extractVerboseDirective,
-} from "./reply.js";
-import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
+} from "./reply/directives.js";
 import { extractFastDirective, extractStatusDirective } from "./reply/directives.js";
+import { extractExecDirective } from "./reply/exec/directive.js";
+import { extractQueueDirective } from "./reply/queue/directive.js";
+import { extractReplyToTag } from "./reply/reply-tags.js";
 
 describe("directive parsing", () => {
   it("ignores verbose directive inside URL", () => {
@@ -67,6 +67,21 @@ describe("directive parsing", () => {
     const res = extractFastDirective("/fast on please");
     expect(res.hasDirective).toBe(true);
     expect(res.fastMode).toBe(true);
+  });
+
+  it("parses default thinking and fast directives as override clears", () => {
+    expect(parseInlineDirectives("/think default")).toMatchObject({
+      hasThinkDirective: true,
+      thinkLevel: undefined,
+      rawThinkLevel: "default",
+      clearThinkLevel: true,
+    });
+    expect(parseInlineDirectives("/fast inherit")).toMatchObject({
+      hasFastDirective: true,
+      fastMode: undefined,
+      rawFastMode: "inherit",
+      clearFastMode: true,
+    });
   });
 
   it("matches elevated with leading space", () => {
@@ -175,6 +190,13 @@ describe("directive parsing", () => {
     expect(res.hasDirective).toBe(true);
     expect(res.queueMode).toBe("interrupt");
     expect(res.queueReset).toBe(false);
+    expect(res.cleaned).toBe("please now");
+  });
+
+  it("keeps legacy queue directive as queue mode", () => {
+    const res = extractQueueDirective("please /queue queue now");
+    expect(res.hasDirective).toBe(true);
+    expect(res.queueMode).toBe("queue");
     expect(res.cleaned).toBe("please now");
   });
 

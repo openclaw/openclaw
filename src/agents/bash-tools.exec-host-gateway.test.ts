@@ -1,7 +1,14 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
+import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
 type StrictInlineEvalBoundary =
   typeof import("./bash-tools.exec-host-shared.js").enforceStrictInlineEvalApprovalBoundary;
+type SendExecApprovalFollowupResult =
+  typeof import("./bash-tools.exec-host-shared.js").sendExecApprovalFollowupResult;
+type BuildExecApprovalFollowupTargetMock = (
+  value: ExecApprovalFollowupTarget,
+) => ExecApprovalFollowupTarget | null;
 
 const INLINE_EVAL_HIT = {
   executable: "python3",
@@ -12,7 +19,9 @@ const INLINE_EVAL_HIT = {
 
 const createAndRegisterDefaultExecApprovalRequestMock = vi.hoisted(() => vi.fn());
 const buildExecApprovalPendingToolResultMock = vi.hoisted(() => vi.fn());
-const buildExecApprovalFollowupTargetMock = vi.hoisted(() => vi.fn(() => null));
+const buildExecApprovalFollowupTargetMock = vi.hoisted(() =>
+  vi.fn<BuildExecApprovalFollowupTargetMock>(() => null),
+);
 const createExecApprovalDecisionStateMock = vi.hoisted(() =>
   vi.fn(
     (): {
@@ -55,7 +64,9 @@ const resolveExecHostApprovalContextMock = vi.hoisted(() =>
   })),
 );
 const runExecProcessMock = vi.hoisted(() => vi.fn());
-const sendExecApprovalFollowupResultMock = vi.hoisted(() => vi.fn(async () => undefined));
+const sendExecApprovalFollowupResultMock = vi.hoisted(() =>
+  vi.fn<SendExecApprovalFollowupResult>(async () => undefined),
+);
 const enforceStrictInlineEvalApprovalBoundaryMock = vi.hoisted(() =>
   vi.fn<StrictInlineEvalBoundary>((value) => ({
     approvedByAsk: value.approvedByAsk,
@@ -119,7 +130,7 @@ vi.mock("./bash-process-registry.js", () => ({
   tail: vi.fn((value) => value),
 }));
 
-vi.mock("../infra/exec-inline-eval.js", () => ({
+vi.mock("../infra/command-analysis/inline-eval.js", () => ({
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
 }));
@@ -300,11 +311,100 @@ describe("processGatewayAllowlist", () => {
       sessionKey: "agent:main:telegram:direct:123",
     });
 
-    expect(buildExecApprovalFollowupTargetMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:telegram:direct:123",
+    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0] as
+      | { sessionKey?: string }
+      | undefined;
+    expect(followupTargetInput?.sessionKey).toBe("agent:main:telegram:direct:123");
+  });
+
+  it("formats diagnostics approvals as direct pasteable followups", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: false,
+      deniedReason: null,
+    });
+    const outcome = {
+      status: "completed" as const,
+      exitCode: 0,
+      exitSignal: null,
+      durationMs: 12,
+      timedOut: false,
+      aggregated: JSON.stringify({
+        path: "/tmp/openclaw-diagnostics.zip",
+        bytes: 1234,
+        manifest: {
+          generatedAt: "2026-04-28T20:58:29.311Z",
+          openclawVersion: "2026.4.27",
+          contents: [
+            { path: "diagnostics.json", bytes: 100 },
+            { path: "summary.md", bytes: 200 },
+          ],
+          privacy: {
+            payloadFree: true,
+            rawLogsIncluded: false,
+            notes: ["Logs keep operational summaries."],
+          },
+        },
       }),
+    };
+    runExecProcessMock.mockResolvedValue({
+      session: { id: "sess-1" },
+      promise: Promise.resolve(outcome),
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+
+    const approvalFollowup = vi.fn<ExecApprovalFollowupFactory>(async () =>
+      [
+        "OpenAI Codex harness:",
+        "Codex diagnostics sent to OpenAI servers:",
+        "Session 1",
+        "Channel: telegram",
+        "OpenClaw session id: `session-1`",
+        "Codex thread id: `thread-1`",
+      ].join("\n"),
     );
+
+    await runGatewayAllowlist({
+      command: "openclaw gateway diagnostics export --json",
+      trigger: "diagnostics",
+      approvalFollowupMode: "direct",
+      approvalFollowup,
+    });
+
+    await vi.waitFor(() => {
+      expect(sendExecApprovalFollowupResultMock).toHaveBeenCalled();
+    });
+    const followupTargetInput = buildExecApprovalFollowupTargetMock.mock.calls[0]?.[0] as
+      | { direct?: boolean }
+      | undefined;
+    expect(followupTargetInput?.direct).toBe(true);
+
+    const followupTarget = sendExecApprovalFollowupResultMock.mock.calls[0]?.[0] as
+      | { direct?: boolean }
+      | null
+      | undefined;
+    expect(followupTarget?.direct).toBe(true);
+    const followupText = sendExecApprovalFollowupResultMock.mock.calls[0]?.[1] ?? "";
+    expect(followupText).toContain("Diagnostics export created.");
+    expect(followupText).toContain("Path: /tmp/openclaw-diagnostics.zip");
+    expect(followupText).toContain("Contents (2 files):");
+    expect(followupText).toContain("OpenAI Codex harness:");
+    expect(followupText).toContain("Codex diagnostics sent to OpenAI servers:");
+    expect(followupText).toContain("Codex thread id: `thread-1`");
+    const approvalInput = approvalFollowup.mock.calls[0]?.[0] as
+      | {
+          approvalId?: string;
+          sessionId?: string;
+          trigger?: string;
+          outcome?: { status?: string; exitCode?: number | null };
+        }
+      | undefined;
+    expect(approvalInput?.approvalId).toBe("req-1");
+    expect(approvalInput?.sessionId).toBe("sess-1");
+    expect(approvalInput?.trigger).toBe("diagnostics");
+    expect(approvalInput?.outcome?.status).toBe("completed");
+    expect(approvalInput?.outcome?.exitCode).toBe(0);
   });
 
   it("denies timed-out inline-eval requests instead of auto-running them", async () => {

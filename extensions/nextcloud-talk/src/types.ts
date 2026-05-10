@@ -1,3 +1,4 @@
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
 import type {
   BlockStreamingCoalesceConfig,
   DmConfig,
@@ -5,8 +6,6 @@ import type {
   GroupPolicy,
   SecretInput,
 } from "../runtime-api.js";
-
-export type { DmPolicy, GroupPolicy };
 
 export type NextcloudTalkRoomConfig = {
   requireMention?: boolean;
@@ -22,7 +21,7 @@ export type NextcloudTalkRoomConfig = {
   systemPrompt?: string;
 };
 
-export type NextcloudTalkNetworkConfig = {
+type NextcloudTalkNetworkConfig = {
   /** Dangerous opt-in for self-hosted Nextcloud Talk on trusted private/internal hosts. */
   dangerouslyAllowPrivateNetwork?: boolean;
 };
@@ -84,7 +83,7 @@ export type NextcloudTalkAccountConfig = {
   network?: NextcloudTalkNetworkConfig;
 };
 
-export type NextcloudTalkConfig = {
+type NextcloudTalkConfig = {
   /** Optional per-account Nextcloud Talk configuration (multi-account). */
   accounts?: Record<string, NextcloudTalkAccountConfig>;
   /** Optional default account id when multiple accounts are configured. */
@@ -104,7 +103,7 @@ export type CoreConfig = {
  */
 
 /** Actor in the activity (the message sender). */
-export type NextcloudTalkActor = {
+type NextcloudTalkActor = {
   type: "Person";
   /** User ID in Nextcloud. */
   id: string;
@@ -113,7 +112,7 @@ export type NextcloudTalkActor = {
 };
 
 /** The message object in the activity. */
-export type NextcloudTalkObject = {
+type NextcloudTalkObject = {
   type: "Note";
   /** Message ID. */
   id: string;
@@ -126,7 +125,7 @@ export type NextcloudTalkObject = {
 };
 
 /** Target conversation/room. */
-export type NextcloudTalkTarget = {
+type NextcloudTalkTarget = {
   type: "Collection";
   /** Room token. */
   id: string;
@@ -146,6 +145,7 @@ export type NextcloudTalkWebhookPayload = {
 export type NextcloudTalkSendResult = {
   messageId: string;
   roomToken: string;
+  receipt: MessageReceipt;
   timestamp?: number;
 };
 
@@ -192,13 +192,4 @@ export type NextcloudTalkWebhookServerOptions = {
   onMessage: (message: NextcloudTalkInboundMessage) => void | Promise<void>;
   onError?: (error: Error) => void;
   abortSignal?: AbortSignal;
-};
-
-/** Options for sending a message. */
-export type NextcloudTalkSendOptions = {
-  baseUrl: string;
-  secret: string;
-  roomToken: string;
-  message: string;
-  replyTo?: string;
 };

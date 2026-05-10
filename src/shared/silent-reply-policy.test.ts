@@ -8,6 +8,19 @@ import {
   resolveSilentReplyRewriteText,
 } from "./silent-reply-policy.js";
 
+const defaultPolicyResolverCases = [
+  {
+    name: "resolveSilentReplyRewriteFromPolicies",
+    resolve: resolveSilentReplyRewriteFromPolicies,
+    defaults: DEFAULT_SILENT_REPLY_REWRITE,
+  },
+  {
+    name: "resolveSilentReplyPolicyFromPolicies",
+    resolve: resolveSilentReplyPolicyFromPolicies,
+    defaults: DEFAULT_SILENT_REPLY_POLICY,
+  },
+];
+
 describe("classifySilentReplyConversationType", () => {
   it("prefers an explicit conversation type", () => {
     expect(
@@ -37,38 +50,18 @@ describe("classifySilentReplyConversationType", () => {
   });
 });
 
-describe("resolveSilentReplyPolicyFromPolicies", () => {
-  it("uses defaults when no overrides exist", () => {
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.direct,
-    );
-    expect(resolveSilentReplyPolicyFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_POLICY.group,
-    );
-  });
-
-  it("prefers surface policy over defaults", () => {
-    expect(
-      resolveSilentReplyPolicyFromPolicies({
-        conversationType: "direct",
-        defaultPolicy: { direct: "disallow" },
-        surfacePolicy: { direct: "allow" },
-      }),
-    ).toBe("allow");
-  });
+describe("silent reply default policy resolution", () => {
+  it.each(defaultPolicyResolverCases)(
+    "$name uses defaults when no overrides exist",
+    ({ defaults, resolve }) => {
+      expect(resolve({ conversationType: "direct" })).toBe(defaults.direct);
+      expect(resolve({ conversationType: "group" })).toBe(defaults.group);
+    },
+  );
 });
 
 describe("resolveSilentReplyRewriteFromPolicies", () => {
-  it("uses default rewrite flags when no overrides exist", () => {
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "direct" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.direct,
-    );
-    expect(resolveSilentReplyRewriteFromPolicies({ conversationType: "group" })).toBe(
-      DEFAULT_SILENT_REPLY_REWRITE.group,
-    );
-  });
-
-  it("prefers surface rewrite flags over defaults", () => {
+  it("prefers surface rewrite settings over defaults", () => {
     expect(
       resolveSilentReplyRewriteFromPolicies({
         conversationType: "direct",
@@ -86,5 +79,17 @@ describe("resolveSilentReplyRewriteText", () => {
     expect(first).toBe(second);
     expect(first).not.toBe("NO_REPLY");
     expect(first.length).toBeGreaterThan(0);
+  });
+});
+
+describe("resolveSilentReplyPolicyFromPolicies", () => {
+  it("prefers surface policy over defaults", () => {
+    expect(
+      resolveSilentReplyPolicyFromPolicies({
+        conversationType: "direct",
+        defaultPolicy: { direct: "disallow" },
+        surfacePolicy: { direct: "allow" },
+      }),
+    ).toBe("allow");
   });
 });

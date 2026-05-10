@@ -1,4 +1,4 @@
-import type { ToolFsPolicy } from "../agents/tool-fs-policy.js";
+import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
@@ -9,6 +9,8 @@ export type OpenClawPluginToolContext = {
   config?: OpenClawConfig;
   /** Active runtime-resolved config snapshot when one is available. */
   runtimeConfig?: OpenClawConfig;
+  /** Returns the latest runtime-resolved config snapshot for long-lived tool definitions. */
+  getRuntimeConfig?: () => OpenClawConfig | undefined;
   /** Effective filesystem policy for the active tool run. */
   fsPolicy?: ToolFsPolicy;
   workspaceDir?: string;
@@ -23,6 +25,10 @@ export type OpenClawPluginToolContext = {
   };
   messageChannel?: string;
   agentAccountId?: string;
+  /** Trusted provider auth availability from the active auth profile store. */
+  hasAuthForProvider?: (providerId: string) => boolean;
+  /** Resolves an API key from the active auth profile store when available. */
+  resolveApiKeyForProvider?: (providerId: string) => Promise<string | undefined>;
   /** Trusted ambient delivery route for the active agent/session. */
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */

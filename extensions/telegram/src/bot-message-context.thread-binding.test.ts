@@ -93,7 +93,7 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-1");
-    expect(recordInboundSessionMock.mock.calls[0]?.[0]).toMatchObject({
+    expect(ctx?.turn.record).toMatchObject({
       updateLastRoute: undefined,
     });
   });
@@ -119,7 +119,6 @@ describe("buildTelegramMessageContext thread binding override", () => {
         senderId: "42",
       }),
     );
-    expect(ctx).not.toBeNull();
     expect(ctx?.route.accountId).toBe("work");
     expect(ctx?.route.matchedBy).toBe("binding.channel");
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-2");
@@ -156,5 +155,37 @@ describe("buildTelegramMessageContext thread binding override", () => {
       }),
     );
     expect(ctx?.ctxPayload?.SessionKey).toBe("agent:codex-acp:session-dm");
+  });
+
+  it("preserves Telegram DM topic thread IDs in the inbound context", async () => {
+    resolveTelegramConversationRouteMock.mockReturnValue(
+      createBoundRoute({
+        accountId: "default",
+        sessionKey: "agent:codex-acp:session-dm-topic",
+        agentId: "codex-acp",
+      }),
+    );
+
+    const ctx = await buildTelegramMessageContextForTest({
+      sessionRuntime: threadBindingSessionRuntime,
+      message: {
+        message_id: 1,
+        message_thread_id: 77,
+        chat: { id: 1234, type: "private" },
+        date: 1_700_000_000,
+        text: "hello",
+        from: { id: 42, first_name: "Alice" },
+      },
+    });
+
+    expect(resolveTelegramConversationRouteMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: 1234,
+        isGroup: false,
+        resolvedThreadId: undefined,
+        replyThreadId: 77,
+      }),
+    );
+    expect(ctx?.ctxPayload?.MessageThreadId).toBe(77);
   });
 });

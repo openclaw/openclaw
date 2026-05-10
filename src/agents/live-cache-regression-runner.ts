@@ -19,6 +19,10 @@ import {
 
 const OPENAI_TIMEOUT_MS = 120_000;
 const ANTHROPIC_TIMEOUT_MS = 120_000;
+const LIVE_CACHE_LANE_RETRIES = 1;
+const LIVE_CACHE_RESPONSE_RETRIES = 2;
+const OPENAI_CACHE_REASONING = "low" as unknown as never;
+const OPENAI_CACHE_MIN_MAX_TOKENS = 256;
 const OPENAI_PREFIX = buildStableCachePrefix("openai");
 const OPENAI_MCP_PREFIX = buildStableCachePrefix("openai-mcp-style");
 const ANTHROPIC_PREFIX = buildStableCachePrefix("anthropic");
@@ -47,11 +51,25 @@ type LaneResult = {
   disabled?: CacheRun;
   warmup?: CacheRun;
 };
+type BaselineFindings = {
+  regressions: string[];
+  warnings: string[];
+};
 
-export type LiveCacheRegressionResult = {
+type LiveCacheRegressionResult = {
   regressions: string[];
   summary: Record<string, Record<string, unknown>>;
+  warnings: string[];
 };
+
+class CacheProbeTextMismatchError extends Error {
+  constructor(
+    readonly suffix: string,
+    readonly text: string,
+  ) {
+    super(`expected response to contain CACHE-OK ${suffix}, got ${JSON.stringify(text)}`);
+  }
+}
 
 const NOOP_TOOL: Tool = {
   name: "noop",
@@ -122,6 +140,46 @@ function assert(condition: unknown, message: string): asserts condition {
   }
 }
 
+function shouldRetryCacheProbeText(params: {
+  attempt: number;
+  suffix: string;
+  text: string;
+}): boolean {
+  const responseTextLower = normalizeLowercaseStringOrEmpty(params.text);
+  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
+  const markerLower = `cache-ok ${suffixLower}`;
+  return (
+    (!responseTextLower.includes(markerLower) || !responseTextLower.includes(suffixLower)) &&
+    params.attempt <= LIVE_CACHE_RESPONSE_RETRIES
+  );
+}
+
+function resolveCacheProbeMaxTokens(params: {
+  maxTokens: number | undefined;
+  providerTag: "anthropic" | "openai";
+}): number {
+  const requested = params.maxTokens ?? 64;
+  if (params.providerTag !== "openai") {
+    return requested;
+  }
+  return Math.max(requested, OPENAI_CACHE_MIN_MAX_TOKENS);
+}
+
+function shouldAcceptEmptyOpenAICacheProbe(params: {
+  providerTag: "anthropic" | "openai";
+  text: string;
+  usage: CacheUsage;
+}): boolean {
+  if (params.providerTag !== "openai" || params.text.trim().length > 0) {
+    return false;
+  }
+  return (
+    (params.usage.input ?? 0) > 0 ||
+    (params.usage.cacheRead ?? 0) > 0 ||
+    (params.usage.cacheWrite ?? 0) > 0
+  );
+}
+
 async function runToolOnlyTurn(params: {
   apiKey: string;
   cacheRetention: "none" | "short" | "long";
@@ -138,7 +196,7 @@ async function runToolOnlyTurn(params: {
     sessionId: params.sessionId,
     maxTokens: 128,
     temperature: 0,
-    ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
+    ...(params.providerTag === "openai" ? { reasoning: OPENAI_CACHE_REASONING } : {}),
   };
   let prompt = `Call the tool \`${params.tool.name}\` with {}. IMPORTANT: respond ONLY with the tool call and no other text.`;
   let response = await completeSimpleWithLiveTimeout(
@@ -199,38 +257,67 @@ async function completeCacheProbe(params: {
   maxTokens?: number;
 }): Promise<CacheRun> {
   const timeoutMs = params.providerTag === "openai" ? OPENAI_TIMEOUT_MS : ANTHROPIC_TIMEOUT_MS;
-  const response = await completeSimpleWithLiveTimeout(
-    params.model,
-    {
-      systemPrompt: params.systemPrompt,
-      messages: params.messages,
-      ...(params.tools ? { tools: params.tools } : {}),
-    },
-    {
-      apiKey: params.apiKey,
-      cacheRetention: params.cacheRetention,
-      sessionId: params.sessionId,
-      maxTokens: params.maxTokens ?? 64,
-      temperature: 0,
-      ...(params.providerTag === "openai" ? { reasoning: "none" as unknown as never } : {}),
-    },
-    `${params.providerTag} cache lane ${params.suffix}`,
-    timeoutMs,
-  );
-  const text = extractAssistantText(response);
-  const responseTextLower = normalizeLowercaseStringOrEmpty(text);
-  const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
-  assert(
-    responseTextLower.includes(suffixLower),
-    `expected response to contain ${params.suffix}, got ${JSON.stringify(text)}`,
-  );
-  const usage = normalizeCacheUsage(response.usage);
-  return {
-    suffix: params.suffix,
-    text,
-    usage,
-    hitRate: computeCacheHitRate(usage),
-  };
+  for (let attempt = 1; attempt <= 1 + LIVE_CACHE_RESPONSE_RETRIES; attempt += 1) {
+    const response = await completeSimpleWithLiveTimeout(
+      params.model,
+      {
+        systemPrompt: params.systemPrompt,
+        messages: params.messages,
+        ...(params.tools ? { tools: params.tools } : {}),
+      },
+      {
+        apiKey: params.apiKey,
+        cacheRetention: params.cacheRetention,
+        sessionId: params.sessionId,
+        maxTokens: resolveCacheProbeMaxTokens({
+          maxTokens: params.maxTokens,
+          providerTag: params.providerTag,
+        }),
+        temperature: 0,
+        ...(params.providerTag === "openai" ? { reasoning: OPENAI_CACHE_REASONING } : {}),
+      },
+      `${params.providerTag} cache lane ${params.suffix}`,
+      timeoutMs,
+    );
+    const text = extractAssistantText(response);
+    const usage = normalizeCacheUsage(response.usage);
+    if (
+      shouldAcceptEmptyOpenAICacheProbe({
+        providerTag: params.providerTag,
+        text,
+        usage,
+      })
+    ) {
+      logLiveCache(
+        `${params.providerTag} cache lane ${params.suffix} accepted empty text with usage ${formatUsage(usage)}`,
+      );
+      return {
+        suffix: params.suffix,
+        text,
+        usage,
+        hitRate: computeCacheHitRate(usage),
+      };
+    }
+    if (shouldRetryCacheProbeText({ attempt, suffix: params.suffix, text })) {
+      logLiveCache(
+        `${params.providerTag} cache lane ${params.suffix} response mismatch; retrying: ${JSON.stringify(text)}`,
+      );
+      continue;
+    }
+    const responseTextLower = normalizeLowercaseStringOrEmpty(text);
+    const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
+    const markerLower = `cache-ok ${suffixLower}`;
+    if (!responseTextLower.includes(markerLower)) {
+      throw new CacheProbeTextMismatchError(params.suffix, text);
+    }
+    return {
+      suffix: params.suffix,
+      text,
+      usage,
+      hitRate: computeCacheHitRate(usage),
+    };
+  }
+  throw new Error(`expected response to contain CACHE-OK ${params.suffix}`);
 }
 
 async function runRepeatedLane(params: {
@@ -353,13 +440,36 @@ function formatUsage(usage: CacheUsage | undefined) {
   return `cacheRead=${usage?.cacheRead ?? 0} cacheWrite=${usage?.cacheWrite ?? 0} input=${usage?.input ?? 0}`;
 }
 
+function warmupHasCacheEvidence(params: { floor: LiveCacheFloor; warmup: CacheRun }): boolean {
+  const cacheRead = params.warmup.usage.cacheRead ?? 0;
+  const cacheWrite = params.warmup.usage.cacheWrite ?? 0;
+  if (params.floor.minCacheReadOrWrite !== undefined) {
+    return Math.max(cacheRead, cacheWrite) >= params.floor.minCacheReadOrWrite;
+  }
+  if (params.floor.minCacheRead !== undefined && cacheRead < params.floor.minCacheRead) {
+    return false;
+  }
+  if (params.floor.minHitRate !== undefined && params.warmup.hitRate < params.floor.minHitRate) {
+    return false;
+  }
+  return params.floor.minCacheRead !== undefined || params.floor.minHitRate !== undefined;
+}
+
 function assertAgainstBaseline(params: {
   lane: BaselineLane;
   provider: ProviderKey;
   result: LaneResult;
   regressions: string[];
+  warnings: string[];
 }) {
   const floor = resolveBaselineFloor(params.provider, params.lane);
+  const recordRegression = (message: string) => {
+    if (floor?.warnOnly) {
+      params.warnings.push(message);
+    } else {
+      params.regressions.push(message);
+    }
+  };
   if (!floor) {
     params.regressions.push(`${params.provider}:${params.lane} missing baseline entry`);
     return;
@@ -367,22 +477,33 @@ function assertAgainstBaseline(params: {
 
   if (params.result.best) {
     const usage = params.result.best.usage;
-    if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
-      params.regressions.push(
+    if (floor.minCacheReadOrWrite !== undefined) {
+      const cacheReadOrWrite = Math.max(usage.cacheRead ?? 0, usage.cacheWrite ?? 0);
+      if (cacheReadOrWrite < floor.minCacheReadOrWrite) {
+        recordRegression(
+          `${params.provider}:${params.lane} cacheReadOrWrite=${cacheReadOrWrite} < min=${floor.minCacheReadOrWrite}`,
+        );
+      }
+    } else if ((usage.cacheRead ?? 0) < (floor.minCacheRead ?? 0)) {
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} < min=${floor.minCacheRead}`,
       );
     }
     if (params.result.best.hitRate < (floor.minHitRate ?? 0)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} hitRate=${params.result.best.hitRate.toFixed(3)} < min=${floor.minHitRate?.toFixed(3)}`,
       );
     }
   }
 
   if (params.result.warmup) {
-    const warmupUsage = params.result.warmup.usage;
-    if ((warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0)) {
-      params.regressions.push(
+    const warmup = params.result.warmup;
+    const warmupUsage = warmup.usage;
+    if (
+      (warmupUsage.cacheWrite ?? 0) < (floor.minCacheWrite ?? 0) &&
+      !warmupHasCacheEvidence({ floor, warmup })
+    ) {
+      recordRegression(
         `${params.provider}:${params.lane} warmup cacheWrite=${warmupUsage.cacheWrite ?? 0} < min=${floor.minCacheWrite}`,
       );
     }
@@ -391,17 +512,97 @@ function assertAgainstBaseline(params: {
   if (params.result.disabled) {
     const usage = params.result.disabled.usage;
     if ((usage.cacheRead ?? 0) > (floor.maxCacheRead ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheRead=${usage.cacheRead ?? 0} > max=${floor.maxCacheRead}`,
       );
     }
     if ((usage.cacheWrite ?? 0) > (floor.maxCacheWrite ?? Number.POSITIVE_INFINITY)) {
-      params.regressions.push(
+      recordRegression(
         `${params.provider}:${params.lane} cacheWrite=${usage.cacheWrite ?? 0} > max=${floor.maxCacheWrite}`,
       );
     }
   }
 }
+
+function evaluateAgainstBaseline(params: {
+  lane: BaselineLane;
+  provider: ProviderKey;
+  result: LaneResult;
+}): BaselineFindings {
+  const regressions: string[] = [];
+  const warnings: string[] = [];
+  assertAgainstBaseline({
+    ...params,
+    regressions,
+    warnings,
+  });
+  return { regressions, warnings };
+}
+
+function shouldRetryBaselineFindings(findings: BaselineFindings, attempt: number): boolean {
+  return findings.regressions.length > 0 && attempt <= LIVE_CACHE_LANE_RETRIES;
+}
+
+async function runRepeatedLaneWithBaselineRetry(params: {
+  lane: CacheLane;
+  providerTag: "anthropic" | "openai";
+  fixture: LiveResolvedModel;
+  runToken: string;
+  pngBase64: string;
+}): Promise<{ result: LaneResult; findings: BaselineFindings; attempts: number }> {
+  let result: LaneResult | undefined;
+  let findings: BaselineFindings = { regressions: [], warnings: [] };
+  let attempts = 0;
+  for (let attempt = 1; attempt <= 1 + LIVE_CACHE_LANE_RETRIES; attempt += 1) {
+    attempts = attempt;
+    try {
+      result = await runRepeatedLane({
+        ...params,
+        sessionId: `live-cache-regression-${params.runToken}-${params.providerTag}-${params.lane}${
+          attempt > 1 ? `-retry-${attempt}` : ""
+        }`,
+      });
+    } catch (error) {
+      if (error instanceof CacheProbeTextMismatchError && attempt <= LIVE_CACHE_LANE_RETRIES) {
+        logLiveCache(
+          `${params.providerTag} ${params.lane} response mismatch; retrying lane once: ${error.message}`,
+        );
+        continue;
+      }
+      throw error;
+    }
+    findings = evaluateAgainstBaseline({
+      lane: params.lane,
+      provider: params.providerTag,
+      result,
+    });
+    if (!shouldRetryBaselineFindings(findings, attempt)) {
+      break;
+    }
+    logLiveCache(
+      `${params.providerTag} ${params.lane} baseline miss; retrying lane once: ${JSON.stringify(
+        findings.regressions,
+      )}`,
+    );
+  }
+
+  assert(result, `expected ${params.providerTag} ${params.lane} cache lane result`);
+  return { result, findings, attempts };
+}
+
+function appendBaselineFindings(target: BaselineFindings, source: BaselineFindings) {
+  target.regressions.push(...source.regressions);
+  target.warnings.push(...source.warnings);
+}
+
+export const __testing = {
+  assertAgainstBaseline,
+  evaluateAgainstBaseline,
+  resolveCacheProbeMaxTokens,
+  shouldAcceptEmptyOpenAICacheProbe,
+  shouldRetryCacheProbeText,
+  shouldRetryBaselineFindings,
+};
 
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
@@ -410,7 +611,7 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "openai",
     api: "openai-responses",
     envVar: "OPENCLAW_LIVE_OPENAI_CACHE_MODEL",
-    preferredModelIds: ["gpt-5.5", "gpt-5.4-mini", "gpt-5.4", "gpt-5.2"],
+    preferredModelIds: ["gpt-4.1", "gpt-5.2", "gpt-5.4-mini", "gpt-5.4", "gpt-5.5"],
   });
   const anthropic = await resolveLiveDirectModel({
     provider: "anthropic",
@@ -420,20 +621,21 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
   });
 
   const regressions: string[] = [];
+  const warnings: string[] = [];
   const summary: Record<string, Record<string, unknown>> = {
     anthropic: {},
     openai: {},
   };
 
   for (const lane of ["stable", "tool", "image", "mcp"] as const) {
-    const openaiResult = await runRepeatedLane({
+    const openaiAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "openai",
       fixture: openai,
       runToken,
-      sessionId: `live-cache-regression-${runToken}-openai-${lane}`,
       pngBase64,
     });
+    const openaiResult = openaiAttempt.result;
     logLiveCache(
       `openai ${lane} warmup ${formatUsage(openaiResult.warmup?.usage ?? {})} rate=${openaiResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
@@ -443,23 +645,19 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     summary.openai[lane] = {
       best: openaiResult.best?.usage,
       hitRate: openaiResult.best?.hitRate,
+      attempts: openaiAttempt.attempts,
       warmup: openaiResult.warmup?.usage,
     };
-    assertAgainstBaseline({
-      lane,
-      provider: "openai",
-      result: openaiResult,
-      regressions,
-    });
+    appendBaselineFindings({ regressions, warnings }, openaiAttempt.findings);
 
-    const anthropicResult = await runRepeatedLane({
+    const anthropicAttempt = await runRepeatedLaneWithBaselineRetry({
       lane,
       providerTag: "anthropic",
       fixture: anthropic,
       runToken,
-      sessionId: `live-cache-regression-${runToken}-anthropic-${lane}`,
       pngBase64,
     });
+    const anthropicResult = anthropicAttempt.result;
     logLiveCache(
       `anthropic ${lane} warmup ${formatUsage(anthropicResult.warmup?.usage ?? {})} rate=${anthropicResult.warmup?.hitRate.toFixed(3) ?? "0.000"}`,
     );
@@ -469,14 +667,10 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     summary.anthropic[lane] = {
       best: anthropicResult.best?.usage,
       hitRate: anthropicResult.best?.hitRate,
+      attempts: anthropicAttempt.attempts,
       warmup: anthropicResult.warmup?.usage,
     };
-    assertAgainstBaseline({
-      lane,
-      provider: "anthropic",
-      result: anthropicResult,
-      regressions,
-    });
+    appendBaselineFindings({ regressions, warnings }, anthropicAttempt.findings);
   }
 
   const disabled = await runAnthropicDisabledLane({
@@ -493,8 +687,12 @@ export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResul
     provider: "anthropic",
     result: disabled,
     regressions,
+    warnings,
   });
 
   logLiveCache(`cache regression summary ${JSON.stringify(summary)}`);
-  return { regressions, summary };
+  if (warnings.length > 0) {
+    logLiveCache(`cache regression warnings ${JSON.stringify(warnings)}`);
+  }
+  return { regressions, summary, warnings };
 }

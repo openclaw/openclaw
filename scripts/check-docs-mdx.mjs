@@ -3,6 +3,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { compile } from "@mdx-js/mdx";
+import {
+  checkMintlifyAccordionIndentation,
+  MINTLIFY_ACCORDION_INDENT_MESSAGE,
+} from "./lib/mintlify-accordion.mjs";
 
 const MINTLIFY_LANGUAGE_CODES = new Set([
   "en",
@@ -42,6 +46,37 @@ const MINTLIFY_LANGUAGE_CODES = new Set([
   "fi",
   "hu",
 ]);
+
+const POISON_TEXT_PATTERNS = [
+  {
+    pattern: /\banalysis\s+to=functions\./iu,
+    message: "Leaked tool-call channel marker.",
+  },
+  {
+    pattern: /\b(?:commentary|final)\s+to=functions\./iu,
+    message: "Leaked tool-call channel marker.",
+  },
+  {
+    pattern: /\bfunctions\.(?:read|write|exec|search|run)\b/iu,
+    message: "Leaked internal tool name.",
+  },
+  {
+    pattern: /\b[A-Za-z_\u3400-\u9fff][\w\u3400-\u9fff-]*_input=\{/u,
+    message: "Leaked tool-call input payload.",
+  },
+  {
+    pattern: /<\/?openclaw_docs_i18n_input>/iu,
+    message: "Leaked docs i18n prompt wrapper.",
+  },
+  {
+    pattern: /\/home\/runner\/work\//u,
+    message: "Leaked GitHub Actions workspace path.",
+  },
+  {
+    pattern: /彩神马争霸/u,
+    message: "Known spam/gambling text from a poisoned translation.",
+  },
+];
 
 function parseArgs(argv) {
   const roots = [];
@@ -120,63 +155,49 @@ function formatMdxError(filePath, error) {
 }
 
 function checkMintlifyMdxStructure(filePath, raw) {
+  return checkMintlifyAccordionIndentation(stripFrontmatter(raw)).map((error) => ({
+    type: "mintlify-mdx",
+    file: filePath,
+    line: error.line,
+    column: error.column,
+    message: MINTLIFY_ACCORDION_INDENT_MESSAGE,
+  }));
+}
+
+function lineColumnForIndex(raw, offset) {
+  const prefix = raw.slice(0, offset);
+  const lines = prefix.split(/\r?\n/u);
+  return {
+    line: lines.length,
+    column: lines.at(-1).length + 1,
+  };
+}
+
+function checkPoisonText(filePath, raw) {
   const errors = [];
-  const lines = stripFrontmatter(raw).split(/\r?\n/u);
-  const accordionStack = [];
-  let inCodeFence = false;
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (/^\s*(```|~~~)/u.test(line)) {
-      inCodeFence = !inCodeFence;
+  for (const { pattern, message } of POISON_TEXT_PATTERNS) {
+    const match = pattern.exec(raw);
+    if (!match) {
       continue;
     }
-    if (inCodeFence) {
-      continue;
-    }
-
-    const openAccordion = line.match(/^(\s*)<Accordion\b/u);
-    if (openAccordion) {
-      accordionStack.push({
-        indent: openAccordion[1].length,
-        line: index + 1,
-        hasOutdentedListItem: false,
-      });
-      continue;
-    }
-
-    const listItem = line.match(/^(\s*)[-*+]\s+/u);
-    if (listItem) {
-      for (const accordion of accordionStack) {
-        if (listItem[1].length < accordion.indent) {
-          accordion.hasOutdentedListItem = true;
-        }
-      }
-    }
-
-    const closeAccordion = line.match(/^(\s*)<\/Accordion>/u);
-    if (!closeAccordion) {
-      continue;
-    }
-
-    const opening = accordionStack.pop();
-    if (opening && opening.hasOutdentedListItem && closeAccordion[1].length > opening.indent) {
-      errors.push({
-        type: "mintlify-mdx",
-        file: filePath,
-        line: index + 1,
-        column: closeAccordion[1].length + 1,
-        message:
-          "Accordion closing tag is indented deeper than its opening tag; Mintlify can parse following markdown as nested content.",
-      });
-    }
+    const location = lineColumnForIndex(raw, match.index);
+    errors.push({
+      type: "poison-text",
+      file: filePath,
+      line: location.line,
+      column: location.column,
+      message,
+    });
   }
-
   return errors;
 }
 
 async function checkMdxFile(filePath) {
   const raw = fs.readFileSync(filePath, "utf8");
+  const poisonErrors = checkPoisonText(filePath, raw);
+  if (poisonErrors.length > 0) {
+    return poisonErrors;
+  }
   const structureErrors = checkMintlifyMdxStructure(filePath, raw);
   if (structureErrors.length > 0) {
     return structureErrors;

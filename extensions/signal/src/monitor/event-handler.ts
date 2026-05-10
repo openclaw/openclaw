@@ -11,14 +11,13 @@ import {
   shouldDebounceTextInbound,
 } from "openclaw/plugin-sdk/channel-inbound";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
-import { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
-import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
-import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
+import { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-} from "openclaw/plugin-sdk/config-runtime";
-import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
+import { resolveControlCommandGate } from "openclaw/plugin-sdk/command-auth";
+import { hasControlCommand } from "openclaw/plugin-sdk/command-auth";
 import { recordInboundSession } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createInternalHookEvent,
@@ -26,22 +25,24 @@ import {
   toInternalMessageReceivedContext,
   triggerInternalHook,
 } from "openclaw/plugin-sdk/hook-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/infra-runtime";
+import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import {
   buildPendingHistoryContextFromMap,
-  clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,
 } from "openclaw/plugin-sdk/reply-history";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { createReplyDispatcherWithTyping } from "openclaw/plugin-sdk/reply-runtime";
+import { settleReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   DM_GROUP_ACCESS_REASON,
   resolvePinnedMainDmOwnerFromAllowlist,
 } from "openclaw/plugin-sdk/security-runtime";
+import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeE164, normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
   formatSignalPairingIdLine,
@@ -232,80 +233,45 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       OriginatingTo: signalTo,
     });
 
-    await recordInboundSession({
-      storePath,
-      sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
-      ctx: ctxPayload,
-      updateLastRoute: !entry.isGroup
-        ? {
-            sessionKey: route.mainSessionKey,
-            channel: "signal",
-            to: entry.senderRecipient,
-            accountId: route.accountId,
-            mainDmOwnerPin: (() => {
-              const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
-                dmScope: deps.cfg.session?.dmScope,
-                allowFrom: deps.allowFrom,
-                normalizeEntry: normalizeSignalAllowRecipient,
-              });
-              if (!pinnedOwner) {
-                return undefined;
-              }
-              return {
-                ownerRecipient: pinnedOwner,
-                senderRecipient: entry.senderRecipient,
-                onSkip: ({ ownerRecipient, senderRecipient }) => {
-                  logVerbose(
-                    `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
-                  );
-                },
-              };
-            })(),
-          }
-        : undefined,
-      onRecordError: (err) => {
-        logVerbose(`signal: failed updating session meta: ${String(err)}`);
-      },
-    });
-
     if (shouldLogVerbose()) {
       const preview = body.slice(0, 200).replace(/\\n/g, "\\\\n");
       logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
     }
 
-    const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
-      cfg: deps.cfg,
-      agentId: route.agentId,
-      channel: "signal",
-      accountId: route.accountId,
-      typing: {
-        start: async () => {
-          if (!ctxPayload.To) {
-            return;
-          }
-          await sendTypingSignal(ctxPayload.To, {
-            cfg: deps.cfg,
-            baseUrl: deps.baseUrl,
-            account: deps.account,
-            accountId: deps.accountId,
-          });
+    const { onModelSelected, typingCallbacks, ...replyPipeline } =
+      createChannelMessageReplyPipeline({
+        cfg: deps.cfg,
+        agentId: route.agentId,
+        channel: "signal",
+        accountId: route.accountId,
+        typing: {
+          start: async () => {
+            if (!ctxPayload.To) {
+              return;
+            }
+            await sendTypingSignal(ctxPayload.To, {
+              cfg: deps.cfg,
+              baseUrl: deps.baseUrl,
+              account: deps.account,
+              accountId: deps.accountId,
+            });
+          },
+          onStartError: (err) => {
+            logTypingFailure({
+              log: logVerbose,
+              channel: "signal",
+              target: ctxPayload.To ?? undefined,
+              error: err,
+            });
+          },
         },
-        onStartError: (err) => {
-          logTypingFailure({
-            log: logVerbose,
-            channel: "signal",
-            target: ctxPayload.To ?? undefined,
-            error: err,
-          });
-        },
-      },
-    });
+      });
 
     const { dispatcher, replyOptions, markDispatchIdle } = createReplyDispatcherWithTyping({
       ...replyPipeline,
       humanDelay: resolveHumanDelayConfig(deps.cfg, route.agentId),
       typingCallbacks,
-      deliver: async (payload) => {
+      deliver: async (payload, _info) => {
         await deps.deliverReplies({
           cfg: deps.cfg,
           replies: [payload],
@@ -323,35 +289,87 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
 
-    const { queuedFinal } = await dispatchInboundMessage({
-      ctx: ctxPayload,
-      cfg: deps.cfg,
-      dispatcher,
-      replyOptions: {
-        ...replyOptions,
-        disableBlockStreaming:
-          typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
-        onModelSelected,
+    await runInboundReplyTurn({
+      channel: "signal",
+      accountId: route.accountId,
+      raw: entry,
+      adapter: {
+        ingest: () => ({
+          id: entry.messageId ?? `${entry.timestamp ?? Date.now()}`,
+          timestamp: entry.timestamp,
+          rawText: entry.bodyText,
+          raw: entry,
+        }),
+        resolveTurn: () => ({
+          channel: "signal",
+          accountId: route.accountId,
+          routeSessionKey: route.sessionKey,
+          storePath,
+          ctxPayload,
+          recordInboundSession,
+          record: {
+            updateLastRoute: !entry.isGroup
+              ? {
+                  sessionKey: route.mainSessionKey,
+                  channel: "signal",
+                  to: entry.senderRecipient,
+                  accountId: route.accountId,
+                  mainDmOwnerPin: (() => {
+                    const pinnedOwner = resolvePinnedMainDmOwnerFromAllowlist({
+                      dmScope: deps.cfg.session?.dmScope,
+                      allowFrom: deps.allowFrom,
+                      normalizeEntry: normalizeSignalAllowRecipient,
+                    });
+                    if (!pinnedOwner) {
+                      return undefined;
+                    }
+                    return {
+                      ownerRecipient: pinnedOwner,
+                      senderRecipient: entry.senderRecipient,
+                      onSkip: ({ ownerRecipient, senderRecipient }) => {
+                        logVerbose(
+                          `signal: skip main-session last route for ${senderRecipient} (pinned owner ${ownerRecipient})`,
+                        );
+                      },
+                    };
+                  })(),
+                }
+              : undefined,
+            onRecordError: (err) => {
+              logVerbose(`signal: failed updating session meta: ${String(err)}`);
+            },
+          },
+          history: {
+            isGroup: entry.isGroup,
+            historyKey,
+            historyMap: deps.groupHistories,
+            limit: deps.historyLimit,
+          },
+          onPreDispatchFailure: () =>
+            settleReplyDispatcher({
+              dispatcher,
+              onSettled: () => markDispatchIdle(),
+            }),
+          runDispatch: async () => {
+            try {
+              return await dispatchInboundMessage({
+                ctx: ctxPayload,
+                cfg: deps.cfg,
+                dispatcher,
+                replyOptions: {
+                  ...replyOptions,
+                  disableBlockStreaming:
+                    typeof deps.blockStreaming === "boolean" ? !deps.blockStreaming : undefined,
+                  onModelSelected,
+                },
+              });
+            } finally {
+              markDispatchIdle();
+            }
+          },
+        }),
       },
     });
-    markDispatchIdle();
-    if (!queuedFinal) {
-      if (entry.isGroup && historyKey) {
-        clearHistoryEntriesIfEnabled({
-          historyMap: deps.groupHistories,
-          historyKey,
-          limit: deps.historyLimit,
-        });
-      }
-      return;
-    }
-    if (entry.isGroup && historyKey) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: deps.groupHistories,
-        historyKey,
-        limit: deps.historyLimit,
-      });
-    }
   }
 
   const { debouncer: inboundDebouncer } = createChannelInboundDebouncer<SignalInboundEntry>({
@@ -474,7 +492,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     ]
       .filter(Boolean)
       .join(":");
-    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey });
+    enqueueSystemEvent(text, { sessionKey: route.sessionKey, contextKey, trusted: false });
     return true;
   }
 
@@ -535,19 +553,25 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const rawMessage = dataMessage?.message ?? "";
     const normalizedMessage = renderSignalMentions(rawMessage, dataMessage?.mentions);
     const messageText = normalizedMessage.trim();
-    const groupId = dataMessage?.groupInfo?.groupId ?? undefined;
+    const groupId = dataMessage?.groupInfo?.groupId ?? reaction?.groupInfo?.groupId ?? undefined;
     const isGroup = Boolean(groupId);
 
     const senderDisplay = formatSignalSenderDisplay(sender);
-    const { resolveAccessDecision, dmAccess, effectiveDmAllow, effectiveGroupAllow } =
-      await resolveSignalAccessState({
-        accountId: deps.accountId,
-        dmPolicy: deps.dmPolicy,
-        groupPolicy: deps.groupPolicy,
-        allowFrom: deps.allowFrom,
-        groupAllowFrom: deps.groupAllowFrom,
-        sender,
-      });
+    const {
+      resolveAccessDecision,
+      isGroupAllowed,
+      dmAccess,
+      effectiveDmAllow,
+      effectiveGroupAllow,
+    } = await resolveSignalAccessState({
+      accountId: deps.accountId,
+      dmPolicy: deps.dmPolicy,
+      groupPolicy: deps.groupPolicy,
+      allowFrom: deps.allowFrom,
+      groupAllowFrom: deps.groupAllowFrom,
+      sender,
+      groupId,
+    });
     const quoteText = normalizeOptionalString(dataMessage?.quote?.text) ?? "";
     const { contextVisibilityMode, quoteSenderAllowed, visibleQuoteText, visibleQuoteSender } =
       resolveSignalQuoteContext({
@@ -633,7 +657,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     const useAccessGroups = deps.cfg.commands?.useAccessGroups !== false;
     const commandDmAllow = isGroup ? deps.allowFrom : effectiveDmAllow;
     const ownerAllowedForCommands = isSignalSenderAllowed(sender, commandDmAllow);
-    const groupAllowedForCommands = isSignalSenderAllowed(sender, effectiveGroupAllow);
+    const groupAllowedForCommands = isGroupAllowed(effectiveGroupAllow);
     const hasControlCommandInMessage = hasControlCommand(messageText, deps.cfg);
     const commandGate = resolveControlCommandGate({
       useAccessGroups,
@@ -671,6 +695,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         channel: "signal",
         groupId,
         accountId: deps.accountId,
+        configuredGroupDefaultsToNoMention: true,
       });
     const canDetectMention = mentionRegexes.length > 0;
     const mentionDecision = resolveInboundMentionDecision({

@@ -2,21 +2,166 @@ import { describe, expect, it, vi } from "vitest";
 import { handleSlackMessageAction } from "./message-action-dispatch.js";
 
 function createInvokeSpy() {
-  return vi.fn(async (action: Record<string, unknown>) => ({
+  return vi.fn(async (action: Record<string, unknown>, _cfg?: unknown, _toolContext?: unknown) => ({
     ok: true,
     content: action,
   }));
 }
 
+function slackConfig() {
+  return { channels: { slack: { botToken: "tok" } } };
+}
+
+function expectForwardedCfg(invoke: ReturnType<typeof createInvokeSpy>, cfg: unknown) {
+  expect(invoke.mock.calls[0]?.[1]).toBe(cfg);
+}
+
 describe("handleSlackMessageAction", () => {
-  it("maps upload-file to the internal uploadFile action", async () => {
+  it("merges presentation and interactive blocks when sending", async () => {
     const invoke = createInvokeSpy();
 
     await handleSlackMessageAction({
       providerId: "slack",
       ctx: {
-        action: "upload-file",
+        action: "send",
         cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: {
+            blocks: [{ type: "text", text: "Deploy summary" }],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = invoke.mock.calls[0]?.[0] as {
+      blocks?: Array<{ type?: string; elements?: Array<{ value?: string }> }>;
+    };
+    expect(action.blocks).toEqual([
+      expect.objectContaining({ type: "section" }),
+      expect.objectContaining({
+        type: "actions",
+        elements: [expect.objectContaining({ value: "approve" })],
+      }),
+    ]);
+  });
+
+  it("keeps generated Slack control ids unique when presentation and interactive controls are merged", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg: {},
+        params: {
+          to: "channel:C1",
+          message: "Deploy?",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Stage", value: "stage" }],
+              },
+            ],
+          },
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    const action = invoke.mock.calls[0]?.[0] as {
+      blocks?: Array<{
+        block_id?: string;
+        elements?: Array<{ action_id?: string; value?: string }>;
+      }>;
+    };
+
+    expect(action.blocks).toEqual([
+      expect.objectContaining({
+        block_id: "openclaw_reply_buttons_1",
+        elements: [expect.objectContaining({ action_id: "openclaw:reply_button:1:1" })],
+      }),
+      expect.objectContaining({
+        block_id: "openclaw_reply_buttons_2",
+        elements: [expect.objectContaining({ action_id: "openclaw:reply_button:2:1" })],
+      }),
+    ]);
+  });
+
+  it("passes media and rendered interactive blocks through for split Slack delivery", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "Approval required",
+          media: "https://example.com/report.md",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Approve", value: "approve" }],
+              },
+            ],
+          },
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledOnce();
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:C1",
+        content: "Approval required",
+        mediaUrl: "https://example.com/report.md",
+        blocks: [
+          expect.objectContaining({
+            type: "actions",
+            elements: [expect.objectContaining({ value: "approve" })],
+          }),
+        ],
+      }),
+      cfg,
+      undefined,
+    );
+    expectForwardedCfg(invoke, cfg);
+  });
+
+  it("maps upload-file to the internal uploadFile action", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "upload-file",
+        cfg,
         params: {
           to: "user:U1",
           filePath: "/tmp/report.png",
@@ -39,19 +184,21 @@ describe("handleSlackMessageAction", () => {
         title: "Build Screenshot",
         threadTs: "111.222",
       }),
-      expect.any(Object),
+      cfg,
       undefined,
     );
+    expectForwardedCfg(invoke, cfg);
   });
 
   it("maps upload-file aliases to upload params", async () => {
     const invoke = createInvokeSpy();
+    const cfg = slackConfig();
 
     await handleSlackMessageAction({
       providerId: "slack",
       ctx: {
         action: "upload-file",
-        cfg: {},
+        cfg,
         params: {
           channelId: "C1",
           media: "/tmp/chart.png",
@@ -70,19 +217,21 @@ describe("handleSlackMessageAction", () => {
         initialComment: "chart attached",
         threadTs: "333.444",
       }),
-      expect.any(Object),
+      cfg,
       undefined,
     );
+    expectForwardedCfg(invoke, cfg);
   });
 
   it("maps upload-file path alias to filePath", async () => {
     const invoke = createInvokeSpy();
+    const cfg = slackConfig();
 
     await handleSlackMessageAction({
       providerId: "slack",
       ctx: {
         action: "upload-file",
-        cfg: {},
+        cfg,
         params: {
           to: "channel:C1",
           path: "/tmp/report.txt",
@@ -99,8 +248,35 @@ describe("handleSlackMessageAction", () => {
         filePath: "/tmp/report.txt",
         initialComment: "path alias",
       }),
-      expect.any(Object),
+      cfg,
       undefined,
+    );
+    expectForwardedCfg(invoke, cfg);
+  });
+
+  it("forwards messageId for read actions", async () => {
+    const invoke = createInvokeSpy();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "read",
+        cfg: {},
+        params: {
+          channelId: "C1",
+          messageId: "1712345678.654321",
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "readMessages",
+        channelId: "C1",
+        messageId: "1712345678.654321",
+      }),
+      {},
     );
   });
 
@@ -122,12 +298,13 @@ describe("handleSlackMessageAction", () => {
 
   it("maps download-file to the internal downloadFile action", async () => {
     const invoke = createInvokeSpy();
+    const cfg = slackConfig();
 
     await handleSlackMessageAction({
       providerId: "slack",
       ctx: {
         action: "download-file",
-        cfg: {},
+        cfg,
         params: {
           channelId: "C1",
           fileId: "F123",
@@ -144,18 +321,20 @@ describe("handleSlackMessageAction", () => {
         channelId: "C1",
         threadId: "111.222",
       }),
-      expect.any(Object),
+      cfg,
     );
+    expectForwardedCfg(invoke, cfg);
   });
 
   it("maps download-file target aliases to scope fields", async () => {
     const invoke = createInvokeSpy();
+    const cfg = slackConfig();
 
     await handleSlackMessageAction({
       providerId: "slack",
       ctx: {
         action: "download-file",
-        cfg: {},
+        cfg,
         params: {
           to: "channel:C2",
           fileId: "F999",
@@ -172,7 +351,8 @@ describe("handleSlackMessageAction", () => {
         channelId: "channel:C2",
         threadId: "333.444",
       }),
-      expect.any(Object),
+      cfg,
     );
+    expectForwardedCfg(invoke, cfg);
   });
 });

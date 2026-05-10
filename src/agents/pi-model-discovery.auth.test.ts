@@ -6,20 +6,40 @@ import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import {
   addEnvBackedPiCredentials,
   scrubLegacyStaticAuthJsonEntriesForDiscovery,
-} from "./pi-model-discovery.js";
+} from "./pi-auth-discovery-core.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
+  listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
   resolveProviderEnvApiKeyCandidates: () => ({
     mistral: ["MISTRAL_API_KEY"],
+  }),
+  resolveProviderEnvAuthEvidence: () => ({
+    "workspace-cloud": [
+      {
+        type: "local-file-with-env",
+        credentialMarker: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      },
+    ],
   }),
 }));
 
 vi.mock("./model-auth-env.js", () => ({
-  resolveEnvApiKey: (provider: string, env: NodeJS.ProcessEnv) => {
-    if (provider !== "mistral" || !env.MISTRAL_API_KEY?.trim()) {
-      return null;
+  resolveEnvApiKey: (
+    provider: string,
+    env: NodeJS.ProcessEnv,
+    options?: { workspaceDir?: string },
+  ) => {
+    if (provider === "mistral" && env.MISTRAL_API_KEY?.trim()) {
+      return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
     }
-    return { apiKey: env.MISTRAL_API_KEY, source: "env: MISTRAL_API_KEY" };
+    if (provider === "workspace-cloud" && options?.workspaceDir === "/tmp/workspace") {
+      return {
+        apiKey: "workspace-cloud-local-credentials",
+        source: "workspace cloud credentials",
+      };
+    }
+    return null;
   },
 }));
 
@@ -83,11 +103,12 @@ describe("discoverAuthStorage", () => {
       type: "api_key",
       key: "sk-ant-runtime",
     });
-    expect(credentials["openai-codex"]).toMatchObject({
-      type: "oauth",
-      access: "oauth-access",
-      refresh: "oauth-refresh",
-    });
+    const codexCredential = credentials["openai-codex"] as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(codexCredential?.type).toBe("oauth");
+    expect(codexCredential?.access).toBe("oauth-access");
+    expect(codexCredential?.refresh).toBe("oauth-refresh");
   });
 
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
@@ -106,10 +127,9 @@ describe("discoverAuthStorage", () => {
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      expect(parsed["openai-codex"]).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
-      });
+      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      expect(codexEntry?.type).toBe("oauth");
+      expect(codexEntry?.access).toBe("oauth-access");
     });
   });
 
@@ -125,7 +145,9 @@ describe("discoverAuthStorage", () => {
         scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
         const parsed = await readLegacyAuthJson(agentDir);
-        expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
+        expect(openrouterEntry?.type).toBe("api_key");
+        expect(openrouterEntry?.key).toBe("legacy-static-key");
       } finally {
         if (previous === undefined) {
           delete process.env.OPENCLAW_AUTH_STORE_READONLY;
@@ -136,7 +158,7 @@ describe("discoverAuthStorage", () => {
     });
   });
 
-  it("includes env-backed provider auth when no auth profile exists", async () => {
+  it("includes env-backed provider auth when no auth profile exists", () => {
     const previousMistral = process.env.MISTRAL_API_KEY;
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
@@ -144,7 +166,7 @@ describe("discoverAuthStorage", () => {
     delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
     try {
-      const credentials = addEnvBackedPiCredentials({}, process.env);
+      const credentials = addEnvBackedPiCredentials({}, { env: process.env });
 
       expect(credentials.mistral).toEqual({
         type: "api_key",
@@ -167,5 +189,20 @@ describe("discoverAuthStorage", () => {
         process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
       }
     }
+  });
+
+  it("includes workspace-scoped auth evidence in pi discovery credentials", () => {
+    const credentials = addEnvBackedPiCredentials(
+      {},
+      {
+        env: {},
+        workspaceDir: "/tmp/workspace",
+      },
+    );
+
+    expect(credentials["workspace-cloud"]).toEqual({
+      type: "api_key",
+      key: "workspace-cloud-local-credentials",
+    });
   });
 });

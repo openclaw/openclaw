@@ -14,6 +14,20 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+async function expectPathMissing(targetPath: string) {
+  let statError: unknown;
+  try {
+    await fsPromises.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect(statError).toBeInstanceOf(Error);
+  if (!(statError instanceof Error)) {
+    throw new Error("expected missing path error");
+  }
+  expect(Reflect.get(statError, "code")).toBe("ENOENT");
+}
+
 describe("resolveTsdownBuildInvocation", () => {
   it("routes Windows tsdown builds through the pnpm runner instead of shell=true", () => {
     const result = resolveTsdownBuildInvocation({
@@ -52,11 +66,11 @@ describe("resolveTsdownBuildInvocation", () => {
       throw new Error("locked");
     });
 
-    expect(() =>
+    expect(
       pruneSourceCheckoutBundledPluginNodeModules({
         cwd: process.cwd(),
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
 
     expect(warn).toHaveBeenCalledWith(
       "tsdown: could not prune bundled plugin source node_modules: Error: locked",
@@ -97,31 +111,31 @@ describe("resolveTsdownBuildInvocation", () => {
     await expect(
       fsPromises.readFile(path.join(distRuntimeDir, "heartbeat-runner.runtime.js"), "utf8"),
     ).resolves.toBe("alias\n");
-    await expect(fsPromises.stat(path.join(distDir, "delegate-BPjCe4gC.js"))).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distDir, "compact.runtime-2DiEmVcA.js")),
-    ).rejects.toThrow();
-    await expect(
-      fsPromises.stat(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js")),
-    ).rejects.toThrow();
+    await expectPathMissing(path.join(distDir, "delegate-BPjCe4gC.js"));
+    await expectPathMissing(path.join(distDir, "compact.runtime-2DiEmVcA.js"));
+    await expectPathMissing(path.join(distRuntimeDir, "heartbeat-runner.runtime-fspOEj_1.js"));
   });
 
   it("cleans tsdown output roots before using tsdown --no-clean", async () => {
     const rootDir = createTempDir("openclaw-tsdown-clean-");
     const distFile = path.join(rootDir, "dist", "stale.js");
+    const pluginGeneratedFile = path.join(rootDir, "dist", "extensions", "telegram", "index.js");
     const distRuntimeFile = path.join(rootDir, "dist-runtime", "stale.js");
     const unrelatedFile = path.join(rootDir, "tmp", "keep.js");
     await fsPromises.mkdir(path.dirname(distFile), { recursive: true });
+    await fsPromises.mkdir(path.dirname(pluginGeneratedFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(distRuntimeFile), { recursive: true });
     await fsPromises.mkdir(path.dirname(unrelatedFile), { recursive: true });
     await fsPromises.writeFile(distFile, "stale\n");
+    await fsPromises.writeFile(pluginGeneratedFile, "generated\n");
     await fsPromises.writeFile(distRuntimeFile, "stale\n");
     await fsPromises.writeFile(unrelatedFile, "keep\n");
 
     cleanTsdownOutputRoots({ cwd: rootDir });
 
-    await expect(fsPromises.stat(path.join(rootDir, "dist"))).rejects.toThrow();
-    await expect(fsPromises.stat(path.join(rootDir, "dist-runtime"))).rejects.toThrow();
+    await expectPathMissing(distFile);
+    await expectPathMissing(pluginGeneratedFile);
+    await expectPathMissing(path.join(rootDir, "dist-runtime"));
     await expect(fsPromises.readFile(unrelatedFile, "utf8")).resolves.toBe("keep\n");
   });
 });

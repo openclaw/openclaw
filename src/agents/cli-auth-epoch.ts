@@ -5,25 +5,29 @@ import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/ty
 import {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
+  readGeminiCliCredentialsCached,
   type ClaudeCliCredential,
   type CodexCliCredential,
+  type GeminiCliCredential,
 } from "./cli-credentials.js";
 
 type CliAuthEpochDeps = {
   readClaudeCliCredentialsCached: typeof readClaudeCliCredentialsCached;
   readCodexCliCredentialsCached: typeof readCodexCliCredentialsCached;
+  readGeminiCliCredentialsCached: typeof readGeminiCliCredentialsCached;
   loadAuthProfileStoreForRuntime: typeof loadAuthProfileStoreForRuntime;
 };
 
 const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
   readClaudeCliCredentialsCached,
   readCodexCliCredentialsCached,
+  readGeminiCliCredentialsCached,
   loadAuthProfileStoreForRuntime,
 };
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 3;
+export const CLI_AUTH_EPOCH_VERSION = 4;
 
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
@@ -72,6 +76,17 @@ function encodeCodexCredential(credential: CodexCliCredential): string {
   return encodeOAuthIdentity(credential);
 }
 
+function encodeGeminiCredential(credential: GeminiCliCredential): string {
+  // Delegate to the shared OAuth-identity encoder. The Gemini CLI reader
+  // lifts the Google-account identity (sub, email) off the openid id_token
+  // onto the credential, so the encoder fingerprints the user through stable,
+  // non-secret identity fields — matching the Claude/Codex OAuth contract.
+  // When the id_token is absent (older logins, scope omitted), the encoder
+  // falls back to a provider-keyed constant, the same identity-less behavior
+  // the Claude CLI OAuth branch tolerates.
+  return encodeOAuthIdentity(credential);
+}
+
 function encodeAuthProfileCredential(credential: AuthProfileCredential): string {
   switch (credential.type) {
     case "api_key":
@@ -99,6 +114,25 @@ function encodeAuthProfileCredential(credential: AuthProfileCredential): string 
   throw new Error("Unsupported auth profile credential type");
 }
 
+function hasOAuthAccountIdentity(credential: AuthProfileCredential): boolean {
+  return (
+    credential.type === "oauth" &&
+    (normalizeOptionalString(credential.accountId) !== undefined ||
+      normalizeOptionalString(credential.email) !== undefined)
+  );
+}
+
+function encodeAuthProfileEpochPart(
+  authProfileId: string,
+  credential: AuthProfileCredential,
+): string {
+  const credentialHash = hashCliAuthEpochPart(encodeAuthProfileCredential(credential));
+  if (hasOAuthAccountIdentity(credential)) {
+    return `profile:oauth-identity:${credentialHash}`;
+  }
+  return `profile:${authProfileId}:${credentialHash}`;
+}
+
 function getLocalCliCredentialFingerprint(provider: string): string | undefined {
   switch (provider) {
     case "claude-cli": {
@@ -111,8 +145,15 @@ function getLocalCliCredentialFingerprint(provider: string): string | undefined 
     case "codex-cli": {
       const credential = cliAuthEpochDeps.readCodexCliCredentialsCached({
         ttlMs: 5000,
+        allowKeychainPrompt: false,
       });
       return credential ? hashCliAuthEpochPart(encodeCodexCredential(credential)) : undefined;
+    }
+    case "google-gemini-cli": {
+      const credential = cliAuthEpochDeps.readGeminiCliCredentialsCached({
+        ttlMs: 5000,
+      });
+      return credential ? hashCliAuthEpochPart(encodeGeminiCredential(credential)) : undefined;
     }
     default:
       return undefined;
@@ -152,9 +193,7 @@ export async function resolveCliAuthEpoch(params: {
     });
     const credential = getAuthProfileCredential(store, authProfileId);
     if (credential) {
-      parts.push(
-        `profile:${authProfileId}:${hashCliAuthEpochPart(encodeAuthProfileCredential(credential))}`,
-      );
+      parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
     }
   }
 

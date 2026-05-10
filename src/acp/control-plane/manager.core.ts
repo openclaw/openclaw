@@ -39,6 +39,7 @@ import {
   applyManagerRuntimeControls,
   resolveManagerRuntimeCapabilities,
 } from "./manager.runtime-controls.js";
+import { consumeAcpTurnStream } from "./manager.turn-stream.js";
 import {
   type AcpCloseSessionInput,
   type AcpCloseSessionResult,
@@ -74,6 +75,7 @@ import {
   mergeRuntimeOptions,
   normalizeRuntimeOptions,
   normalizeText,
+  resolveRuntimeConfigOptionKey,
   resolveRuntimeOptionsFromMeta,
   runtimeOptionsEqual,
   validateRuntimeConfigOptionInput,
@@ -97,11 +99,15 @@ function summarizeBackgroundTaskText(text: string): string {
 }
 
 function appendBackgroundTaskProgressSummary(current: string, chunk: string): string {
-  const normalizedChunk = normalizeText(chunk)?.replace(/\s+/g, " ");
+  const normalizedChunk = chunk.replace(/\s+/g, " ");
   if (!normalizedChunk) {
     return current;
   }
-  const combined = current ? `${current} ${normalizedChunk}` : normalizedChunk;
+  const chunkToAppend = current ? normalizedChunk : normalizedChunk.trimStart();
+  if (!chunkToAppend) {
+    return current;
+  }
+  const combined = `${current}${chunkToAppend}`.replace(/\s+/g, " ");
   if (combined.length <= ACP_BACKGROUND_TASK_PROGRESS_MAX_LENGTH) {
     return combined;
   }
@@ -316,6 +322,8 @@ export class AcpSessionManager {
         ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
       });
       const requestedCwd = initialRuntimeOptions.cwd;
+      const requestedModel = initialRuntimeOptions.model;
+      const requestedThinking = initialRuntimeOptions.thinking;
       this.enforceConcurrentSessionLimit({
         cfg: input.cfg,
         sessionKey,
@@ -327,6 +335,8 @@ export class AcpSessionManager {
             agent,
             mode: input.mode,
             resumeSessionId: input.resumeSessionId,
+            ...(requestedModel ? { model: requestedModel } : {}),
+            ...(requestedThinking ? { thinking: requestedThinking } : {}),
             cwd: requestedCwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -579,7 +589,11 @@ export class AcpSessionManager {
         meta: resolvedMeta,
       });
       const inferredPatch = inferRuntimeOptionPatchFromConfigOption(key, value);
-      const capabilities = await this.resolveRuntimeCapabilities({ runtime, handle });
+      const capabilities = await this.resolveRuntimeCapabilities({
+        runtime,
+        handle,
+        includeStatusConfigOptionKeys: true,
+      });
       if (
         !capabilities.controls.includes("session/set_config_option") ||
         !runtime.setConfigOption
@@ -592,13 +606,17 @@ export class AcpSessionManager {
 
       const advertisedKeys = new Set(
         (capabilities.configOptionKeys ?? [])
-          .map((entry) => normalizeText(entry))
-          .filter(Boolean) as string[],
+          .map((entry) => normalizeLowercaseStringOrEmpty(entry))
+          .filter(Boolean),
       );
-      if (advertisedKeys.size > 0 && !advertisedKeys.has(key)) {
+      const wireKey = resolveRuntimeConfigOptionKey(key, capabilities.configOptionKeys);
+      if (
+        advertisedKeys.size > 0 &&
+        !advertisedKeys.has(normalizeLowercaseStringOrEmpty(wireKey))
+      ) {
         throw new AcpRuntimeError(
           "ACP_BACKEND_UNSUPPORTED_CONTROL",
-          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${key}".`,
+          `ACP backend "${handle.backend || meta.backend}" does not accept config key "${wireKey}".`,
         );
       }
 
@@ -606,7 +624,7 @@ export class AcpSessionManager {
         run: async () =>
           await runtime.setConfigOption!({
             handle,
-            key,
+            key: wireKey,
             value,
           }),
         fallbackCode: "ACP_TURN_FAILED",
@@ -780,59 +798,46 @@ export class AcpSessionManager {
             this.activeTurnBySession.set(actorKey, activeTurn);
             activeTurnStarted = true;
 
-            let streamError: AcpRuntimeError | null = null;
             const combinedSignal =
               input.signal && typeof AbortSignal.any === "function"
                 ? AbortSignal.any([input.signal, internalAbortController.signal])
                 : internalAbortController.signal;
             const eventGate = { open: true };
-            const turnPromise = (async () => {
-              for await (const event of runtime.runTurn({
+            const turnPromise = consumeAcpTurnStream({
+              runtime,
+              turn: {
                 handle,
                 text: input.text,
                 attachments: input.attachments,
                 mode: input.mode,
                 requestId: input.requestId,
                 signal: combinedSignal,
-              })) {
-                if (!eventGate.open) {
-                  continue;
-                }
-                if (event.type === "error") {
-                  streamError = new AcpRuntimeError(
-                    normalizeAcpErrorCode(event.code),
-                    normalizeText(event.message) || "ACP turn failed before completion.",
+              },
+              eventGate,
+              onOutputEvent: (event) => {
+                sawTurnOutput = true;
+                if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
+                  taskProgressSummary = appendBackgroundTaskProgressSummary(
+                    taskProgressSummary,
+                    event.text,
                   );
-                } else if (event.type === "text_delta" || event.type === "tool_call") {
-                  sawTurnOutput = true;
-                  if (event.type === "text_delta" && event.stream !== "thought" && event.text) {
-                    taskProgressSummary = appendBackgroundTaskProgressSummary(
-                      taskProgressSummary,
-                      event.text,
-                    );
-                  }
-                  if (taskContext) {
-                    this.markBackgroundTaskRunning(taskContext.runId, {
-                      sessionKey,
-                      lastEventAt: Date.now(),
-                      progressSummary: taskProgressSummary || null,
-                    });
-                  }
                 }
-                if (input.onEvent) {
-                  await input.onEvent(event);
+                if (taskContext) {
+                  this.markBackgroundTaskRunning(taskContext.runId, {
+                    sessionKey,
+                    lastEventAt: Date.now(),
+                    progressSummary: taskProgressSummary || null,
+                  });
                 }
-              }
-              if (eventGate.open && streamError) {
-                throw streamError;
-              }
-            })();
+              },
+              onEvent: input.onEvent,
+            });
             const turnTimeoutMs = this.resolveTurnTimeoutMs({
               cfg: input.cfg,
               meta,
             });
             const sessionMode = meta.mode;
-            await this.awaitTurnWithTimeout({
+            const turnOutcome = await this.awaitTurnWithTimeout({
               sessionKey,
               turnPromise,
               timeoutMs: turnTimeoutMs + ACP_TURN_TIMEOUT_GRACE_MS,
@@ -850,8 +855,11 @@ export class AcpSessionManager {
                 });
               },
             });
-            if (streamError) {
-              throw streamError;
+            if (!turnOutcome.sawTerminalEvent) {
+              throw new AcpRuntimeError(
+                "ACP_TURN_FAILED",
+                "ACP turn ended without a terminal done event.",
+              );
             }
             this.recordTurnCompletion({
               startedAt: turnStartedAt,
@@ -925,15 +933,8 @@ export class AcpSessionManager {
             if (activeTurn && this.activeTurnBySession.get(actorKey) === activeTurn) {
               this.activeTurnBySession.delete(actorKey);
             }
-            if (
-              !retryFreshHandle &&
-              !skipPostTurnCleanup &&
-              runtime &&
-              handle &&
-              meta &&
-              meta.mode !== "oneshot"
-            ) {
-              ({ handle } = await this.reconcileRuntimeSessionIdentifiers({
+            if (!retryFreshHandle && !skipPostTurnCleanup && runtime && handle && meta) {
+              ({ handle, meta } = await this.reconcileRuntimeSessionIdentifiers({
                 cfg: input.cfg,
                 sessionKey,
                 runtime,
@@ -1309,6 +1310,8 @@ export class AcpSessionManager {
             (acpError.code === "ACP_BACKEND_MISSING" ||
               acpError.code === "ACP_BACKEND_UNAVAILABLE" ||
               (input.discardPersistentState && acpError.code === "ACP_SESSION_INIT_FAILED") ||
+              (input.discardPersistentState &&
+                acpError.code === "ACP_BACKEND_UNSUPPORTED_CONTROL") ||
               this.isRecoverableAcpxExitError(acpError.message))
           ) {
             if (input.discardPersistentState) {
@@ -1378,6 +1381,8 @@ export class AcpSessionManager {
     const mode = params.meta.mode;
     const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
     const cwd = runtimeOptions.cwd ?? normalizeText(params.meta.cwd);
+    const model = normalizeText(runtimeOptions.model);
+    const thinking = normalizeText(runtimeOptions.thinking);
     const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
     const cached = this.getCachedRuntimeState(params.sessionKey);
     if (cached) {
@@ -1434,6 +1439,8 @@ export class AcpSessionManager {
             agent,
             mode,
             ...(resumeSessionId ? { resumeSessionId } : {}),
+            ...(model ? { model } : {}),
+            ...(thinking ? { thinking } : {}),
             cwd,
           }),
         fallbackCode: "ACP_SESSION_INIT_FAILED",
@@ -1881,6 +1888,7 @@ export class AcpSessionManager {
   private async resolveRuntimeCapabilities(params: {
     runtime: AcpRuntime;
     handle: AcpRuntimeHandle;
+    includeStatusConfigOptionKeys?: boolean;
   }): Promise<AcpRuntimeCapabilities> {
     return await resolveManagerRuntimeCapabilities(params);
   }

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
@@ -15,7 +15,7 @@ type ConfiguredBindingResolution = NonNullable<
   NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
 >;
 
-export type DiscordNativeInteractionRouteState = {
+type DiscordNativeInteractionRouteState = {
   route: ResolvedAgentRoute;
   effectiveRoute: ResolvedAgentRoute;
   boundSessionKey?: string;

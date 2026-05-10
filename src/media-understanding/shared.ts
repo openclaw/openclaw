@@ -1,28 +1,28 @@
 import path from "node:path";
+import { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
+export { assertOkOrThrowHttpError } from "../agents/provider-http-errors.js";
 import type {
   ProviderRequestCapability,
   ProviderRequestTransport,
 } from "../agents/provider-attribution.js";
 import {
   buildProviderRequestDispatcherPolicy,
-  normalizeBaseUrl,
   resolveProviderRequestPolicyConfig,
-  sanitizeConfiguredModelProviderRequest,
   type ProviderRequestTransportOverrides,
   type ResolvedProviderRequestConfig,
 } from "../agents/provider-request-config.js";
 import type { GuardedFetchMode, GuardedFetchResult } from "../infra/net/fetch-guard.js";
 import { fetchWithSsrFGuard, GUARDED_FETCH_MODE } from "../infra/net/fetch-guard.js";
-import { hasEnvHttpProxyConfigured, matchesNoProxy } from "../infra/net/proxy-env.js";
+import { shouldUseEnvHttpProxyForUrl } from "../infra/net/proxy-env.js";
 import type { LookupFn, PinnedDispatcherPolicy, SsrFPolicy } from "../infra/net/ssrf.js";
 import { fetchWithTimeout } from "../utils/fetch-timeout.js";
 export { fetchWithTimeout };
 export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
+const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_ERROR_CHARS = 300;
 const MAX_ERROR_RESPONSE_BYTES = 4096;
-const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
@@ -256,29 +256,7 @@ function shouldAutoUpgradeToTrustedEnvProxy(params: {
     return false;
   }
 
-  let protocol: "http" | "https";
-  try {
-    const parsed = new URL(params.url);
-    if (parsed.protocol === "http:") {
-      protocol = "http";
-    } else if (parsed.protocol === "https:") {
-      protocol = "https";
-    } else {
-      return false;
-    }
-  } catch {
-    return false;
-  }
-
-  if (!hasEnvHttpProxyConfigured(protocol)) {
-    return false;
-  }
-
-  if (matchesNoProxy(params.url)) {
-    return false;
-  }
-
-  return true;
+  return shouldUseEnvHttpProxyForUrl(params.url);
 }
 
 export async function fetchWithTimeoutGuarded(
@@ -341,15 +319,30 @@ export async function fetchWithTimeoutGuarded(
 
 type GuardedPostRequestOptions = NonNullable<Parameters<typeof fetchWithTimeoutGuarded>[4]>;
 
+function mergeGuardedPostSsrfPolicy(params: {
+  ssrfPolicy?: SsrFPolicy;
+  allowPrivateNetwork?: boolean;
+}): SsrFPolicy | undefined {
+  if (!params.ssrfPolicy) {
+    return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
+  }
+  if (!params.allowPrivateNetwork) {
+    return params.ssrfPolicy;
+  }
+  return { ...params.ssrfPolicy, allowPrivateNetwork: true };
+}
+
 function resolveGuardedPostRequestOptions(params: {
   pinDns?: boolean;
   allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
   mode?: GuardedFetchMode;
 }): GuardedPostRequestOptions | undefined {
   if (
     !params.allowPrivateNetwork &&
+    !params.ssrfPolicy &&
     !params.dispatcherPolicy &&
     params.pinDns === undefined &&
     !params.auditContext &&
@@ -357,8 +350,9 @@ function resolveGuardedPostRequestOptions(params: {
   ) {
     return undefined;
   }
+  const ssrfPolicy = mergeGuardedPostSsrfPolicy(params);
   return {
-    ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+    ...(ssrfPolicy ? { ssrfPolicy } : {}),
     ...(params.pinDns !== undefined ? { pinDns: params.pinDns } : {}),
     ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
     ...(params.auditContext ? { auditContext: params.auditContext } : {}),
@@ -374,6 +368,7 @@ export async function postTranscriptionRequest(params: {
   fetchFn: typeof fetch;
   pinDns?: boolean;
   allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
   /**
@@ -404,6 +399,7 @@ export async function postJsonRequest(params: {
   fetchFn: typeof fetch;
   pinDns?: boolean;
   allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
   /**
@@ -434,6 +430,7 @@ export async function postMultipartRequest(params: {
   fetchFn: typeof fetch;
   pinDns?: boolean;
   allowPrivateNetwork?: boolean;
+  ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   auditContext?: string;
   /**
@@ -510,15 +507,6 @@ export async function readErrorResponse(res: Response): Promise<string | undefin
       // Ignore stream-cancel failures while reporting the original HTTP error.
     }
   }
-}
-
-export async function assertOkOrThrowHttpError(res: Response, label: string): Promise<void> {
-  if (res.ok) {
-    return;
-  }
-  const detail = await readErrorResponse(res);
-  const suffix = detail ? `: ${detail}` : "";
-  throw new Error(`${label} (HTTP ${res.status})${suffix}`);
 }
 
 export function requireTranscriptionText(

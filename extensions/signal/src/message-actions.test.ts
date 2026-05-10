@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendReactionsModule = await import("./send-reactions.js");
@@ -33,7 +33,7 @@ describe("signalMessageActions", () => {
   it("lists actions based on configured accounts and reaction gates", () => {
     expect(
       signalMessageActions.describeMessageTool?.({ cfg: {} as OpenClawConfig })?.actions ?? [],
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       signalMessageActions.describeMessageTool?.({

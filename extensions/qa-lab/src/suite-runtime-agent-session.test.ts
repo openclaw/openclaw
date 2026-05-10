@@ -17,8 +17,8 @@ describe("qa suite runtime agent session helpers", () => {
   const gatewayCall = vi.fn();
   const env = {
     gateway: { call: gatewayCall },
-    primaryModel: "openai/gpt-5.4",
-    alternateModel: "openai/gpt-5.4-mini",
+    primaryModel: "openai/gpt-5.5",
+    alternateModel: "openai/gpt-5.5-mini",
     providerMode: "mock-openai",
   } as never;
 
@@ -87,6 +87,6 @@ describe("qa suite runtime agent session helpers", () => {
       readRawQaSessionStore({
         gateway: { tempRoot },
       } as never),
-    ).resolves.toEqual({});
+    ).resolves.toStrictEqual({});
   });
 });

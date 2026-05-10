@@ -10,7 +10,11 @@ import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-fil
 import { buildEmbeddedSystemPrompt } from "../../../src/agents/pi-embedded-runner/system-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
 import { createStubTool } from "../../../src/agents/test-helpers/pi-tool-stubs.js";
-import { buildGroupChatContext, buildGroupIntro } from "../../../src/auto-reply/reply/groups.js";
+import {
+  buildDirectChatContext,
+  buildGroupChatContext,
+  buildGroupIntro,
+} from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
@@ -74,6 +78,7 @@ function buildSystemPrompt(params: {
   skillsPrompt?: string;
   reactionGuidance?: { level: "minimal" | "extensive"; channel: string };
   contextFiles?: Array<{ path: string; content: string }>;
+  silentReplyPromptMode?: "generic" | "none";
 }) {
   const { runtimeInfo, userTimezone, userTime, userTimeFormat, toolNames } =
     buildCommonSystemParams(params.workspaceDir);
@@ -87,6 +92,7 @@ function buildSystemPrompt(params: {
     toolNames,
     modelAliasLines: [],
     promptMode: "full",
+    silentReplyPromptMode: params.silentReplyPromptMode,
     acpEnabled: true,
     skillsPrompt: params.skillsPrompt,
     reactionGuidance: params.reactionGuidance,
@@ -118,7 +124,21 @@ function buildAutoReplySystemPrompt(params: {
 }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx),
-    params.includeGroupChatContext ? buildGroupChatContext({ sessionCtx: params.sessionCtx }) : "",
+    params.sessionCtx.ChatType === "direct" || params.sessionCtx.ChatType === "dm"
+      ? buildDirectChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "disallow",
+          silentReplyRewrite: true,
+        })
+      : "",
+    params.includeGroupChatContext
+      ? buildGroupChatContext({
+          sessionCtx: params.sessionCtx,
+          silentToken: SILENT_REPLY_TOKEN,
+          silentReplyPolicy: "allow",
+        })
+      : "",
     params.includeGroupIntro
       ? buildGroupIntro({
           cfg: {} as OpenClawConfig,
@@ -132,6 +152,12 @@ function buildAutoReplySystemPrompt(params: {
   return buildSystemPrompt({
     workspaceDir: params.workspaceDir,
     extraSystemPrompt: extraSystemPromptParts.join("\n\n") || undefined,
+    silentReplyPromptMode:
+      params.sessionCtx.ChatType === "direct" ||
+      params.sessionCtx.ChatType === "dm" ||
+      params.includeGroupChatContext
+        ? "none"
+        : "generic",
   });
 }
 
@@ -179,7 +205,7 @@ function createDirectScenario(workspaceDir: string): PromptScenario {
     OriginatingChannel: "slack",
     OriginatingTo: "D123",
     AccountId: "A1",
-    ChatType: "direct",
+    ChatType: "dm",
     SenderId: "U1",
     SenderName: "Alice",
     Body: "hi",
@@ -568,7 +594,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "Store durable memories only in memory/2026-03-15.md (create memory/ if needed).",
     "Treat workspace bootstrap/reference files such as MEMORY.md, SOUL.md, TOOLS.md, and AGENTS.md as read-only during this flush; never overwrite, replace, or edit them.",
     "If nothing to store, reply with NO_REPLY.",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const memoryFlushSystemPrompt = buildSystemPrompt({
     workspaceDir,
@@ -592,7 +619,8 @@ async function createMaintenanceScenario(workspaceDir: string): Promise<PromptSc
     "## Red Lines",
     "Do not delete production data.",
     "",
-    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles) / 2026-03-16 04:30 UTC",
+    "Current time: Sunday, March 15th, 2026 - 9:30 PM (America/Los_Angeles)",
+    "Reference UTC: 2026-03-16 04:30 UTC",
   ].join("\n");
   const postCompactionSystemPrompt = buildSystemPrompt({
     workspaceDir,

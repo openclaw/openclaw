@@ -14,9 +14,11 @@ const resolveStorePathMock = vi.fn((_store: unknown, _options: unknown) => "/tmp
 const resolveMainSessionKeyMock = vi.fn((_cfg: unknown) => "agent:main:main");
 const readLatestAssistantReplyMock = vi.fn(async (_params?: unknown) => "raw subagent reply");
 const isEmbeddedPiRunActiveMock = vi.fn((_sessionId: string) => false);
-const queueEmbeddedPiMessageMock = vi.fn((_sessionId: string, _text: string) => false);
+const queueEmbeddedPiMessageMock = vi.fn(
+  (_sessionId: string, _text: string, _options?: unknown) => false,
+);
 const waitForEmbeddedPiRunEndMock = vi.fn(async (_sessionId: string, _timeoutMs?: number) => true);
-let mockConfig: ReturnType<(typeof import("../config/config.js"))["loadConfig"]> = {
+let mockConfig: ReturnType<(typeof import("../config/config.js"))["getRuntimeConfig"]> = {
   session: {
     mainKey: "main",
     scope: "per-sender",
@@ -39,10 +41,10 @@ const { subagentRegistryRuntimeMock } = vi.hoisted(() => ({
 vi.mock("./subagent-announce.runtime.js", () => ({
   callGateway: (request: unknown) => callGatewayMock(request),
   isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-  loadConfig: () => mockConfig,
+  getRuntimeConfig: () => mockConfig,
   loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
-  queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-    queueEmbeddedPiMessageMock(sessionId, text),
+  queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
+    queueEmbeddedPiMessageMock(sessionId, text, options),
   resolveAgentIdFromSessionKey: (sessionKey: string) =>
     resolveAgentIdFromSessionKeyMock(sessionKey),
   resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
@@ -58,15 +60,15 @@ vi.mock("./tools/agent-step.js", () => ({
 vi.mock("./subagent-announce-delivery.runtime.js", () =>
   createSubagentAnnounceDeliveryRuntimeMock({
     callGateway: (request: unknown) => callGatewayMock(request),
-    loadConfig: () => mockConfig,
+    getRuntimeConfig: () => mockConfig,
     loadSessionStore: (storePath: string) => loadSessionStoreMock(storePath),
     resolveAgentIdFromSessionKey: (sessionKey: string) =>
       resolveAgentIdFromSessionKeyMock(sessionKey),
     resolveMainSessionKey: (cfg: unknown) => resolveMainSessionKeyMock(cfg),
     resolveStorePath: (store: unknown, options: unknown) => resolveStorePathMock(store, options),
     isEmbeddedPiRunActive: (sessionId: string) => isEmbeddedPiRunActiveMock(sessionId),
-    queueEmbeddedPiMessage: (sessionId: string, text: string) =>
-      queueEmbeddedPiMessageMock(sessionId, text),
+    queueEmbeddedPiMessage: (sessionId: string, text: string, options?: unknown) =>
+      queueEmbeddedPiMessageMock(sessionId, text, options),
   }),
 );
 
@@ -101,6 +103,7 @@ vi.mock("./subagent-announce-delivery.js", () => ({
       queueEmbeddedPiMessageMock(
         sessionId,
         `[Internal task completion event]\n${params.triggerMessage}`,
+        { steeringMode: "all" },
       );
       return { delivered: true, path: "queue" };
     }
@@ -355,6 +358,7 @@ describe("subagent announce seam flow", () => {
     expect(queueEmbeddedPiMessageMock).toHaveBeenCalledWith(
       "session-origin-provider-steer",
       expect.stringContaining("[Internal task completion event]"),
+      { steeringMode: "all" },
     );
     expect(agentSpy).not.toHaveBeenCalled();
   });
@@ -384,17 +388,12 @@ describe("subagent announce seam flow", () => {
 
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expect(agentSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: "agent:main:main",
-          deliver: false,
-          bestEffortDeliver: true,
-          accountId: "default",
-        }),
-      }),
-    );
+    const agentCall = agentSpy.mock.calls[0]?.[0];
+    expect(agentCall?.method).toBe("agent");
+    expect(agentCall?.params?.sessionKey).toBe("agent:main:main");
+    expect(agentCall?.params?.deliver).toBe(false);
+    expect(agentCall?.params?.bestEffortDeliver).toBe(true);
+    expect(agentCall?.params?.accountId).toBe("default");
   });
 
   it("keeps nested subagent completion announces channel-less in session-only mode", async () => {
@@ -464,13 +463,9 @@ describe("subagent announce seam flow", () => {
     expect(didAnnounce).toBe(true);
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const agentCall = agentSpy.mock.calls[0]?.[0];
-    expect(agentCall?.params).toEqual(
-      expect.objectContaining({
-        deliver: true,
-        channel: "telegram",
-        accountId: "bot:123",
-        to: "-1001234567890",
-      }),
-    );
+    expect(agentCall?.params?.deliver).toBe(true);
+    expect(agentCall?.params?.channel).toBe("telegram");
+    expect(agentCall?.params?.accountId).toBe("bot-123");
+    expect(agentCall?.params?.to).toBe("-1001234567890");
   });
 });

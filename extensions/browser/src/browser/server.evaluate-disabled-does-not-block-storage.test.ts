@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { getBrowserTestFetch } from "./test-fetch.js";
 import { getFreePort } from "./test-port.js";
+import { getBrowserTestFetch } from "./test-support/fetch.js";
 
 let testPort = 0;
 let prevGatewayPort: string | undefined;
@@ -37,18 +37,20 @@ const routeCtxMocks = vi.hoisted(() => {
 
 vi.mock("../config/config.js", async () => {
   const actual = await vi.importActual<typeof import("../config/config.js")>("../config/config.js");
+  const loadConfig = () => ({
+    browser: {
+      enabled: true,
+      evaluateEnabled: false,
+      defaultProfile: "openclaw",
+      profiles: {
+        openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
+      },
+    },
+  });
   return {
     ...actual,
-    loadConfig: () => ({
-      browser: {
-        enabled: true,
-        evaluateEnabled: false,
-        defaultProfile: "openclaw",
-        profiles: {
-          openclaw: { cdpPort: testPort + 1, color: "#FF4500" },
-        },
-      },
-    }),
+    getRuntimeConfig: loadConfig,
+    loadConfig,
     writeConfigFile: vi.fn(async () => {}),
   };
 });

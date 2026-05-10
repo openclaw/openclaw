@@ -66,26 +66,37 @@ export async function handleDiscordMessageAction(
     return target;
   };
   const resolveChannelId = () => resolveDiscordChannelId(readTarget());
+  const readSendTarget = () => {
+    const target =
+      readStringParam(params, "to") ??
+      readStringParam(params, "target") ??
+      readCurrentDiscordTarget(ctx.toolContext);
+    if (!target) {
+      throw new Error("Discord channel target is required (use channel:<id>).");
+    }
+    return target;
+  };
 
   if (action === "send") {
-    const to = readStringParam(params, "to", { required: true });
+    const to = readSendTarget();
     const asVoice = readBooleanParam(params, "asVoice") === true;
     const rawComponents =
+      params.components ??
       buildDiscordPresentationComponents(normalizeMessagePresentation(params.presentation)) ??
       buildDiscordInteractiveComponents(normalizeInteractiveReply(params.interactive));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
-    const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents,
-      allowEmpty: true,
-    });
     // Support media, path, and filePath for media URL
     const mediaUrl =
       readStringParam(params, "media", { trim: false }) ??
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
+    const content = readStringParam(params, "message", {
+      required: !asVoice && !hasComponents && !mediaUrl,
+      allowEmpty: true,
+    });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const rawEmbeds = params.embeds;
@@ -98,13 +109,48 @@ export async function handleDiscordMessageAction(
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
-        content,
+        content: content ?? "",
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         components,
         embeds,
         asVoice,
+        silent,
+        __sessionKey: sessionKey ?? undefined,
+        __agentId: agentId ?? undefined,
+      },
+      cfg,
+      actionOptions,
+    );
+  }
+
+  if (action === "upload-file") {
+    const to = readSendTarget();
+    const mediaUrl =
+      readStringParam(params, "filePath", { trim: false }) ??
+      readStringParam(params, "path", { trim: false }) ??
+      readStringParam(params, "media", { trim: false });
+    if (!mediaUrl) {
+      throw new Error("upload-file requires filePath, path, or media.");
+    }
+    const content =
+      readStringParam(params, "message", { allowEmpty: true }) ??
+      readStringParam(params, "content", { allowEmpty: true });
+    const filename = readStringParam(params, "filename");
+    const replyTo = readStringParam(params, "replyTo");
+    const silent = readBooleanParam(params, "silent") === true;
+    const sessionKey = readStringParam(params, "__sessionKey");
+    const agentId = readStringParam(params, "__agentId");
+    return await handleDiscordAction(
+      {
+        action: "sendMessage",
+        accountId: accountId ?? undefined,
+        to,
+        content: content ?? "",
+        mediaUrl,
+        filename: filename ?? undefined,
+        replyTo: replyTo ?? undefined,
         silent,
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,

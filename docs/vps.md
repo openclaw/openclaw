@@ -43,6 +43,21 @@ A community video walkthrough is available at
 
 Related pages: [Gateway remote access](/gateway/remote), [Platforms hub](/platforms).
 
+## Harden admin access first
+
+Before you install OpenClaw on a public VPS, decide how you want to administer
+the box itself.
+
+- If you want Tailnet-only admin access, install Tailscale first, join the VPS
+  to your tailnet, verify a second SSH session over the Tailscale IP or
+  MagicDNS name, then restrict public SSH.
+- If you are not using Tailscale, apply the equivalent hardening for your SSH
+  path before exposing more services.
+- This is separate from Gateway access. You can still keep OpenClaw bound to
+  loopback and use an SSH tunnel or Tailscale Serve for the dashboard.
+
+Tailscale-specific Gateway options live in [Tailscale](/gateway/tailscale).
+
 ## Shared company agent on a VPS
 
 Running a single agent for a team is a valid setup when every user is in the same trust boundary and the agent is business-only.
@@ -115,3 +130,10 @@ How `Restart=` policies help automated recovery:
 
 For Linux OOM behavior, child process victim selection, and `exit 137`
 diagnostics, see [Linux memory pressure and OOM kills](/platforms/linux#memory-pressure-and-oom-kills).
+
+## Related
+
+- [Install overview](/install)
+- [DigitalOcean](/install/digitalocean)
+- [Fly.io](/install/fly)
+- [Hetzner](/install/hetzner)

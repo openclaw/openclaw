@@ -7,7 +7,7 @@ import {
 } from "./gateway-supervisor.js";
 
 describe("classifyDiscordGatewayEvent", () => {
-  it("maps current Carbon gateway errors onto domain events", () => {
+  it("maps current gateway errors onto domain events", () => {
     const transientTypeError = new TypeError();
     transientTypeError.stack = "TypeError\n    at gatewayCrash (discord-gateway.js:12:34)";
     const reconnectEvent = classifyDiscordGatewayEvent({
@@ -98,10 +98,10 @@ describe("createDiscordGatewaySupervisor", () => {
     });
 
     expect(supervisor.drainPending(() => "continue")).toBe("continue");
-    expect(() => supervisor.attachLifecycle(() => {})).not.toThrow();
-    expect(() => supervisor.detachLifecycle()).not.toThrow();
-    expect(() => supervisor.dispose()).not.toThrow();
-    expect(() => supervisor.dispose()).not.toThrow();
+    supervisor.attachLifecycle(() => {});
+    supervisor.detachLifecycle();
+    supervisor.dispose();
+    supervisor.dispose();
   });
 
   it("keeps suppressing late gateway errors after dispose", () => {
@@ -115,9 +115,7 @@ describe("createDiscordGatewaySupervisor", () => {
 
     supervisor.dispose();
 
-    expect(() =>
-      emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005")),
-    ).not.toThrow();
+    emitter.emit("error", new Error("Max reconnect attempts (0) reached after close code 1005"));
     expect(runtime.error).toHaveBeenCalledWith(
       expect.stringContaining("suppressed late gateway reconnect-exhausted error after dispose"),
     );

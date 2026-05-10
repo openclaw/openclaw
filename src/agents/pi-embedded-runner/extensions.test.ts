@@ -41,16 +41,37 @@ function expectSafeguardRuntime(
   const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
   expect(factories).toContain(compactionSafeguardExtension);
-  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
+  const runtime = getCompactionSafeguardRuntime(sessionManager);
+  expect(runtime?.contextWindowTokens).toBe(200_000);
+  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
+  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
 }
 
 describe("buildEmbeddedExtensionFactories", () => {
-  it("does not opt safeguard mode into quality-guard retries", () => {
+  it("enables quality-guard retries by default in safeguard mode", () => {
     const cfg = {
       agents: {
         defaults: {
           compaction: {
             mode: "safeguard",
+          },
+        },
+      },
+    } as OpenClawConfig;
+    expectSafeguardRuntime(cfg, {
+      qualityGuardEnabled: true,
+    });
+  });
+
+  it("honors explicit safeguard quality-guard disablement", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          compaction: {
+            mode: "safeguard",
+            qualityGuard: {
+              enabled: false,
+            },
           },
         },
       },

@@ -66,6 +66,15 @@ export function resolveModelSelectionFromDirective(params: {
   }
 
   const raw = params.directives.rawModelDirective.trim();
+  if (/^default$/i.test(raw)) {
+    return {
+      modelSelection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    };
+  }
   const storedNumericProfile =
     params.directives.rawModelProfile === undefined
       ? resolveStoredNumericProfileModelDirective({
@@ -80,6 +89,7 @@ export function resolveModelSelectionFromDirective(params: {
         defaultModel: params.defaultModel,
         aliasIndex: params.aliasIndex,
         allowedModelKeys: params.allowedModelKeys,
+        rawRuntime: params.directives.rawModelRuntime,
       })
     : null;
   const useStoredNumericProfile =
@@ -131,6 +141,7 @@ export function resolveModelSelectionFromDirective(params: {
       defaultModel: params.defaultModel,
       aliasIndex: params.aliasIndex,
       allowedModelKeys: params.allowedModelKeys,
+      rawRuntime: params.directives.rawModelRuntime,
     });
 
     if (resolved.error) {

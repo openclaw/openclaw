@@ -1,15 +1,12 @@
 import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
-import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 import {
-  capEntryCount,
-  getActiveSessionMaintenanceWarning,
-  pruneStaleEntries,
-  rotateSessionFile,
-} from "./store.js";
+  isProtectedSessionMaintenanceEntry,
+  resolveMaintenanceConfigFromInput,
+  resolveSessionEntryMaintenanceHighWater,
+} from "./store-maintenance.js";
+import { capEntryCount, getActiveSessionMaintenanceWarning, pruneStaleEntries } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -49,7 +46,29 @@ describe("pruneStaleEntries", () => {
 
     expect(pruned).toBe(1);
     expect(store.old).toBeUndefined();
-    expect(store.fresh).toBeDefined();
+    expect(store).toHaveProperty("fresh");
+  });
+
+  it("preserves durable external conversation entries", () => {
+    const now = Date.now();
+    const store = makeStore([
+      ["old", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:slack:channel:C123:thread:1710000000.000100", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:telegram:group:-100123:topic:77", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:slack:channel:C999", makeEntry(now - 31 * DAY_MS)],
+      ["agent:main:telegram:group:-100123", { ...makeEntry(now - 31 * DAY_MS), chatType: "group" }],
+      ["agent:main:discord:channel:ops", { ...makeEntry(now - 31 * DAY_MS), chatType: "channel" }],
+    ]);
+
+    const pruned = pruneStaleEntries(store, 30 * DAY_MS);
+
+    expect(pruned).toBe(1);
+    expect(store.old).toBeUndefined();
+    expect(store).toHaveProperty("agent:main:slack:channel:C123:thread:1710000000.000100");
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123:topic:77");
+    expect(store).toHaveProperty("agent:main:slack:channel:C999");
+    expect(store).toHaveProperty("agent:main:telegram:group:-100123");
+    expect(store).toHaveProperty("agent:main:discord:channel:ops");
   });
 });
 
@@ -68,11 +87,83 @@ describe("capEntryCount", () => {
 
     expect(evicted).toBe(2);
     expect(Object.keys(store)).toHaveLength(3);
-    expect(store.newest).toBeDefined();
-    expect(store.recent).toBeDefined();
-    expect(store.mid).toBeDefined();
+    expect(store).toHaveProperty("newest");
+    expect(store).toHaveProperty("recent");
+    expect(store).toHaveProperty("mid");
     expect(store.oldest).toBeUndefined();
     expect(store.old).toBeUndefined();
+  });
+
+  it("preserves durable external conversation entries when capping", () => {
+    const now = Date.now();
+    const threadKey = "agent:main:discord:channel:123456:thread:987654";
+    const store = makeStore([
+      [threadKey, makeEntry(now - 5 * DAY_MS)],
+      ["oldest", makeEntry(now - 4 * DAY_MS)],
+      ["old", makeEntry(now - 3 * DAY_MS)],
+      ["recent", makeEntry(now - 1 * DAY_MS)],
+      ["newest", makeEntry(now)],
+    ]);
+
+    const evicted = capEntryCount(store, 3);
+
+    expect(evicted).toBe(2);
+    expect(Object.keys(store)).toHaveLength(3);
+    expect(store).toHaveProperty(threadKey);
+    expect(store).toHaveProperty("newest");
+    expect(store).toHaveProperty("recent");
+    expect(store.oldest).toBeUndefined();
+    expect(store.old).toBeUndefined();
+  });
+});
+
+describe("isProtectedSessionMaintenanceEntry", () => {
+  it("does not protect synthetic sessions just because they carry group metadata", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:subagent:worker", {
+        ...makeEntry(Date.now()),
+        chatType: "group",
+      }),
+    ).toBe(false);
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:cron:job:run:123", {
+        ...makeEntry(Date.now()),
+        origin: { chatType: "group" },
+      }),
+    ).toBe(false);
+  });
+
+  it("protects metadata-less Telegram topic keys without treating every :topic: id as a thread", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:telegram:group:-100123:topic:77",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:opaque:topic:om_topic_root:sender:ou_topic_user",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(false);
+  });
+
+  it("protects metadata-less channel session keys and channel chat metadata", () => {
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:slack:channel:C123", makeEntry(Date.now())),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry(
+        "agent:main:custom:channel:room-one:with:colon",
+        makeEntry(Date.now()),
+      ),
+    ).toBe(true);
+    expect(
+      isProtectedSessionMaintenanceEntry("agent:main:opaque", {
+        ...makeEntry(Date.now()),
+        chatType: "channel",
+      }),
+    ).toBe(true);
   });
 });
 
@@ -81,6 +172,12 @@ describe("resolveMaintenanceConfigFromInput", () => {
     const maintenance = resolveMaintenanceConfigFromInput();
 
     expect(maintenance.mode).toBe("enforce");
+  });
+
+  it("batches normal entry-count maintenance for production-sized caps", () => {
+    expect(resolveSessionEntryMaintenanceHighWater(2)).toBe(3);
+    expect(resolveSessionEntryMaintenanceHighWater(50)).toBe(75);
+    expect(resolveSessionEntryMaintenanceHighWater(500)).toBe(550);
   });
 });
 
@@ -123,49 +220,5 @@ describe("getActiveSessionMaintenanceWarning", () => {
     });
 
     expect(warning?.wouldCap).toBe(true);
-  });
-});
-
-describe("rotateSessionFile", () => {
-  let testDir: string;
-  let storePath: string;
-
-  beforeEach(async () => {
-    testDir = await fixtureSuite.createCaseDir("rotate");
-    storePath = path.join(testDir, "sessions.json");
-  });
-
-  it("file over maxBytes: renamed to .bak.{timestamp}, returns true", async () => {
-    const bigContent = "x".repeat(200);
-    await fs.writeFile(storePath, bigContent, "utf-8");
-
-    const rotated = await rotateSessionFile(storePath, 100);
-
-    expect(rotated).toBe(true);
-    await expect(fs.stat(storePath)).rejects.toThrow();
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak."));
-    expect(bakFiles).toHaveLength(1);
-    const bakContent = await fs.readFile(path.join(testDir, bakFiles[0]), "utf-8");
-    expect(bakContent).toBe(bigContent);
-  });
-
-  it("multiple rotations: only keeps 3 most recent .bak files", async () => {
-    let now = Date.now();
-    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 5));
-    try {
-      // 4 rotations are enough to verify pruning to <=3 backups.
-      for (let i = 0; i < 4; i++) {
-        await fs.writeFile(storePath, `data-${i}-${"x".repeat(100)}`, "utf-8");
-        await rotateSessionFile(storePath, 50);
-      }
-    } finally {
-      nowSpy.mockRestore();
-    }
-
-    const files = await fs.readdir(testDir);
-    const bakFiles = files.filter((f) => f.startsWith("sessions.json.bak.")).toSorted();
-
-    expect(bakFiles.length).toBeLessThanOrEqual(3);
   });
 });

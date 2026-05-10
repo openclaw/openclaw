@@ -40,11 +40,24 @@ export function createMockPluginRegistry(
     imageGenerationProviders: [],
     videoGenerationProviders: [],
     musicGenerationProviders: [],
+    webFetchProviders: [],
     webSearchProviders: [],
+    migrationProviders: [],
+    codexAppServerExtensionFactories: [],
+    agentToolResultMiddlewares: [],
+    memoryEmbeddingProviders: [],
+    agentHarnesses: [],
     httpRoutes: [],
     gatewayHandlers: {},
+    gatewayMethodScopes: {},
     cliRegistrars: [],
+    textTransforms: [],
+    reloads: [],
+    nodeHostCommands: [],
+    securityAuditCollectors: [],
     services: [],
+    gatewayDiscoveryServices: [],
+    conversationBindingResolvedHandlers: [],
     commands: [],
     diagnostics: [],
   } as unknown as PluginRegistry;
@@ -65,23 +78,26 @@ export function addTestHook(params: {
   hookName: PluginHookRegistration["hookName"];
   handler: PluginHookRegistration["handler"];
   priority?: number;
+  timeoutMs?: number;
 }) {
   params.registry.typedHooks.push({
     pluginId: params.pluginId,
     hookName: params.hookName,
     handler: params.handler,
     priority: params.priority ?? 0,
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
     source: "test",
   } as PluginHookRegistration);
 }
 
-export function addTestHooks(
+function addTestHooks(
   registry: PluginRegistry,
   hooks: ReadonlyArray<{
     pluginId: string;
     hookName: PluginHookRegistration["hookName"];
     handler: PluginHookRegistration["handler"];
     priority?: number;
+    timeoutMs?: number;
   }>,
 ) {
   for (const hook of hooks) {
@@ -91,6 +107,7 @@ export function addTestHooks(
       hookName: hook.hookName,
       handler: hook.handler,
       ...(hook.priority !== undefined ? { priority: hook.priority } : {}),
+      ...(hook.timeoutMs !== undefined ? { timeoutMs: hook.timeoutMs } : {}),
     });
   }
 }

@@ -1,104 +1,45 @@
-import { randomUUID } from "node:crypto";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime, RuntimeLogger } from "openclaw/plugin-sdk/plugin-runtime";
-import type { RealtimeVoiceTool } from "openclaw/plugin-sdk/realtime-voice";
+import {
+  buildRealtimeVoiceAgentConsultWorkingResponse,
+  consultRealtimeVoiceAgent,
+  REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
+  resolveRealtimeVoiceAgentConsultTools,
+  resolveRealtimeVoiceAgentConsultToolsAllow,
+  type RealtimeVoiceBridgeSession,
+  type RealtimeVoiceToolCallEvent,
+  type RealtimeVoiceTool,
+  type TalkEventInput,
+} from "openclaw/plugin-sdk/realtime-voice";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { GoogleMeetConfig, GoogleMeetToolPolicy } from "./config.js";
 
-type AgentPayload = {
-  text?: string;
-  isError?: boolean;
-  isReasoning?: boolean;
-};
+export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME;
 
-export const GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME = "openclaw_agent_consult";
-
-export const GOOGLE_MEET_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
-  type: "function",
-  name: GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME,
-  description:
-    "Ask the full OpenClaw agent for deeper reasoning, current information, or tool-backed help before speaking in the meeting.",
-  parameters: {
-    type: "object",
-    properties: {
-      question: {
-        type: "string",
-        description: "The concrete question or task the meeting participant asked.",
-      },
-      context: {
-        type: "string",
-        description: "Optional relevant meeting context or transcript summary.",
-      },
-      responseStyle: {
-        type: "string",
-        description: "Optional style hint for the spoken answer.",
-      },
-    },
-    required: ["question"],
-  },
-};
+const GOOGLE_MEET_CONSULT_SYSTEM_PROMPT = [
+  "You are a behind-the-scenes consultant for a live meeting voice agent.",
+  "Prioritize a fast, speakable answer over exhaustive investigation.",
+  "For tool-backed status checks, prefer one or two bounded read-only queries before answering.",
+  "Do not print secret values or dump environment variables; only check whether required configuration is present.",
+  "Be accurate, brief, and speakable.",
+].join(" ");
 
 export function resolveGoogleMeetRealtimeTools(policy: GoogleMeetToolPolicy): RealtimeVoiceTool[] {
-  return policy === "none" ? [] : [GOOGLE_MEET_AGENT_CONSULT_TOOL];
+  return resolveRealtimeVoiceAgentConsultTools(policy);
 }
 
-function normalizeToolArgString(args: unknown, key: string): string | undefined {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return undefined;
+export function submitGoogleMeetConsultWorkingResponse(
+  session: RealtimeVoiceBridgeSession,
+  callId: string,
+): void {
+  if (!session.bridge.supportsToolResultContinuation) {
+    return;
   }
-  return normalizeOptionalString((args as Record<string, unknown>)[key]);
-}
-
-function collectVisibleText(payloads: AgentPayload[]): string | null {
-  const chunks: string[] = [];
-  for (const payload of payloads) {
-    if (payload.isError || payload.isReasoning) {
-      continue;
-    }
-    const text = normalizeOptionalString(payload.text);
-    if (text) {
-      chunks.push(text);
-    }
-  }
-  return chunks.length > 0 ? chunks.join("\n\n").trim() : null;
-}
-
-function resolveToolsAllow(policy: GoogleMeetToolPolicy): string[] | undefined {
-  if (policy === "owner") {
-    return undefined;
-  }
-  if (policy === "safe-read-only") {
-    return ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"];
-  }
-  return [];
-}
-
-function buildPrompt(params: {
-  args: unknown;
-  transcript: Array<{ role: "user" | "assistant"; text: string }>;
-}): string {
-  const question = normalizeToolArgString(params.args, "question");
-  if (!question) {
-    throw new Error("question required");
-  }
-  const context = normalizeToolArgString(params.args, "context");
-  const responseStyle = normalizeToolArgString(params.args, "responseStyle");
-  const transcript = params.transcript
-    .slice(-12)
-    .map((entry) => `${entry.role === "assistant" ? "Agent" : "Participant"}: ${entry.text}`)
-    .join("\n");
-  return [
-    "You are helping an OpenClaw realtime voice agent during a private Google Meet.",
-    "Answer the participant's question with the strongest useful reasoning and available tools.",
-    "Return only the concise answer the realtime voice agent should speak next.",
-    "Do not include markdown, citations unless needed, tool logs, or private reasoning.",
-    responseStyle ? `Spoken style: ${responseStyle}` : undefined,
-    transcript ? `Recent meeting transcript:\n${transcript}` : undefined,
-    context ? `Additional context:\n${context}` : undefined,
-    `Question:\n${question}`,
-  ]
-    .filter(Boolean)
-    .join("\n\n");
+  session.submitToolResult(callId, buildRealtimeVoiceAgentConsultWorkingResponse("participant"), {
+    willContinue: true,
+  });
 }
 
 export async function consultOpenClawAgentForGoogleMeet(params: {
@@ -107,57 +48,111 @@ export async function consultOpenClawAgentForGoogleMeet(params: {
   runtime: PluginRuntime;
   logger: RuntimeLogger;
   meetingSessionId: string;
+  requesterSessionKey?: string;
   args: unknown;
   transcript: Array<{ role: "user" | "assistant"; text: string }>;
 }): Promise<{ text: string }> {
-  const agentId = "main";
-  const sessionKey = `google-meet:${params.meetingSessionId}`;
-  const cfg = params.fullConfig;
-  const agentDir = params.runtime.agent.resolveAgentDir(cfg, agentId);
-  const workspaceDir = params.runtime.agent.resolveAgentWorkspaceDir(cfg, agentId);
-  await params.runtime.agent.ensureAgentWorkspace({ dir: workspaceDir });
-
-  const storePath = params.runtime.agent.session.resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore = params.runtime.agent.session.loadSessionStore(storePath);
-  const now = Date.now();
-  const existing = sessionStore[sessionKey] as
-    | { sessionId?: string; updatedAt?: number }
-    | undefined;
-  const sessionId = normalizeOptionalString(existing?.sessionId) ?? randomUUID();
-  sessionStore[sessionKey] = { ...existing, sessionId, updatedAt: now };
-  await params.runtime.agent.session.saveSessionStore(storePath, sessionStore);
-
-  const sessionFile = params.runtime.agent.session.resolveSessionFilePath(
-    sessionId,
-    sessionStore[sessionKey],
-    { agentId },
-  );
-  const result = await params.runtime.agent.runEmbeddedPiAgent({
-    sessionId,
+  const agentId = normalizeAgentId(params.config.realtime.agentId);
+  const requesterSessionKey =
+    normalizeOptionalString(params.requesterSessionKey) ?? `agent:${agentId}:main`;
+  const sessionKey = `agent:${agentId}:subagent:google-meet:${params.meetingSessionId}`;
+  return await consultRealtimeVoiceAgent({
+    cfg: params.fullConfig,
+    agentRuntime: params.runtime.agent,
+    logger: params.logger,
+    agentId,
     sessionKey,
     messageProvider: "google-meet",
-    sessionFile,
-    workspaceDir,
-    config: cfg,
-    prompt: buildPrompt({ args: params.args, transcript: params.transcript }),
-    thinkLevel: "high",
-    verboseLevel: "off",
-    reasoningLevel: "off",
-    toolResultFormat: "plain",
-    toolsAllow: resolveToolsAllow(params.config.realtime.toolPolicy),
-    timeoutMs: params.runtime.agent.resolveAgentTimeoutMs({ cfg }),
-    runId: `google-meet:${params.meetingSessionId}:${Date.now()}`,
     lane: "google-meet",
-    extraSystemPrompt:
-      "You are a behind-the-scenes consultant for a live meeting voice agent. Be accurate, brief, and speakable.",
-    agentDir,
+    runIdPrefix: `google-meet:${params.meetingSessionId}`,
+    spawnedBy: requesterSessionKey,
+    contextMode: "fork",
+    args: params.args,
+    transcript: params.transcript,
+    surface: "a private Google Meet",
+    userLabel: "Participant",
+    assistantLabel: "Agent",
+    questionSourceLabel: "participant",
+    toolsAllow: resolveRealtimeVoiceAgentConsultToolsAllow(params.config.realtime.toolPolicy),
+    extraSystemPrompt: GOOGLE_MEET_CONSULT_SYSTEM_PROMPT,
   });
+}
 
-  const text = collectVisibleText((result.payloads ?? []) as AgentPayload[]);
-  if (!text) {
-    const reason = result.meta?.aborted ? "agent run aborted" : "agent returned no speakable text";
-    params.logger.warn(`[google-meet] agent consult produced no answer: ${reason}`);
-    return { text: "I need a moment to verify that before answering." };
+export function handleGoogleMeetRealtimeConsultToolCall(params: {
+  strategy: string;
+  session: RealtimeVoiceBridgeSession;
+  event: RealtimeVoiceToolCallEvent;
+  config: GoogleMeetConfig;
+  fullConfig: OpenClawConfig;
+  runtime: PluginRuntime;
+  logger: RuntimeLogger;
+  meetingSessionId: string;
+  requesterSessionKey?: string;
+  transcript: Array<{ role: "user" | "assistant"; text: string }>;
+  onTalkEvent?: (event: TalkEventInput) => void;
+}): void {
+  const callId = params.event.callId || params.event.itemId;
+  if (params.strategy !== "bidi") {
+    params.onTalkEvent?.({
+      type: "tool.error",
+      callId,
+      payload: {
+        name: params.event.name,
+        error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
+      },
+      final: true,
+    });
+    params.session.submitToolResult(callId, {
+      error: `Tool "${params.event.name}" is only available in bidi realtime strategy`,
+    });
+    return;
   }
-  return { text };
+  if (params.event.name !== GOOGLE_MEET_AGENT_CONSULT_TOOL_NAME) {
+    params.onTalkEvent?.({
+      type: "tool.error",
+      callId,
+      payload: { name: params.event.name, error: `Tool "${params.event.name}" not available` },
+      final: true,
+    });
+    params.session.submitToolResult(callId, {
+      error: `Tool "${params.event.name}" not available`,
+    });
+    return;
+  }
+  params.onTalkEvent?.({
+    type: "tool.progress",
+    callId,
+    payload: { name: params.event.name, status: "working" },
+  });
+  submitGoogleMeetConsultWorkingResponse(params.session, callId);
+  void consultOpenClawAgentForGoogleMeet({
+    config: params.config,
+    fullConfig: params.fullConfig,
+    runtime: params.runtime,
+    logger: params.logger,
+    meetingSessionId: params.meetingSessionId,
+    requesterSessionKey: params.requesterSessionKey,
+    args: params.event.args,
+    transcript: params.transcript,
+  })
+    .then((result) => {
+      params.onTalkEvent?.({
+        type: "tool.result",
+        callId,
+        payload: { name: params.event.name, result },
+        final: true,
+      });
+      params.session.submitToolResult(callId, result);
+    })
+    .catch((error: Error) => {
+      params.onTalkEvent?.({
+        type: "tool.error",
+        callId,
+        payload: { name: params.event.name, error: formatErrorMessage(error) },
+        final: true,
+      });
+      params.session.submitToolResult(callId, {
+        error: formatErrorMessage(error),
+      });
+    });
 }

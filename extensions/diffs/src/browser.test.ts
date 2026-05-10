@@ -1,9 +1,9 @@
 import fs from "node:fs/promises";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { createMockServerResponse } from "../../../test/helpers/plugins/mock-http-response.js";
-import { createTestPluginApi } from "../../../test/helpers/plugins/plugin-api.js";
+import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
 import type { OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { registerDiffsPlugin } from "./plugin.js";
@@ -21,6 +21,11 @@ vi.mock("playwright-core", () => ({
     launch: launchMock,
   },
 }));
+
+afterAll(() => {
+  vi.doUnmock("playwright-core");
+  vi.resetModules();
+});
 
 describe("PlaywrightDiffScreenshotter", () => {
   let rootDir: string;
@@ -126,7 +131,9 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     expect(pages[0]?.pdf).toHaveBeenCalledTimes(1);
     const pdfCall = pages[0]?.pdf.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
-    expect(pdfCall).toBeDefined();
+    if (!pdfCall) {
+      throw new Error("expected PDF render call");
+    }
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
@@ -256,7 +263,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -384,7 +391,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {
@@ -521,7 +528,7 @@ describe("diffs plugin registration", () => {
       },
       runtime: {
         config: {
-          loadConfig: () => configFile,
+          current: () => configFile,
         },
       } as never,
       registerTool(tool: Parameters<OpenClawPluginApi["registerTool"]>[0]) {

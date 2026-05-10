@@ -11,6 +11,7 @@ import {
   rmSync,
 } from "node:fs";
 import { builtinModules } from "node:module";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { isAbsolute, join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -18,14 +19,11 @@ import { formatErrorMessage } from "../src/infra/errors.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import { listBundledPluginPackArtifacts } from "./lib/bundled-plugin-build-entries.mjs";
 import {
-  collectBundledPluginRootRuntimeMirrorErrors,
-  collectRootDistBundledRuntimeMirrors,
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+} from "./lib/plugin-package-dependencies.mjs";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mjs";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
-import { createRequire } from "node:module";
 
 type InstalledPackageJson = {
   version?: string;
@@ -52,9 +50,26 @@ const PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS = BUNDLED_RUNTIME_SIDECAR_PATHS.fi
 );
 const NODE_BUILTIN_MODULES = new Set(builtinModules.map((name) => name.replace(/^node:/u, "")));
 const MAX_INSTALLED_ROOT_PACKAGE_JSON_BYTES = 1024 * 1024;
-const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 2 * 1024 * 1024;
+const MAX_INSTALLED_ROOT_DIST_JS_BYTES = 4 * 1024 * 1024;
 const MAX_INSTALLED_ROOT_DIST_JS_FILES = 5000;
 const ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE = /\.(?:c|m)?js$/u;
+const OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS = new Set([
+  // Optional A2UI markdown renderer. The Canvas host bundle catches the missing
+  // package and falls back when the optional renderer is unavailable.
+  "@a2ui/markdown-it",
+  "@discordjs/opus",
+  "@lancedb/lancedb",
+  // Feishu/Lark remains a bundled plugin package. Root dist can retain orphaned
+  // lazy chunks from the plugin build even though dist/extensions/feishu is
+  // externalized from the root package scan.
+  "@larksuiteoapi/node-sdk",
+  "@matrix-org/matrix-sdk-crypto-nodejs",
+  "link-preview-js",
+  "matrix-js-sdk",
+  // Discord voice decoder fallback. The root chunk catches missing decoders and the owning
+  // Discord plugin remains externalized from the root package.
+  "opusscript",
+]);
 const require = createRequire(import.meta.url);
 const acorn = require("acorn") as typeof import("acorn");
 
@@ -104,7 +119,7 @@ export function collectInstalledPackageErrors(params: {
     );
   }
 
-  for (const relativePath of PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS) {
+  for (const relativePath of collectInstalledBundledRuntimeSidecarPaths(params.packageRoot)) {
     if (!existsSync(join(params.packageRoot, relativePath))) {
       errors.push(`installed package is missing required bundled runtime sidecar: ${relativePath}`);
     }
@@ -112,9 +127,33 @@ export function collectInstalledPackageErrors(params: {
 
   errors.push(...collectInstalledContextEngineRuntimeErrors(params.packageRoot));
   errors.push(...collectInstalledRootDependencyManifestErrors(params.packageRoot));
-  errors.push(...collectInstalledMirroredRootDependencyManifestErrors(params.packageRoot));
 
   return errors;
+}
+
+function collectInstalledBundledExtensionIds(packageRoot: string): Set<string> {
+  const extensionsDir = join(packageRoot, "dist", "extensions");
+  if (!existsSync(extensionsDir)) {
+    return new Set();
+  }
+  const ids = new Set<string>();
+  for (const entry of readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) {
+      continue;
+    }
+    if (existsSync(join(extensionsDir, entry.name, "package.json"))) {
+      ids.add(entry.name);
+    }
+  }
+  return ids;
+}
+
+export function collectInstalledBundledRuntimeSidecarPaths(packageRoot: string): string[] {
+  const installedExtensionIds = collectInstalledBundledExtensionIds(packageRoot);
+  return PUBLISHED_BUNDLED_RUNTIME_SIDECAR_PATHS.filter((relativePath) => {
+    const match = /^dist\/extensions\/([^/]+)\//u.exec(relativePath);
+    return match !== null && installedExtensionIds.has(match[1]);
+  });
 }
 
 export function normalizeInstalledBinaryVersion(output: string): string {
@@ -123,7 +162,10 @@ export function normalizeInstalledBinaryVersion(output: string): string {
   return versionMatch?.[0] ?? trimmed;
 }
 
-function listDistJavaScriptFiles(packageRoot: string): string[] {
+function listDistJavaScriptFiles(
+  packageRoot: string,
+  opts: { skipRelativePath?: (relativePath: string) => boolean } = {},
+): string[] {
   const distDir = join(packageRoot, "dist");
   if (!existsSync(distDir)) {
     return [];
@@ -138,6 +180,10 @@ function listDistJavaScriptFiles(packageRoot: string): string[] {
     }
     for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
       const entryPath = join(currentDir, entry.name);
+      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
+      if (opts.skipRelativePath?.(relativePath)) {
+        continue;
+      }
       if (entry.isDirectory()) {
         pending.push(entryPath);
         continue;
@@ -166,35 +212,9 @@ export function collectInstalledContextEngineRuntimeErrors(packageRoot: string):
 }
 
 function listInstalledRootDistJavaScriptFiles(packageRoot: string): string[] {
-  const distDir = join(packageRoot, "dist");
-  if (!existsSync(distDir)) {
-    return [];
-  }
-
-  const pending = [distDir];
-  const files: string[] = [];
-  while (pending.length > 0) {
-    const currentDir = pending.pop();
-    if (!currentDir) {
-      continue;
-    }
-    for (const entry of readdirSync(currentDir, { withFileTypes: true })) {
-      const entryPath = join(currentDir, entry.name);
-      const relativePath = relative(distDir, entryPath).replaceAll("\\", "/");
-      if (relativePath.startsWith("extensions/")) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        pending.push(entryPath);
-        continue;
-      }
-      if (entry.isFile() && ROOT_DIST_JAVASCRIPT_MODULE_FILE_RE.test(entry.name)) {
-        files.push(entryPath);
-      }
-    }
-  }
-
-  return files;
+  return listDistJavaScriptFiles(packageRoot, {
+    skipRelativePath: (relativePath) => relativePath.startsWith("extensions/"),
+  });
 }
 
 type ParsedImportSpecifiersResult =
@@ -302,6 +322,8 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
     ];
   }
   const missingImporters = new Map<string, Set<string>>();
+  const bundledExtensionRuntimeDependencyOwners =
+    collectBundledExtensionRuntimeDependencyOwners(packageRoot);
 
   for (const filePath of distFiles) {
     const fileStat = lstatSync(filePath);
@@ -324,7 +346,13 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       if (
         !dependencyName ||
         NODE_BUILTIN_MODULES.has(dependencyName) ||
-        declaredRuntimeDeps.has(dependencyName)
+        OPTIONAL_OR_EXTERNALIZED_RUNTIME_IMPORTS.has(dependencyName) ||
+        declaredRuntimeDeps.has(dependencyName) ||
+        isBundledExtensionOwnedRuntimeImport({
+          dependencyName,
+          ownersByDependency: bundledExtensionRuntimeDependencyOwners,
+          source,
+        })
       ) {
         continue;
       }
@@ -340,6 +368,35 @@ export function collectInstalledRootDependencyManifestErrors(packageRoot: string
       return `installed package root is missing declared runtime dependency '${dependencyName}' for dist importers: ${importerList.join(", ")}. Add it to package.json dependencies/optionalDependencies.`;
     })
     .toSorted((left, right) => left.localeCompare(right));
+}
+
+function collectBundledExtensionRuntimeDependencyOwners(
+  packageRoot: string,
+): Map<string, Set<string>> {
+  const ownersByDependency = new Map<string, Set<string>>();
+  const { manifests } = readBundledExtensionPackageJsons(packageRoot);
+  for (const { id, manifest } of manifests) {
+    for (const dependencyName of collectRuntimeDependencySpecs(manifest).keys()) {
+      const owners = ownersByDependency.get(dependencyName) ?? new Set<string>();
+      owners.add(id);
+      ownersByDependency.set(dependencyName, owners);
+    }
+  }
+  return ownersByDependency;
+}
+
+function isBundledExtensionOwnedRuntimeImport(params: {
+  dependencyName: string;
+  ownersByDependency: Map<string, Set<string>>;
+  source: string;
+}): boolean {
+  const owners = params.ownersByDependency.get(params.dependencyName);
+  if (!owners) {
+    return false;
+  }
+  return [...owners].some((pluginId) =>
+    params.source.includes(`//#region extensions/${pluginId}/`),
+  );
 }
 
 export function resolveInstalledBinaryPath(prefixDir: string, platform = process.platform): string {
@@ -421,52 +478,6 @@ function readBundledExtensionPackageJsons(packageRoot: string): {
   }
 
   return { manifests, errors };
-}
-
-export function collectInstalledMirroredRootDependencyManifestErrors(
-  packageRoot: string,
-): string[] {
-  const packageJsonPath = join(packageRoot, "package.json");
-  if (!existsSync(packageJsonPath)) {
-    return ["installed package is missing package.json."];
-  }
-
-  const rootPackageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as InstalledPackageJson;
-  const { manifests, errors } = readBundledExtensionPackageJsons(packageRoot);
-  const bundledRuntimeDependencySpecs = new Map<
-    string,
-    { conflicts: Array<{ pluginId: string; spec: string }>; pluginIds: string[]; spec: string }
-  >();
-
-  for (const { id, manifest: extensionPackageJson } of manifests) {
-    const extensionRuntimeDeps = collectRuntimeDependencySpecs(extensionPackageJson);
-    for (const [dependencyName, spec] of extensionRuntimeDeps) {
-      const existing = bundledRuntimeDependencySpecs.get(dependencyName);
-      if (existing) {
-        if (existing.spec !== spec) {
-          existing.conflicts.push({ pluginId: id, spec });
-        } else if (!existing.pluginIds.includes(id)) {
-          existing.pluginIds.push(id);
-        }
-        continue;
-      }
-      bundledRuntimeDependencySpecs.set(dependencyName, { conflicts: [], pluginIds: [id], spec });
-    }
-  }
-
-  const requiredRootMirrors = collectRootDistBundledRuntimeMirrors({
-    bundledRuntimeDependencySpecs,
-    distDir: join(packageRoot, "dist"),
-  });
-  errors.push(
-    ...collectBundledPluginRootRuntimeMirrorErrors({
-      bundledRuntimeDependencySpecs,
-      requiredRootMirrors,
-      rootPackageJson,
-    }),
-  );
-
-  return errors;
 }
 
 function npmExec(args: string[], cwd: string): string {

@@ -98,8 +98,29 @@ describe("renderSkills", () => {
     }
   });
 
+  it("defers detail dialog opening until the dialog is connected", async () => {
+    const container = document.createElement("div");
+    const showModal = vi.fn(function (this: HTMLDialogElement) {
+      expect(this.isConnected).toBe(true);
+      this.setAttribute("open", "");
+    });
+
+    installDialogMethod("showModal", showModal);
+
+    render(renderSkills(createProps({ detailKey: "repo-skill" })), container);
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+
+    await Promise.resolve();
+
+    expect(showModal).toHaveBeenCalledTimes(1);
+    expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
+  });
+
   it("opens detail dialogs and routes ClawHub actions", async () => {
     const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
     const onDetailClose = vi.fn();
     const showModal = vi.fn(function (this: HTMLDialogElement) {
       this.setAttribute("open", "");
@@ -127,7 +148,11 @@ describe("renderSkills", () => {
     expect(showModal).toHaveBeenCalledTimes(1);
     expect(container.querySelector("dialog")?.hasAttribute("open")).toBe(true);
 
-    container.querySelector<HTMLButtonElement>(".md-preview-dialog__header .btn")?.click();
+    const closeButton = container.querySelector<HTMLButtonElement>(
+      ".md-preview-dialog__header .btn",
+    );
+    expect(closeButton).toBeInstanceOf(HTMLButtonElement);
+    closeButton!.click();
 
     expect(onDetailClose).toHaveBeenCalledTimes(1);
 
@@ -157,10 +182,12 @@ describe("renderSkills", () => {
     expect(text).toContain("GitHub integration for OpenClaw");
     expect(text).toContain("v1.2.3");
 
-    container.querySelector<HTMLElement>(".list-item")?.click();
-    container
-      .querySelector<HTMLButtonElement>(".list-item .btn.btn--sm")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const resultItem = container.querySelector<HTMLElement>(".list-item");
+    const installButton = container.querySelector<HTMLButtonElement>(".list-item .btn.btn--sm");
+    expect(resultItem).toBeInstanceOf(HTMLElement);
+    expect(installButton).toBeInstanceOf(HTMLButtonElement);
+    resultItem!.click();
+    installButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubDetailOpen).toHaveBeenCalledTimes(1);
     expect(onClawHubDetailOpen).toHaveBeenCalledWith("github");
@@ -213,9 +240,11 @@ describe("renderSkills", () => {
     expect(text).toContain("Platforms: macos, linux");
     expect(text).toContain("Added search support");
 
-    container
-      .querySelector<HTMLButtonElement>(".md-preview-dialog__body .btn.primary")
-      ?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const detailInstallButton = container.querySelector<HTMLButtonElement>(
+      ".md-preview-dialog__body .btn.primary",
+    );
+    expect(detailInstallButton).toBeInstanceOf(HTMLButtonElement);
+    detailInstallButton!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onClawHubInstall).toHaveBeenCalledTimes(1);
     expect(onClawHubInstall).toHaveBeenCalledWith("github");

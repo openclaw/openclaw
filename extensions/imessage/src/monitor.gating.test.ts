@@ -1,11 +1,16 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-runtime";
-import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { beforeEach, describe, expect, it } from "vitest";
+import { _resetIMessageShortIdState } from "./monitor-reply-cache.js";
 import {
   buildIMessageInboundContext,
   resolveIMessageInboundDecision,
 } from "./monitor/inbound-processing.js";
 import { parseIMessageNotification } from "./monitor/parse-notification.js";
 import type { IMessagePayload } from "./monitor/types.js";
+
+beforeEach(() => {
+  _resetIMessageShortIdState();
+});
 
 function baseCfg(): OpenClawConfig {
   return {
@@ -154,9 +159,30 @@ describe("imessage monitor gating + envelope builders", () => {
 
     expect(ctxPayload.ChatType).toBe("group");
     expect(ctxPayload.SessionKey).toBe("agent:main:imessage:group:42");
-    expect(String(ctxPayload.Body ?? "")).toContain("+15550002222:");
-    expect(String(ctxPayload.Body ?? "")).not.toContain("[from:");
+    expect(ctxPayload.Body ?? "").toContain("+15550002222:");
+    expect(ctxPayload.Body ?? "").not.toContain("[from:");
     expect(ctxPayload.To).toBe("chat_id:42");
+  });
+
+  it("uses short message ids in context and keeps the full guid for actions", () => {
+    const cfg = baseCfg();
+    const message: IMessagePayload = {
+      id: 3,
+      guid: "full-message-guid",
+      chat_id: 42,
+      chat_guid: "iMessage;+;chat0000",
+      chat_identifier: "thread-42",
+      sender: "+15550002222",
+      is_from_me: false,
+      text: "@openclaw ping",
+      is_group: true,
+      chat_name: "Lobster Squad",
+      participants: ["+1555", "+1556"],
+    };
+    const ctxPayload = buildDispatchContextPayload({ cfg, message });
+
+    expect(ctxPayload.MessageSid).toBe("1");
+    expect(ctxPayload.MessageSidFull).toBe("full-message-guid");
   });
 
   it("includes reply-to context fields + suffix", () => {
@@ -177,8 +203,8 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.ReplyToId).toBe("9001");
     expect(ctxPayload.ReplyToBody).toBe("original message");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(String(ctxPayload.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
-    expect(String(ctxPayload.Body ?? "")).toContain("original message");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
+    expect(ctxPayload.Body ?? "").toContain("original message");
   });
 
   it("drops group reply context from non-allowlisted senders in allowlist mode", () => {
@@ -217,7 +243,7 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.ReplyToId).toBeUndefined();
     expect(ctxPayload.ReplyToBody).toBeUndefined();
     expect(ctxPayload.ReplyToSender).toBeUndefined();
-    expect(String(ctxPayload.Body ?? "")).not.toContain("[Replying to");
+    expect(ctxPayload.Body ?? "").not.toContain("[Replying to");
   });
 
   it("keeps group reply context in allowlist_quote mode", () => {
@@ -256,7 +282,7 @@ describe("imessage monitor gating + envelope builders", () => {
     expect(ctxPayload.ReplyToId).toBe("9001");
     expect(ctxPayload.ReplyToBody).toBe("quoted context");
     expect(ctxPayload.ReplyToSender).toBe("+15559998888");
-    expect(String(ctxPayload.Body ?? "")).toContain("[Replying to +15559998888 id:9001]");
+    expect(ctxPayload.Body ?? "").toContain("[Replying to +15559998888 id:9001]");
   });
 
   it("treats configured chat_id as a group session even when is_group is false", () => {

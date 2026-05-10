@@ -9,6 +9,13 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
+function expectProcessPid(pid: number | undefined): number {
+  if (pid == null) {
+    throw new Error("Expected spawned process to expose a pid");
+  }
+  return pid;
+}
+
 describe("managed-child-process", () => {
   it("maps forwarded signals to shell-compatible exit codes", () => {
     expect(signalExitCode("SIGHUP")).toBe(129);
@@ -21,6 +28,7 @@ describe("managed-child-process", () => {
     const childPath = path.join(dir, "child.mjs");
     const runnerPath = path.join(dir, "runner.mjs");
     const childPidPath = path.join(dir, "child.pid");
+    const runnerReadyPath = path.join(dir, "runner.ready");
     const helperUrl = pathToFileURL(path.resolve("scripts/lib/managed-child-process.mjs")).href;
 
     fs.writeFileSync(
@@ -39,12 +47,14 @@ setInterval(() => {}, 1_000);
     fs.writeFileSync(
       runnerPath,
       `
+import fs from "node:fs";
 import { runManagedCommand } from ${JSON.stringify(helperUrl)};
 
 process.exitCode = await runManagedCommand({
   bin: process.execPath,
   args: [${JSON.stringify(childPath)}, ${JSON.stringify(childPidPath)}],
   stdio: "ignore",
+  onReady: () => fs.writeFileSync(${JSON.stringify(runnerReadyPath)}, "1"),
 });
 `,
       "utf8",
@@ -53,22 +63,24 @@ process.exitCode = await runManagedCommand({
     const runner = spawn(process.execPath, [runnerPath], {
       stdio: "ignore",
     });
+    const runnerPid = expectProcessPid(runner.pid);
     let childPid = 0;
 
     try {
+      await waitFor(() => fs.existsSync(runnerReadyPath));
       await waitFor(() => fs.existsSync(childPidPath));
       childPid = Number(fs.readFileSync(childPidPath, "utf8"));
       expect(Number.isInteger(childPid)).toBe(true);
       expect(isProcessAlive(childPid)).toBe(true);
 
-      process.kill(runner.pid!, "SIGTERM");
+      process.kill(runnerPid, "SIGTERM");
       const result = await waitForClose(runner);
 
       expect(result).toEqual({ code: 143, signal: null });
-      await waitFor(() => !isProcessAlive(childPid));
+      await waitFor(() => !isProcessAlive(childPid), 10_000);
     } finally {
-      if (runner.pid && isProcessAlive(runner.pid)) {
-        process.kill(runner.pid, "SIGKILL");
+      if (isProcessAlive(runnerPid)) {
+        process.kill(runnerPid, "SIGKILL");
       }
       if (childPid && isProcessAlive(childPid)) {
         process.kill(childPid, "SIGKILL");

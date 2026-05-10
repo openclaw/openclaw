@@ -1,8 +1,10 @@
+import { createServer } from "node:http";
 import type { Model } from "@mariozechner/pi-ai";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,
   buildOpenAICompletionsParams,
+  createOpenAICompletionsTransportStreamFn,
   parseTransportChunkUsage,
   resolveAzureOpenAIApiVersion,
   sanitizeTransportPayloadText,
@@ -12,13 +14,125 @@ import { attachModelProviderRequestTransport } from "./provider-request-config.j
 import {
   buildTransportAwareSimpleStreamFn,
   createBoundaryAwareStreamFnForModel,
+  createOpenClawTransportStreamFnForModel,
   isTransportAwareApiSupported,
   prepareTransportAwareSimpleModel,
   resolveTransportAwareSimpleApi,
 } from "./provider-transport-stream.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 
+type OpenAICompletionsOutput = Parameters<typeof __testing.processOpenAICompletionsStream>[1];
+
+type CapturedStreamEvent = { type?: string; delta?: string };
+
+function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
+  return {
+    id: "deepseek-v4-pro",
+    name: "DeepSeek V4 Pro",
+    api: "openai-completions",
+    provider: "deepseek",
+    baseUrl: "https://api.deepseek.com",
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1_000_000,
+    maxTokens: 384_000,
+  };
+}
+
+function createAssistantOutput(model: Model<"openai-completions">): OpenAICompletionsOutput {
+  return {
+    role: "assistant" as const,
+    content: [],
+    api: model.api,
+    provider: model.provider,
+    model: model.id,
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: Date.now(),
+  };
+}
+
+async function* streamChunks(chunks: readonly unknown[]): AsyncGenerator<never> {
+  for (const chunk of chunks) {
+    yield chunk as never;
+  }
+}
+
 describe("openai transport stream", () => {
+  it("adds OpenClaw attribution to native OpenAI transport headers and protects it from pi", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const headers = __testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        headers: {
+          originator: "pi",
+          "User-Agent": "pi",
+          "X-Provider": "model",
+        },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      { systemPrompt: "", messages: [] } as never,
+      {
+        originator: "pi",
+        "User-Agent": "pi",
+        "X-Caller": "request",
+      },
+    );
+
+    expect(headers).toMatchObject({
+      originator: "openclaw",
+      version: "2026.3.22",
+      "User-Agent": "openclaw/2026.3.22",
+      "X-Provider": "model",
+      "X-Caller": "request",
+    });
+  });
+
+  it("adds OpenClaw attribution to native OpenAI Codex transport headers", () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.3.22");
+    const headers = __testing.buildOpenAIClientHeaders(
+      {
+        id: "gpt-5.4-codex",
+        name: "GPT-5.4 Codex",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        headers: {
+          originator: "pi",
+          "User-Agent": "pi",
+        },
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      { systemPrompt: "", messages: [] } as never,
+    );
+
+    expect(headers).toMatchObject({
+      originator: "openclaw",
+      version: "2026.3.22",
+      "User-Agent": "openclaw/2026.3.22",
+    });
+  });
+
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
     const config = __testing.buildOpenAICompletionsClientConfig(
       {
@@ -37,7 +151,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128000,
         maxTokens: 4096,
-      } satisfies Model<"openai-completions">,
+      } as unknown as Model<"openai-completions">,
       { systemPrompt: "", messages: [] } as never,
     );
 
@@ -99,6 +213,20 @@ describe("openai transport stream", () => {
   it("builds boundary-aware stream shapers for supported default agent transports", () => {
     expect(
       createBoundaryAwareStreamFnForModel({
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">),
+    ).toBeTypeOf("function");
+    expect(
+      createOpenClawTransportStreamFnForModel({
         id: "gpt-5.4",
         name: "GPT-5.4",
         api: "openai-responses",
@@ -345,6 +473,181 @@ describe("openai transport stream", () => {
     );
   });
 
+  it("passes provider request timeouts to OpenAI SDK clients", () => {
+    const requestTimeoutMs = 900_000;
+
+    const responsesModel = {
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses",
+      provider: "custom-openai",
+      baseUrl: "https://api.example.com/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+      requestTimeoutMs,
+    } satisfies Model<"openai-responses"> & { requestTimeoutMs: number };
+    const azureModel = {
+      ...responsesModel,
+      api: "azure-openai-responses",
+      provider: "azure-openai",
+      baseUrl: "https://example.openai.azure.com/openai/deployments/gpt-5.4",
+    } satisfies Model<"azure-openai-responses"> & { requestTimeoutMs: number };
+    const completionsModel = {
+      ...responsesModel,
+      api: "openai-completions",
+      reasoning: false,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(__testing.buildOpenAISdkClientOptions(responsesModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(azureModel).timeout).toBe(requestTimeoutMs);
+    expect(__testing.buildOpenAISdkClientOptions(completionsModel).timeout).toBe(requestTimeoutMs);
+  });
+
+  it("passes provider request timeouts to OpenAI SDK per-request options", () => {
+    const signal = new AbortController().signal;
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+      requestTimeoutMs: 900_000.7,
+    } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+
+    expect(__testing.buildOpenAISdkRequestOptions(model, signal)).toEqual({
+      signal,
+      timeout: 900_000,
+    });
+    expect(
+      __testing.buildOpenAISdkRequestOptions(
+        { ...model, requestTimeoutMs: -1 } as Model<"openai-completions">,
+        undefined,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
+    let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
+    const server = createServer((req, res) => {
+      let body = "";
+      req.setEncoding("utf8");
+      req.on("data", (chunk) => {
+        body += chunk;
+      });
+      req.on("end", () => {
+        const parsed = JSON.parse(body) as {
+          model?: string;
+          messages?: Array<{ role?: string }>;
+        };
+        captured = {
+          path: req.url,
+          timeout: Array.isArray(req.headers["x-stainless-timeout"])
+            ? req.headers["x-stainless-timeout"][0]
+            : req.headers["x-stainless-timeout"],
+          model: parsed.model,
+          roles: parsed.messages?.map((message) => message.role ?? ""),
+        };
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        const created = Math.floor(Date.now() / 1000);
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
+            choices: [
+              {
+                index: 0,
+                delta: { role: "assistant", content: "OK" },
+                finish_reason: null,
+              },
+            ],
+          })}\n\n`,
+        );
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-timeout-proof",
+            object: "chat.completion.chunk",
+            created,
+            model: "mlx-community/Qwen3-30B-A3B-6bit",
+            choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          })}\n\n`,
+        );
+        res.write("data: [DONE]\n\n");
+        res.end();
+      });
+    });
+
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const baseModel = {
+        id: "mlx-community/Qwen3-30B-A3B-6bit",
+        name: "Qwen3 MLX",
+        api: "openai-completions",
+        provider: "mlx",
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 256,
+        requestTimeoutMs: 900_000,
+      } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        baseModel,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Reply OK", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      let doneReason: string | undefined;
+      let text = "";
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        delta?: string;
+        reason?: string;
+      }>) {
+        if (event.type === "text_delta") {
+          text += event.delta ?? "";
+        }
+        if (event.type === "done") {
+          doneReason = event.reason;
+        }
+      }
+
+      expect(captured.path).toBe("/v1/chat/completions");
+      expect(captured.timeout).toBe("900");
+      expect(captured.model).toBe("mlx-community/Qwen3-30B-A3B-6bit");
+      expect(captured.roles).toEqual(["system", "user"]);
+      expect(doneReason).toBe("stop");
+      expect(text).toBe("OK");
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("does not double-count reasoning tokens and clamps uncached prompt usage at zero", () => {
     const model = {
       id: "gpt-5",
@@ -395,8 +698,382 @@ describe("openai transport stream", () => {
     });
   });
 
-  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("records usage from OpenAI-compatible streaming usage chunks", async () => {
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    async function* mockStream() {
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "ok" },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [],
+        usage: {
+          prompt_tokens: 8,
+          completion_tokens: 10,
+          total_tokens: 18,
+        },
+      };
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.usage).toMatchObject({
+      input: 8,
+      output: 10,
+      cacheRead: 0,
+      totalTokens: 18,
+    });
+  });
+
+  it("skips null and non-object OpenAI-compatible stream chunks", async () => {
+    const model = {
+      id: "glm-5",
+      name: "GLM-5",
+      api: "openai-completions",
+      provider: "vllm",
+      baseUrl: "http://localhost:8000/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 4096,
+    } satisfies Model<"openai-completions">;
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    async function* mockStream() {
+      yield null as never;
+      yield "not-a-chunk" as never;
+      yield {
+        id: "chatcmpl-vllm",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            delta: { role: "assistant" as const, content: "ok" },
+            logprobs: null,
+            finish_reason: "stop" as const,
+          },
+        ],
+      };
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toContainEqual({ type: "text", text: "ok" });
+    expect(output.stopReason).toBe("stop");
+  });
+
+  it("filters DeepSeek DSML content without disturbing native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <｜DSML｜tool_use_error>body</｜DSML｜tool_use_error> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls>",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before  after" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("preserves DeepSeek visible content before same-chunk native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-native-tool",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "I'll check",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "I'll check" },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+    ]);
+  });
+
+  it("filters DeepSeek DSML text queued after native tool calls", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-post-tool-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "<|DSML|tool_calls>shadow</|DSML|tool_calls> visible",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " visible" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("keeps DeepSeek DSML state across native tool-call chunks", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+    const events: CapturedStreamEvent[] = [];
+
+    await __testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "before <|DSML|tool",
+                tool_calls: [
+                  {
+                    index: 0,
+                    id: "call_native_1",
+                    type: "function",
+                    function: { name: "read", arguments: '{"path":"/tmp/native.md"}' },
+                  },
+                ],
+              },
+              logprobs: null,
+              finish_reason: "tool_calls",
+            },
+          ],
+        },
+        {
+          id: "chatcmpl-deepseek-split-dsml",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "_calls>shadow</|DSML|tool_calls> after",
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push: (event) => events.push(event as CapturedStreamEvent) },
+    );
+
+    expect(output.content).toEqual([
+      { type: "text", text: "before " },
+      {
+        type: "toolCall",
+        id: "call_native_1",
+        name: "read",
+        arguments: { path: "/tmp/native.md" },
+        partialArgs: '{"path":"/tmp/native.md"}',
+      },
+      { type: "text", text: " after" },
+    ]);
+    expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it("keeps OpenRouter thinking format for declared OpenRouter providers on custom proxy URLs", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -417,28 +1094,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "openrouter",
-        baseUrl: "https://proxy.example.com/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -446,25 +1101,18 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
     );
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
     });
   });
 
-  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", async () => {
-    const streamFn = buildTransportAwareSimpleStreamFn(
+  it("keeps OpenRouter thinking format for native OpenRouter hosts behind custom provider ids", () => {
+    const params = buildOpenAICompletionsParams(
       attachModelProviderRequestTransport(
         {
           id: "anthropic/claude-sonnet-4",
@@ -485,28 +1133,6 @@ describe("openai transport stream", () => {
           },
         },
       ),
-    );
-
-    expect(streamFn).toBeTypeOf("function");
-    let capturedPayload: Record<string, unknown> | undefined;
-    let resolveCaptured!: () => void;
-    const captured = new Promise<void>((resolve) => {
-      resolveCaptured = resolve;
-    });
-
-    void streamFn!(
-      {
-        id: "anthropic/claude-sonnet-4",
-        name: "Claude Sonnet 4",
-        api: "openclaw-openai-completions-transport",
-        provider: "custom-openrouter",
-        baseUrl: "https://openrouter.ai/api/v1",
-        reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-        contextWindow: 200000,
-        maxTokens: 8192,
-      } as Model<"openclaw-openai-completions-transport">,
       {
         systemPrompt: "system",
         messages: [],
@@ -514,21 +1140,42 @@ describe("openai transport stream", () => {
       } as never,
       {
         reasoningEffort: "high",
-        onPayload: async (payload: unknown) => {
-          capturedPayload = payload as Record<string, unknown>;
-          resolveCaptured();
-          return payload;
-        },
       } as never,
     );
 
-    await captured;
-
-    expect(capturedPayload).toMatchObject({
+    expect(params).toMatchObject({
       reasoning: {
         effort: "high",
       },
     });
+  });
+
+  it("does not build OpenRouter reasoning params for Hunter Alpha when reasoning is disabled", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openrouter/hunter-alpha",
+        name: "Hunter Alpha",
+        api: "openai-completions",
+        provider: "openrouter",
+        baseUrl: "https://openrouter.ai/api/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 1_048_576,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoningEffort: "high",
+      } as never,
+    ) as { reasoning?: unknown; reasoning_effort?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning");
+    expect(params).not.toHaveProperty("reasoning_effort");
   });
 
   it("uses system role instead of developer for responses providers that disable developer role", () => {
@@ -579,6 +1226,424 @@ describe("openai transport stream", () => {
     ) as { input?: Array<{ role?: string }> };
 
     expect(params.input?.[0]).toMatchObject({ role: "developer" });
+  });
+
+  it("uses model maxTokens for Responses params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { max_output_tokens?: unknown };
+
+    expect(params.max_output_tokens).toBe(65_536);
+  });
+
+  it("uses top-level instructions for Codex responses and preserves prompt cache identity", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        serviceTier: "auto",
+        sessionId: "session-123",
+        temperature: 0.2,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown> & {
+      input?: Array<{ role?: string }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(Array.isArray(params.input)).toBe(true);
+    expect(params.input?.map((item) => item.role)).toEqual(["user"]);
+    expect(
+      params.input?.filter((item) => item.role === "system" || item.role === "developer"),
+    ).toStrictEqual([]);
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.store).toBe(false);
+    expect(params).not.toHaveProperty("metadata");
+    expect(params).not.toHaveProperty("max_output_tokens");
+    expect(params).not.toHaveProperty("prompt_cache_retention");
+    expect(params).not.toHaveProperty("service_tier");
+    expect(params).not.toHaveProperty("temperature");
+  });
+
+  it("sanitizes Codex responses params after payload hooks mutate them without stripping cache identity", () => {
+    const payload = {
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      max_output_tokens: 1024,
+      metadata: { openclaw_session_id: "session-123" },
+      prompt_cache_key: "session-123",
+      prompt_cache_retention: "24h",
+      service_tier: "auto",
+      temperature: 0.2,
+    };
+
+    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      payload,
+    );
+
+    expect(sanitized.prompt_cache_key).toBe("session-123");
+    expect(sanitized).not.toHaveProperty("metadata");
+    expect(sanitized).not.toHaveProperty("max_output_tokens");
+    expect(sanitized).not.toHaveProperty("prompt_cache_retention");
+    expect(sanitized).not.toHaveProperty("service_tier");
+    expect(sanitized).not.toHaveProperty("temperature");
+  });
+
+  it("preserves custom Codex-compatible responses params", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "Hello", timestamp: 1 }],
+        tools: [],
+      } as never,
+      {
+        cacheRetention: "long",
+        maxTokens: 1024,
+        sessionId: "session-123",
+        temperature: 0.2,
+      },
+      {
+        openclaw_session_id: "session-123",
+        openclaw_turn_id: "turn-123",
+      },
+    ) as Record<string, unknown>;
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.prompt_cache_key).toBe("session-123");
+    expect(params.metadata).toEqual({
+      openclaw_session_id: "session-123",
+      openclaw_turn_id: "turn-123",
+    });
+    expect(params.max_output_tokens).toBe(1024);
+    expect(params.temperature).toBe(0.2);
+  });
+
+  it("preserves custom Codex-compatible responses params after payload hooks mutate them", () => {
+    const payload = {
+      model: "gpt-5.4",
+      input: [],
+      stream: true,
+      max_output_tokens: 1024,
+      metadata: { openclaw_session_id: "session-123" },
+      prompt_cache_key: "session-123",
+      prompt_cache_retention: "24h",
+      service_tier: "auto",
+      temperature: 0.2,
+    };
+
+    const sanitized = __testing.sanitizeOpenAICodexResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      payload,
+    );
+
+    expect(sanitized).toEqual(payload);
+  });
+
+  it("omits prior Responses replay item ids for native Codex responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_abc|fc_prior",
+            toolName: "price_lookup",
+            content: [{ type: "text", text: "$83.95" }],
+            isError: false,
+            timestamp: 2,
+          },
+          { role: "user", content: "what is the capital of the philippines", timestamp: 3 },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+        encrypted_content?: string;
+      }>;
+    };
+
+    const reasoningItem = params.input?.find((item) => item.type === "reasoning");
+    expect(reasoningItem).toMatchObject({
+      type: "reasoning",
+      encrypted_content: "ciphertext",
+    });
+    expect(reasoningItem?.id).toBeUndefined();
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      phase: "commentary",
+    });
+    expect(assistantMessage?.id).toBeUndefined();
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      call_id: "call_abc",
+    });
+    expect(functionCall?.id).toBeUndefined();
+  });
+
+  it("preserves prior Responses replay item ids for custom Codex-compatible responses", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-codex-responses",
+            provider: "openai-codex",
+            model: "gpt-5.4",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [
+              {
+                type: "thinking",
+                thinking: "Need a tool.",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: "rs_prior",
+                  encrypted_content: "ciphertext",
+                }),
+              },
+              {
+                type: "text",
+                text: "Checking the price.",
+                textSignature: JSON.stringify({
+                  v: 1,
+                  id: "msg_prior",
+                  phase: "commentary",
+                }),
+              },
+              {
+                type: "toolCall",
+                id: "call_abc|fc_prior",
+                name: "price_lookup",
+                arguments: { symbol: "SOL" },
+              },
+            ],
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{
+        type?: string;
+        role?: string;
+        id?: string;
+        call_id?: string;
+        phase?: string;
+      }>;
+    };
+
+    expect(
+      params.input?.reduce((count, item) => count + (item.type === "reasoning" ? 1 : 0), 0),
+    ).toBe(1);
+    const assistantMessage = params.input?.find(
+      (item) => item.type === "message" && item.role === "assistant",
+    );
+    expect(assistantMessage).toMatchObject({
+      type: "message",
+      role: "assistant",
+      id: "msg_prior",
+      phase: "commentary",
+    });
+    const functionCall = params.input?.find((item) => item.type === "function_call");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      id: "fc_prior",
+      call_id: "call_abc",
+    });
+  });
+
+  it("adds minimal user input for Codex responses when only the system prompt is present", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-codex-responses",
+        provider: "openai-codex",
+        baseUrl: "https://chatgpt.com/backend-api",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-codex-responses">,
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    ) as {
+      input?: Array<{ role?: string; content?: Array<{ type?: string; text?: string }> }>;
+      instructions?: string;
+    };
+
+    expect(params.instructions).toBe("Stable prefix\nDynamic suffix");
+    expect(params.input).toEqual([
+      {
+        role: "user",
+        content: [{ type: "input_text", text: " " }],
+      },
+    ]);
   });
 
   it("does not infer high reasoning when Pi passes thinking off", () => {
@@ -861,7 +1926,7 @@ describe("openai transport stream", () => {
         baseUrl: "https://proxy.example.com/v1",
       },
     },
-  ])("replays assistant phase metadata for $label responses payloads", ({ model }) => {
+  ])("replays assistant phase metadata for $label responses payloads", ({ label, model }) => {
     const params = buildOpenAIResponsesParams(
       {
         ...model,
@@ -917,9 +1982,13 @@ describe("openai transport stream", () => {
     const assistantItem = params.input?.find((item) => item.role === "assistant");
     expect(assistantItem).toMatchObject({
       role: "assistant",
-      id: "msg_commentary",
       phase: "commentary",
     });
+    if (label === "openai-codex") {
+      expect(assistantItem?.id).toBeUndefined();
+    } else {
+      expect(assistantItem?.id).toBe("msg_commentary");
+    }
   });
 
   it("strips the internal cache boundary from OpenAI system prompts", () => {
@@ -1051,6 +2120,80 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ strict?: boolean }> };
 
     expect(params.tools?.[0]).not.toHaveProperty("strict");
+  });
+
+  it("still normalizes responses tool parameters when strict is omitted", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://proxy.example.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
+
+    expect(params.tools?.[0]).not.toHaveProperty("strict");
+    expect(params.tools?.[0]?.parameters).toMatchObject({
+      type: "object",
+      properties: {},
+    });
+  });
+
+  it("normalizes responses tool parameters while downgrading native strict:false", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "read",
+            description: "Read file",
+            parameters: {
+              properties: { path: { type: "string" } },
+              required: [],
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as { tools?: Array<{ strict?: boolean; parameters?: Record<string, unknown> }> };
+
+    expect(params.tools?.[0]?.strict).toBe(false);
+    expect(params.tools?.[0]?.parameters).toMatchObject({
+      type: "object",
+      properties: { path: { type: "string" } },
+      required: [],
+    });
   });
 
   it("adds native OpenAI turn metadata on direct Responses routes", () => {
@@ -1229,7 +2372,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      } satisfies Model<"openai-completions">,
+      } as unknown as Model<"openai-completions">,
       {
         systemPrompt: "system",
         messages: [],
@@ -1345,6 +2488,212 @@ describe("openai transport stream", () => {
     expect(params.reasoning_effort).toBe("high");
   });
 
+  it("omits reasoning_effort for gpt-5.4-mini Chat Completions tool payloads", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: { type: "object", properties: {}, additionalProperties: false },
+          },
+        ],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toEqual([
+      expect.objectContaining({
+        type: "function",
+        function: expect.objectContaining({
+          name: "lookup_weather",
+        }),
+      }),
+    ]);
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("keeps reasoning_effort for gpt-5.4-mini Chat Completions payloads without tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4-mini",
+        name: "GPT-5.4 mini",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 400000,
+        maxTokens: 128000,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "medium",
+      } as never,
+    ) as { reasoning_effort?: unknown; tools?: unknown };
+
+    expect(params.tools).toStrictEqual([]);
+    expect(params.reasoning_effort).toBe("medium");
+  });
+
+  it("uses provider-native reasoning effort values declared by model compat", () => {
+    const baseModel = {
+      id: "qwen/qwen3-32b",
+      name: "Qwen 3 32B",
+      api: "openai-completions",
+      provider: "groq",
+      baseUrl: "https://api.groq.com/openai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["none", "default"],
+        reasoningEffortMap: {
+          off: "none",
+          low: "default",
+          medium: "default",
+          high: "default",
+        },
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { reasoning_effort?: unknown };
+
+    expect(enabled.reasoning_effort).toBe("default");
+    expect(disabled.reasoning_effort).toBe("none");
+  });
+
+  it("maps qwen thinking format to top-level enable_thinking", () => {
+    const baseModel = {
+      id: "qwen3.5-32b",
+      name: "Qwen 3.5 32B",
+      api: "openai-completions",
+      provider: "llama-cpp",
+      baseUrl: "http://127.0.0.1:8080/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 131072,
+      maxTokens: 8192,
+      compat: {
+        thinkingFormat: "qwen",
+      },
+    } as unknown as Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const enabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "medium",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+    const disabled = buildOpenAICompletionsParams(baseModel, context, {
+      reasoning: "off",
+    } as never) as { enable_thinking?: unknown; reasoning_effort?: unknown };
+
+    expect(enabled.enable_thinking).toBe(true);
+    expect(disabled.enable_thinking).toBe(false);
+    expect(enabled).not.toHaveProperty("reasoning_effort");
+    expect(disabled).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("maps qwen-chat-template thinking format to chat_template_kwargs", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "qwen3.5-32b",
+        name: "Qwen 3.5 32B",
+        api: "openai-completions",
+        provider: "llama-cpp",
+        baseUrl: "http://127.0.0.1:8080/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          thinkingFormat: "qwen-chat-template",
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { chat_template_kwargs?: Record<string, unknown>; reasoning_effort?: unknown };
+
+    expect(params.chat_template_kwargs).toEqual({ enable_thinking: false });
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("omits unsupported disabled reasoning for completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "openai/gpt-oss-120b",
+        name: "GPT OSS 120B",
+        api: "openai-completions",
+        provider: "groq",
+        baseUrl: "https://api.groq.com/openai/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: 8192,
+        compat: {
+          supportsReasoningEffort: true,
+          supportedReasoningEfforts: ["low", "medium", "high"],
+        },
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      {
+        reasoning: "off",
+      } as never,
+    ) as { reasoning_effort?: unknown };
+
+    expect(params).not.toHaveProperty("reasoning_effort");
+  });
+
   it("uses system role and streaming usage compat for native Qwen completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1415,7 +2764,7 @@ describe("openai transport stream", () => {
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 32768,
         maxTokens: 8192,
-      } satisfies Model<"openai-completions">,
+      } as unknown as Model<"openai-completions">,
       {
         systemPrompt: "system",
         messages: [],
@@ -1454,6 +2803,67 @@ describe("openai transport stream", () => {
     };
 
     expect(params.stream_options).toEqual({ include_usage: true });
+  });
+
+  it("forwards prompt_cache_key for opted-in OpenAI-compatible completions providers", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "custom-model",
+        name: "Custom Model",
+        api: "openai-completions",
+        provider: "custom-cpa",
+        baseUrl: "https://proxy.example.com/v1",
+        compat: { supportsPromptCacheKey: true },
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 8192,
+      } as unknown as Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as { prompt_cache_key?: string };
+
+    expect(params.prompt_cache_key).toBe("session-123");
+  });
+
+  it("omits prompt_cache_key for completions when caching is disabled or not opted in", () => {
+    const baseModel = {
+      id: "custom-model",
+      name: "Custom Model",
+      api: "openai-completions",
+      provider: "custom-cpa",
+      baseUrl: "https://proxy.example.com/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 32768,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+    const context = {
+      systemPrompt: "system",
+      messages: [],
+      tools: [],
+    } as never;
+
+    const disabled = buildOpenAICompletionsParams(
+      {
+        ...baseModel,
+        compat: { supportsPromptCacheKey: true },
+      } as unknown as Model<"openai-completions">,
+      context,
+      { sessionId: "session-123", cacheRetention: "none" },
+    ) as { prompt_cache_key?: string };
+    const notOptedIn = buildOpenAICompletionsParams(baseModel, context, {
+      sessionId: "session-123",
+    }) as { prompt_cache_key?: string };
+
+    expect(disabled.prompt_cache_key).toBeUndefined();
+    expect(notOptedIn.prompt_cache_key).toBeUndefined();
   });
 
   it("disables developer-role-only compat defaults for configured custom proxy completions providers", () => {
@@ -1561,6 +2971,57 @@ describe("openai transport stream", () => {
     expect(params).not.toHaveProperty("max_completion_tokens");
   });
 
+  it("uses model maxTokens for OpenAI completions params when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_completion_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_tokens");
+  });
+
+  it("uses model maxTokens with max_tokens completions compat when runtime maxTokens is omitted", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "zai-org/GLM-4.7-TEE",
+        name: "GLM 4.7 TEE",
+        api: "openai-completions",
+        provider: "chutes",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 65_536,
+      } as never,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [],
+      } as never,
+      undefined,
+    );
+
+    expect(params.max_tokens).toBe(65_536);
+    expect(params).not.toHaveProperty("max_completion_tokens");
+  });
+
   it("omits strict tool shaping for Z.ai default-route completions providers", () => {
     const params = buildOpenAICompletionsParams(
       {
@@ -1644,7 +3105,12 @@ describe("openai transport stream", () => {
           {
             name: "read",
             description: "Read file",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              additionalProperties: false,
+              properties: { path: { type: "string" } },
+              required: [],
+            },
           },
         ],
       } as never,
@@ -1652,6 +3118,47 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(false);
+  });
+
+  it("applies model compat unsupported schema keywords to completions tools", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "accounts/fireworks/routers/kimi-k2p5-turbo",
+        name: "Kimi K2.5 Turbo",
+        api: "openai-completions",
+        provider: "fireworks",
+        baseUrl: "https://api.fireworks.ai/inference/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256000,
+        maxTokens: 256000,
+        compat: {
+          unsupportedToolSchemaKeywords: ["not"],
+        } as never,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {
+              type: "object",
+              properties: {
+                forbidden: { not: {} },
+              },
+            },
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{ function?: { parameters?: { properties?: Record<string, unknown> } } }>;
+    };
+
+    expect(params.tools?.[0]?.function?.parameters?.properties?.forbidden).toStrictEqual({});
   });
 
   describe("Gemini thought_signature round-trip on OpenAI-compatible completions", () => {
@@ -1803,7 +3310,7 @@ describe("openai transport stream", () => {
       );
     });
 
-    it("does not replay thought_signature across a different API surface", () => {
+    it("uses the Gemini skip-validator signature across a different API surface", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -1840,12 +3347,14 @@ describe("openai transport stream", () => {
       ) as { messages: Array<Record<string, unknown>> };
 
       const assistant = params.messages.find((message) => message.role === "assistant") as
-        | { tool_calls?: Array<{ extra_content?: unknown }> }
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
         | undefined;
-      expect(assistant?.tool_calls?.[0]?.extra_content).toBeUndefined();
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
     });
 
-    it("does not emit extra_content when no thought_signature was captured", () => {
+    it("uses the Gemini skip-validator signature when no thought_signature was captured", () => {
       const params = buildOpenAICompletionsParams(
         geminiModel,
         {
@@ -1866,6 +3375,55 @@ describe("openai transport stream", () => {
               stopReason: "toolUse",
               timestamp: 1,
               content: [{ type: "toolCall", id: "call_abc", name: "echo_value", arguments: {} }],
+            },
+          ],
+          tools: [],
+        } as never,
+        undefined,
+      ) as { messages: Array<Record<string, unknown>> };
+
+      const assistant = params.messages.find((message) => message.role === "assistant") as
+        | { tool_calls?: Array<{ extra_content?: { google?: { thought_signature?: string } } }> }
+        | undefined;
+      expect(assistant?.tool_calls?.[0]?.extra_content?.google?.thought_signature).toBe(
+        "skip_thought_signature_validator",
+      );
+    });
+
+    it("does not trust cross-route thought_signature for non-Gemini-3 Google compat models", () => {
+      const nonGemini3Model = {
+        ...geminiModel,
+        id: "gemini-2.5-pro",
+        name: "Gemini 2.5 Pro",
+      };
+      const params = buildOpenAICompletionsParams(
+        nonGemini3Model,
+        {
+          messages: [
+            {
+              role: "assistant",
+              api: "google-generative-ai",
+              provider: nonGemini3Model.provider,
+              model: nonGemini3Model.id,
+              usage: {
+                input: 0,
+                output: 0,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 0,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason: "toolUse",
+              timestamp: 1,
+              content: [
+                {
+                  type: "toolCall",
+                  id: "call_abc",
+                  name: "echo_value",
+                  arguments: { value: "repro" },
+                  thoughtSignature: "SIG-OPAQUE-ABC==",
+                },
+              ],
             },
           ],
           tools: [],
@@ -1995,11 +3553,13 @@ describe("openai transport stream", () => {
     };
 
     const functionCall = params.input?.find((item) => item.type === "function_call");
-    expect(functionCall).toBeDefined();
-    expect(functionCall?.arguments).toBe("not valid json");
+    expect(functionCall).toMatchObject({
+      type: "function_call",
+      arguments: "not valid json",
+    });
   });
 
-  it("does not send tool_choice when tools are provided but toolChoice option is not set", () => {
+  it("defaults tool_choice to auto for proxy-like openai-completions endpoints", () => {
     const params = buildOpenAICompletionsParams(
       {
         id: "test-model",
@@ -2007,6 +3567,38 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "vllm",
         baseUrl: "http://localhost:8000/v1",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 4096,
+        maxTokens: 2048,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "You are a helpful assistant",
+        messages: [],
+        tools: [
+          {
+            name: "get_weather",
+            description: "Get weather information",
+            parameters: { type: "object", properties: {} },
+          },
+        ],
+      } as never,
+      undefined,
+    );
+
+    expect(params).toHaveProperty("tools");
+    expect(params).toHaveProperty("tool_choice", "auto");
+  });
+
+  it("does not send tool_choice by default for native openai-completions endpoints", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
         reasoning: false,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2155,9 +3747,9 @@ describe("openai transport stream", () => {
     await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
 
     expect(output.stopReason).toBe("stop");
-    expect(output.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
-      false,
-    );
+    expect(
+      output.content.filter((block) => (block as { type?: string }).type === "toolCall"),
+    ).toStrictEqual([]);
   });
 
   it("handles reasoning_details from OpenRouter/Qwen3 in completions stream", async () => {
@@ -2258,6 +3850,85 @@ describe("openai transport stream", () => {
     expect(textBlock.text).toBe(" Hello! How can I help you?");
   });
 
+  it("normalizes structured completions content blocks without stringifying objects (#78846)", async () => {
+    const model = {
+      id: "mistral-small-latest",
+      name: "Mistral Small",
+      api: "openai-completions",
+      provider: "mistral",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+    const mockChunks = [
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: [
+                { type: "thinking", thinking: [{ type: "text", text: "Need to think." }] },
+                { type: "text", content: "Visible answer." },
+              ],
+            } as Record<string, unknown>,
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-structured-content",
+        object: "chat.completion.chunk" as const,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "stop",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.content).toEqual([
+      { type: "thinking", thinking: "Need to think.", thinkingSignature: "content" },
+      { type: "text", text: "Visible answer." },
+    ]);
+  });
+
   it("keeps tool calls when reasoning_details and tool_calls share a chunk", async () => {
     const model = {
       id: "openrouter/qwen/qwen3-235b-a22b",
@@ -2341,6 +4012,93 @@ describe("openai transport stream", () => {
       { type: "thinking", thinking: "Need a tool.", thinkingSignature: "reasoning_details" },
       { type: "toolCall", id: "call_1", name: "lookup", arguments: { query: "qwen3" } },
     ]);
+  });
+
+  it("treats singular tool_call finish_reason as tool use", async () => {
+    const model = {
+      id: "minimax-m2.5-8bit",
+      name: "MiniMax M2.5 8bit",
+      api: "openai-completions",
+      provider: "mlx-lm",
+      baseUrl: "http://localhost:1234/v1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 128000,
+      maxTokens: 8192,
+    } satisfies Model<"openai-completions">;
+
+    const output = {
+      role: "assistant" as const,
+      content: [],
+      api: model.api,
+      provider: model.provider,
+      model: model.id,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: Date.now(),
+    };
+
+    const stream: { push(event: unknown): void } = { push() {} };
+
+    const mockChunks = [
+      {
+        id: "chatcmpl-mlx",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  id: "call_1",
+                  type: "function" as const,
+                  function: { name: "lookup", arguments: "{}" },
+                },
+              ],
+            },
+            logprobs: null,
+            finish_reason: null,
+          },
+        ],
+      },
+      {
+        id: "chatcmpl-mlx",
+        object: "chat.completion.chunk" as const,
+        created: 1775425651,
+        model: model.id,
+        choices: [
+          {
+            index: 0,
+            delta: {},
+            logprobs: null,
+            finish_reason: "tool_call",
+          },
+        ],
+      },
+    ] as const;
+
+    async function* mockStream() {
+      for (const chunk of mockChunks) {
+        yield chunk as never;
+      }
+    }
+
+    await __testing.processOpenAICompletionsStream(mockStream(), output, model, stream);
+
+    expect(output.stopReason).toBe("toolUse");
+    expect(output.content).toContainEqual(
+      expect.objectContaining({ type: "toolCall", id: "call_1", name: "lookup" }),
+    );
   });
 
   it("keeps streamed tool call arguments intact when reasoning_details repeats", async () => {

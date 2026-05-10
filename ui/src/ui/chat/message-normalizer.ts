@@ -13,6 +13,7 @@ import { mediaKindFromMime } from "../../../../src/media/constants.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
+export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
 
 function coerceCanvasPreview(
   value: unknown,
@@ -155,6 +156,21 @@ function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem
     merged.push(item);
   }
   return merged.filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
+}
+
+export function stripMessageDisplayMetadataText(text: string): string {
+  return stripInboundMetadata(text);
+}
+
+function stripMessageDisplayMetadata(items: MessageContentItem[]): MessageContentItem[] {
+  return items
+    .map((item) => {
+      if (item.type !== "text" || typeof item.text !== "string") {
+        return item;
+      }
+      return { ...item, text: stripMessageDisplayMetadataText(item.text) };
+    })
+    .filter((item) => item.type !== "text" || Boolean(item.text?.trim()));
 }
 
 function expandTextContent(text: string): {
@@ -369,15 +385,7 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const senderLabel =
     typeof m.senderLabel === "string" && m.senderLabel.trim() ? m.senderLabel.trim() : null;
 
-  // Strip AI-injected metadata prefix blocks from user messages before display.
-  if (role === "user" || role === "User") {
-    content = content.map((item) => {
-      if (item.type === "text" && typeof item.text === "string") {
-        return { ...item, text: stripInboundMetadata(item.text) };
-      }
-      return item;
-    });
-  }
+  content = stripMessageDisplayMetadata(content);
 
   return {
     role,
@@ -388,40 +396,4 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     ...(audioAsVoice ? { audioAsVoice: true } : {}),
     ...(replyTarget ? { replyTarget } : {}),
   };
-}
-
-/**
- * Normalize role for grouping purposes.
- */
-export function normalizeRoleForGrouping(role: string): string {
-  const lower = role.toLowerCase();
-  // Preserve original casing when it's already a core role.
-  if (role === "user" || role === "User") {
-    return role;
-  }
-  if (role === "assistant") {
-    return "assistant";
-  }
-  if (role === "system") {
-    return "system";
-  }
-  // Keep tool-related roles distinct so the UI can style/toggle them.
-  if (
-    lower === "toolresult" ||
-    lower === "tool_result" ||
-    lower === "tool" ||
-    lower === "function"
-  ) {
-    return "tool";
-  }
-  return role;
-}
-
-/**
- * Check if a message is a tool result message based on its role.
- */
-export function isToolResultMessage(message: unknown): boolean {
-  const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role.toLowerCase() : "";
-  return role === "toolresult" || role === "tool_result";
 }

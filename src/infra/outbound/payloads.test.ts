@@ -13,6 +13,7 @@ import {
   projectOutboundPayloadPlanForJson,
   projectOutboundPayloadPlanForMirror,
   projectOutboundPayloadPlanForOutbound,
+  summarizeOutboundPayloadForTransport,
 } from "./payloads.js";
 import { registerPendingSpawnedChildrenQuery } from "./pending-spawn-query.js";
 
@@ -86,7 +87,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           text: "Updated [wiki/tools.md] with the rollback failure-mode nuance. No channel reply.",
         },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps normal payloads that mention wiki without matching relay placeholders", () => {
@@ -113,7 +114,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
         { text: '{"action":"NO_REPLY"}' },
         { text: '{\n  "action": "NO_REPLY"\n}' },
       ]),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps JSON NO_REPLY objects that include extra fields", () => {
@@ -189,7 +190,7 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
   });
 
-  it("rewrites bare silent replies for direct conversations when requested", () => {
+  it("rewrites bare silent replies for direct conversations where silence is disallowed", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -197,9 +198,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -214,8 +212,12 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       }),
     );
     expect(projected).toHaveLength(1);
-    expect(projected[0]?.text).toEqual(expect.any(String));
-    expect(projected[0]?.text?.trim()).not.toBe("NO_REPLY");
+    const [reply] = projected;
+    if (!reply?.text) {
+      throw new Error("expected direct silent reply rewrite to produce visible text");
+    }
+    expect(reply.text.trim().length).toBeGreaterThan(0);
+    expect(reply.text.trim()).not.toBe("NO_REPLY");
   });
 
   it("drops bare silent replies for groups when policy allows silence", () => {
@@ -226,9 +228,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -242,10 +241,10 @@ describe("normalizeReplyPayloadsForDelivery", () => {
           surface: "telegram",
         }),
       ),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
-  it("does not add rewrite chatter when visible content is already being delivered", () => {
+  it("does not add silent-reply chatter when visible content is already being delivered", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -253,9 +252,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
             direct: "disallow",
             group: "allow",
             internal: "allow",
-          },
-          silentReplyRewrite: {
-            direct: true,
           },
         },
       },
@@ -281,7 +277,6 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       agents: {
         defaults: {
           silentReply: { direct: "disallow", group: "allow", internal: "allow" },
-          silentReplyRewrite: { direct: true },
         },
       },
     };
@@ -296,35 +291,39 @@ describe("normalizeReplyPayloadsForDelivery", () => {
       );
 
     it("drops bare silent replies when the context flag is set", () => {
-      expect(planSilent("agent:main:telegram:direct:123", true)).toEqual([]);
+      expect(planSilent("agent:main:telegram:direct:123", true)).toStrictEqual([]);
     });
 
     it("drops bare silent replies via the registered runtime query", () => {
       const sessionKey = "agent:main:telegram:direct:456";
       const previousQuery = registerPendingSpawnedChildrenQuery((key) => key === sessionKey);
       try {
-        expect(planSilent(sessionKey)).toEqual([]);
+        expect(planSilent(sessionKey)).toStrictEqual([]);
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }
     });
 
-    it("falls back to the rewrite path when the query throws", () => {
+    it("falls back to the visible rewrite path when the query throws", () => {
       const previousQuery = registerPendingSpawnedChildrenQuery(() => {
         throw new Error("registry unavailable");
       });
       try {
         const delivery = planSilent("agent:main:telegram:direct:789");
         expect(delivery).toHaveLength(1);
-        expect(delivery[0]?.text).toBeTruthy();
-        expect(delivery[0]?.text).not.toMatch(/NO_REPLY/i);
+        const [reply] = delivery;
+        if (!reply?.text) {
+          throw new Error("expected visible silent-reply fallback text");
+        }
+        expect(reply.text.length).toBeGreaterThan(0);
+        expect(reply.text).not.toBe("NO_REPLY");
       } finally {
         registerPendingSpawnedChildrenQuery(previousQuery);
       }
     });
   });
 
-  it("keeps bare NO_REPLY visible when silence is disallowed but rewrite is off", () => {
+  it("keeps bare NO_REPLY visible when silence is disallowed and rewrite is disabled", () => {
     const cfg: OpenClawConfig = {
       agents: {
         defaults: {
@@ -554,7 +553,7 @@ describe("normalizeOutboundPayloadsForJson", () => {
     expect(normalizeOutboundPayloadsForJson(cloneReplyPayloads(input))).toEqual(expected);
   });
 
-  it("suppresses reasoning payloads", () => {
+  it("suppresses reasoning payloads during JSON normalization", () => {
     expect(
       normalizeOutboundPayloadsForJson([
         { text: "Reasoning:\n_step_", isReasoning: true },
@@ -574,7 +573,7 @@ describe("normalizeOutboundPayloads", () => {
     ]);
   });
 
-  it("suppresses reasoning payloads", () => {
+  it("suppresses reasoning payloads during runtime normalization", () => {
     expect(
       normalizeOutboundPayloads([
         { text: "Reasoning:\n_step_", isReasoning: true },
@@ -651,6 +650,44 @@ describe("OutboundPayloadPlan projections", () => {
     const plan = createOutboundPayloadPlan(matrix);
     expect(projectOutboundPayloadPlanForMirror(plan)).toEqual(resolveMirrorProjection(matrix));
   });
+
+  it("keeps markdown images as text unless extraction is enabled", () => {
+    const input = "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)";
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan([{ text: input }])),
+    ).toEqual([
+      {
+        text: input,
+        mediaUrl: undefined,
+        mediaUrls: undefined,
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
+
+  it("extracts markdown images when the outbound channel opts in", () => {
+    const input = "Chart ![chart](https://example.com/chart.png) now";
+
+    expect(
+      projectOutboundPayloadPlanForDelivery(
+        createOutboundPayloadPlan([{ text: input }], { extractMarkdownImages: true }),
+      ),
+    ).toEqual([
+      {
+        text: "Chart now",
+        mediaUrl: "https://example.com/chart.png",
+        mediaUrls: ["https://example.com/chart.png"],
+        replyToId: undefined,
+        replyToCurrent: undefined,
+        replyToTag: false,
+        audioAsVoice: false,
+      },
+    ]);
+  });
 });
 
 describe("formatOutboundPayloadLog", () => {
@@ -684,5 +721,40 @@ describe("formatOutboundPayloadLog", () => {
         mediaUrls: [...input.mediaUrls],
       }),
     ).toBe(expected);
+  });
+});
+
+describe("summarizeOutboundPayloadForTransport", () => {
+  it("keeps visible text as channel text and does not expose hook-only content", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      text: "visible",
+      spokenText: "hidden transcript",
+    });
+
+    expect(summary.text).toBe("visible");
+    expect(summary.hookContent).toBeUndefined();
+  });
+
+  it("surfaces spokenText only as hook content for audio-only payloads", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      spokenText: "Hi Ivy, good morning.",
+    });
+
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBe("Hi Ivy, good morning.");
+    expect(summary.mediaUrls).toEqual(["/tmp/reply.opus"]);
+    expect(summary.audioAsVoice).toBe(true);
+  });
+
+  it("ignores blank spokenText", () => {
+    const summary = summarizeOutboundPayloadForTransport({
+      mediaUrl: "/tmp/reply.opus",
+      spokenText: "   ",
+    });
+
+    expect(summary.text).toBe("");
+    expect(summary.hookContent).toBeUndefined();
   });
 });

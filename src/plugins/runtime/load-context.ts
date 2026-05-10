@@ -1,10 +1,11 @@
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { loadConfig } from "../../config/config.js";
+import { getRuntimeConfig } from "../../config/config.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createSubsystemLogger } from "../../logging.js";
 import { resolvePluginActivationSourceConfig } from "../activation-source-config.js";
 import type { PluginLoadOptions } from "../loader.js";
+import type { PluginManifestRegistry } from "../manifest-registry.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -30,6 +31,7 @@ export type PluginRuntimeLoadContextOptions = {
   env?: NodeJS.ProcessEnv;
   workspaceDir?: string;
   logger?: PluginLogger;
+  manifestRegistry?: PluginManifestRegistry;
 };
 
 export function createPluginRuntimeLoaderLogger(): PluginLogger {
@@ -45,12 +47,16 @@ export function resolvePluginRuntimeLoadContext(
   options?: PluginRuntimeLoadContextOptions,
 ): PluginRuntimeLoadContext {
   const env = options?.env ?? process.env;
-  const rawConfig = options?.config ?? loadConfig();
+  const rawConfig = options?.config ?? getRuntimeConfig();
   const activationSourceConfig = resolvePluginActivationSourceConfig({
     config: rawConfig,
     activationSourceConfig: options?.activationSourceConfig,
   });
-  const autoEnabled = applyPluginAutoEnable({ config: rawConfig, env });
+  const autoEnabled = applyPluginAutoEnable({
+    config: rawConfig,
+    env,
+    manifestRegistry: options?.manifestRegistry,
+  });
   const config = autoEnabled.config;
   const workspaceDir =
     options?.workspaceDir ?? resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));

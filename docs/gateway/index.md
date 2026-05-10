@@ -83,7 +83,7 @@ After the first successful load, the running process serves the active in-memory
 
 ## OpenAI-compatible endpoints
 
-OpenClaw’s highest-leverage compatibility surface is now:
+OpenClaw's highest-leverage compatibility surface is now:
 
 - `GET /v1/models`
 - `GET /v1/models/{id}`
@@ -111,6 +111,14 @@ All of these run on the main Gateway port and use the same trusted operator auth
 | ------------ | ------------------------------------------------------------- |
 | Gateway port | `--port` → `OPENCLAW_GATEWAY_PORT` → `gateway.port` → `18789` |
 | Bind mode    | CLI/override → `gateway.bind` → `loopback`                    |
+
+Installed gateway services record the resolved `--port` in supervisor metadata. After changing `gateway.port`, run `openclaw doctor --fix` or `openclaw gateway install --force` so launchd/systemd/schtasks starts the process on the new port.
+
+Gateway startup uses the same effective port and bind when it seeds local
+Control UI origins for non-loopback binds. For example, `--bind lan --port 3000`
+seeds `http://localhost:3000` and `http://127.0.0.1:3000` before runtime
+validation runs. Add any remote browser origins, such as HTTPS proxy URLs, to
+`gateway.controlUi.allowedOrigins` explicitly.
 
 ### Hot reload modes
 
@@ -209,6 +217,10 @@ openclaw gateway restart
 openclaw gateway stop
 ```
 
+Use `openclaw gateway restart` for restarts. Do not chain `openclaw gateway stop` and `openclaw gateway start` as a restart substitute.
+
+On macOS, `gateway stop` uses `launchctl bootout` by default — this removes the LaunchAgent from the current boot session without persisting a disable, so KeepAlive auto-recovery still works after unexpected crashes and `gateway start` re-enables cleanly. To persistently suppress auto-respawn across reboots, pass `--disable`: `openclaw gateway stop --disable`.
+
 LaunchAgent labels are `ai.openclaw.gateway` (default) or `ai.openclaw.<profile>` (named profile). `openclaw doctor` audits and repairs service config drift.
 
   </Tab>
@@ -278,6 +290,8 @@ sudo systemctl enable --now openclaw-gateway[-<profile>].service
 Use the same service body as the user unit, but install it under
 `/etc/systemd/system/openclaw-gateway[-<profile>].service` and adjust
 `ExecStart=` if your `openclaw` binary lives elsewhere.
+
+Do not also let `openclaw doctor --fix` install a user-level gateway service for the same profile/port. Doctor refuses that automatic install when it finds a system-level OpenClaw gateway service; use `OPENCLAW_SERVICE_REPAIR_POLICY=external` when the system unit owns the lifecycle.
 
   </Tab>
 </Tabs>
@@ -356,3 +370,10 @@ Related:
 - [Health](/gateway/health)
 - [Doctor](/gateway/doctor)
 - [Authentication](/gateway/authentication)
+
+## Related
+
+- [Configuration](/gateway/configuration)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Remote access](/gateway/remote)
+- [Secrets management](/gateway/secrets)

@@ -7,6 +7,7 @@ const pageState = vi.hoisted(() => ({
 
 const sessionMocks = vi.hoisted(() => ({
   assertPageNavigationCompletedSafely: vi.fn(async () => {}),
+  closeBlockedNavigationTarget: vi.fn(async () => {}),
   ensurePageState: vi.fn(() => ({})),
   forceDisconnectPlaywrightForTarget: vi.fn(async () => {}),
   getPageForTargetId: vi.fn(async () => {
@@ -16,6 +17,7 @@ const sessionMocks = vi.hoisted(() => ({
     return pageState.page;
   }),
   gotoPageWithNavigationGuard: vi.fn(async () => null),
+  isPolicyDenyNavigationError: vi.fn(() => false),
   refLocator: vi.fn(() => {
     if (!pageState.locator) {
       throw new Error("missing locator");
@@ -27,6 +29,7 @@ const sessionMocks = vi.hoisted(() => ({
 }));
 
 const pageCdpMocks = vi.hoisted(() => ({
+  markBackendDomRefsOnPage: vi.fn(async () => new Set<string>()),
   withPageScopedCdpClient: vi.fn(
     async ({ fn }: { fn: (send: () => Promise<unknown>) => unknown }) =>
       await fn(async () => ({ nodes: [] })),
@@ -116,9 +119,9 @@ describe("pw-tools-core browser SSRF guards", () => {
   });
 
   it("re-checks current page URL before snapshotting AI content", async () => {
-    const snapshotForAI = vi.fn(async () => ({ full: 'button "Save"' }));
+    const ariaSnapshot = vi.fn(async () => 'button "Save"');
     pageState.page = {
-      _snapshotForAI: snapshotForAI,
+      ariaSnapshot,
       url: vi.fn(() => "https://example.com"),
     };
 
@@ -137,7 +140,7 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
     expect(
       sessionMocks.assertPageNavigationCompletedSafely.mock.invocationCallOrder[0],
-    ).toBeLessThan(snapshotForAI.mock.invocationCallOrder[0]);
+    ).toBeLessThan(ariaSnapshot.mock.invocationCallOrder[0]);
   });
 
   it("re-checks current page URL before role snapshots", async () => {

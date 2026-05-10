@@ -1,10 +1,15 @@
+import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { getSlashCommands, parseCommand } from "./commands.js";
 import {
   createBackspaceDeduper,
+  createDeferredTuiFinish,
   drainAndStopTuiSafely,
+  installTuiTerminalLossExitHandler,
   isIgnorableTuiStopError,
+  isTuiTerminalLossError,
   resolveCodexCliBin,
   resolveCtrlCAction,
   resolveFinalAssistantText,
@@ -40,6 +45,16 @@ describe("resolveFinalAssistantText", () => {
       }),
     ).toContain("HTTP 401");
   });
+
+  it("formats malformed streaming fragment errors when final and streamed text are empty", () => {
+    expect(
+      resolveFinalAssistantText({
+        finalText: "",
+        streamedText: "",
+        errorMessage: MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+      }),
+    ).toBe("LLM streaming response contained a malformed fragment. Please try again.");
+  });
 });
 
 describe("tui slash commands", () => {
@@ -56,13 +71,14 @@ describe("tui slash commands", () => {
 
   it("includes gateway text commands", () => {
     const commands = getSlashCommands({});
-    expect(commands.some((command) => command.name === "context")).toBe(true);
-    expect(commands.some((command) => command.name === "commands")).toBe(true);
+    const names = commands.map((command) => command.name);
+    expect(names).toContain("context");
+    expect(names).toContain("commands");
   });
 
   it("includes /auth in local embedded mode", () => {
     const commands = getSlashCommands({ local: true });
-    expect(commands.some((command) => command.name === "auth")).toBe(true);
+    expect(commands.map((command) => command.name)).toContain("auth");
   });
 });
 
@@ -210,6 +226,14 @@ describe("createBackspaceDeduper", () => {
     expect(dedupe("\x7f")).toBe("\x7f");
   });
 
+  it("treats ASCII BS as backspace when it is the first event", () => {
+    const { dedupe, advance } = createTimedDedupe();
+
+    expect(dedupe("\x08")).toBe("\x08");
+    advance(1);
+    expect(dedupe("\x7f")).toBe("");
+  });
+
   it("never suppresses non-backspace keys", () => {
     const dedupe = createBackspaceDeduper();
     expect(dedupe("a")).toBe("a");
@@ -304,11 +328,11 @@ describe("TUI shutdown safety", () => {
   });
 
   it("swallows only ignorable stop errors", () => {
-    expect(() => {
+    expect(
       stopTuiSafely(() => {
         throw new Error("setRawMode EBADF");
-      });
-    }).not.toThrow();
+      }),
+    ).toBeUndefined();
   });
 
   it("rethrows non-ignorable stop errors", () => {
@@ -317,6 +341,44 @@ describe("TUI shutdown safety", () => {
         throw new Error("boom");
       });
     }).toThrow("boom");
+  });
+
+  it("classifies terminal-loss IO errors", () => {
+    expect(isTuiTerminalLossError({ code: "EIO", syscall: "read" })).toBe(true);
+    expect(isTuiTerminalLossError({ code: "EPIPE", syscall: "write" })).toBe(true);
+    expect(isTuiTerminalLossError(new Error("read EIO at TTY.onStreamRead"))).toBe(true);
+    expect(isTuiTerminalLossError(new Error("ordinary failure"))).toBe(false);
+  });
+
+  it("requests exit once when the TUI terminal closes", () => {
+    const stdin = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const stdout = new EventEmitter() as EventEmitter & {
+      on(event: "close" | "end", listener: () => void): unknown;
+      off(event: "close" | "end", listener: () => void): unknown;
+    };
+    const requestExit = vi.fn();
+
+    const cleanup = installTuiTerminalLossExitHandler(requestExit, { stdin, stdout });
+    stdin.emit("end");
+    stdout.emit("close");
+    cleanup();
+    stdin.emit("close");
+
+    expect(requestExit).toHaveBeenCalledTimes(1);
+  });
+
+  it("resolves terminal-loss exits requested before the TUI finish handler is installed", () => {
+    const deferredFinish = createDeferredTuiFinish();
+    const finish = vi.fn();
+
+    deferredFinish.requestFinish();
+    expect(finish).not.toHaveBeenCalled();
+
+    deferredFinish.setFinish(finish);
+    expect(finish).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -332,10 +394,12 @@ describe("resolveCodexCliBin", () => {
   });
 
   it("returns null or a valid path (never throws)", () => {
-    // The function should never throw regardless of environment
-    expect(() => resolveCodexCliBin()).not.toThrow();
     const result = resolveCodexCliBin();
-    expect(result === null || typeof result === "string").toBe(true);
+    if (result === null) {
+      expect(result).toBeNull();
+    } else {
+      expect(typeof result).toBe("string");
+    }
   });
 });
 
@@ -396,13 +460,13 @@ describe("resolveLocalAuthSpawnOptions", () => {
         command: "/usr/local/bin/codex",
         platform: "linux",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
     expect(
       resolveLocalAuthSpawnOptions({
         command: "C:\\tools\\codex.exe",
         platform: "win32",
       }),
-    ).toEqual({});
+    ).toStrictEqual({});
   });
 });
 

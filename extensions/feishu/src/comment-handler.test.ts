@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { handleFeishuCommentEvent } from "./comment-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
@@ -29,12 +29,29 @@ vi.mock("./drive.js", () => ({
   deliverCommentThreadText: deliverCommentThreadTextMock,
 }));
 
+async function raceWithNextMacrotask<T>(promise: Promise<T>): Promise<T | "pending"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<"pending">((resolve) => {
+        timer = setTimeout(() => resolve("pending"), 0);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function buildConfig(overrides?: Partial<ClawdbotConfig>): ClawdbotConfig {
   return {
     channels: {
       feishu: {
         enabled: true,
         dmPolicy: "open",
+        allowFrom: ["*"],
       },
     },
     ...overrides,
@@ -85,6 +102,27 @@ function createTestRuntime(overrides?: {
       },
     );
   const recordInboundSession = vi.fn(async () => {});
+  const runPrepared = vi.fn(
+    async (turn: Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0]) => {
+      await turn.recordInboundSession({
+        storePath: turn.storePath,
+        sessionKey: turn.ctxPayload.SessionKey ?? turn.routeSessionKey,
+        ctx: turn.ctxPayload,
+        groupResolution: turn.record?.groupResolution,
+        createIfMissing: turn.record?.createIfMissing,
+        updateLastRoute: turn.record?.updateLastRoute,
+        onRecordError: turn.record?.onRecordError ?? (() => undefined),
+      });
+      const dispatchResult = await turn.runDispatch();
+      return {
+        admission: { kind: "dispatch" as const },
+        dispatched: true,
+        ctxPayload: turn.ctxPayload,
+        routeSessionKey: turn.routeSessionKey,
+        dispatchResult,
+      };
+    },
+  );
 
   return {
     channel: {
@@ -111,6 +149,29 @@ function createTestRuntime(overrides?: {
         resolveStorePath: vi.fn(() => "/tmp/feishu-session-store.json"),
         recordInboundSession,
       },
+      turn: {
+        run: vi.fn(async (params: Parameters<PluginRuntime["channel"]["turn"]["run"]>[0]) => {
+          const input = await params.adapter.ingest(params.raw);
+          if (!input) {
+            return {
+              admission: { kind: "drop" as const, reason: "ingest-null" },
+              dispatched: false,
+            };
+          }
+          const eventClass = {
+            kind: "message" as const,
+            canStartAgentTurn: true,
+          };
+          const turn = await params.adapter.resolveTurn(input, eventClass, {});
+          if (!("runDispatch" in turn)) {
+            throw new Error("feishu comment test runtime only supports prepared turns");
+          }
+          return await runPrepared(
+            turn as Parameters<PluginRuntime["channel"]["turn"]["runPrepared"]>[0],
+          );
+        }) as unknown as PluginRuntime["channel"]["turn"]["run"],
+        runPrepared: runPrepared as unknown as PluginRuntime["channel"]["turn"]["runPrepared"],
+      },
       pairing: {
         readAllowFromStore: vi.fn(overrides?.readAllowFromStore ?? (async () => [])),
         upsertPairingRequest: vi.fn(
@@ -127,6 +188,15 @@ function createTestRuntime(overrides?: {
 }
 
 describe("handleFeishuCommentEvent", () => {
+  afterAll(() => {
+    vi.doUnmock("./monitor.comment.js");
+    vi.doUnmock("./comment-dispatcher.js");
+    vi.doUnmock("./dynamic-agent.js");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./drive.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
     maybeCreateDynamicAgentMock.mockResolvedValue({ created: false });
@@ -241,6 +311,47 @@ describe("handleFeishuCommentEvent", () => {
     >;
     expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
     expect(deliverCommentThreadTextMock).not.toHaveBeenCalled();
+  });
+
+  it("passes disabled config-write policy to dynamic agent creation", async () => {
+    const runtime = createTestRuntime({
+      resolveAgentRoute: () => buildResolvedRoute("default"),
+    });
+    setFeishuRuntime(runtime);
+
+    await handleFeishuCommentEvent({
+      cfg: buildConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            dmPolicy: "open",
+            allowFrom: ["*"],
+            configWrites: false,
+            dynamicAgentCreation: {
+              enabled: true,
+            },
+          },
+        },
+      }),
+      accountId: "default",
+      event: { event_id: "evt_1" },
+      botOpenId: "ou_bot",
+      runtime: {
+        log: vi.fn(),
+        error: vi.fn(),
+      } as never,
+    });
+
+    expect(maybeCreateDynamicAgentMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderOpenId: "ou_sender",
+        configWritesAllowed: false,
+      }),
+    );
+    const dispatchReplyFromConfig = runtime.channel.reply.dispatchReplyFromConfig as ReturnType<
+      typeof vi.fn
+    >;
+    expect(dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("issues a pairing challenge in the comment thread when dmPolicy=pairing", async () => {
@@ -394,10 +505,7 @@ describe("handleFeishuCommentEvent", () => {
       } as never,
     });
 
-    const status = await Promise.race([
-      eventPromise.then(() => "done"),
-      new Promise<string>((resolve) => setTimeout(() => resolve("pending"), 0)),
-    ]);
+    const status = await raceWithNextMacrotask(eventPromise.then(() => "done"));
 
     expect(status).toBe("done");
     expect(cleanupTypingReaction).toHaveBeenCalledTimes(1);

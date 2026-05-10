@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
+  buildFastReplyCommandContext,
   initFastReplySessionState,
   markCompleteReplyConfig,
   withFastReplyConfig,
@@ -30,12 +31,12 @@ vi.mock("../../agents/workspace.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
-let loadConfigMock: typeof import("../../config/config.js").loadConfig;
+let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
-  ({ loadConfig: loadConfigMock } = await import("../../config/config.js"));
+  ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
 
@@ -68,7 +69,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
   });
 
-  it("skips loadConfig, workspace bootstrap, and session bootstrap for marked test configs", async () => {
+  it("skips getRuntimeConfig, workspace bootstrap, and session bootstrap for marked test configs", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fast-reply-"));
     const cfg = markCompleteReplyConfig({
       agents: {
@@ -95,7 +96,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     );
   });
 
-  it("still merges partial config overrides against loadConfig()", async () => {
+  it("still merges partial config overrides against getRuntimeConfig()", async () => {
     vi.stubEnv("OPENCLAW_ALLOW_SLOW_REPLY_TESTS", "1");
     vi.mocked(loadConfigMock).mockReturnValue({
       channels: {
@@ -129,6 +130,86 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
   });
 
+  it("handles native /status before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-status-fast-"));
+    const targetSessionKey = "agent:main:telegram:123";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+
+    const reply = await getReplyFromConfig(
+      buildGetReplyCtx({
+        Body: "/status",
+        BodyForAgent: "/status",
+        RawBody: "/status",
+        CommandBody: "/status",
+        CommandSource: "native",
+        CommandAuthorized: true,
+        SessionKey: "telegram:slash:123",
+        CommandTargetSessionKey: targetSessionKey,
+      }),
+      undefined,
+      cfg,
+    );
+
+    expect(reply).toEqual(expect.objectContaining({ text: expect.stringContaining("OpenClaw") }));
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+  });
+
+  it("handles native slash directives before workspace bootstrap", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-native-slash-fast-"));
+    const targetSessionKey = "agent:main:telegram:123";
+    const cfg = markCompleteReplyConfig({
+      agents: {
+        defaults: {
+          model: "anthropic/claude-opus-4-6",
+          workspace: path.join(home, "workspace"),
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    mocks.resolveReplyDirectives.mockResolvedValueOnce({
+      kind: "reply",
+      reply: { text: "model status" },
+    });
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "/model status",
+          BodyForAgent: "/model status",
+          RawBody: "/model status",
+          CommandBody: "/model status",
+          CommandSource: "native",
+          CommandAuthorized: true,
+          SessionKey: "telegram:slash:123",
+          CommandTargetSessionKey: targetSessionKey,
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "model status" });
+
+    expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
+    expect(mocks.initSessionState).not.toHaveBeenCalled();
+    expect(vi.mocked(runPreparedReplyMock)).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        workspaceDir: expect.any(String),
+      }),
+    );
+  });
+
   it("uses native command target session keys during fast bootstrap", () => {
     const result = initFastReplySessionState({
       ctx: buildGetReplyCtx({
@@ -144,6 +225,30 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
     expect(result.sessionKey).toBe("agent:main:main");
     expect(result.sessionCtx.SessionKey).toBe("agent:main:main");
+  });
+
+  it("maps explicit gateway origin into command context", () => {
+    const command = buildFastReplyCommandContext({
+      ctx: buildGetReplyCtx({
+        Provider: "internal",
+        Surface: "internal",
+        OriginatingChannel: "slack",
+        OriginatingTo: "user:U123",
+        From: undefined,
+        To: undefined,
+        SenderId: "gateway-client",
+      }),
+      cfg: {} as OpenClawConfig,
+      sessionKey: "main",
+      isGroup: false,
+      triggerBodyNormalized: "/codex bind",
+      commandAuthorized: true,
+    });
+
+    expect(command.channel).toBe("slack");
+    expect(command.channelId).toBe("slack");
+    expect(command.from).toBe("gateway-client");
+    expect(command.to).toBe("user:U123");
   });
 
   it("keeps the existing session for /reset newline soft during fast bootstrap", async () => {

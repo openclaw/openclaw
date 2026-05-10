@@ -83,7 +83,7 @@ describe("qa multipass runtime", () => {
     });
 
     expect(plan.outputDir).toBe(outputDir);
-    expect(plan.scenarioIds).toEqual([]);
+    expect(plan.scenarioIds).toStrictEqual([]);
     expect(plan.qaCommand).not.toContain("--scenario");
     expect(plan.guestOutputDir).toBe("/workspace/openclaw-host/.artifacts/qa-e2e/multipass-test");
     expect(plan.reportPath).toBe(path.join(outputDir, "qa-suite-report.md"));
@@ -115,8 +115,8 @@ describe("qa multipass runtime", () => {
       repoRoot: process.cwd(),
       outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-live-test"),
       providerMode: "live-frontier",
-      primaryModel: "openai/gpt-5.4",
-      alternateModel: "openai/gpt-5.4",
+      primaryModel: "openai/gpt-5.5",
+      alternateModel: "openai/gpt-5.5",
       fastMode: true,
       scenarioIds: ["channel-chat-baseline"],
     });
@@ -128,9 +128,9 @@ describe("qa multipass runtime", () => {
         "--provider-mode",
         "live-frontier",
         "--model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--alt-model",
-        "openai/gpt-5.4",
+        "openai/gpt-5.5",
         "--fast",
       ]),
     );
@@ -251,7 +251,7 @@ describe("qa multipass runtime", () => {
     const tempEntries = fs
       .readdirSync(resolvePreferredOpenClawTmpDir())
       .filter((entry) => entry.startsWith(path.basename(expectedTransferDir)));
-    expect(tempEntries).toEqual([]);
+    expect(tempEntries).toStrictEqual([]);
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 

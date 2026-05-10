@@ -23,6 +23,8 @@ export type DiscordPluralKitConfig = {
   token?: string;
 };
 
+export type DiscordMentionAliasesConfig = Record<string, string>;
+
 export type DiscordDmConfig = {
   /** If false, ignore all incoming Discord DMs. Default: true. */
   enabled?: boolean;
@@ -116,6 +118,8 @@ export type DiscordIntentsConfig = {
   presence?: boolean;
   /** Enable Guild Members privileged intent (requires Portal opt-in). Default: false. */
   guildMembers?: boolean;
+  /** Enable Guild Voice States intent. Defaults to voice.enabled, unless explicitly set. */
+  voiceStates?: boolean;
 };
 
 export type DiscordVoiceAutoJoinConfig = {
@@ -125,15 +129,65 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
+
+export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
+
+export type DiscordVoiceRealtimeToolPolicy = "safe-read-only" | "owner" | "none";
+
+export type DiscordVoiceRealtimeConfig = {
+  /** Realtime voice provider id, for example "openai". */
+  provider?: string;
+  /** Provider realtime session model, for example "gpt-realtime-2". */
+  model?: string;
+  /** Provider realtime output voice, for example "cedar". */
+  voice?: string;
+  /** System instructions passed to the realtime provider. */
+  instructions?: string;
+  /** Tool policy for bidi realtime consult calls. */
+  toolPolicy?: DiscordVoiceRealtimeToolPolicy;
+  /** Whether bidi should force the OpenClaw agent brain for every substantive turn. */
+  consultPolicy?: DiscordVoiceRealtimeConsultPolicy;
+  /** Allow Discord speaker-start events to interrupt active realtime playback. */
+  bargeIn?: boolean;
+  /** Minimum assistant playback duration before a barge-in truncates audio. Default: 250ms; set 0 for immediate interruption. */
+  minBargeInAudioEndMs?: number;
+  /** Debounce window before buffered transcripts are sent to the OpenClaw agent. */
+  debounceMs?: number;
+  /** Provider-specific realtime voice config keyed by provider id. */
+  providers?: Record<string, Record<string, unknown> | undefined>;
+};
+
+export type DiscordVoiceAgentSessionConfig = {
+  /** Which OpenClaw conversation should receive voice turns. Default: "voice". */
+  mode?: "voice" | "target";
+  /** Discord target used when mode is "target", for example "channel:123". */
+  target?: string;
+};
+
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
+  /** Voice conversation mode. Default: agent-proxy. */
+  mode?: DiscordVoiceMode;
+  /** Route voice turns through an existing OpenClaw Discord conversation. */
+  agentSession?: DiscordVoiceAgentSessionConfig;
+  /** Optional LLM model override for Discord voice channel responses. */
+  model?: string;
+  /** Realtime provider settings for agent-proxy or bidi modes. */
+  realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];
   /** Enable/disable DAVE end-to-end encryption (default: true; Discord may require this). */
   daveEncryption?: boolean;
   /** Consecutive decrypt failures before DAVE session reinitialization (default: 24). */
   decryptionFailureTolerance?: number;
+  /** Initial @discordjs/voice Ready wait in milliseconds (default: 30000). */
+  connectTimeoutMs?: number;
+  /** Grace period for Discord voice reconnect signalling after a disconnect (default: 15000). */
+  reconnectGraceMs?: number;
+  /** Silence grace after Discord reports a speaker ended before finalizing STT capture (default: 2500). */
+  captureSilenceGraceMs?: number;
   /** Optional TTS overrides for Discord voice output. */
   tts?: TtsConfig;
 };
@@ -187,13 +241,21 @@ export type DiscordThreadBindingsConfig = {
    */
   maxAgeHours?: number;
   /**
-   * Allow `sessions_spawn({ thread: true })` to auto-create + bind Discord
-   * threads for subagent sessions. Default: false (opt-in).
+   * Allow session spawns to auto-create + bind Discord threads.
+   * Applies to native subagent and ACP thread spawns. Default: true.
+   */
+  spawnSessions?: boolean;
+  /**
+   * Default context mode for native subagents spawned into a bound Discord thread.
+   * Default: "fork".
+   */
+  defaultSpawnContext?: "isolated" | "fork";
+  /**
+   * @deprecated Use spawnSessions instead.
    */
   spawnSubagentSessions?: boolean;
   /**
-   * Allow `/acp spawn` to auto-create + bind Discord threads for ACP
-   * sessions. Default: false (opt-in).
+   * @deprecated Use spawnSessions instead.
    */
   spawnAcpSessions?: boolean;
 };
@@ -237,8 +299,16 @@ export type DiscordAccountConfig = {
   /** If false, do not start this Discord account. Default: true. */
   enabled?: boolean;
   token?: SecretInput;
+  /** Optional Discord application/client ID. Set this when REST application lookup is blocked. */
+  applicationId?: string;
   /** HTTP(S) proxy URL for Discord gateway WebSocket connections. */
   proxy?: string;
+  /** Timeout for Discord /gateway/bot metadata lookup before falling back to the default gateway URL. Default: 30000. */
+  gatewayInfoTimeoutMs?: number;
+  /** Startup wait for the gateway READY event before restarting the socket. Default: 15000. */
+  gatewayReadyTimeoutMs?: number;
+  /** Runtime reconnect wait for the gateway READY event before force-stopping the lifecycle. Default: 30000. */
+  gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
   /**
@@ -246,6 +316,11 @@ export type DiscordAccountConfig = {
    * Default behavior is ID-only matching.
    */
   dangerouslyAllowNameMatching?: boolean;
+  /**
+   * Deterministic outbound @handle rewrites for known Discord users.
+   * Keys are handles without the leading @; values are Discord user IDs.
+   */
+  mentionAliases?: DiscordMentionAliasesConfig;
   /**
    * Controls how guild channel messages are handled:
    * - "open": guild channels bypass allowlists; mention-gating applies
@@ -280,12 +355,12 @@ export type DiscordAccountConfig = {
   /** Thread session behavior. */
   thread?: DiscordThreadConfig;
   /**
-   * Alias for dm.policy (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM policy key. Doctor migrates legacy channels.discord.dm.policy here.
    * Legacy key: channels.discord.dm.policy.
    */
   dmPolicy?: DmPolicy;
   /**
-   * Alias for dm.allowFrom (prefer this so it inherits cleanly via base->account shallow merge).
+   * Canonical DM allowlist. Doctor migrates legacy channels.discord.dm.allowFrom here.
    * Legacy key: channels.discord.dm.allowFrom.
    */
   allowFrom?: string[];
@@ -334,18 +409,18 @@ export type DiscordAccountConfig = {
   /** Streaming URL (Twitch/YouTube). Required when activityType=1. */
   activityUrl?: string;
   /**
-   * In-process worker settings for queued inbound Discord runs.
-   * This is separate from Carbon's eventQueue listener budget.
+   * Legacy compatibility block. Discord no longer enforces channel-owned
+   * timeouts for queued inbound agent runs.
    */
   inboundWorker?: {
     /**
-     * Max time (ms) a queued inbound run may execute before OpenClaw aborts it.
-     * Defaults to 1800000 (30 minutes). Set 0 to disable the worker-owned timeout.
+     * Ignored. Queued Discord agent runs are governed by the session/tool/runtime
+     * lifecycle, not by Discord channel config.
      */
     runTimeoutMs?: number;
   };
   /**
-   * Carbon EventQueue configuration. Controls how Discord gateway events are processed.
+   * Discord EventQueue configuration. Controls how Discord gateway events are processed.
    * `listenerTimeout` only covers gateway listener work such as normalization and enqueue.
    * It does not control the lifetime of queued inbound agent turns.
    */
@@ -365,9 +440,3 @@ export type DiscordConfig = {
   /** Optional default account id when multiple accounts are configured. */
   defaultAccount?: string;
 } & DiscordAccountConfig;
-
-declare module "./types.channels.js" {
-  interface ChannelsConfig {
-    discord?: DiscordConfig;
-  }
-}

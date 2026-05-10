@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.gemini .minimax)
+OPENCLAW_DOCKER_LIVE_AUTH_ALL=(.factory .gemini .minimax)
 OPENCLAW_DOCKER_LIVE_AUTH_FILES_ALL=(
   .codex/auth.json
   .codex/config.toml
@@ -16,6 +16,34 @@ openclaw_live_trim() {
   value="${value#"${value%%[![:space:]]*}"}"
   value="${value%"${value##*[![:space:]]}"}"
   printf '%s' "$value"
+}
+
+openclaw_live_truthy() {
+  case "${1:-}" in
+    1 | true | TRUE | yes | YES | on | ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+openclaw_live_is_ci() {
+  openclaw_live_truthy "${CI:-}" || openclaw_live_truthy "${GITHUB_ACTIONS:-}"
+}
+
+openclaw_live_default_profile_file() {
+  if [[ -n "${OPENCLAW_PROFILE_FILE:-}" ]]; then
+    printf '%s\n' "$OPENCLAW_PROFILE_FILE"
+    return 0
+  fi
+  local testbox_profile="$HOME/.openclaw-testbox-live.profile"
+  if [[ -f "$testbox_profile" ]]; then
+    printf '%s\n' "$testbox_profile"
+    return 0
+  fi
+  printf '%s\n' "$HOME/.profile"
 }
 
 openclaw_live_validate_relative_home_path() {
@@ -49,6 +77,9 @@ openclaw_live_should_include_auth_dir_for_provider() {
   local provider
   provider="$(openclaw_live_trim "${1:-}")"
   case "$provider" in
+    droid | factory | factory-droid)
+      printf '%s\n' ".factory"
+      ;;
     gemini | gemini-cli | google-gemini-cli)
       printf '%s\n' ".gemini"
       ;;

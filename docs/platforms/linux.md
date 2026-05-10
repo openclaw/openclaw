@@ -14,7 +14,7 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 ## Beginner quick path (VPS)
 
-1. Install Node 24 (recommended; Node 22 LTS, currently `22.14+`, still works for compatibility)
+1. Install Node 24 (recommended; Node 22 LTS, currently `22.16+`, still works for compatibility)
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -133,3 +133,9 @@ its normal score, usually `0`.
 This does not replace normal memory tuning. If a VPS or container repeatedly
 kills children, increase the memory limit, reduce concurrency, or add stronger
 resource controls such as systemd `MemoryMax=` or container-level memory limits.
+
+## Related
+
+- [Install overview](/install)
+- [Linux server](/vps)
+- [Raspberry Pi](/platforms/raspberry-pi)

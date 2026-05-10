@@ -60,7 +60,6 @@ These tools ship with OpenClaw and are available without installing any plugins:
 | `read` / `write` / `edit`                  | File I/O in the workspace                                             |                                                              |
 | `apply_patch`                              | Multi-hunk file patches                                               | [Apply Patch](/tools/apply-patch)                            |
 | `message`                                  | Send messages across all channels                                     | [Agent Send](/tools/agent-send)                              |
-| `canvas`                                   | Drive node Canvas (present, eval, snapshot)                           |                                                              |
 | `nodes`                                    | Discover and target paired devices                                    |                                                              |
 | `cron` / `gateway`                         | Manage scheduled jobs; inspect, patch, restart, or update the gateway |                                                              |
 | `image` / `image_generate`                 | Analyze or generate images                                            | [Image Generation](/tools/image-generation)                  |
@@ -95,6 +94,8 @@ active runtime model label from the latest transcript usage entry.
 
 For partial changes, prefer `config.schema.lookup` then `config.patch`. Use
 `config.apply` only when you intentionally replace the entire config.
+For broader config docs, read [Configuration](/gateway/configuration) and
+[Configuration reference](/gateway/configuration-reference).
 The tool also refuses to change `tools.exec.ask` or `tools.exec.security`;
 legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
@@ -102,12 +103,19 @@ legacy `tools.bash.*` aliases normalize to the same protected exec paths.
 
 Plugins can register additional tools. Some examples:
 
+- [Canvas](/plugins/reference/canvas) — experimental bundled plugin for node Canvas control and A2UI rendering
 - [Diffs](/tools/diffs) — diff viewer and renderer
 - [LLM Task](/tools/llm-task) — JSON-only LLM step for structured output
 - [Lobster](/tools/lobster) — typed workflow runtime with resumable approvals
 - [Music Generation](/tools/music-generation) — shared `music_generate` tool with workflow-backed providers
 - [OpenProse](/prose) — markdown-first workflow orchestration
 - [Tokenjuice](/tools/tokenjuice) — compact noisy `exec` and `bash` tool results
+
+Plugin tools are still authored with `api.registerTool(...)` and declared in
+the plugin manifest's `contracts.tools` list. OpenClaw captures the validated
+tool descriptor during discovery and caches it by plugin source and contract, so
+later tool planning can skip plugin runtime loading. Tool execution still loads
+the owning plugin and calls the live registered implementation.
 
 ## Tool configuration
 
@@ -125,6 +133,12 @@ config. Deny always wins over allow.
 }
 ```
 
+OpenClaw fails closed when an explicit allowlist resolves to no callable tools.
+For example, `tools.allow: ["query_db"]` only works if a loaded plugin actually
+registers `query_db`. If no built-in, plugin, or bundled MCP tool matches the
+allowlist, the run stops before the model call instead of continuing as a
+text-only run that could hallucinate tool results.
+
 ### Tool profiles
 
 `tools.profile` sets a base allowlist before `allow`/`deny` is applied.
@@ -132,15 +146,43 @@ Per-agent override: `agents.list[].tools.profile`.
 
 | Profile     | What it includes                                                                                                                                  |
 | ----------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `full`      | No restriction (same as unset)                                                                                                                    |
+| `full`      | All core and optional plugin tools; unrestricted baseline for broader command/control access                                                      |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `image`, `image_generate`, `music_generate`, `video_generate` |
 | `messaging` | `group:messaging`, `sessions_list`, `sessions_history`, `sessions_send`, `session_status`                                                         |
 | `minimal`   | `session_status` only                                                                                                                             |
+
+<Note>
+`tools.profile: "messaging"` is intentionally narrow for channel-focused
+agents. It leaves out broader command/control tools such as filesystem, runtime,
+browser, canvas, nodes, cron, and gateway control. Use `tools.profile: "full"`
+as the unrestricted baseline for broader command/control access, then trim
+access with `tools.allow` / `tools.deny` when needed.
+</Note>
+
+`coding` includes lightweight web tools (`web_search`, `web_fetch`, `x_search`)
+but not the full browser-control tool. Browser automation can drive real
+sessions and logged-in profiles, so add it explicitly with
+`tools.alsoAllow: ["browser"]` or a per-agent
+`agents.list[].tools.alsoAllow: ["browser"]`.
+
+<Note>
+Configuring `tools.exec` or `tools.fs` under a restrictive profile (`messaging`, `minimal`) does not implicitly widen the profile's allowlist. Add explicit `tools.alsoAllow` entries (for example `["exec", "process"]` for exec, or `["read", "write", "edit"]` for fs) when you want a restrictive profile to use those configured sections. OpenClaw logs a startup warning when a config section is present without a matching `alsoAllow` grant.
+</Note>
 
 The `coding` and `messaging` profiles also allow configured bundle MCP tools
 under the plugin key `bundle-mcp`. Add `tools.deny: ["bundle-mcp"]` when you
 want a profile to keep its normal built-ins but hide all configured MCP tools.
 The `minimal` profile does not include bundle MCP tools.
+
+Example (broadest tool surface by default):
+
+```json5
+{
+  tools: {
+    profile: "full",
+  },
+}
+```
 
 ### Tool groups
 
@@ -153,11 +195,11 @@ Use `group:*` shorthands in allow/deny lists:
 | `group:sessions`   | sessions_list, sessions_history, sessions_send, sessions_spawn, sessions_yield, subagents, session_status |
 | `group:memory`     | memory_search, memory_get                                                                                 |
 | `group:web`        | web_search, x_search, web_fetch                                                                           |
-| `group:ui`         | browser, canvas                                                                                           |
-| `group:automation` | cron, gateway                                                                                             |
+| `group:ui`         | browser, canvas when the bundled Canvas plugin is enabled                                                 |
+| `group:automation` | heartbeat_respond, cron, gateway                                                                          |
 | `group:messaging`  | message                                                                                                   |
 | `group:nodes`      | nodes                                                                                                     |
-| `group:agents`     | agents_list                                                                                               |
+| `group:agents`     | agents_list, update_plan                                                                                  |
 | `group:media`      | image, image_generate, music_generate, video_generate, tts                                                |
 | `group:openclaw`   | All built-in OpenClaw tools (excludes plugin tools)                                                       |
 

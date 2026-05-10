@@ -1,18 +1,21 @@
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
-  resolveDefaultGroupPolicy,
-  resolveGroupSessionKey,
-  type ChannelGroupPolicy,
-  type DmPolicy,
-  type GroupPolicy,
-  type OpenClawConfig,
-} from "openclaw/plugin-sdk/config-runtime";
+} from "openclaw/plugin-sdk/channel-policy";
+import type {
+  ChannelGroupPolicy,
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-types";
+import { resolveDefaultGroupPolicy } from "openclaw/plugin-sdk/runtime-group-policy";
 import {
+  expandAllowFromWithAccessGroups,
   readStoreAllowFromForDmPolicy,
   resolveEffectiveAllowFromLists,
   resolveDmGroupAccessWithCommandGate,
 } from "openclaw/plugin-sdk/security-runtime";
+import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveWhatsAppAccount, type ResolvedWhatsAppAccount } from "./accounts.js";
 import { getSelfIdentity, getSenderIdentity } from "./identity.js";
 import type { WebInboundMessage } from "./inbound/types.js";
@@ -175,13 +178,45 @@ export async function resolveWhatsAppCommandAuthorized(params: {
           dmPolicy: policy.dmPolicy,
           shouldRead: policy.shouldReadStorePairingApprovals,
         });
+  const isSenderAllowed = (senderId: string, allowEntries: string[]) =>
+    isGroup
+      ? policy.isGroupSenderAllowed(allowEntries, senderId)
+      : policy.isDmSenderAllowed(allowEntries, senderId);
+  const [allowFrom, groupAllowFrom] = await Promise.all([
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: policy.dmAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: normalizedSender,
+      isSenderAllowed,
+    }),
+    expandAllowFromWithAccessGroups({
+      cfg: params.cfg,
+      allowFrom: policy.groupAllowFrom,
+      channel: "whatsapp",
+      accountId: policy.account.accountId,
+      senderId: normalizedSender,
+      isSenderAllowed,
+    }),
+  ]);
+  const dmStoreAllowFrom = isGroup
+    ? []
+    : await expandAllowFromWithAccessGroups({
+        cfg: params.cfg,
+        allowFrom: storeAllowFrom,
+        channel: "whatsapp",
+        accountId: policy.account.accountId,
+        senderId: normalizedSender,
+        isSenderAllowed,
+      });
   const access = resolveDmGroupAccessWithCommandGate({
     isGroup,
     dmPolicy: policy.dmPolicy,
     groupPolicy: policy.groupPolicy,
-    allowFrom: policy.dmAllowFrom,
-    groupAllowFrom: policy.groupAllowFrom,
-    storeAllowFrom,
+    allowFrom,
+    groupAllowFrom,
+    storeAllowFrom: dmStoreAllowFrom,
     isSenderAllowed: (allowEntries) =>
       isGroup
         ? policy.isGroupSenderAllowed(allowEntries, groupSender)

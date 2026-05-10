@@ -3,11 +3,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import {
-  collectBundledPluginRuntimeDependencySpecs,
-  collectRootDistBundledRuntimeMirrors,
-  packageNameFromSpecifier,
-} from "./lib/bundled-plugin-root-runtime-mirrors.mjs";
+import { packageNameFromSpecifier } from "./lib/plugin-package-dependencies.mjs";
 
 const DEFAULT_SCAN_ROOTS = ["src", "extensions", "packages", "ui", "scripts", "test"];
 const SCANNED_EXTENSIONS = new Set([".cjs", ".cts", ".js", ".jsx", ".mjs", ".mts", ".ts", ".tsx"]);
@@ -17,6 +13,22 @@ const IMPORT_PATTERNS = [
   /\brequire\s*\(\s*["']([^"']+)["']\s*\)/g,
   /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*["']([^"']+)["']\s*\)/gi,
 ];
+const STRING_CONSTANT_PATTERN = /\b(?:const|let|var)\s+([_$A-Za-z][\w$]*)\s*=\s*["']([^"']+)["']/g;
+const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
+  /\bimport\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
+  /\brequire\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/g,
+  /\b(?:require|[_$A-Za-z][\w$]*require[\w$]*)\.resolve\s*\(\s*([_$A-Za-z][\w$]*)\s*\)/gi,
+];
+const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
+  [
+    "@homebridge/ciao",
+    "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
+  ],
+  [
+    "playwright-core",
+    "keep at root; the internal browser runtime is shipped with core even though downloadable browser-adjacent plugins also declare it",
+  ],
+]);
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
@@ -73,6 +85,20 @@ export function collectModuleSpecifiers(source) {
       }
     }
   }
+  const stringConstants = new Map();
+  for (const match of source.matchAll(STRING_CONSTANT_PATTERN)) {
+    if (match[1] && match[2]) {
+      stringConstants.set(match[1], match[2]);
+    }
+  }
+  for (const pattern of DYNAMIC_CONSTANT_IMPORT_PATTERNS) {
+    for (const match of source.matchAll(pattern)) {
+      const specifier = match[1] ? stringConstants.get(match[1]) : undefined;
+      if (specifier) {
+        specifiers.add(specifier);
+      }
+    }
+  }
   return specifiers;
 }
 
@@ -113,6 +139,54 @@ function collectExtensionDependencyDeclarations(repoRoot) {
   return declarations;
 }
 
+function collectExcludedPackagedExtensionDirs(rootPackageJson) {
+  const excluded = new Set();
+  for (const entry of rootPackageJson.files ?? []) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
+    if (match?.[1]) {
+      excluded.add(match[1]);
+    }
+  }
+  return excluded;
+}
+
+function collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson) {
+  const dependencies = new Map();
+  const extensionsRoot = path.join(repoRoot, "extensions");
+  if (!fs.existsSync(extensionsRoot)) {
+    return dependencies;
+  }
+
+  const excluded = collectExcludedPackagedExtensionDirs(rootPackageJson);
+  for (const entry of fs.readdirSync(extensionsRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || excluded.has(entry.name)) {
+      continue;
+    }
+    const packageJsonPath = path.join(extensionsRoot, entry.name, "package.json");
+    const manifestPath = path.join(extensionsRoot, entry.name, "openclaw.plugin.json");
+    if (!fs.existsSync(packageJsonPath) || !fs.existsSync(manifestPath)) {
+      continue;
+    }
+    const packageJson = readJson(packageJsonPath);
+    for (const section of ["dependencies", "optionalDependencies"]) {
+      for (const depName of Object.keys(packageJson[section] ?? {})) {
+        const existing = dependencies.get(depName) ?? [];
+        existing.push(`${entry.name}:${section}`);
+        dependencies.set(depName, existing);
+      }
+    }
+  }
+
+  for (const values of dependencies.values()) {
+    values.sort((left, right) => left.localeCompare(right));
+  }
+
+  return dependencies;
+}
+
 function sectionSetContainsCore(sectionSet) {
   return sectionSet.has("src") || sectionSet.has("packages") || sectionSet.has("ui");
 }
@@ -128,16 +202,6 @@ function sectionSetIsSubsetOf(sectionSet, allowed) {
 
 export function classifyRootDependencyOwnership(record) {
   const sections = new Set(record.sections);
-
-  if (record.rootMirrorImporters.length > 0) {
-    if (!sectionSetContainsCore(sections)) {
-      return {
-        category: "extension_only_localizable",
-        recommendation:
-          "remove from root package.json and rely on owning extension manifests plus doctor --fix",
-      };
-    }
-  }
 
   if (sections.size === 0) {
     return {
@@ -164,6 +228,27 @@ export function classifyRootDependencyOwnership(record) {
     return {
       category: "core_runtime",
       recommendation: "keep at root",
+    };
+  }
+
+  const rootOwnedExtensionRuntime = ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES.get(record.depName);
+  if (
+    rootOwnedExtensionRuntime &&
+    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
+  ) {
+    return {
+      category: "root_owned_extension_runtime",
+      recommendation: rootOwnedExtensionRuntime,
+    };
+  }
+
+  if (
+    record.internalizedBundledRuntimeOwners?.length > 0 &&
+    sectionSetIsSubsetOf(sections, new Set(["extensions", "test"]))
+  ) {
+    return {
+      category: "root_owned_extension_runtime",
+      recommendation: `keep at root while bundled plugin runtime dependencies are internalized; owners: ${record.internalizedBundledRuntimeOwners.join(", ")}`,
     };
   }
 
@@ -196,7 +281,7 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
         sections: new Set(),
         files: new Set(),
         declaredInExtensions: [],
-        rootMirrorImporters: [],
+        internalizedBundledRuntimeOwners: [],
         spec: rootDependencies[depName],
       },
     ]),
@@ -227,23 +312,12 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
     }
   }
 
-  const distDir = path.join(repoRoot, "dist");
-  if (fs.existsSync(distDir)) {
-    const bundledSpecs = collectBundledPluginRuntimeDependencySpecs(
-      path.join(repoRoot, "extensions"),
-    );
-    const rootMirrors = collectRootDistBundledRuntimeMirrors({
-      bundledRuntimeDependencySpecs: bundledSpecs,
-      distDir,
-    });
-    for (const [depName, mirror] of rootMirrors) {
-      const record = records.get(depName);
-      if (!record) {
-        continue;
-      }
-      record.rootMirrorImporters = [...mirror.importers].toSorted((left, right) =>
-        left.localeCompare(right),
-      );
+  const internalizedBundledRuntimeDependencies =
+    collectInternalizedBundledExtensionRuntimeDependencies(repoRoot, rootPackageJson);
+  for (const [depName, owners] of internalizedBundledRuntimeDependencies) {
+    const record = records.get(depName);
+    if (record) {
+      record.internalizedBundledRuntimeOwners = owners;
     }
   }
 
@@ -260,7 +334,7 @@ export function collectRootDependencyOwnershipAudit(params = {}) {
         fileCount: record.files.size,
         sampleFiles: [...record.files].slice(0, 5),
         declaredInExtensions: record.declaredInExtensions,
-        rootMirrorImporters: record.rootMirrorImporters,
+        internalizedBundledRuntimeOwners: record.internalizedBundledRuntimeOwners,
         category: classification.category,
         recommendation: classification.recommendation,
       };
@@ -300,8 +374,8 @@ function printTextReport(records) {
       if (record.declaredInExtensions.length > 0) {
         details.push(`extensions=${record.declaredInExtensions.join(",")}`);
       }
-      if (record.rootMirrorImporters.length > 0) {
-        details.push(`rootDist=${record.rootMirrorImporters.join(",")}`);
+      if (record.internalizedBundledRuntimeOwners.length > 0) {
+        details.push(`internalized=${record.internalizedBundledRuntimeOwners.join(",")}`);
       }
       console.log(`- ${record.depName}@${record.spec} :: ${details.join(" | ")}`);
       console.log(`  ${record.recommendation}`);
