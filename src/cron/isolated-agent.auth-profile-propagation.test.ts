@@ -14,7 +14,15 @@ import {
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
   resolveExternalAuthProfilesWithPlugins: () => [],
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
 describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
