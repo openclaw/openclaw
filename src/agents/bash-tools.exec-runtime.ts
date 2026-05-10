@@ -590,7 +590,8 @@ export async function runExecProcess(opts: {
   sessionKey?: string;
   /** `session.mainKey` from the runtime config; snapshotted onto the
    *  ProcessSession so background-exit notifications can remap cron-run
-   *  keys without an ambient config load. */
+   *  keys without an ambient config load. Long-running background exits use
+   *  this start-time value even if config changes while the process runs. */
   mainKey?: string;
   /** `session.scope` from the runtime config; snapshotted alongside
    *  `mainKey` so the cron-run remap can route global-scope agents to

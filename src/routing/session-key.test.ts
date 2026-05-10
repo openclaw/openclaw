@@ -63,6 +63,7 @@ describe("isCronSessionKey", () => {
   it.each([
     { key: "agent:main:cron:job-1", expected: true },
     { key: "agent:main:cron:job-1:run:run-1", expected: true },
+    { key: "agent:main:cron:job-1:run:run-1:subagent:worker", expected: true },
     { key: "agent:main:main", expected: false },
     { key: "agent:main:subagent:worker", expected: false },
     { key: "cron:job-1", expected: false },
@@ -229,6 +230,15 @@ describe("resolveEventSessionKey", () => {
     expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz")).toBe("agent:ops:main");
   });
 
+  it("collapses cron-run descendant session keys to the agent main session key", () => {
+    expect(resolveEventSessionKey("agent:main:cron:backup:run:abc123:subagent:worker")).toBe(
+      "agent:main:main",
+    );
+    expect(resolveEventSessionKey("agent:ops:cron:job-1:run:xyz:thread:reply")).toBe(
+      "agent:ops:main",
+    );
+  });
+
   it("preserves durable cron base session keys", () => {
     expect(resolveEventSessionKey("agent:ops:cron:job-1")).toBe("agent:ops:cron:job-1");
     expect(resolveEventSessionKey("agent:main:cron:backup")).toBe("agent:main:cron:backup");
@@ -264,6 +274,9 @@ describe("resolveEventSessionKey", () => {
     expect(resolveEventSessionKey("agent:main:cron:backup:run:abc", "primary", "global")).toBe(
       "global",
     );
+    expect(
+      resolveEventSessionKey("agent:main:cron:backup:run:abc:subagent:worker", "primary", "global"),
+    ).toBe("global");
   });
 
   it("treats explicit per-sender scope identically to omitted scope", () => {
