@@ -392,7 +392,7 @@ async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
 }
 
 function escapeContainerStyledText(text: string): string {
-  return text.replace(/[\\*~`|]/g, (char) => `\\\\${char}`);
+  return text.replace(/[\\*~`|]/g, (char) => `\\${char}`);
 }
 
 function renderContainerStyledText(

@@ -361,7 +361,7 @@ describe("containerSendMessage", () => {
 
     const callArgs = mockFetch.mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body.message).toBe("**Bold** \\\\* not italic");
+    expect(body.message).toBe("**Bold** \\* not italic");
   });
 
   it("includes attachments as base64 data URIs", async () => {

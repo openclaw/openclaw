@@ -6,7 +6,6 @@
  * only need to change their import path.
  */
 
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   containerCheck,
   containerRpcRequest,
@@ -28,6 +27,8 @@ export type SignalSseEvent = {
   data?: string;
 };
 
+export type SignalApiMode = "native" | "container" | "auto";
+
 // Re-export the options type so consumers can import it from the adapter.
 export type { SignalRpcOptions } from "./client.js";
 
@@ -37,8 +38,7 @@ const detectedModeCache = new Map<
   { mode: "native" | "container"; expiresAt: number; receiveAccount?: string }
 >();
 
-function getConfiguredApiMode(): "native" | "container" | "auto" {
-  const configured = getRuntimeConfig().channels?.signal?.apiMode;
+function resolveConfiguredApiMode(configured?: SignalApiMode): SignalApiMode {
   if (configured === "native" || configured === "container") {
     return configured;
   }
@@ -87,8 +87,9 @@ async function resolveApiModeForOperation(params: {
   account?: string;
   requireContainerReceive?: boolean;
   timeoutMs?: number;
+  apiMode?: SignalApiMode;
 }): Promise<"native" | "container"> {
-  const configured = getConfiguredApiMode();
+  const configured = resolveConfiguredApiMode(params.apiMode);
 
   if (configured === "native" || configured === "container") {
     return configured;
@@ -137,13 +138,14 @@ export async function detectSignalApiMode(
 export async function signalRpcRequest<T = unknown>(
   method: string,
   params: Record<string, unknown> | undefined,
-  opts: SignalRpcOptions & { accountId?: string },
+  opts: SignalRpcOptions & { accountId?: string; apiMode?: SignalApiMode },
 ): Promise<T> {
   const mode = await resolveApiModeForOperation({
     baseUrl: opts.baseUrl,
     accountId: opts.accountId,
     account: typeof params?.account === "string" ? params.account : undefined,
     timeoutMs: opts.timeoutMs,
+    apiMode: opts.apiMode,
   });
   if (mode === "native") {
     return nativeRpcRequest<T>(method, params, opts);
@@ -157,8 +159,9 @@ export async function signalRpcRequest<T = unknown>(
 export async function signalCheck(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  options: { apiMode?: SignalApiMode } = {},
 ): Promise<{ ok: boolean; status?: number | null; error?: string | null }> {
-  const configured = getConfiguredApiMode();
+  const configured = resolveConfiguredApiMode(options.apiMode);
   const mode =
     configured === "auto"
       ? await resolveAutoApiMode(baseUrl, timeoutMs).catch((error: unknown) => {
@@ -186,6 +189,7 @@ export async function streamSignalEvents(params: {
   timeoutMs?: number;
   onEvent: (event: SignalSseEvent) => void;
   logger?: { log?: (msg: string) => void; error?: (msg: string) => void };
+  apiMode?: SignalApiMode;
 }): Promise<void> {
   const mode = await resolveApiModeForOperation({
     baseUrl: params.baseUrl,
@@ -193,6 +197,7 @@ export async function streamSignalEvents(params: {
     account: params.account,
     requireContainerReceive: true,
     timeoutMs: resolveAutoProbeTimeoutMs(params.timeoutMs),
+    apiMode: params.apiMode,
   });
 
   if (mode === "container") {
@@ -227,12 +232,14 @@ export async function fetchAttachment(params: {
   groupId?: string;
   timeoutMs?: number;
   maxResponseBytes?: number;
+  apiMode?: SignalApiMode;
 }): Promise<Buffer | null> {
   const mode = await resolveApiModeForOperation({
     baseUrl: params.baseUrl,
     accountId: params.accountId,
     account: params.account,
     timeoutMs: params.timeoutMs,
+    apiMode: params.apiMode,
   });
   if (mode === "container") {
     return containerFetchAttachment(params.attachmentId, {

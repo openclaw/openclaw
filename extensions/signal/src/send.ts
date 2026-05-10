@@ -172,6 +172,7 @@ export async function sendMessageSignal(
   opts: SignalSendOpts,
 ): Promise<SignalSendResult> {
   const cfg = requireRuntimeConfig(opts.cfg, "Signal send");
+  const apiMode = cfg.channels?.signal?.apiMode;
   const accountInfo = resolveSignalAccount({
     cfg,
     accountId: opts.accountId,
@@ -256,6 +257,7 @@ export async function sendMessageSignal(
   const result = await signalRpcRequest<{ timestamp?: number }>("send", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
+    apiMode,
   });
   const timestamp = result?.timestamp;
   const messageId = timestamp ? String(timestamp) : "unknown";
@@ -276,6 +278,7 @@ export async function sendTypingSignal(
   opts: SignalRpcOpts & { stop?: boolean },
 ): Promise<boolean> {
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const cfg = requireRuntimeConfig(opts.cfg, "Signal typing");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
@@ -294,6 +297,7 @@ export async function sendTypingSignal(
   await signalRpcRequest("sendTyping", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
+    apiMode: cfg.channels?.signal?.apiMode,
   });
   return true;
 }
@@ -307,6 +311,7 @@ export async function sendReadReceiptSignal(
     return false;
   }
   const accountInfo = await resolveSignalRpcAccountInfo(opts);
+  const cfg = requireRuntimeConfig(opts.cfg, "Signal read receipt");
   const { baseUrl, account } = resolveSignalRpcContext(opts, accountInfo);
   const targetParams = buildTargetParams(parseTarget(to), {
     recipient: true,
@@ -325,6 +330,7 @@ export async function sendReadReceiptSignal(
   await signalRpcRequest("sendReceipt", params, {
     baseUrl,
     timeoutMs: opts.timeoutMs,
+    apiMode: cfg.channels?.signal?.apiMode,
   });
   return true;
 }

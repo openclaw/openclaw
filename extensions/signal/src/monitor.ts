@@ -272,6 +272,7 @@ function deriveSignalAttachmentRpcMaxResponseBytes(maxBytes: number): number | u
 async function fetchAttachment(params: {
   baseUrl: string;
   account?: string;
+  apiMode?: "native" | "container" | "auto";
   attachment: SignalAttachment;
   sender?: string;
   groupId?: string;
@@ -303,6 +304,7 @@ async function fetchAttachment(params: {
   const result = await signalRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     maxResponseBytes: deriveSignalAttachmentRpcMaxResponseBytes(params.maxBytes),
+    apiMode: params.apiMode,
   });
   if (!result?.data) {
     return null;
@@ -498,7 +500,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       ignoreAttachments,
       sendReadReceipts,
       readReceiptsViaDaemon,
-      fetchAttachment,
+      fetchAttachment: (params) => fetchAttachment({ ...params, apiMode: configuredApiMode }),
       deliverReplies: (params) => deliverReplies({ ...params, cfg, chunkMode }),
       resolveSignalReactionTargets,
       isSignalReactionMessage,
@@ -513,6 +515,7 @@ export async function monitorSignalProvider(opts: MonitorSignalOpts = {}): Promi
       runtime,
       // signal-cli can keep the SSE event endpoint idle until the next inbound event.
       timeoutMs: 0,
+      apiMode: configuredApiMode,
       policy: opts.reconnectPolicy,
       onEvent: (event) => {
         void handleEvent(event).catch((err) => {

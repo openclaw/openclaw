@@ -1,11 +1,11 @@
-import * as runtimeConfigModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import {
-  signalRpcRequest,
+  signalRpcRequest as signalRpcRequestImpl,
   detectSignalApiMode,
-  signalCheck,
-  streamSignalEvents,
-  fetchAttachment,
+  signalCheck as signalCheckImpl,
+  streamSignalEvents as streamSignalEventsImpl,
+  fetchAttachment as fetchAttachmentImpl,
+  type SignalApiMode,
 } from "./client-adapter.js";
 import * as containerClientModule from "./client-container.js";
 import * as nativeClientModule from "./client.js";
@@ -17,7 +17,7 @@ const mockContainerCheck = vi.fn();
 const mockContainerRpcRequest = vi.fn();
 const mockContainerFetchAttachment = vi.fn();
 const mockStreamContainerEvents = vi.fn();
-const mockGetRuntimeConfig = vi.fn(() => ({}));
+let currentApiMode: SignalApiMode = "auto";
 
 beforeEach(() => {
   vi.spyOn(nativeClientModule, "signalCheck").mockImplementation(mockNativeCheck as any);
@@ -35,17 +35,30 @@ beforeEach(() => {
   vi.spyOn(containerClientModule, "streamContainerEvents").mockImplementation(
     mockStreamContainerEvents as any,
   );
-  vi.spyOn(runtimeConfigModule, "getRuntimeConfig").mockImplementation(mockGetRuntimeConfig as any);
 });
 
-function setApiMode(mode: "native" | "container" | "auto") {
-  mockGetRuntimeConfig.mockReturnValue({
-    channels: {
-      signal: {
-        apiMode: mode,
-      },
-    },
-  });
+function setApiMode(mode: SignalApiMode) {
+  currentApiMode = mode;
+}
+
+function signalRpcRequest<T = unknown>(
+  method: string,
+  params: Record<string, unknown> | undefined,
+  opts: Parameters<typeof signalRpcRequestImpl>[2],
+) {
+  return signalRpcRequestImpl<T>(method, params, { ...opts, apiMode: currentApiMode });
+}
+
+function signalCheck(baseUrl: string, timeoutMs?: number) {
+  return signalCheckImpl(baseUrl, timeoutMs, { apiMode: currentApiMode });
+}
+
+function streamSignalEvents(params: Parameters<typeof streamSignalEventsImpl>[0]) {
+  return streamSignalEventsImpl({ ...params, apiMode: currentApiMode });
+}
+
+function fetchAttachment(params: Parameters<typeof fetchAttachmentImpl>[0]) {
+  return fetchAttachmentImpl({ ...params, apiMode: currentApiMode });
 }
 
 describe("detectSignalApiMode", () => {
@@ -171,6 +184,21 @@ describe("signalRpcRequest", () => {
       expect.objectContaining({ message: "Hello" }),
       expect.objectContaining({ baseUrl: "http://localhost:8080" }),
     );
+    expect(mockNativeRpcRequest).not.toHaveBeenCalled();
+  });
+
+  it("uses explicit apiMode from the active config", async () => {
+    setApiMode("native");
+    mockContainerRpcRequest.mockResolvedValue({ timestamp: 1700000000000 });
+
+    const result = await signalRpcRequestImpl(
+      "send",
+      { message: "Hello", account: "+14259798283", recipient: ["+15550001111"] },
+      { baseUrl: "http://localhost:8080", apiMode: "container" },
+    );
+
+    expect(result).toEqual({ timestamp: 1700000000000 });
+    expect(mockContainerRpcRequest).toHaveBeenCalled();
     expect(mockNativeRpcRequest).not.toHaveBeenCalled();
   });
 
