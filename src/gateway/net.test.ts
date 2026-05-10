@@ -515,6 +515,33 @@ describe("isContainerEnvironment", () => {
     expect(isContainerEnvironment()).toBe(true);
   });
 
+  it("returns true on Fly Machines without Docker sentinel files", () => {
+    const previousFlyMachineId = process.env.FLY_MACHINE_ID;
+    const previousFlyAppName = process.env.FLY_APP_NAME;
+    const fs = require("node:fs");
+    vi.spyOn(fs, "accessSync").mockImplementation(() => {
+      throw new Error("ENOENT");
+    });
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+
+    try {
+      process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+      process.env.FLY_APP_NAME = "openclaw-clawcks-test";
+      expect(isContainerEnvironment()).toBe(true);
+    } finally {
+      if (previousFlyMachineId === undefined) {
+        delete process.env.FLY_MACHINE_ID;
+      } else {
+        process.env.FLY_MACHINE_ID = previousFlyMachineId;
+      }
+      if (previousFlyAppName === undefined) {
+        delete process.env.FLY_APP_NAME;
+      } else {
+        process.env.FLY_APP_NAME = previousFlyAppName;
+      }
+    }
+  });
+
   it("returns true when /proc/1/cgroup contains docker marker", () => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => {
