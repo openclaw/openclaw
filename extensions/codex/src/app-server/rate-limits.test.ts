@@ -36,7 +36,9 @@ describe("formatCodexUsageLimitErrorMessage", () => {
       nowMs: 1_700_000_000_000,
     });
 
-    expect(message).toContain("Next reset in 1 hour");
+    expect(message).toContain("Next reset in 1 hour, ");
+    expect(message).toMatch(/\b[A-Z][a-z]{2} \d{1,2}(?:, \d{4})? at \d{1,2}:\d{2} [AP]M\b/u);
+    expect(message).not.toMatch(/\(\d{4}-\d{2}-\d{2}T/u);
     expect(message).not.toContain("Codex did not return a reset time");
   });
 });

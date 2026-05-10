@@ -244,7 +244,33 @@ function formatReachedType(value: string): string {
 }
 
 function formatResetTime(resetsAtMs: number, nowMs: number): string {
-  return `in ${formatRelativeDuration(resetsAtMs - nowMs)} (${new Date(resetsAtMs).toISOString()})`;
+  return `in ${formatRelativeDuration(resetsAtMs - nowMs)}, ${formatCalendarResetTime(
+    resetsAtMs,
+    nowMs,
+  )}`;
+}
+
+function formatCalendarResetTime(resetsAtMs: number, nowMs: number): string {
+  const resetDate = new Date(resetsAtMs);
+  const resetParts = new Intl.DateTimeFormat("en-US", {
+    month: "short",
+    day: "numeric",
+    ...(resetDate.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).formatToParts(resetDate);
+  const part = (type: Intl.DateTimeFormatPartTypes): string | undefined =>
+    resetParts.find((entry) => entry.type === type)?.value;
+  const dateParts = [part("month"), part("day"), part("year")].filter(Boolean);
+  const day =
+    dateParts.length > 1 ? `${dateParts[0]} ${dateParts.slice(1).join(", ")}` : dateParts[0];
+  const time = [part("hour"), part("minute")].filter(Boolean).join(":");
+  const dayPeriod = part("dayPeriod");
+  const timeZone = part("timeZoneName");
+  return [day, "at", [time, dayPeriod, timeZone].filter(Boolean).join(" ")]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function formatRelativeDuration(durationMs: number): string {
