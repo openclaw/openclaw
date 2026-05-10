@@ -1,56 +1,98 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { AUTH_STORE_VERSION } from "./constants.js";
-import { promoteAuthProfileInOrder } from "./profiles.js";
-import { loadAuthProfileStoreForRuntime, saveAuthProfileStore } from "./store.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { markAuthProfileSuccess } from "./profiles.js";
+import type { AuthProfileStore } from "./types.js";
 
-describe("promoteAuthProfileInOrder", () => {
-  it("moves a relogin profile to the front of an existing per-agent provider order", async () => {
-    const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-order-promote-"));
-    try {
-      const newProfileId = "openai-codex:bunsthedev@gmail.com";
-      const staleProfileId = "openai-codex:val@viewdue.ai";
-      saveAuthProfileStore(
-        {
-          version: AUTH_STORE_VERSION,
-          profiles: {
-            [newProfileId]: {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "new-access",
-              refresh: "new-refresh",
-              expires: Date.now() + 60 * 60 * 1000,
-            },
-            [staleProfileId]: {
-              type: "oauth",
-              provider: "openai-codex",
-              access: "stale-access",
-              refresh: "stale-refresh",
-              expires: Date.now() + 30 * 60 * 1000,
-            },
-          },
-          order: {
-            "openai-codex": [staleProfileId],
-          },
-        },
-        agentDir,
-      );
+const storeMocks = vi.hoisted(() => ({
+  saveAuthProfileStore: vi.fn(),
+  updateAuthProfileStoreWithLock: vi.fn().mockResolvedValue(null),
+}));
 
-      const updated = await promoteAuthProfileInOrder({
-        agentDir,
-        provider: "openai-codex",
-        profileId: newProfileId,
-      });
+vi.mock("./store.js", () => ({
+  ensureAuthProfileStoreForLocalUpdate: vi.fn(() => ({ version: 1, profiles: {} })),
+  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+}));
 
-      expect(updated?.order?.["openai-codex"]).toEqual([newProfileId, staleProfileId]);
-      expect(loadAuthProfileStoreForRuntime(agentDir).order?.["openai-codex"]).toEqual([
-        newProfileId,
-        staleProfileId,
-      ]);
-    } finally {
-      fs.rmSync(agentDir, { recursive: true, force: true });
-    }
+beforeEach(() => {
+  vi.clearAllMocks();
+  storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+});
+
+function makeStore(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
+  return {
+    version: 1,
+    profiles: {
+      "anthropic:default": {
+        type: "api_key",
+        provider: "anthropic",
+        key: "sk-test",
+      },
+    },
+    usageStats,
+  };
+}
+
+describe("markAuthProfileSuccess", () => {
+  it("updates last-good and usage stats through the fallback save path when lock update misses", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+        cooldownReason: "rate_limit",
+      },
+    });
+
+    storeMocks.updateAuthProfileStoreWithLock.mockResolvedValue(null);
+
+    const beforeUsed = Date.now();
+    await markAuthProfileSuccess({
+      store,
+      provider: "anthropic",
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-success",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(
+      store,
+      "/tmp/openclaw-auth-profiles-success",
+    );
+    expect(store.lastGood).toEqual({ anthropic: "anthropic:default" });
+    expect(store.usageStats?.["anthropic:default"]).toMatchObject({
+      errorCount: 0,
+      cooldownUntil: undefined,
+      cooldownReason: undefined,
+    });
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toBeGreaterThanOrEqual(beforeUsed);
+  });
+
+  it("adopts locked store last-good and usage stats without saving locally when lock update succeeds", async () => {
+    const store = makeStore({
+      "anthropic:default": {
+        errorCount: 3,
+        cooldownUntil: Date.now() + 60_000,
+      },
+    });
+    const lockedStore = makeStore(undefined);
+
+    storeMocks.updateAuthProfileStoreWithLock.mockImplementationOnce(async ({ updater }) => {
+      updater(lockedStore);
+      return lockedStore;
+    });
+
+    await markAuthProfileSuccess({
+      store,
+      provider: "anthropic",
+      profileId: "anthropic:default",
+      agentDir: "/tmp/openclaw-auth-profiles-success",
+    });
+
+    expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
+    expect(store.lastGood).toEqual({ anthropic: "anthropic:default" });
+    expect(store.usageStats).toEqual(lockedStore.usageStats);
+    expect(store.usageStats?.["anthropic:default"]).toMatchObject({
+      errorCount: 0,
+      cooldownUntil: undefined,
+    });
+    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
   });
 });
