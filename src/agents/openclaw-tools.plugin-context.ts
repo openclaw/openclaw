@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { modelKey } from "./model-ref-shared.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
@@ -51,7 +52,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       ? {
           ...(modelProvider ? { provider: modelProvider } : {}),
           ...(modelId ? { modelId } : {}),
-          ...(modelProvider && modelId ? { modelRef: `${modelProvider}/${modelId}` } : {}),
+          ...(modelProvider && modelId ? { modelRef: modelKey(modelProvider, modelId) } : {}),
         }
       : undefined;
   const deliveryContext = normalizeDeliveryContext({

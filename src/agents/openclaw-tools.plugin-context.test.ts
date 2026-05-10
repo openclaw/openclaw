@@ -58,6 +58,22 @@ describe("openclaw plugin tool context", () => {
     });
   });
 
+  it("does not duplicate provider-qualified active model refs", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      },
+    });
+
+    expect(result.context.activeModel).toStrictEqual({
+      provider: "openrouter",
+      modelId: "openrouter/auto",
+      modelRef: "openrouter/auto",
+    });
+  });
+
   it("infers the default agent workspace when workspaceDir is omitted", () => {
     const workspaceDir = path.join(process.cwd(), "tmp-main-workspace");
     const result = resolveOpenClawPluginToolInputs({
