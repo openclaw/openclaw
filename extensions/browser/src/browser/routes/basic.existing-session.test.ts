@@ -9,9 +9,9 @@ const { BrowserProfileUnavailableError } = await import("../errors.js");
 const { registerBrowserBasicRoutes } = await import("./basic.js");
 
 function createExistingSessionProfileState(params?: {
-  isHttpReachable?: () => Promise<boolean>;
-  isTransportAvailable?: () => Promise<boolean>;
-  isReachable?: () => Promise<boolean>;
+  isHttpReachable?: (timeoutMs?: number) => Promise<boolean>;
+  isTransportAvailable?: (timeoutMs?: number) => Promise<boolean>;
+  isReachable?: (timeoutMs?: number, options?: { ephemeral?: boolean }) => Promise<boolean>;
 }) {
   return {
     resolved: {
@@ -276,7 +276,7 @@ describe("basic browser routes", () => {
     expect(ensureBrowserAvailable).not.toHaveBeenCalled();
   });
 
-  it("treats attach-only profiles as running when transport is available even if page reachability is false", async () => {
+  it("reports pageReady=false when Chrome MCP transport is up but page tools are unreachable", async () => {
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
         isTransportAvailable: async () => true,
@@ -291,26 +291,81 @@ describe("basic browser routes", () => {
     expect(body.transport).toBe("chrome-mcp");
     expect(body.running).toBe(true);
     expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(false);
   });
 
-  it("probes Chrome MCP transport only once for status", async () => {
+  it("reports pageReady=false when the page-reachability probe throws", async () => {
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => true,
+        isReachable: async () => {
+          throw new Error('Chrome MCP "list_pages" timed out after 5000ms.');
+        },
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    const body = responseBodyRecord(response);
+    expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(false);
+  });
+
+  it("reports pageReady=true when both transport and page tools succeed", async () => {
     const isHttpReachable = vi.fn(async () => true);
     const isTransportAvailable = vi.fn(async () => true);
+    const isReachable = vi.fn(async () => true);
 
     const response = await callBasicRouteWithState({
       state: createExistingSessionProfileState({
         isHttpReachable,
         isTransportAvailable,
+        isReachable,
       }),
     });
 
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
+    expect(isReachable).toHaveBeenCalledWith(5_000, { ephemeral: true });
     expect(isHttpReachable).not.toHaveBeenCalled();
     const body = responseBodyRecord(response);
     expect(body.cdpHttp).toBe(true);
     expect(body.cdpReady).toBe(true);
+    expect(body.pageReady).toBe(true);
     expect(body.running).toBe(true);
+  });
+
+  it("page-readiness probe runs in ephemeral mode so status does not seed a cached session", async () => {
+    const isReachable = vi.fn<
+      (timeoutMs?: number, options?: { ephemeral?: boolean }) => Promise<boolean>
+    >(async () => true);
+
+    await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => true,
+        isReachable,
+      }),
+    });
+
+    expect(isReachable).toHaveBeenCalledTimes(1);
+    expect(isReachable.mock.calls[0]?.[1]).toEqual({ ephemeral: true });
+  });
+
+  it("skips the page-reachability probe when transport is unavailable", async () => {
+    const isReachable = vi.fn(async () => true);
+
+    const response = await callBasicRouteWithState({
+      state: createExistingSessionProfileState({
+        isTransportAvailable: async () => false,
+        isReachable,
+      }),
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(isReachable).not.toHaveBeenCalled();
+    const body = responseBodyRecord(response);
+    expect(body.cdpReady).toBe(false);
+    expect(body.pageReady).toBe(false);
+    expect(body.running).toBe(false);
   });
 });

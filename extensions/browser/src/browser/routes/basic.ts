@@ -20,6 +20,7 @@ import {
 const STATUS_CDP_HTTP_TIMEOUT_MS = 300;
 const STATUS_CDP_TRANSPORT_TIMEOUT_MS = 600;
 const STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS = 5_000;
+const STATUS_CHROME_MCP_PAGE_TIMEOUT_MS = 5_000;
 
 function handleBrowserRouteError(res: BrowserResponse, err: unknown) {
   const mapped = toBrowserErrorResponse(err);
@@ -74,15 +75,39 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
   }
 
   const capabilities = getBrowserProfileCapabilities(profileCtx.profile);
-  const [cdpHttp, cdpReady] = capabilities.usesChromeMcp
+  const [cdpHttp, cdpReady, pageReady] = capabilities.usesChromeMcp
     ? await (async () => {
-        const ready = await profileCtx.isTransportAvailable(STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS);
-        return [ready, ready] as const;
+        const transportReady = await profileCtx.isTransportAvailable(
+          STATUS_CHROME_MCP_TRANSPORT_TIMEOUT_MS,
+        );
+        if (!transportReady) {
+          return [false, false, false] as const;
+        }
+        let pageReachable = false;
+        try {
+          // Status-safe page probe: ephemeral so a passive status call does not seed
+          // a persistent cached Chrome MCP session. Reuses an existing cached session
+          // if one is already live, otherwise opens a temporary session that is closed
+          // immediately after the round-trip.
+          pageReachable = await profileCtx.isReachable(STATUS_CHROME_MCP_PAGE_TIMEOUT_MS, {
+            ephemeral: true,
+          });
+        } catch {
+          // Page-tool round-trip failed (timeout, MCP error, Chrome rejected
+          // the call). Transport stays green; pageReady reports the gap.
+          pageReachable = false;
+        }
+        return [transportReady, transportReady, pageReachable] as const;
       })()
-    : await Promise.all([
-        profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
-        profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
-      ]);
+    : await (async () => {
+        const [http, ready] = await Promise.all([
+          profileCtx.isHttpReachable(STATUS_CDP_HTTP_TIMEOUT_MS),
+          profileCtx.isTransportAvailable(STATUS_CDP_TRANSPORT_TIMEOUT_MS),
+        ]);
+        // For managed CDP profiles, the transport check already includes a WS
+        // handshake against the page, so pageReady mirrors cdpReady.
+        return [http, ready, ready] as const;
+      })();
 
   const profileState = current.profiles.get(profileCtx.profile.name);
   let detectedBrowser: string | null = null;
@@ -118,6 +143,7 @@ async function buildBrowserStatus(req: BrowserRequest, ctx: BrowserRouteContext)
     running: cdpReady,
     cdpReady,
     cdpHttp,
+    pageReady,
     pid: capabilities.usesChromeMcp
       ? getChromeMcpPid(profileCtx.profile.name)
       : (profileState?.running?.pid ?? null),

@@ -47,7 +47,7 @@ type AvailabilityDeps = {
 type AvailabilityOps = {
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
-  isReachable: (timeoutMs?: number) => Promise<boolean>;
+  isReachable: (timeoutMs?: number, options?: { ephemeral?: boolean }) => Promise<boolean>;
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
   stopRunningBrowser: () => Promise<{ stopped: boolean }>;
 };
@@ -150,11 +150,20 @@ export function createProfileAvailability({
 
   const getCdpReachabilityPolicy = () =>
     resolveCdpReachabilityPolicy(profile, state().resolved.ssrfPolicy);
-  const isReachable = async (timeoutMs?: number) => {
+  const isReachable = async (timeoutMs?: number, options?: { ephemeral?: boolean }) => {
     if (capabilities.usesChromeMcp) {
-      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required
+      // listChromeMcpTabs creates the session if needed — no separate ensureChromeMcpAvailable call required.
+      // Status probes opt into ephemeral so they reuse a cached attach session if one exists,
+      // but do not seed a new persistent session as a side effect of read-only status calls.
       const { listChromeMcpTabs } = await getChromeMcpModule();
-      await listChromeMcpTabs(profile.name, profile);
+      const callOptions: { timeoutMs?: number; ephemeral?: boolean } = {};
+      if (timeoutMs != null) {
+        callOptions.timeoutMs = timeoutMs;
+      }
+      if (options?.ephemeral) {
+        callOptions.ephemeral = true;
+      }
+      await listChromeMcpTabs(profile.name, profile, callOptions);
       return true;
     }
     const { httpTimeoutMs, wsTimeoutMs } = resolveTimeouts(timeoutMs);
