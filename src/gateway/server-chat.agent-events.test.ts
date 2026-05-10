@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
+import { formatChannelProgressDraftLine } from "../plugin-sdk/channel-streaming.js";
 
 const persistGatewaySessionLifecycleEventMock = vi.fn();
 
@@ -1021,7 +1022,7 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
-  it("projects tool-search bridge names for channel verbose tool events", () => {
+  it("projects tool-search bridge calls like native channel verbose tool events", () => {
     const { nodeSendToSession, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
     });
@@ -1046,18 +1047,30 @@ describe("agent event handler", () => {
       },
     });
 
-    expect(nodeSendToSession).toHaveBeenCalledWith(
-      "session-1",
-      "agent",
-      expect.objectContaining({
-        stream: "tool",
-        data: expect.objectContaining({
-          phase: "start",
-          name: "openclaw:core:exec",
-          bridgeToolName: "tool_search_code",
-          bridgeVerb: "call",
-          args: { detail: "echo hi" },
-        }),
+    const payload = nodeSendToSession.mock.calls[0]?.[2] as {
+      stream?: string;
+      data?: { name?: string; args?: Record<string, unknown> };
+    };
+    expect(payload.stream).toBe("tool");
+    expect(payload.data).toMatchObject({
+      phase: "start",
+      name: "exec",
+      bridgeToolName: "tool_search_code",
+      bridgeTargetToolName: "openclaw:core:exec",
+      bridgeVerb: "call",
+      args: { command: "echo hi" },
+    });
+    expect(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: payload.data?.name,
+        args: payload.data?.args,
+      }),
+    ).toBe(
+      formatChannelProgressDraftLine({
+        event: "tool",
+        name: "exec",
+        args: { command: "echo hi" },
       }),
     );
     resetAgentRunContextForTest();

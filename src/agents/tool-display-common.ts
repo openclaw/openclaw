@@ -19,6 +19,8 @@ export type ToolDisplaySpec = {
 
 export type ToolSearchCodeDisplayTarget = {
   toolName: string;
+  displayToolName?: string;
+  displayArgs?: Record<string, unknown>;
   detail?: string;
   bridgeVerb?: "call" | "describe" | "search";
 };
@@ -376,6 +378,15 @@ function parseToolSearchCall(code: string): { target: string; args?: string } | 
   return { target: targetMatch[1], args };
 }
 
+function normalizeToolSearchDisplayToolName(toolName: string | undefined): string | undefined {
+  const value = normalizeOptionalString(toolName);
+  if (!value) {
+    return undefined;
+  }
+  const catalogIdMatch = value.match(/^(?:openclaw|mcp|client):[^:]+:(.+)$/s);
+  return normalizeOptionalString(catalogIdMatch?.[1]) ?? value;
+}
+
 function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
   const value = normalizeOptionalString(raw);
   if (!value) {
@@ -395,6 +406,96 @@ function summarizeToolSearchTarget(raw: string | undefined): string | undefined 
   }
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length <= 80 ? compact : undefined;
+}
+
+function parseToolSearchCallArgs(raw: string | undefined): Record<string, unknown> | undefined {
+  const source = extractObjectLiteralSource(raw);
+  if (!source) {
+    return undefined;
+  }
+  const args: Record<string, unknown> = {};
+  const propertyPattern =
+    /(?:^|[,{\s])([A-Za-z_$][\w$]*)\s*:\s*("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|true|false|null|-?\d+(?:\.\d+)?)/g;
+  for (const match of source.matchAll(propertyPattern)) {
+    const key = match[1];
+    const value = match[2];
+    if (!key || value === undefined) {
+      continue;
+    }
+    args[key] = parseSimpleToolSearchArgValue(value);
+  }
+  return Object.keys(args).length > 0 ? args : undefined;
+}
+
+function extractObjectLiteralSource(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const start = value.indexOf("{");
+  if (start < 0) {
+    return undefined;
+  }
+  let depth = 0;
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let i = start; i < value.length; i += 1) {
+    const char = value[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return value.slice(start, i + 1);
+      }
+    }
+  }
+  return undefined;
+}
+
+function parseSimpleToolSearchArgValue(raw: string): unknown {
+  if (raw === "true") {
+    return true;
+  }
+  if (raw === "false") {
+    return false;
+  }
+  if (raw === "null") {
+    return null;
+  }
+  if (/^-?\d+(?:\.\d+)?$/.test(raw)) {
+    return Number(raw);
+  }
+  const quote = raw[0];
+  const inner = raw.slice(1, -1);
+  if (quote === '"') {
+    try {
+      return JSON.parse(raw) as unknown;
+    } catch {
+      return inner;
+    }
+  }
+  return inner.replace(/\\'/g, "'").replace(/\\\\/g, "\\");
 }
 
 function summarizeToolSearchCallInput(raw: string | undefined): string | undefined {
@@ -441,7 +542,13 @@ export function resolveToolSearchCodeDisplayTarget(
     if (!toolName) {
       return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
     }
-    return { toolName, detail: summarizeToolSearchCallInput(call.args), bridgeVerb: "call" };
+    return {
+      toolName,
+      displayToolName: normalizeToolSearchDisplayToolName(toolName),
+      displayArgs: parseToolSearchCallArgs(call.args),
+      detail: summarizeToolSearchCallInput(call.args),
+      bridgeVerb: "call",
+    };
   }
   const describeMatch = code.match(/openclaw\.tools\.describe\s*\(\s*([^)]+?)\s*(?:,|\))/s);
   if (describeMatch) {

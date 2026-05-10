@@ -10,6 +10,22 @@ describe("tool display details", () => {
       }),
     ).toEqual({
       toolName: "tool",
+      displayToolName: "tool",
+      displayArgs: { command: "echo hi" },
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
+  it("normalizes direct tool-search catalog ids to native display names and args", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: 'return await openclaw.tools.call("openclaw:core:exec", { command: "echo hi" });',
+      }),
+    ).toEqual({
+      toolName: "openclaw:core:exec",
+      displayToolName: "exec",
+      displayArgs: { command: "echo hi" },
       detail: "echo hi",
       bridgeVerb: "call",
     });

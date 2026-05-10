@@ -50,7 +50,10 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
     return payload;
   }
   const target = resolveToolSearchCodeDisplayTarget(record.args);
-  const projectedName = target?.toolName;
+  if (!target) {
+    return payload;
+  }
+  const projectedName = target.displayToolName ?? target.toolName;
   if (!projectedName || projectedName === "tool_search_code") {
     return payload;
   }
@@ -59,11 +62,14 @@ function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown 
   // helper used by Control UI. Project obvious bridge calls so verbose
   // surfaces name the concrete tool while keeping the bridge identity available.
   const projectedData: Record<string, unknown> = { ...record, name: projectedName };
-  if (target.detail) {
+  if (target.displayArgs) {
+    projectedData.args = target.displayArgs;
+  } else if (target.detail) {
     projectedData.args = { detail: target.detail };
   }
   if (target.bridgeVerb) {
     projectedData.bridgeToolName = "tool_search_code";
+    projectedData.bridgeTargetToolName = target.toolName;
     projectedData.bridgeVerb = target.bridgeVerb;
   }
   return { ...payload, data: projectedData };
