@@ -1,6 +1,7 @@
 import path from "node:path";
-import { fileExists, type ArchiveLogger } from "../infra/archive.js";
+import type { ArchiveLogger } from "../infra/archive.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { pathExists } from "../infra/fs-safe.js";
 import { withExtractedArchiveRoot } from "../infra/install-flow.js";
 import { installPackageDir } from "../infra/install-package-dir.js";
 import { resolveSafeInstallDir } from "../infra/install-safe-path.js";
@@ -82,7 +83,7 @@ async function hasSkillArchiveRoot(
   rootMarkers: readonly string[],
 ): Promise<boolean> {
   for (const candidate of rootMarkers) {
-    if (await fileExists(path.join(rootDir, candidate))) {
+    if (await pathExists(path.join(rootDir, candidate))) {
       return true;
     }
   }
@@ -143,7 +144,7 @@ export async function installExtractedSkillRoot(params: {
     } catch (err) {
       return installFailure(formatErrorMessage(err), "invalid-request");
     }
-    if (params.mode === "install" && (await fileExists(targetDir))) {
+    if (params.mode === "install" && (await pathExists(targetDir))) {
       return installFailure(
         `Skill already exists at ${targetDir}. Re-run with force/update.`,
         "invalid-request",
