@@ -175,6 +175,36 @@ describe("resolveModelAuthLabel", () => {
     });
   });
 
+  it("prefers claude-cli OAuth over env API key inherited via provider alias", () => {
+    mocks.ensureAuthProfileStore.mockReturnValue({
+      version: 1,
+      profiles: {},
+    } as never);
+    mocks.resolveAuthProfileOrder.mockReturnValue([]);
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "oauth",
+      provider: "claude-cli",
+      access: "token",
+      refresh: "refresh",
+      expires: Date.now() + 60_000,
+    });
+    // Simulates ANTHROPIC_API_KEY present in env, which the alias map would surface for claude-cli.
+    mocks.resolveEnvApiKey.mockReturnValue({
+      apiKey: "sk-ant-key",
+      source: "env: ANTHROPIC_API_KEY",
+    });
+
+    const label = resolveModelAuthLabel({
+      provider: "claude-cli",
+      cfg: {},
+    });
+
+    expect(label).toBe("oauth (claude-cli)");
+    expect(mocks.readClaudeCliCredentialsCached).toHaveBeenCalled();
+    // resolveEnvApiKey must NOT have been reached (CLI creds took priority).
+    expect(mocks.resolveEnvApiKey).not.toHaveBeenCalled();
+  });
+
   it("can skip external auth profile overlays for status labels", () => {
     mocks.loadAuthProfileStoreWithoutExternalProfiles.mockReturnValue({
       version: 1,

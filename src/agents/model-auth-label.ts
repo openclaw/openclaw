@@ -66,17 +66,9 @@ export function resolveModelAuthLabel(params: {
     return `api-key${label ? ` (${label})` : ""}`;
   }
 
-  const envKey = resolveEnvApiKey(providerKey, process.env, {
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
-  if (envKey?.apiKey) {
-    if (envKey.source.includes("OAUTH_TOKEN")) {
-      return `oauth (${envKey.source})`;
-    }
-    return `api-key (${envKey.source})`;
-  }
-
+  // CLI-based OAuth credentials take priority over env API keys inherited via provider alias.
+  // Without this check first, `claude-cli` (aliased to `anthropic` for env-var lookup) would
+  // surface `api-key (env: ANTHROPIC_API_KEY)` even when valid Claude CLI OAuth is active.
   if (
     providerKey === "codex" &&
     readCodexCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
@@ -88,6 +80,17 @@ export function resolveModelAuthLabel(params: {
     readClaudeCliCredentialsCached({ ttlMs: 5_000, allowKeychainPrompt: false })
   ) {
     return "oauth (claude-cli)";
+  }
+
+  const envKey = resolveEnvApiKey(providerKey, process.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  if (envKey?.apiKey) {
+    if (envKey.source.includes("OAUTH_TOKEN")) {
+      return `oauth (${envKey.source})`;
+    }
+    return `api-key (${envKey.source})`;
   }
 
   const customKey = resolveUsableCustomProviderApiKey({
