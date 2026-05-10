@@ -740,6 +740,41 @@ describe("runCodexAppServerAttempt", () => {
     expect(heartbeat?.deferLoading).toBe(true);
   });
 
+  it("returns a run context report without deferred Codex dynamic tool schemas", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("message"),
+      createRuntimeDynamicTool("web_search"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.sourceReplyDeliveryMode = "message_tool_only";
+    params.toolsAllow = ["message", "web_search"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { mode: "yolo" } },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    const report = result.systemPromptReport;
+    expect(report?.source).toBe("run");
+    expect(report?.provider).toBe("codex");
+    expect(report?.model).toBe("gpt-5.4-codex");
+    expect(report?.systemPrompt.chars).toBeGreaterThan(0);
+
+    const message = report?.tools.entries.find((tool) => tool.name === "message");
+    const webSearch = report?.tools.entries.find((tool) => tool.name === "web_search");
+    expect(message?.schemaChars).toBeGreaterThan(0);
+    expect(webSearch?.schemaChars).toBe(0);
+    expect(report?.tools.schemaChars).toBe(message?.schemaChars);
+  });
+
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("wiki_status"),
