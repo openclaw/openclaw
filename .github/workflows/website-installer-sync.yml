@@ -191,4 +191,5 @@ jobs:
           git config user.email "openclaw-installer-sync[bot]@users.noreply.github.com"
           git add public/install.sh public/install-cli.sh public/install.ps1 public/install.cmd
           git commit -m "chore: sync installers from openclaw ${GITHUB_SHA::12}"
+          git pull --rebase origin main
           git push origin HEAD:main
