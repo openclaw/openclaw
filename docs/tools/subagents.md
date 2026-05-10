@@ -96,7 +96,7 @@ requester chat when the run finishes.
     The completion handoff to the requester session is runtime-generated
     internal context (not user-authored text) and includes:
 
-    - `Result` — latest visible `assistant` reply text, otherwise sanitized latest tool/toolResult text. Terminal failed runs do not reuse captured reply text.
+    - `Result` — latest visible `assistant` reply text, otherwise `(no output)`. Terminal failed runs do not reuse captured reply text.
     - `Status` — `completed successfully` / `failed` / `timed out` / `unknown`.
     - Compact runtime/token stats.
     - A delivery instruction telling the requester agent to rewrite in normal assistant voice (not forward raw internal metadata).
@@ -486,7 +486,7 @@ Announce context is normalized to a stable internal event block:
 | Session ids    | Child session key/id                                                                                          |
 | Type           | Announce type + task label                                                                                    |
 | Status         | Derived from runtime outcome (`success`, `error`, `timeout`, or `unknown`) — **not** inferred from model text |
-| Result content | Latest visible assistant text, otherwise sanitized latest tool/toolResult text                                |
+| Result content | Latest visible assistant text; `(no output)` if no assistant text is available                                |
 | Follow-up      | Instruction describing when to reply vs stay silent                                                           |
 
 Terminal failed runs report failure status without replaying captured

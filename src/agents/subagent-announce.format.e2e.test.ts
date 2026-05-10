@@ -607,7 +607,7 @@ describe("subagent announce formatting", () => {
     { role: "toolResult", toolOutput: "tool output line 1", childRunId: "run-tool-fallback-1" },
     { role: "tool", toolOutput: "tool output line 2", childRunId: "run-tool-fallback-2" },
   ] as const)(
-    "falls back to latest $role output when assistant reply is empty",
+    "uses no-output fallback for $role-only history when assistant reply is empty",
     async (testCase) => {
       chatHistoryMock.mockResolvedValueOnce({
         messages: [
@@ -634,7 +634,8 @@ describe("subagent announce formatting", () => {
 
       const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
       const msg = call?.params?.message as string;
-      expect(msg).toContain(testCase.toolOutput);
+      expect(msg).toContain("(no output)");
+      expect(msg).not.toContain(testCase.toolOutput);
     },
   );
 
@@ -1992,7 +1993,7 @@ describe("subagent announce formatting", () => {
     expect(msg).not.toContain("old tool output");
   });
 
-  it("falls back to latest tool output for completion-mode when assistant output is empty", async () => {
+  it("uses no-output fallback for completion-mode when assistant output is empty", async () => {
     chatHistoryMock.mockResolvedValueOnce({
       messages: [
         {
@@ -2022,7 +2023,8 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output only");
+    expect(msg).toContain("(no output)");
+    expect(msg).not.toContain("tool output only");
   });
 
   it("ignores user text when deriving fallback completion output", async () => {

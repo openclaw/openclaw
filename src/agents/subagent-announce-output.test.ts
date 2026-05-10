@@ -104,6 +104,40 @@ describe("readSubagentOutput", () => {
       "Mapped the code path.",
     );
   });
+
+  it("does not return raw tool-only history as completion output", async () => {
+    const deps = installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "" }],
+        },
+        {
+          role: "toolResult",
+          content: [{ type: "text", text: "raw grep output" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBeUndefined();
+    expect(deps.readLatestAssistantReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("falls back to post-compaction assistant reply instead of raw tool output", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "tool",
+          content: [{ type: "text", text: "raw exec output" }],
+        },
+      ],
+      latestAssistantReply: "post-compaction final answer",
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "post-compaction final answer",
+    );
+  });
 });
 
 describe("buildChildCompletionFindings", () => {

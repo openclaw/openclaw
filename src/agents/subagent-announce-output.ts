@@ -301,7 +301,12 @@ function selectSubagentOutputText(
   if (partialProgress) {
     return partialProgress;
   }
-  return snapshot.latestRawText;
+  // Do not fall through to snapshot.latestRawText: raw tool output is not
+  // user-facing content and must not be delivered as completion text. If no
+  // assistant-produced text is available, the caller should fall back to
+  // readLatestAssistantReply (post-compaction result) or synthesize a bounded
+  // failure summary.
+  return undefined;
 }
 
 export async function readSubagentOutput(
