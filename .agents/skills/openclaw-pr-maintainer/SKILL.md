@@ -120,6 +120,15 @@ gh search issues --repo openclaw/openclaw --match title,body --limit 50 \
   --jq '.[] | "\(.number) | \(.state) | \(.title) | \(.url)"'
 ```
 
+## Handle PR-list URLs robustly
+
+- Treat `https://github.com/<owner>/<repo>/pulls/<user>` as a PR list filtered by author, not as a single PR.
+  - Example: `https://github.com/openclaw/openclaw/pulls/yfge` means list open PRs in `openclaw/openclaw` authored by `yfge`.
+  - Use `gh pr list --repo <owner>/<repo> --author <user> --state open --limit <n> --json ...`.
+- Only use `gh pr view` for real single-PR URLs like `/pull/<number>` or numeric PR refs.
+- If a PR lookup returns `not found`, first re-parse the input URL and check whether it is a list/filter URL (`/pulls`, `/pulls/<user>`, query filters) before telling the user nothing exists.
+- For PR巡检 summaries, include mergeability, failing/non-success checks, review decision, conflicts, and the recommended next action.
+
 ## Follow PR review and landing hygiene
 
 - If bot review conversations exist on your PR, address them and resolve them yourself once fixed.

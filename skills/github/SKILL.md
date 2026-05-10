@@ -71,10 +71,13 @@ gh auth status
 # List PRs
 gh pr list --repo owner/repo
 
+# List PRs by author, including GitHub URLs like /pulls/<user>
+gh pr list --repo owner/repo --author user --state open
+
 # Check CI status
 gh pr checks 55 --repo owner/repo
 
-# View PR details
+# View PR details; only use for /pull/<number> URLs or numeric refs, not /pulls/<user>
 gh pr view 55 --repo owner/repo
 
 # Create PR
