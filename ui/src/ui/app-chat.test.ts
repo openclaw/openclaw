@@ -222,7 +222,7 @@ describe("refreshChat", () => {
       limit: 100,
       maxChars: 4000,
     });
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
     const sessionsListPayload = findRequestPayload(
       request as unknown as MockCallSource,
       "sessions.list",
@@ -266,7 +266,7 @@ describe("refreshChat", () => {
     expect(host.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "ready" }] },
     ]);
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
     expect(requestUpdate).toHaveBeenCalled();
   });
 });
@@ -579,7 +579,7 @@ describe("refreshChat", () => {
       expect(sessionsListPayload.agentId).toBe("main");
       expect(sessionsListPayload.includeGlobal).toBe(true);
       expect(sessionsListPayload.includeUnknown).toBe(true);
-      expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+      expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
       const commandsListPayload = findRequestPayload(
         request as unknown as MockCallSource,
         "commands.list",

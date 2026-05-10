@@ -786,7 +786,8 @@ async function refreshChatModels(host: ChatHost) {
   }
   host.chatModelsLoading = true;
   try {
-    host.chatModelCatalog = await loadModels(host.client);
+    const agentId = resolveAgentIdForSession(host) ?? undefined;
+    host.chatModelCatalog = await loadModels(host.client, agentId ? { agentId } : undefined);
   } finally {
     host.chatModelsLoading = false;
   }

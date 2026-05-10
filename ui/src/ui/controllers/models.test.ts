@@ -17,4 +17,23 @@ describe("loadModels", () => {
       { id: "MiniMax-M2.7-highspeed", name: "MiniMax M2.7 Highspeed", provider: "minimax" },
     ]);
   });
+
+  it("forwards the agentId to scope the per-agent allowlist when provided", async () => {
+    const request = vi.fn(async () => ({ models: [] }));
+
+    await loadModels({ request } as unknown as GatewayBrowserClient, { agentId: "writer" });
+
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      agentId: "writer",
+    });
+  });
+
+  it("omits an empty agentId option to keep gateway requests backwards compatible", async () => {
+    const request = vi.fn(async () => ({ models: [] }));
+
+    await loadModels({ request } as unknown as GatewayBrowserClient, { agentId: "   " });
+
+    expect(request).toHaveBeenCalledWith("models.list", { view: "configured" });
+  });
 });

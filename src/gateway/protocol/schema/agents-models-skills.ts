@@ -200,6 +200,12 @@ export const ModelsListParamsSchema = Type.Object(
     view: Type.Optional(
       Type.Union([Type.Literal("default"), Type.Literal("configured"), Type.Literal("all")]),
     ),
+    /**
+     * Optional agent id to scope the catalog to that agent's per-agent
+     * `agents.list[<agentId>].models` allowlist when present. Falls back to
+     * `agents.defaults.models` when the agent does not define its own list.
+     */
+    agentId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
 );

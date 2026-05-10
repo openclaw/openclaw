@@ -97,4 +97,99 @@ describe("resolveVisibleModelCatalog", () => {
     expect(createProviderAuthCheckerMock).toHaveBeenCalled();
     expect(result).toEqual([]);
   });
+
+  it("scopes visibility to agents.list[<agentId>].models when agentId is provided", () => {
+    createProviderAuthCheckerMock.mockReturnValue(vi.fn(() => true));
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus" },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+    ];
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "anthropic/claude-opus-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [
+          { id: "writer", models: { "anthropic/claude-sonnet-4-6": {} } },
+          {
+            id: "coder",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        ],
+      },
+    } as OpenClawConfig;
+
+    const writerView = resolveVisibleModelCatalog({
+      cfg,
+      catalog,
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+      agentId: "writer",
+    });
+    expect(writerView.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "anthropic/claude-sonnet-4-6",
+    ]);
+
+    const coderView = resolveVisibleModelCatalog({
+      cfg,
+      catalog,
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+      agentId: "coder",
+    });
+    expect(coderView.map((entry) => `${entry.provider}/${entry.id}`).toSorted()).toEqual([
+      "anthropic/claude-opus-4-6",
+      "openai/gpt-5.4",
+    ]);
+
+    const defaultView = resolveVisibleModelCatalog({
+      cfg,
+      catalog,
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+    });
+    expect(defaultView.map((entry) => `${entry.provider}/${entry.id}`).toSorted()).toEqual([
+      "anthropic/claude-opus-4-6",
+      "anthropic/claude-sonnet-4-6",
+      "openai/gpt-5.4",
+    ]);
+  });
+
+  it("falls back to defaults visibility when an agent has no per-agent models record", () => {
+    createProviderAuthCheckerMock.mockReturnValue(vi.fn(() => true));
+    const catalog: ModelCatalogEntry[] = [
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+    ];
+
+    const cfg = {
+      agents: {
+        defaults: {
+          models: { "anthropic/claude-sonnet-4-6": {} },
+        },
+        list: [{ id: "main", default: true }],
+      },
+    } as OpenClawConfig;
+
+    const result = resolveVisibleModelCatalog({
+      cfg,
+      catalog,
+      defaultProvider: "anthropic",
+      runtimeAuthDiscovery: false,
+      agentId: "main",
+    });
+
+    expect(result.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+      "anthropic/claude-sonnet-4-6",
+    ]);
+  });
 });

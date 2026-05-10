@@ -23,15 +23,42 @@ function resolveModelsListView(params: Record<string, unknown>): ModelsListView 
   return typeof params.view === "string" ? (params.view as ModelsListView) : "default";
 }
 
+function resolveModelsListAgentId(
+  params: Record<string, unknown>,
+  cfg: OpenClawConfig,
+): string | undefined {
+  const raw = params.agentId;
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return undefined;
+  }
+  const list = cfg.agents?.list;
+  if (!Array.isArray(list)) {
+    return undefined;
+  }
+  const known = list.some((entry) => {
+    if (!entry || typeof entry !== "object") {
+      return false;
+    }
+    const id = typeof entry.id === "string" ? entry.id.trim() : "";
+    return id === trimmed;
+  });
+  return known ? trimmed : undefined;
+}
+
 async function loadModelsListCatalog(
   context: GatewayRequestContext,
   view: ModelsListView,
   cfg: OpenClawConfig,
+  agentId: string | undefined,
 ): Promise<GatewayModelCatalog> {
   if (view === "all") {
     return await context.loadGatewayModelCatalog({ readOnly: false });
   }
-  if (parseConfiguredModelVisibilityEntries({ cfg }).providerWildcards.size > 0) {
+  if (parseConfiguredModelVisibilityEntries({ cfg, agentId }).providerWildcards.size > 0) {
     return await context.loadGatewayModelCatalog({ readOnly: false });
   }
   let timeout: NodeJS.Timeout | undefined;
@@ -76,11 +103,12 @@ export const modelsHandlers: GatewayRequestHandlers = {
     }
     try {
       const cfg = context.getRuntimeConfig();
+      const requestedAgentId = resolveModelsListAgentId(params, cfg);
       const workspaceDir =
-        resolveAgentWorkspaceDir(cfg, resolveDefaultAgentId(cfg)) ??
+        resolveAgentWorkspaceDir(cfg, requestedAgentId ?? resolveDefaultAgentId(cfg)) ??
         resolveDefaultAgentWorkspaceDir();
       const view = resolveModelsListView(params);
-      const catalog = await loadModelsListCatalog(context, view, cfg);
+      const catalog = await loadModelsListCatalog(context, view, cfg, requestedAgentId);
       if (view === "all") {
         respond(true, { models: catalog }, undefined);
         return;
@@ -92,6 +120,7 @@ export const modelsHandlers: GatewayRequestHandlers = {
         workspaceDir,
         view,
         runtimeAuthDiscovery: false,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       });
       respond(true, { models }, undefined);
     } catch (err) {

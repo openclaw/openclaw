@@ -1270,6 +1270,187 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
       expect(result.allowAny).toBe(false);
     });
+
+    describe("per-agent allowlist via agents.list[].models", () => {
+      const PER_AGENT_CATALOG = [
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+        { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
+        { provider: "openai", id: "gpt-5.4", name: "GPT-5.4" },
+      ];
+
+      const PER_AGENT_CFG = {
+        agents: {
+          defaults: {
+            models: {
+              "anthropic/claude-sonnet-4-6": {},
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+          list: [
+            {
+              id: "writer",
+              models: {
+                "anthropic/claude-sonnet-4-6": {},
+              },
+            },
+            {
+              id: "coder",
+              models: {
+                "openai/gpt-5.4": {},
+                "anthropic/claude-opus-4-6": {},
+              },
+            },
+            {
+              // Empty per-agent record must fall back to defaults to keep
+              // current configs working when an agent has no explicit list.
+              id: "empty",
+              models: {},
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      it("restricts the visible catalog to the per-agent allowlist", () => {
+        const result = buildAllowedModelSet({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "writer",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual(["anthropic/claude-sonnet-4-6"]);
+        expect(result.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+          "anthropic/claude-sonnet-4-6",
+        ]);
+      });
+
+      it("keeps a different agent scoped to its own allowlist", () => {
+        const result = buildAllowedModelSet({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "coder",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual([
+          "anthropic/claude-opus-4-6",
+          "openai/gpt-5.4",
+        ]);
+      });
+
+      it("falls back to agents.defaults.models when no agentId is provided", () => {
+        const result = buildAllowedModelSet({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual([
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-sonnet-4-6",
+          "openai/gpt-5.4",
+        ]);
+      });
+
+      it("falls back to defaults when the agent is unknown", () => {
+        const result = buildAllowedModelSet({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "nonexistent",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual([
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-sonnet-4-6",
+          "openai/gpt-5.4",
+        ]);
+      });
+
+      it("falls back to defaults when the per-agent models record is empty", () => {
+        const result = buildAllowedModelSet({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "empty",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual([
+          "anthropic/claude-opus-4-6",
+          "anthropic/claude-sonnet-4-6",
+          "openai/gpt-5.4",
+        ]);
+      });
+
+      it("falls back to defaults when defaults define an allowlist but the agent has no `models` key", () => {
+        const cfg = {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-sonnet-4-6": {} },
+            },
+            list: [{ id: "main", default: true }],
+          },
+        } as OpenClawConfig;
+
+        const result = buildAllowedModelSet({
+          cfg,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "main",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect([...result.allowedKeys].toSorted()).toEqual(["anthropic/claude-sonnet-4-6"]);
+      });
+
+      it("honors per-agent provider wildcards independently from defaults", () => {
+        const cfg = {
+          agents: {
+            defaults: {
+              models: { "anthropic/claude-sonnet-4-6": {} },
+            },
+            list: [
+              {
+                id: "openai-only",
+                models: { "openai/*": {} },
+              },
+            ],
+          },
+        } as OpenClawConfig;
+
+        const result = buildAllowedModelSet({
+          cfg,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "openai-only",
+        });
+
+        expect(result.allowAny).toBe(false);
+        expect(result.allowedCatalog.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
+          "openai/gpt-5.4",
+        ]);
+        expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
+      });
+
+      it("surfaces per-agent allowlist through createModelVisibilityPolicy", () => {
+        const policy = createModelVisibilityPolicy({
+          cfg: PER_AGENT_CFG,
+          catalog: PER_AGENT_CATALOG,
+          defaultProvider: "anthropic",
+          agentId: "writer",
+        });
+
+        expect(policy.allowAny).toBe(false);
+        expect(policy.allows({ provider: "anthropic", model: "claude-sonnet-4-6" })).toBe(true);
+        expect(policy.allows({ provider: "openai", model: "gpt-5.4" })).toBe(false);
+      });
+    });
   });
 
   describe("resolveAllowedModelRef", () => {

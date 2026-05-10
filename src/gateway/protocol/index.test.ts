@@ -455,9 +455,15 @@ describe("validateModelsListParams", () => {
     expect(validateModelsListParams({ view: "all" })).toBe(true);
   });
 
+  it("accepts an optional agentId scoping the per-agent allowlist", () => {
+    expect(validateModelsListParams({ agentId: "writer" })).toBe(true);
+    expect(validateModelsListParams({ view: "configured", agentId: "coder" })).toBe(true);
+  });
+
   it("rejects unknown model catalog views and extra fields", () => {
     expect(validateModelsListParams({ view: "available" })).toBe(false);
     expect(validateModelsListParams({ view: "configured", provider: "minimax" })).toBe(false);
+    expect(validateModelsListParams({ agentId: "" })).toBe(false);
   });
 });
 

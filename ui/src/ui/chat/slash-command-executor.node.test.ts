@@ -587,7 +587,10 @@ describe("executeSlashCommand directives", () => {
       "Current thinking level: low.\nOptions: default, off, minimal, low, medium, high.",
     );
     expect(request).toHaveBeenNthCalledWith(1, "sessions.list", {});
-    expect(request).toHaveBeenNthCalledWith(2, "models.list", { view: "configured" });
+    expect(request).toHaveBeenNthCalledWith(2, "models.list", {
+      view: "configured",
+      agentId: "main",
+    });
   });
 
   it("accepts minimal and xhigh thinking levels", async () => {

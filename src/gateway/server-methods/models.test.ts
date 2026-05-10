@@ -213,6 +213,129 @@ describe("models.list", () => {
     expect(allRespond).toHaveBeenCalledWith(true, { models: catalog }, undefined);
   });
 
+  it("scopes the configured view to a per-agent allowlist when agentId is provided", async () => {
+    const catalog = [
+      { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+      { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+      { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+    ];
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "anthropic/claude-opus-4-6": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+        list: [
+          { id: "writer", models: { "anthropic/claude-sonnet-4-6": {} } },
+          {
+            id: "coder",
+            models: {
+              "openai/gpt-5.4": {},
+              "anthropic/claude-opus-4-6": {},
+            },
+          },
+        ],
+      },
+      models: {
+        providers: {
+          anthropic: { apiKey: "k" },
+          openai: { apiKey: "k" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const writerRespond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-per-agent-writer",
+        method: "models.list",
+        params: { view: "configured", agentId: "writer" },
+      },
+      params: { view: "configured", agentId: "writer" },
+      respond: writerRespond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+        logGateway: { debug: vi.fn() },
+      } as never,
+    });
+
+    expect(writerRespond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [{ id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" }],
+      },
+      undefined,
+    );
+
+    const coderRespond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-per-agent-coder",
+        method: "models.list",
+        params: { view: "configured", agentId: "coder" },
+      },
+      params: { view: "configured", agentId: "coder" },
+      respond: coderRespond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+        logGateway: { debug: vi.fn() },
+      } as never,
+    });
+
+    expect(coderRespond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        ],
+      },
+      undefined,
+    );
+
+    const defaultRespond = vi.fn();
+    await modelsHandlers["models.list"]({
+      req: {
+        type: "req",
+        id: "req-models-list-per-agent-default",
+        method: "models.list",
+        params: { view: "configured" },
+      },
+      params: { view: "configured" },
+      respond: defaultRespond,
+      client: null,
+      isWebchatConnect: () => false,
+      context: {
+        getRuntimeConfig: () => cfg,
+        loadGatewayModelCatalog: vi.fn(() => Promise.resolve(catalog)),
+        logGateway: { debug: vi.fn() },
+      } as never,
+    });
+
+    expect(defaultRespond).toHaveBeenCalledWith(
+      true,
+      {
+        models: [
+          { id: "claude-opus-4-6", name: "Claude Opus 4.6", provider: "anthropic" },
+          { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", provider: "anthropic" },
+          { id: "gpt-5.4", name: "GPT-5.4", provider: "openai" },
+        ],
+      },
+      undefined,
+    );
+  });
+
   it("preserves catalog load errors before the timeout fallback wins", async () => {
     const respond = vi.fn();
 
