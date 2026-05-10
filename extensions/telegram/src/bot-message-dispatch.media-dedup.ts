@@ -1,9 +1,3 @@
-/**
- * Deduplicate media URLs in a final-reply payload against media already
- * delivered via block replies. Returns the deduplicated payload, or
- * undefined if the payload should be skipped entirely (all media already
- * sent and no text remains).
- */
 export function deduplicateBlockSentMedia<
   T extends { mediaUrl?: string; mediaUrls?: string[]; text?: string },
 >(payload: T, sentBlockMediaUrls: ReadonlySet<string>): T | undefined {

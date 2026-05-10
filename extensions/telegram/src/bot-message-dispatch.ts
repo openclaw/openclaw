@@ -1166,10 +1166,6 @@ export const dispatchTelegramMessage = async ({
             recordInboundSession: context.turn.recordInboundSession,
             record: context.turn.record,
             runDispatch: () => {
-              // Track media URLs delivered via block replies so final replies
-              // can skip duplicates. Without this, non-streaming Telegram
-              // delivers each MEDIA: attachment twice — once from the
-              // media-only block reply and once from the final reply.
               const sentBlockMediaUrls = new Set<string>();
 
               return telegramDeps.dispatchReplyWithBufferedBlockDispatcher({
