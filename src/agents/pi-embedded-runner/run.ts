@@ -1405,6 +1405,7 @@ export async function runEmbeddedPiAgent(
             currentMessageId: params.currentMessageId,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
+            explicitMessageSends: params.explicitMessageSends,
             sessionFile: activeSessionFile,
             workspaceDir: resolvedWorkspace,
             agentDir,

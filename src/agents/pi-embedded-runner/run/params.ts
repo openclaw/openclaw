@@ -14,6 +14,7 @@ import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
+import type { ExplicitMessageSendTracker } from "../../command/types.js";
 import type { AgentInternalEvent } from "../../internal-events.js";
 import type { BlockReplyPayload } from "../../pi-embedded-payloads.js";
 import type {
@@ -87,6 +88,8 @@ export type RunEmbeddedPiAgentParams = {
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Explicit message.send calls made by this same agent turn. */
+  explicitMessageSends?: ExplicitMessageSendTracker;
   /** Require explicit message tool targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
   /** If true, omit the message tool from the tool list. */

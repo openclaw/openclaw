@@ -26,6 +26,18 @@ export type AgentCommandResultMetaOverrides = {
 
 export type AcpTurnSource = "manual_spawn";
 
+export type ExplicitMessageSendRecord = {
+  channel: string;
+  to: string;
+  accountId?: string;
+  threadId?: string | null;
+  text?: string;
+};
+
+export type ExplicitMessageSendTracker = {
+  entries: ExplicitMessageSendRecord[];
+};
+
 export type AgentRunContext = {
   messageChannel?: string;
   accountId?: string;
@@ -36,6 +48,8 @@ export type AgentRunContext = {
   currentThreadTs?: string;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
+  /** Explicit message.send calls made by this same agent turn. */
+  explicitMessageSends?: ExplicitMessageSendTracker;
 };
 
 export type AgentCommandOpts = {

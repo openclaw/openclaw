@@ -10,6 +10,7 @@ import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
+import type { ExplicitMessageSendTracker } from "./command/types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
@@ -105,6 +106,8 @@ export function createOpenClawTools(
     hasRepliedRef?: { value: boolean };
     /** Fail closed instead of posting same-channel thread-originated replies at the root. */
     sameChannelThreadRequired?: boolean;
+    /** Explicit message.send calls made by this same agent turn. */
+    explicitMessageSends?: ExplicitMessageSendTracker;
     /** If true, the model has native vision capability */
     modelHasVision?: boolean;
     /** Active model provider for provider-specific tool gating. */
@@ -302,6 +305,7 @@ export function createOpenClawTools(
         replyToMode: options?.replyToMode,
         hasRepliedRef: options?.hasRepliedRef,
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
+        explicitMessageSends: options?.explicitMessageSends,
         sandboxRoot: options?.sandboxRoot,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

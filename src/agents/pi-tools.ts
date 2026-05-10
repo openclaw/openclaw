@@ -25,6 +25,7 @@ import type { ProcessToolDefaults } from "./bash-tools.process.js";
 import { execSchema, processSchema } from "./bash-tools.schemas.js";
 import { listChannelAgentTools } from "./channel-tools.js";
 import { shouldSuppressManagedWebSearchTool } from "./codex-native-web-search.js";
+import type { ExplicitMessageSendTracker } from "./command/types.js";
 import { resolveImageSanitizationLimits } from "./image-sanitization.js";
 import type { ModelAuthMode } from "./model-auth.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
@@ -424,6 +425,8 @@ export function createOpenClawCodingTools(options?: {
   replyToMode?: "off" | "first" | "all" | "batched";
   /** Mutable ref to track if a reply was sent (for "first" mode). */
   hasRepliedRef?: { value: boolean };
+  /** Explicit message.send calls made by this same agent turn. */
+  explicitMessageSends?: ExplicitMessageSendTracker;
   /** Allow plugin tools for this run to late-bind the gateway subagent. */
   allowGatewaySubagentBinding?: boolean;
   /** Runtime-scoped explicit allowlist used to materialize matching plugin tools. */
@@ -947,6 +950,7 @@ export function createOpenClawCodingTools(options?: {
           modelId: options?.modelId,
           replyToMode: options?.replyToMode,
           hasRepliedRef: options?.hasRepliedRef,
+          explicitMessageSends: options?.explicitMessageSends,
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
           sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,

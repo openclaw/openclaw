@@ -1611,6 +1611,7 @@ export const agentHandlers: GatewayRequestHandlers = {
                 groupChannel: resolvedGroupChannel,
                 groupSpace: resolvedGroupSpace,
                 currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
+                explicitMessageSends: { entries: [] },
               },
               ...(execApprovalFollowupElevatedDefaults
                 ? { bashElevated: execApprovalFollowupElevatedDefaults }

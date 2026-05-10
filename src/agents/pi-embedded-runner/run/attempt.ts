@@ -1427,6 +1427,7 @@ export async function runEmbeddedAttempt(
             toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
+            explicitMessageSends: params.explicitMessageSends,
             modelHasVision: params.model.input?.includes("image") ?? false,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
