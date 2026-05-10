@@ -51,7 +51,14 @@ type MessageWithExternalReply = Message & { external_reply?: Message };
 
 type TelegramMessageCacheBucket = {
   messages: Map<string, TelegramCachedMessageNode>;
+  keyScopes: Map<string, string[]>;
+  scopedIndexes: Map<string, TelegramMessageCacheScopeIndex>;
   persistedEntryCount: number;
+};
+
+type TelegramMessageCacheScopeIndex = {
+  messages: Map<string, TelegramCachedMessageNode>;
+  sorted?: TelegramCachedMessageNode[];
 };
 
 const DEFAULT_MAX_MESSAGES = 5000;
@@ -66,8 +73,12 @@ function telegramMessageCacheKey(params: {
   return `${params.accountId}:${params.chatId}:${params.messageId}`;
 }
 
-function telegramMessageCacheKeyPrefix(params: { accountId: string; chatId: string | number }) {
-  return `${params.accountId}:${params.chatId}:`;
+function telegramMessageCacheScopeKey(params: {
+  accountId: string;
+  chatId: string | number;
+  threadId?: string;
+}) {
+  return `${params.accountId}:${params.chatId}:${params.threadId ?? ""}`;
 }
 
 export function resolveTelegramMessageCachePath(storePath: string): string {
@@ -168,21 +179,155 @@ function parsePersistedEntry(value: unknown): {
   return node ? { key: value.key, node } : null;
 }
 
-function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
+function trimMessages(
+  messages: Map<string, TelegramCachedMessageNode>,
+  maxMessages: number,
+  onDelete?: (key: string) => void,
+): void {
   while (messages.size > maxMessages) {
     const oldest = messages.keys().next().value;
     if (oldest === undefined) {
       break;
     }
     messages.delete(oldest);
+    onDelete?.(oldest);
   }
+}
+
+function parseMessageCacheKey(key: string): {
+  accountId: string;
+  chatId: string;
+  messageId: string;
+} | null {
+  const first = key.indexOf(":");
+  const last = key.lastIndexOf(":");
+  if (first <= 0 || last <= first) {
+    return null;
+  }
+  return {
+    accountId: key.slice(0, first),
+    chatId: key.slice(first + 1, last),
+    messageId: key.slice(last + 1),
+  };
+}
+
+function getOrCreateScopeIndex(
+  scopedIndexes: Map<string, TelegramMessageCacheScopeIndex>,
+  scopeKey: string,
+): TelegramMessageCacheScopeIndex {
+  let index = scopedIndexes.get(scopeKey);
+  if (!index) {
+    index = { messages: new Map<string, TelegramCachedMessageNode>() };
+    scopedIndexes.set(scopeKey, index);
+  }
+  return index;
+}
+
+function indexMessage(
+  key: string,
+  node: TelegramCachedMessageNode,
+  params: {
+    keyScopes: Map<string, string[]>;
+    scopedIndexes: Map<string, TelegramMessageCacheScopeIndex>;
+  },
+): void {
+  const parsed = parseMessageCacheKey(key);
+  if (!parsed) {
+    return;
+  }
+  const scopeKeys = [
+    telegramMessageCacheScopeKey({
+      accountId: parsed.accountId,
+      chatId: parsed.chatId,
+    }),
+  ];
+  if (node.threadId != null) {
+    scopeKeys.push(
+      telegramMessageCacheScopeKey({
+        accountId: parsed.accountId,
+        chatId: parsed.chatId,
+        threadId: node.threadId,
+      }),
+    );
+  }
+  params.keyScopes.set(key, scopeKeys);
+  for (const scopeKey of scopeKeys) {
+    const index = getOrCreateScopeIndex(params.scopedIndexes, scopeKey);
+    index.messages.set(parsed.messageId, node);
+    index.sorted = undefined;
+  }
+}
+
+function removeMessageFromIndexes(
+  key: string,
+  params: {
+    keyScopes: Map<string, string[]>;
+    scopedIndexes: Map<string, TelegramMessageCacheScopeIndex>;
+  },
+): void {
+  const scopeKeys = params.keyScopes.get(key);
+  if (!scopeKeys) {
+    return;
+  }
+  params.keyScopes.delete(key);
+  const parsed = parseMessageCacheKey(key);
+  if (!parsed) {
+    return;
+  }
+  for (const scopeKey of scopeKeys) {
+    const index = params.scopedIndexes.get(scopeKey);
+    if (!index) {
+      continue;
+    }
+    index.messages.delete(parsed.messageId);
+    index.sorted = undefined;
+    if (index.messages.size === 0) {
+      params.scopedIndexes.delete(scopeKey);
+    }
+  }
+}
+
+function getSortedScopeMessages(
+  index?: TelegramMessageCacheScopeIndex,
+): TelegramCachedMessageNode[] {
+  if (!index) {
+    return [];
+  }
+  if (!index.sorted) {
+    index.sorted = Array.from(index.messages.values()).toSorted(compareCachedMessageNodes);
+  }
+  return index.sorted;
+}
+
+function compareMessageIdToTarget(entry: TelegramCachedMessageNode, targetId: number): number {
+  const entryId = Number(entry.messageId);
+  if (Number.isFinite(entryId)) {
+    return entryId - targetId;
+  }
+  return (entry.messageId ?? "").localeCompare(String(targetId));
+}
+
+function lowerBoundMessageId(entries: TelegramCachedMessageNode[], targetId: number): number {
+  let low = 0;
+  let high = entries.length;
+  while (low < high) {
+    const mid = low + Math.floor((high - low) / 2);
+    if (compareMessageIdToTarget(entries[mid], targetId) < 0) {
+      low = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  return low;
 }
 
 function readPersistedMessages(filePath: string, maxMessages: number) {
   const messages = new Map<string, TelegramCachedMessageNode>();
+  const keyScopes = new Map<string, string[]>();
+  const scopedIndexes = new Map<string, TelegramMessageCacheScopeIndex>();
   let persistedEntryCount = 0;
   if (!fs.existsSync(filePath)) {
-    return { messages, persistedEntryCount };
+    return { messages, keyScopes, scopedIndexes, persistedEntryCount };
   }
   try {
     for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
@@ -194,14 +339,18 @@ function readPersistedMessages(filePath: string, maxMessages: number) {
         continue;
       }
       persistedEntryCount++;
+      removeMessageFromIndexes(entry.key, { keyScopes, scopedIndexes });
       messages.delete(entry.key);
       messages.set(entry.key, entry.node);
-      trimMessages(messages, maxMessages);
+      indexMessage(entry.key, entry.node, { keyScopes, scopedIndexes });
+      trimMessages(messages, maxMessages, (key) =>
+        removeMessageFromIndexes(key, { keyScopes, scopedIndexes }),
+      );
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
   }
-  return { messages, persistedEntryCount };
+  return { messages, keyScopes, scopedIndexes, persistedEntryCount };
 }
 
 function serializePersistedEntry(key: string, node: TelegramCachedMessageNode): string {
@@ -259,12 +408,19 @@ function resolveMessageCacheBucket(params: {
 }): TelegramMessageCacheBucket {
   const { persistedPath, maxMessages } = params;
   if (!persistedPath) {
-    return { messages: new Map<string, TelegramCachedMessageNode>(), persistedEntryCount: 0 };
+    return {
+      messages: new Map<string, TelegramCachedMessageNode>(),
+      keyScopes: new Map<string, string[]>(),
+      scopedIndexes: new Map<string, TelegramMessageCacheScopeIndex>(),
+      persistedEntryCount: 0,
+    };
   }
   const existing = persistedMessageCacheBuckets.get(persistedPath);
   if (existing) {
     if (!fs.existsSync(persistedPath)) {
       existing.messages.clear();
+      existing.keyScopes.clear();
+      existing.scopedIndexes.clear();
       existing.persistedEntryCount = 0;
     }
     return existing;
@@ -272,6 +428,8 @@ function resolveMessageCacheBucket(params: {
   const persisted = readPersistedMessages(persistedPath, maxMessages);
   const bucket = {
     messages: persisted.messages,
+    keyScopes: persisted.keyScopes,
+    scopedIndexes: persisted.scopedIndexes,
     persistedEntryCount: persisted.persistedEntryCount,
   };
   persistedMessageCacheBuckets.set(persistedPath, bucket);
@@ -308,17 +466,12 @@ export function createTelegramMessageCache(params?: {
     chatId: string | number;
     threadId?: number;
   }) => {
-    const prefix = telegramMessageCacheKeyPrefix(params);
-    const threadId = params.threadId != null ? String(params.threadId) : undefined;
-    return Array.from(messages, ([key, node]) => ({ key, node }))
-      .filter(({ key, node }) => {
-        if (!key.startsWith(prefix)) {
-          return false;
-        }
-        return threadId === undefined || node.threadId === threadId;
-      })
-      .map(({ node }) => node)
-      .toSorted(compareCachedMessageNodes);
+    const scopeKey = telegramMessageCacheScopeKey({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      ...(params.threadId != null ? { threadId: String(params.threadId) } : {}),
+    });
+    return getSortedScopeMessages(bucket.scopedIndexes.get(scopeKey));
   };
 
   return {
@@ -328,9 +481,11 @@ export function createTelegramMessageCache(params?: {
         return null;
       }
       const key = telegramMessageCacheKey({ accountId, chatId, messageId: entry.messageId });
+      removeMessageFromIndexes(key, bucket);
       messages.delete(key);
       messages.set(key, entry);
-      trimMessages(messages, maxMessages);
+      indexMessage(key, entry, bucket);
+      trimMessages(messages, maxMessages, (key) => removeMessageFromIndexes(key, bucket));
       try {
         bucket.persistedEntryCount += appendPersistedMessage({
           key,
@@ -357,20 +512,21 @@ export function createTelegramMessageCache(params?: {
       if (!Number.isFinite(targetId)) {
         return [];
       }
-      return listChatMessages({ accountId, chatId, threadId })
-        .filter((entry) => {
-          const entryId = Number(entry.messageId);
-          return Number.isFinite(entryId) && entryId < targetId;
-        })
-        .slice(-limit);
+      const entries = listChatMessages({ accountId, chatId, threadId });
+      const endIndex = lowerBoundMessageId(entries, targetId);
+      return entries.slice(Math.max(0, endIndex - limit), endIndex);
     },
     around: ({ accountId, chatId, messageId, threadId, before, after }) => {
       if (!messageId) {
         return [];
       }
+      const targetId = Number(messageId);
+      if (!Number.isFinite(targetId)) {
+        return [];
+      }
       const entries = listChatMessages({ accountId, chatId, threadId });
-      const targetIndex = entries.findIndex((entry) => entry.messageId === messageId);
-      if (targetIndex === -1) {
+      const targetIndex = lowerBoundMessageId(entries, targetId);
+      if (entries[targetIndex]?.messageId !== messageId) {
         return [];
       }
       return entries.slice(
