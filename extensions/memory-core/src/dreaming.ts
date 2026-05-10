@@ -141,6 +141,7 @@ function formatRepairSummary(repair: {
   rewroteStore: boolean;
   removedInvalidEntries: number;
   removedStaleLock: boolean;
+  removedTempFiles: number;
 }): string {
   const actions: string[] = [];
   if (repair.rewroteStore) {
@@ -151,7 +152,10 @@ function formatRepairSummary(repair: {
   if (repair.removedStaleLock) {
     actions.push("removed stale promotion lock");
   }
-  return actions.join(", ");
+  if (repair.removedTempFiles > 0) {
+    actions.push(`removed ${repair.removedTempFiles} stale temp file(s)`);
+  }
+  return actions.length > 0 ? actions.join(", ") : "no changes";
 }
 
 function resolveManagedCronDescription(config: ShortTermPromotionDreamingConfig): string {

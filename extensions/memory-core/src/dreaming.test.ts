@@ -2425,6 +2425,47 @@ describe("short-term dreaming trigger", () => {
     expect(conceptTags).toContain("router");
   });
 
+  it("reports temp-only recall artifact repairs before dreaming promotion runs", async () => {
+    const logger = createLogger();
+    const workspaceDir = await createTempWorkspace("memory-dreaming-temp-repair-");
+    await writeDailyMemoryNote(workspaceDir, "2026-04-03", ["Keep router recovery docs current."]);
+    const dreamsDir = path.join(workspaceDir, "memory", ".dreams");
+    await fs.mkdir(dreamsDir, { recursive: true });
+    await fs.writeFile(
+      path.join(dreamsDir, "short-term-recall.json.1.1.stale.tmp"),
+      "stale temp",
+      "utf-8",
+    );
+    const staleTime = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    await fs.utimes(
+      path.join(dreamsDir, "short-term-recall.json.1.1.stale.tmp"),
+      staleTime,
+      staleTime,
+    );
+
+    const result = await runShortTermDreamingPromotionIfTriggered({
+      cleanedBody: constants.DREAMING_SYSTEM_EVENT_TEXT,
+      trigger: "heartbeat",
+      workspaceDir,
+      config: {
+        enabled: true,
+        cron: constants.DEFAULT_DREAMING_CRON_EXPR,
+        limit: 10,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+        recencyHalfLifeDays: constants.DEFAULT_DREAMING_RECENCY_HALF_LIFE_DAYS,
+        verboseLogging: false,
+      },
+      logger,
+    });
+
+    expect(result?.handled).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith(
+      expect.stringContaining("removed 1 stale temp file(s)"),
+    );
+  });
+
   it("emits detailed run logs when verboseLogging is enabled", async () => {
     const logger = createLogger();
     const workspaceDir = await createTempWorkspace("memory-dreaming-verbose-");
