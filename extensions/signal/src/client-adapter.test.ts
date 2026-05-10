@@ -241,6 +241,17 @@ describe("signalCheck", () => {
     expect(mockNativeCheck).toHaveBeenCalledWith("http://localhost:8080", 5000);
   });
 
+  it("uses the caller timeout for auto detection", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });
+
+    await signalCheck("http://auto-timeout.local:8080", 1000);
+
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://auto-timeout.local:8080", 1000);
+    expect(mockContainerCheck).toHaveBeenCalledWith("http://auto-timeout.local:8080", 1000);
+  });
+
   it("returns a retryable failure when auto detection is not ready", async () => {
     setApiMode("auto");
     mockNativeCheck.mockResolvedValue({ ok: false, status: null, error: "Connection refused" });

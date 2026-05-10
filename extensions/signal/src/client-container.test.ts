@@ -278,7 +278,7 @@ describe("containerSendMessage", () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
-      text: async () => JSON.stringify({ timestamp: 1700000000000 }),
+      text: async () => JSON.stringify({ timestamp: "1700000000000" }),
     });
 
     const result = await containerSendMessage({
@@ -302,7 +302,24 @@ describe("containerSendMessage", () => {
     );
   });
 
-  it("includes text styles when provided", async () => {
+  it("normalizes invalid send timestamps before returning", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({ timestamp: "not-a-number" }),
+    });
+
+    await expect(
+      containerSendMessage({
+        baseUrl: "http://localhost:8080",
+        account: "+14259798283",
+        recipients: ["+15550001111"],
+        message: "Hello world",
+      }),
+    ).rejects.toThrow("Signal REST send returned invalid timestamp");
+  });
+
+  it("uses container styled text mode when styles are provided", async () => {
     mockFetch.mockResolvedValue({
       ok: true,
       status: 200,
@@ -319,7 +336,31 @@ describe("containerSendMessage", () => {
 
     const callArgs = mockFetch.mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
-    expect(body["text_style"]).toEqual(["0:4:BOLD"]);
+    expect(body).toMatchObject({
+      message: "**Bold** text",
+      text_mode: "styled",
+    });
+    expect(body).not.toHaveProperty("text_style");
+  });
+
+  it("escapes unstyled formatting markers in styled container messages", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({}),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Bold * not italic",
+      textStyles: [{ start: 0, length: 4, style: "BOLD" }],
+    });
+
+    const callArgs = mockFetch.mock.calls[0];
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.message).toBe("**Bold** \\\\* not italic");
   });
 
   it("includes attachments as base64 data URIs", async () => {

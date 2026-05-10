@@ -43,6 +43,13 @@ export type ContainerWebSocketMessage = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
+  BOLD: "**",
+  ITALIC: "*",
+  STRIKETHROUGH: "~",
+  MONOSPACE: "`",
+  SPOILER: "||",
+};
 
 function normalizeBaseUrl(url: string): string {
   const trimmed = url.trim();
@@ -326,6 +333,68 @@ async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
   return results;
 }
 
+function escapeContainerStyledText(text: string): string {
+  return text.replace(/[\\*~`|]/g, (char) => `\\\\${char}`);
+}
+
+function renderContainerStyledText(
+  text: string,
+  styles: Array<{ start: number; length: number; style: string }>,
+): string {
+  const spans = styles
+    .map((style) => {
+      const marker = CONTAINER_TEXT_STYLE_MARKERS[style.style];
+      if (!marker) {
+        return null;
+      }
+      const start = Math.max(0, Math.min(style.start, text.length));
+      const end = Math.max(start, Math.min(style.start + style.length, text.length));
+      if (end <= start) {
+        return null;
+      }
+      return { start, end, marker };
+    })
+    .filter((span): span is { start: number; end: number; marker: string } => span !== null);
+
+  if (spans.length === 0) {
+    return text;
+  }
+
+  const positions = [
+    ...new Set([0, text.length, ...spans.flatMap((span) => [span.start, span.end])]),
+  ].toSorted((a, b) => a - b);
+  let rendered = "";
+  for (let i = 0; i < positions.length; i += 1) {
+    const pos = positions[i];
+    for (const span of spans
+      .filter((candidate) => candidate.end === pos)
+      .toSorted((a, b) => b.start - a.start)) {
+      rendered += span.marker;
+    }
+    for (const span of spans
+      .filter((candidate) => candidate.start === pos)
+      .toSorted((a, b) => b.end - a.end)) {
+      rendered += span.marker;
+    }
+    const next = positions[i + 1];
+    if (next !== undefined && next > pos) {
+      rendered += escapeContainerStyledText(text.slice(pos, next));
+    }
+  }
+  return rendered;
+}
+
+function parseContainerSendTimestamp(raw: unknown): number | undefined {
+  if (raw == null) {
+    return undefined;
+  }
+  const timestamp = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  if (!Number.isFinite(timestamp)) {
+    throw new Error("Signal REST send returned invalid timestamp");
+  }
+  return timestamp;
+}
+
 /**
  * Send message via bbernhard container REST API.
  */
@@ -345,9 +414,8 @@ export async function containerSendMessage(params: {
   };
 
   if (params.textStyles && params.textStyles.length > 0) {
-    payload["text_style"] = params.textStyles.map(
-      (style) => `${style.start}:${style.length}:${style.style}`,
-    );
+    payload.message = renderContainerStyledText(params.message, params.textStyles);
+    payload["text_mode"] = "styled";
   }
 
   if (params.attachments && params.attachments.length > 0) {
@@ -355,14 +423,15 @@ export async function containerSendMessage(params: {
     payload.base64_attachments = await filesToBase64DataUris(params.attachments);
   }
 
-  const result = await containerRestRequest<{ timestamp?: number }>(
+  const result = await containerRestRequest<{ timestamp?: unknown }>(
     "/v2/send",
     { baseUrl: params.baseUrl, timeoutMs: params.timeoutMs },
     "POST",
     payload,
   );
 
-  return result ?? {};
+  const timestamp = parseContainerSendTimestamp(result?.timestamp);
+  return timestamp === undefined ? {} : { timestamp };
 }
 
 /**

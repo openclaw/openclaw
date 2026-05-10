@@ -51,6 +51,7 @@ function formatErrorMessage(error: unknown): string {
 
 async function resolveAutoApiMode(
   baseUrl: string,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
   options: { account?: string; requireContainerReceive?: boolean } = {},
 ): Promise<"native" | "container"> {
   const cached = detectedModeCache.get(baseUrl);
@@ -63,7 +64,7 @@ async function resolveAutoApiMode(
       return cached.mode;
     }
   }
-  const detected = await detectSignalApiMode(baseUrl, DEFAULT_TIMEOUT_MS, options);
+  const detected = await detectSignalApiMode(baseUrl, timeoutMs, options);
   detectedModeCache.set(baseUrl, {
     mode: detected,
     expiresAt: Date.now() + MODE_CACHE_TTL_MS,
@@ -79,6 +80,7 @@ async function resolveApiModeForOperation(params: {
   accountId?: string;
   account?: string;
   requireContainerReceive?: boolean;
+  timeoutMs?: number;
 }): Promise<"native" | "container"> {
   const configured = getConfiguredApiMode();
 
@@ -86,7 +88,7 @@ async function resolveApiModeForOperation(params: {
     return configured;
   }
 
-  return resolveAutoApiMode(params.baseUrl, {
+  return resolveAutoApiMode(params.baseUrl, params.timeoutMs ?? DEFAULT_TIMEOUT_MS, {
     account: params.account,
     requireContainerReceive: params.requireContainerReceive,
   });
@@ -135,6 +137,7 @@ export async function signalRpcRequest<T = unknown>(
     baseUrl: opts.baseUrl,
     accountId: opts.accountId,
     account: typeof params?.account === "string" ? params.account : undefined,
+    timeoutMs: opts.timeoutMs,
   });
   if (mode === "native") {
     return nativeRpcRequest<T>(method, params, opts);
@@ -152,7 +155,7 @@ export async function signalCheck(
   const configured = getConfiguredApiMode();
   const mode =
     configured === "auto"
-      ? await resolveAutoApiMode(baseUrl).catch((error: unknown) => {
+      ? await resolveAutoApiMode(baseUrl, timeoutMs).catch((error: unknown) => {
           return { ok: false, status: null, error: formatErrorMessage(error) } as const;
         })
       : configured;
@@ -183,6 +186,7 @@ export async function streamSignalEvents(params: {
     accountId: params.accountId,
     account: params.account,
     requireContainerReceive: true,
+    timeoutMs: params.timeoutMs,
   });
 
   if (mode === "container") {
@@ -221,6 +225,7 @@ export async function fetchAttachment(params: {
     baseUrl: params.baseUrl,
     accountId: params.accountId,
     account: params.account,
+    timeoutMs: params.timeoutMs,
   });
   if (mode === "container") {
     return containerFetchAttachment(params.attachmentId, {
