@@ -16,6 +16,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Cron/webhooks: let isolated `/hooks/agent` runs reuse approved stable `sessionKey` sessions instead of always forcing a fresh isolated session. Fixes #70894. Thanks @dannylin108.
 - Codex/media understanding: support `codex/*` image models through bounded Codex app-server image turns, while keeping `openai-codex/*` on the OpenAI Codex OAuth route and validating app-server responses against generated protocol contracts. Fixes #70201.
 - Providers/OpenAI Codex: synthesize the `openai-codex/gpt-5.5` OAuth model row when Codex catalog discovery omits it, so cron and subagent runs do not fail with `Unknown model` while the account is authenticated.
 - Models/CLI: keep `openclaw models list` read-only while still showing eligible configured-provider rows, so listing models no longer rewrites per-agent `models.json`. (#70847) Thanks @shakkernerd.
