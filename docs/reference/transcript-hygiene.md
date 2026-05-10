@@ -185,6 +185,26 @@ inter-session user turns that only have provenance metadata.
   OpenAI-compatible Anthropic model payloads when reasoning is enabled, matching
   direct Anthropic and Cloudflare Anthropic replay behavior.
 
+**GitHub Copilot**
+
+- Routing split: Claude-family Copilot model IDs go through `anthropic-messages`;
+  every other Copilot model ID (GPT-family and `o*` reasoning models) goes through
+  `openai-responses`.
+- Claude-family Copilot models follow the standard Anthropic replay rules above
+  (thinking signature stripping, no historical reasoning drop).
+- Non-Claude Copilot models (GPT-family and `o*` reasoning models on the
+  `openai-responses` route) drop historical reasoning from the replay copy
+  (`dropReasoningFromHistory`). Copilot's enterprise endpoint rejects replayed
+  encrypted reasoning payloads with `Encrypted content item_id did not match`
+  even when the IDs are connection-bound, so we never replay prior-turn
+  `thinkingSignature` reasoning back to Copilot.
+- This is intentionally narrower than the native OpenAI Responses behavior:
+  native OpenAI Responses keeps replayable reasoning item payloads (including
+  encrypted empty-summary items) so manual/WebSocket replay can resume `rs_*`
+  state. Copilot does not honor that contract for non-Claude models, so we
+  diverge from native OpenAI Responses on this single point.
+- Image sanitization applies through the global rule.
+
 **Everything else**
 
 - Image sanitization only.
