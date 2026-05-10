@@ -60,6 +60,22 @@
     "target": "频道消息 API"
   },
   {
+    "source": "Channel ingress API",
+    "target": "频道入口 API"
+  },
+  {
+    "source": "Channel access cleanup",
+    "target": "频道访问清理"
+  },
+  {
+    "source": "Ingress core shrink plan",
+    "target": "入口核心精简计划"
+  },
+  {
+    "source": "Ingress core shrink",
+    "target": "入口核心精简"
+  },
+  {
     "source": "Talk mode",
     "target": "Talk 模式"
   },

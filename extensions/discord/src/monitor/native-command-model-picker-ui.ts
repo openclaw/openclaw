@@ -4,7 +4,7 @@ import {
   serializeCommandArgs,
   type ChatCommandDefinition,
   type CommandArgs,
-} from "openclaw/plugin-sdk/command-auth";
+} from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
