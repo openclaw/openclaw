@@ -713,8 +713,6 @@ function Main {
         return $true
     }
 
-    Remove-LegacySubmodule -RepoDir $RepoDir
-
     # Check for existing installation
     $isUpgrade = Check-ExistingOpenClaw
 

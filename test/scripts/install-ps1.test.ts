@@ -96,6 +96,13 @@ describe("install.ps1 failure handling", () => {
     );
   });
 
+  it("cleans legacy git submodules only from the selected git checkout", () => {
+    const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
+    const mainBody = extractFunctionBody(source, "Main");
+    expect(gitInstallBody).toContain("Remove-LegacySubmodule -RepoDir $RepoDir");
+    expect(mainBody).not.toContain("Remove-LegacySubmodule");
+  });
+
   runIfPowerShell("creates a temp npm working directory", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");
