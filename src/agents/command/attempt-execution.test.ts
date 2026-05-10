@@ -227,7 +227,7 @@ describe("buildClaudeCliFallbackContextPrelude", () => {
     expect(buildClaudeCliFallbackContextPrelude({ cliSessionId: "  " })).toBe("");
   });
 
-  it("returns empty string when the Claude session file does not exist", async () => {
+  it("returns empty string when the Claude history JSONL does not exist", async () => {
     const tmpHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-fallback-prelude-"));
     try {
       expect(

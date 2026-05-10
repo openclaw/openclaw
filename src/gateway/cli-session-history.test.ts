@@ -5,9 +5,9 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   augmentChatHistoryWithCliSessionImports,
   mergeImportedChatHistoryMessages,
+  resolveClaudeCliHistoryJsonlPath,
   readClaudeCliFallbackSeed,
   readClaudeCliSessionMessages,
-  resolveClaudeCliSessionFilePath,
 } from "./cli-session-history.js";
 
 const ORIGINAL_HOME = process.env.HOME;
@@ -153,7 +153,7 @@ describe("cli session history", () => {
 
   it("reads claude-cli session messages from the Claude projects store", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
-      expect(resolveClaudeCliSessionFilePath({ cliSessionId: sessionId, homeDir })).toBe(filePath);
+      expect(resolveClaudeCliHistoryJsonlPath({ cliSessionId: sessionId, homeDir })).toBe(filePath);
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
       expect(messages).toHaveLength(3);
       expectFields(messages[0], {
@@ -427,7 +427,7 @@ describe("readClaudeCliFallbackSeed", () => {
     await fs.writeFile(file, `${lines.map((line) => JSON.stringify(line)).join("\n")}\n`, "utf-8");
   }
 
-  it("returns undefined when the Claude session file does not exist", () => {
+  it("returns undefined when the Claude history JSONL does not exist", () => {
     const seed = readClaudeCliFallbackSeed({ cliSessionId: SESSION_ID });
     expect(seed).toBeUndefined();
   });
@@ -589,7 +589,7 @@ describe("readClaudeCliFallbackSeed", () => {
     expect(JSON.stringify(seed?.recentTurns)).not.toContain("mid-window turn");
   });
 
-  it("returns undefined when the session file is empty or has no usable content", async () => {
+  it("returns undefined when the Claude history JSONL is empty or has no usable content", async () => {
     await writeJsonl([
       // Sidechain entries are filtered out by the underlying parser.
       {

@@ -275,7 +275,7 @@ function parseClaudeCliHistoryEntry(
   ) as TranscriptLikeMessage;
 }
 
-export function resolveClaudeCliSessionFilePath(params: {
+export function resolveClaudeCliHistoryJsonlPath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
@@ -303,7 +303,7 @@ export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
 }): TranscriptLikeMessage[] {
-  const filePath = resolveClaudeCliSessionFilePath(params);
+  const filePath = resolveClaudeCliHistoryJsonlPath(params);
   if (!filePath) {
     return [];
   }
@@ -382,7 +382,7 @@ export function readClaudeCliFallbackSeed(params: {
   cliSessionId: string;
   homeDir?: string;
 }): ClaudeCliFallbackSeed | undefined {
-  const filePath = resolveClaudeCliSessionFilePath(params);
+  const filePath = resolveClaudeCliHistoryJsonlPath(params);
   if (!filePath) {
     return undefined;
   }
