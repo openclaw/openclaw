@@ -240,22 +240,6 @@ body {
   gap: 12px;
 }
 
-.download-json-btn {
-  font-size: 10px;
-  padding: 2px 8px;
-  background: var(--container-bg);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  color: var(--text);
-  cursor: pointer;
-  font-family: inherit;
-}
-
-.download-json-btn:hover {
-  background: var(--hover);
-  border-color: var(--borderAccent);
-}
-
 /* Header */
 .header {
   background: var(--container-bg);

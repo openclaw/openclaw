@@ -51,10 +51,10 @@ This migration has one canonical runtime shape:
   TTS, memory hooks, subagents, plugin command routing, protocol boundaries, and
   hooks must pass `{agentId, sessionId}` through the runtime.
 - Tests should seed and assert SQLite transcript rows through
-  `{agentId, sessionId}`. Tests that only prove JSONL path forwarding, caller-supplied
-  locator preservation, or transcript-file compatibility should be deleted
-  unless they cover doctor import, export/debug materialization, or protocol
-  shape.
+  `{agentId, sessionId}`. Tests that only prove JSONL path forwarding,
+  caller-supplied locator preservation, or transcript-file compatibility should
+  be deleted unless they cover doctor import, non-session support/debug
+  materialization, or protocol shape.
 - `runEmbeddedPiAgent(...)`, prepared worker runs, and the inner embedded
   attempt must not accept transcript locators. They open the SQLite transcript
   manager by `{agentId, sessionId}` and pass that manager to the internalized
@@ -275,8 +275,8 @@ The remaining cleanup is mostly consolidation and deletion:
   records legacy source paths in durable migration rows instead.
 - Runtime transcript lookup no longer scans JSONL byte offsets or probes legacy
   transcript files. Gateway chat/media/history paths read transcript rows from
-  SQLite; JSONL is now a legacy doctor input or in-memory export
-  encoding, not a runtime state file.
+  SQLite; session JSONL is now only a legacy doctor input, not a runtime state
+  or export format.
 - Runtime transcript store APIs resolve SQLite scope, not filesystem paths. The
   old `resolve...ForPath` helper and unused `transcriptPath` write options are
   gone from runtime callers.
@@ -295,6 +295,9 @@ The remaining cleanup is mostly consolidation and deletion:
   must not receive derived `sqlite-transcript://...` handles. Export/debug code
   can materialize files from rows explicitly, but it does not feed those names
   back into runtime identity.
+- `/export-session` reads transcript rows from SQLite and writes the requested
+  standalone HTML view only. The embedded viewer no longer reconstructs or
+  downloads session JSONL from those rows.
 - Context-engine delegation no longer parses a transcript locator to recover
   agent identity. The prepared runtime context carries the resolved `agentId`
   into the built-in compaction bridge.
@@ -1109,8 +1112,8 @@ Make every agent data stream database-native:
 - ACP parent stream logs become rows, not `.acp-stream.jsonl` files. Done.
 - ACP spawn setup no longer persists transcript JSONL paths. Done.
 - Runtime trajectory capture writes event rows/artifacts directly. The explicit
-  support/export command can still produce JSONL bundles as an export format.
-  Done.
+  support/export command can still produce support-bundle JSONL artifacts as an
+  export format, but session export does not recreate session JSONL. Done.
 - Disk workspaces stay on disk when configured as disk mode.
 - VFS scratch and experimental VFS-only workspace mode use the agent DB.
 
@@ -1278,7 +1281,7 @@ keeps only the version-1 schema plus doctor file-to-database import.
    - Record backup run metadata in SQLite. Done via the shared `backup_runs`
      table with archive path, status, and manifest JSON.
    - Include VFS/workspace export only when requested; do not export session
-     internals as JSON.
+     internals as JSON or JSONL.
 
 9. Delete obsolete tests and code.
 
