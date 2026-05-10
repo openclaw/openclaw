@@ -203,6 +203,17 @@ Use `--dry-run` before user-visible writes when the exact bytes matter. The
 substrate preserves byte-identical output for parse/emit round-trips, but a
 mutation can canonicalize the edited region or file depending on kind.
 
+## Extension API shape
+
+Plugin authors can stay on the document-level surface for ordinary use:
+`parseOcDocument(raw, { fileName })`, `resolveOcPath(ast, path)`,
+`setOcPath(ast, path, value)`, and `emitOcDocument(ast)`. The document parser
+infers markdown, JSONC, or JSONL from the filename, while emit dispatches from
+the AST kind.
+
+The per-kind parsers and emitters remain available for low-level callers that
+already need concrete markdown, JSONC, or JSONL behavior.
+
 ## Examples
 
 ```bash

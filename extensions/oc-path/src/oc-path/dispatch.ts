@@ -1,11 +1,7 @@
 /**
- * Cross-kind utilities. `inferKind` is a convention helper for callers
- * who want to map filename to the parser they should use before calling
- * the universal verbs (`resolveOcPath`, `findOcPaths`, `setOcPath`).
- *
- * Encoding remains per-kind (`parseMd`, `parseJsonc`, `parseJsonl`),
- * while addressing and mutation dispatch are universal once callers
- * have an AST carrying its `kind` discriminator.
+ * Cross-kind utilities. `inferKind` backs the document-level parser in
+ * `document.ts`, so callers can parse by filename before using the
+ * universal verbs (`resolveOcPath`, `findOcPaths`, `setOcPath`).
  *
  * @module @openclaw/oc-path/dispatch
  */

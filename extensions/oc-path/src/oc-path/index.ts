@@ -3,14 +3,16 @@
  *
  * **Strategic frame**: workspace files are byte-stable and addressable
  * via the `oc://` scheme — the addressing scheme is universal across
- * file kinds (md / jsonc / jsonl). Encoding (parse/emit) is per-kind;
- * addressing (resolve/set) is universal.
+ * file kinds (md / jsonc / jsonl). Callers can parse / emit a document
+ * by filename and then use the universal addressing verbs.
  *
  * **Public verbs**:
  *   - One `resolveOcPath(ast, path)` - concrete, kind-dispatched
  *   - One `findOcPaths(ast, pattern)` - multi-match, kind-dispatched
  *   - One `setOcPath(ast, path, value)` - concrete mutation / insertion
- *   - Per-kind `parseXxx` / `emitXxx` (parsing is per-kind by nature)
+ *   - One `parseOcDocument(raw, { fileName })` - kind-inferred parse
+ *   - One `emitOcDocument(ast)` - kind-dispatched emit
+ *   - Per-kind `parseXxx` / `emitXxx` for low-level callers
  *
  * `setOcPath` accepts a string value; the substrate coerces based on
  * AST shape at the path location. The OcPath syntax encodes the
@@ -27,21 +29,14 @@
 /**
  * SDK version this build of `@openclaw/oc-path` exposes. Bumped on
  * every breaking change to AST shape, OcPath syntax, or universal
- * verbs (`resolveOcPath`, `setOcPath`, `findOcPaths`, `parseXxx`,
- * `emitXxx`). Plugin packs that depend on the substrate declare the
+ * verbs (`resolveOcPath`, `setOcPath`, `findOcPaths`, `parseOcDocument`,
+ * `emitOcDocument`). Plugin packs that depend on the substrate declare the
  * version they were authored against and the host warns on mismatch.
  */
 export const SDK_VERSION = "0.1.0";
 
 // AST types
-export type {
-  AstBlock,
-  AstItem,
-  Diagnostic,
-  FrontmatterEntry,
-  ParseResult,
-  MdAst,
-} from "./ast.js";
+export type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult, MdAst } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 export type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
 
@@ -77,7 +72,15 @@ export {
 // Callers that need their behavior should round-trip through
 // `parseOcPath` / `formatOcPath` / `findOcPaths`.
 
-// Per-kind parse / emit (encoding is genuinely per-kind)
+// Document parse / emit (filename-inferred parser; AST-kind emitter)
+export { OcDocumentKindError, emitOcDocument, parseOcDocument } from "./document.js";
+export type {
+  EmitOcDocumentOptions,
+  ParseOcDocumentOptions,
+  ParseOcDocumentResult,
+} from "./document.js";
+
+// Per-kind parse / emit (for callers that already know the concrete kind)
 export { parseMd } from "./parse.js";
 export { parseJsonc } from "./jsonc/parse.js";
 export { parseJsonl } from "./jsonl/parse.js";
