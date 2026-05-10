@@ -1,0 +1,310 @@
+/**
+ * Wall-tablet kiosk styles.
+ *
+ * The `.kiosk-mode` class is set on `<html>` while the kiosk view is
+ * mounted (kiosk-shell.ts toggles it). It hides the standard control-UI
+ * shell, removes hover-only affordances, and bumps touch targets.
+ *
+ * Design tokens come from base.css; this file only reshapes layout for
+ * the kiosk surface and never invents new colors.
+ */
+
+:root.kiosk-mode .shell,
+:root.kiosk-mode .topbar,
+:root.kiosk-mode .nav,
+:root.kiosk-mode .dashboard-header {
+  display: none !important;
+}
+
+:root.kiosk-mode {
+  background: var(--bg);
+  color: var(--text);
+}
+
+:root.kiosk-mode body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 18px;
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+  touch-action: manipulation;
+  overscroll-behavior: none;
+}
+
+.kiosk-shell {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  min-height: 100vh;
+  padding: 24px clamp(24px, 4vw, 48px);
+  gap: 24px;
+  box-sizing: border-box;
+}
+
+.kiosk-shell__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.kiosk-shell__title {
+  margin: 0;
+  font-size: clamp(28px, 3vw, 40px);
+  font-weight: 600;
+  color: var(--text-strong);
+  letter-spacing: 0.5px;
+}
+
+.kiosk-shell__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  font-size: 14px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  color: var(--muted);
+  min-height: 44px;
+  box-sizing: border-box;
+}
+
+.kiosk-shell__pill::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+
+.kiosk-shell__pill--live {
+  color: #43ff00;
+  border-color: rgba(67, 255, 0, 0.35);
+  background: rgba(67, 255, 0, 0.08);
+}
+
+.kiosk-shell__pill--live::before {
+  background: #43ff00;
+  box-shadow: 0 0 12px rgba(67, 255, 0, 0.6);
+}
+
+.kiosk-shell__pill--attaching {
+  color: var(--accent);
+  border-color: rgba(255, 92, 92, 0.35);
+  background: rgba(255, 92, 92, 0.08);
+}
+
+.kiosk-shell__pill--attaching::before {
+  background: var(--accent);
+}
+
+.kiosk-shell__pill--degraded {
+  color: #ff5c5c;
+  border-color: rgba(255, 92, 92, 0.45);
+  background: rgba(255, 92, 92, 0.1);
+}
+
+.kiosk-shell__pill--degraded::before {
+  background: #ff5c5c;
+  animation: kiosk-pulse 1s ease-in-out infinite;
+}
+
+@keyframes kiosk-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
+
+.kiosk-shell__body {
+  display: block;
+}
+
+.kiosk-shell__placeholder {
+  display: grid;
+  place-items: center;
+  height: 100%;
+  color: var(--muted);
+  font-size: 18px;
+}
+
+/* -- Display primitive base styles (used by kiosk-* components) -- */
+
+.kiosk-card {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 16px;
+  display: grid;
+  gap: 8px;
+  box-sizing: border-box;
+}
+
+.kiosk-tile {
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  min-height: 64px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 18px;
+  color: var(--text);
+  transition: background 120ms ease, border-color 120ms ease, transform 60ms ease;
+}
+
+.kiosk-tile:active {
+  transform: scale(0.98);
+}
+
+.kiosk-tile[data-state="on"] {
+  border-color: rgba(67, 255, 0, 0.45);
+  background: rgba(67, 255, 0, 0.08);
+}
+
+.kiosk-tile[data-state="off"] {
+  border-color: var(--border);
+}
+
+.kiosk-tile[data-pending="true"] {
+  opacity: 0.7;
+}
+
+.kiosk-tile[data-error="true"] {
+  border-color: rgba(255, 92, 92, 0.6);
+  background: rgba(255, 92, 92, 0.12);
+}
+
+.kiosk-tile__icon {
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+}
+
+.kiosk-tile__name {
+  flex: 1 1 auto;
+  font-weight: 600;
+}
+
+.kiosk-tile__state {
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: lowercase;
+}
+
+.kiosk-tile__state--on {
+  color: #43ff00;
+}
+
+.kiosk-tile__state--off {
+  color: var(--muted);
+}
+
+.kiosk-gauge {
+  display: grid;
+  place-items: center;
+  position: relative;
+  aspect-ratio: 1 / 1;
+  min-width: 0;
+}
+
+.kiosk-gauge svg {
+  width: 100%;
+  height: auto;
+}
+
+.kiosk-gauge__numeral {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  font-size: clamp(32px, 4vw, 56px);
+  font-weight: 700;
+  color: var(--text-strong);
+}
+
+.kiosk-gauge__unit {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 18%;
+  font-size: 14px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.kiosk-gauge__name {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: end center;
+  padding-bottom: 0.5em;
+  font-size: 14px;
+  color: var(--muted);
+  text-align: center;
+  white-space: nowrap;
+}
+
+.kiosk-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 14px;
+  min-height: 36px;
+  box-sizing: border-box;
+}
+
+.kiosk-badge__name {
+  font-weight: 600;
+}
+
+.kiosk-badge__state {
+  color: var(--muted);
+}
+
+.kiosk-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.kiosk-grid--gauges-4 {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.kiosk-grid--gauges-5 {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.kiosk-grid--gauges-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.kiosk-grid--tiles {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}
+
+.kiosk-grid--badges {
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+}
+
+@media (max-width: 900px) {
+  .kiosk-grid--gauges-4,
+  .kiosk-grid--gauges-5 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
