@@ -234,6 +234,9 @@ export function buildGroupChatContext(params: {
     lines.push(
       "Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat.",
     );
+    lines.push(
+      "If directly addressed, asked for status, or completing requested work where a visible update is expected, call message(action=send) with the user-facing answer; do not put that answer only in normal final text.",
+    );
   } else {
     lines.push(
       "Your replies are automatically sent to this group chat. Do not use the message tool to send to this same group - just reply normally.",
@@ -299,6 +302,9 @@ export function buildDirectChatContext(params: {
   if (messageToolOnly) {
     lines.push(
       "Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation.",
+    );
+    lines.push(
+      "If directly asked a question, asked for status, or completing requested work where a visible update is expected, call message(action=send) with the user-facing answer; do not put that answer only in normal final text.",
     );
     lines.push(
       "If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.",
