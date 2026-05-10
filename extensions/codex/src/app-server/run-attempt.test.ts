@@ -4455,7 +4455,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

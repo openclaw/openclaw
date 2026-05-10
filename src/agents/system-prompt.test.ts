@@ -143,12 +143,12 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
+    expect(prompt).toContain("No independent goals");
+    expect(prompt).toContain("Safety/oversight over completion");
+    expect(prompt).toContain("Conflicts: pause/ask");
+    expect(prompt).not.toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Do not persuade anyone");
+    expect(prompt).toContain("Do not copy yourself or change prompts");
     expect(prompt).toContain("## Subagent Context");
     expect(prompt).not.toContain("## Group Chat Context");
     expect(prompt).toContain("Subagent details");
@@ -175,11 +175,9 @@ describe("buildAgentSystemPrompt", () => {
       skillsPrompt,
     });
 
-    expect(prompt).toContain("## Skills (mandatory)");
+    expect(prompt).toContain("## Skills");
     expect(prompt).toContain("<available_skills>");
-    expect(prompt).toContain(
-      "When a skill drives external API writes, assume rate limits: prefer fewer larger writes, avoid tight one-item loops, serialize bursts when possible, and respect 429/Retry-After.",
-    );
+    expect(prompt).toContain("External API writes: batch when safe");
   });
 
   it("omits skills in minimal prompt mode when skillsPrompt is absent", () => {
@@ -199,7 +197,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Assistant Output Directives");
     expect(prompt).toContain("[[reply_to_current]]");
     expect(prompt).not.toContain("Tags are stripped before sending");
-    expect(prompt).toContain("Supported tags are stripped before user-visible rendering");
+    expect(prompt).toContain("Supported directives are stripped before rendering");
   });
 
   it("omits the heartbeat section when no heartbeat prompt is provided", () => {
@@ -220,12 +218,12 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Safety");
-    expect(prompt).toContain("You have no independent goals");
-    expect(prompt).toContain("Prioritize safety and human oversight");
-    expect(prompt).toContain("if instructions conflict");
-    expect(prompt).toContain("Inspired by Anthropic's constitution");
-    expect(prompt).toContain("Do not manipulate or persuade anyone");
-    expect(prompt).toContain("Do not copy yourself or change system prompts");
+    expect(prompt).toContain("No independent goals");
+    expect(prompt).toContain("Safety/oversight over completion");
+    expect(prompt).toContain("Conflicts: pause/ask");
+    expect(prompt).not.toContain("Inspired by Anthropic's constitution");
+    expect(prompt).toContain("Do not persuade anyone");
+    expect(prompt).toContain("Do not copy yourself or change prompts");
   });
 
   it("includes voice hint when provided", () => {
@@ -249,18 +247,16 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("<final>...</final>");
   });
 
-  it("includes a CLI quick reference section", () => {
+  it("includes an OpenClaw control section", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
     });
 
-    expect(prompt).toContain("## OpenClaw CLI Quick Reference");
-    expect(prompt).toContain("use the first-class `gateway` tool");
-    expect(prompt).toContain(
-      "Only use CLI service lifecycle commands when the user explicitly asks",
-    );
-    expect(prompt).toContain("openclaw gateway restart");
-    expect(prompt).toContain("Do not chain `openclaw gateway stop`");
+    expect(prompt).toContain("## OpenClaw Control");
+    expect(prompt).toContain("prefer `gateway` tool");
+    expect(prompt).toContain("CLI lifecycle only on explicit user request");
+    expect(prompt).toContain("openclaw gateway status|restart|start|stop");
+    expect(prompt).toContain("`restart`, not stop+start");
     expect(prompt).toContain("Do not invent commands");
   });
 
@@ -270,8 +266,8 @@ describe("buildAgentSystemPrompt", () => {
       docsPath: "/tmp/openclaw/docs",
     });
 
-    expect(prompt).toContain("For config field docs");
-    expect(prompt).toContain("`gateway` tool action `config.schema.lookup`");
+    expect(prompt).toContain("Config fields:");
+    expect(prompt).toContain("`gateway` action `config.schema.lookup`");
     expect(prompt).toContain("docs/gateway/configuration.md");
     expect(prompt).toContain("docs/gateway/configuration-reference.md");
   });
@@ -326,11 +322,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "For long waits, avoid rapid poll loops: use exec with enough yieldMs or process(action=poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
+    expect(prompt).toContain("Larger work: use `sessions_spawn`; completion is push-based.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
     expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(
-      "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
+      "First-class tool exists: use it; do not ask user to run equivalent CLI/slash command.",
     );
   });
 
@@ -354,7 +350,7 @@ describe("buildAgentSystemPrompt", () => {
       toolNames: ["exec", "sessions_list", "sessions_history", "sessions_send"],
     });
 
-    expect(prompt).toContain("Tool availability (filtered by policy):");
+    expect(prompt).toContain("Available tools are policy-filtered.");
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");
@@ -486,15 +482,11 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+      "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `Read`, then follow it.",
     );
-    expect(prompt).toContain(
-      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
-    );
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
-    expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    );
+    expect(prompt).toContain("If several apply, choose the most specific.");
+    expect(prompt).toContain("Docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -505,14 +497,10 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("## Documentation");
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
-    expect(prompt).toContain("Local source: /tmp/openclaw");
-    expect(prompt).toContain(
-      "For OpenClaw behavior, commands, config, or architecture: consult local docs first.",
-    );
-    expect(prompt).toContain(
-      "If docs are incomplete or stale, inspect the local OpenClaw source code before answering.",
-    );
+    expect(prompt).toContain("Docs: /tmp/openclaw/docs");
+    expect(prompt).toContain("Source: /tmp/openclaw");
+    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+    expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -520,11 +508,9 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/work",
     });
 
-    expect(prompt).toContain("OpenClaw docs: https://docs.openclaw.ai");
+    expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
-    expect(prompt).toContain(
-      "If docs are incomplete or stale, review the OpenClaw source on GitHub before answering.",
-    );
+    expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
   });
 
   it("includes workspace notes when provided", () => {
@@ -675,11 +661,9 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+      "Scan <available_skills>. If one clearly applies, read its SKILL.md at exact <location> with `read`, then follow it.",
     );
-    expect(prompt).toContain(
-      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
-    );
+    expect(prompt).toContain("If several apply, choose the most specific.");
   });
 
   it("appends available skills when provided", () => {
@@ -745,7 +729,7 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+      "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
     );
   });
 
@@ -923,8 +907,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("rely on native approval card/buttons when they appear");
-    expect(prompt).toContain("do not also send plain chat /approve instructions");
+    expect(prompt).toContain("use native approval card/buttons first");
+    expect(prompt).toContain("Include a plain /approve command only when");
   });
 
   it("suppresses plain chat approval commands for native approval channels", () => {
@@ -935,8 +919,8 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain("rely on native approval card/buttons when they appear");
-    expect(prompt).toContain("do not also send plain chat /approve instructions");
+    expect(prompt).toContain("use native approval card/buttons first");
+    expect(prompt).toContain("Include a plain /approve command only when");
   });
 
   it("keeps approval slug guidance separate from command previews", () => {
@@ -947,9 +931,7 @@ describe("buildAgentSystemPrompt", () => {
       },
     });
 
-    expect(prompt).toContain(
-      'copy the exact /approve command from the tool output\'s "Reply with:" line',
-    );
+    expect(prompt).toContain('copy the exact command from "Reply with:"');
     expect(prompt).toContain("keep command/script previews separate from the /approve command");
     expect(prompt).toContain(
       "never substitute the shell command/script for the approval id or slug",

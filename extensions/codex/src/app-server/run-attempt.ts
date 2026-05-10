@@ -2249,9 +2249,7 @@ function renderCodexWorkspaceBootstrapInstructions(
     "The following project context files have been loaded:",
   ];
   if (hasSoulFile) {
-    lines.push(
-      "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
-    );
+    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
   }
   lines.push("");
   for (const file of files) {

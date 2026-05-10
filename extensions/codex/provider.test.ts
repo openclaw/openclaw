@@ -348,7 +348,7 @@ describe("codex provider", () => {
     ).toEqual({
       stablePrefix: CODEX_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: expect.stringContaining("This is a live chat, not a memo."),
+        interaction_style: expect.stringContaining("Live chat tone: short, natural, human."),
       },
     });
     expect(
@@ -356,7 +356,7 @@ describe("codex provider", () => {
         provider: "codex",
         modelId: "gpt-5.4",
       } as never)?.sectionOverrides?.interaction_style,
-    ).not.toContain("The purpose of heartbeats is to make you feel magical and proactive.");
+    ).not.toContain("Use heartbeats to create useful proactive progress");
   });
 
   it("does not add the GPT-5 prompt overlay to non-GPT-5 Codex provider runs", () => {
