@@ -1,9 +1,13 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { withTempDir } from "../../../test-helpers/temp-dir.js";
 import {
   collectCodexRouteWarnings,
   maybeRepairCodexRoutes,
+  maybeRepairCodexSessionRoutes,
   repairCodexSessionStoreRoutes,
 } from "./codex-route-warnings.js";
 
@@ -171,6 +175,56 @@ describe("collectCodexRouteWarnings", () => {
       updatedAt: 2,
       modelProvider: "openai",
       agentRuntimeOverride: "pi",
+    });
+  });
+
+  it("discovers fallback-notice-only sessions for stale Codex cleanup", async () => {
+    await withTempDir({ prefix: "openclaw-codex-session-routes-" }, async (dir) => {
+      const stateDir = path.join(dir, "state");
+      const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
+      const storePath = path.join(sessionsDir, "sessions.json");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        storePath,
+        JSON.stringify(
+          {
+            fallbackOnly: {
+              sessionId: "s-fallback",
+              updatedAt: 1,
+              modelProvider: "anthropic",
+              model: "anthropic/claude-sonnet-4-6",
+              fallbackNoticeSelectedModel: "openai-codex/gpt-5.4",
+              fallbackNoticeActiveModel: "openai-codex/gpt-5.5",
+              fallbackNoticeReason: "legacy-codex-route",
+              agentRuntimeOverride: "codex",
+            },
+          },
+          null,
+          2,
+        ),
+        "utf8",
+      );
+
+      const result = await maybeRepairCodexSessionRoutes({
+        cfg: {},
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        shouldRepair: true,
+      });
+
+      expect(result).toMatchObject({
+        scannedStores: 1,
+        repairedStores: 1,
+        repairedSessions: 1,
+        warnings: [],
+      });
+      const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
+        string,
+        SessionEntry
+      >;
+      expect(store.fallbackOnly.fallbackNoticeSelectedModel).toBeUndefined();
+      expect(store.fallbackOnly.fallbackNoticeActiveModel).toBeUndefined();
+      expect(store.fallbackOnly.fallbackNoticeReason).toBeUndefined();
+      expect(store.fallbackOnly.agentRuntimeOverride).toBeUndefined();
     });
   });
 });

@@ -169,18 +169,20 @@ Common command routing:
 | Send Codex feedback only        | `/codex diagnostics [note]`             |
 | Start an ACP/acpx task          | ACP/acpx session commands, not `/codex` |
 
-| Use case                                             | Configure                                                        | Verify                                  | Notes                              |
-| ---------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ---------------------------------- |
-| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*` plus enabled `codex` plugin                       | `/status` shows `Runtime: OpenAI Codex` | Recommended path                   |
-| Fail closed if Codex is unavailable                  | Provider or model `agentRuntime.id: "codex"`                     | Turn fails instead of PI fallback       | Use for Codex-only deployments     |
-| Direct OpenAI API-key traffic through PI             | Provider or model `agentRuntime.id: "pi"` and normal OpenAI auth | `/status` shows PI runtime              | Use only when PI is intentional    |
-| Legacy config                                        | `openai-codex/gpt-*`                                             | `openclaw doctor --fix` rewrites it     | Do not write new config this way   |
-| ACP/acpx Codex adapter                               | ACP `sessions_spawn({ runtime: "acp" })`                         | ACP task/session status                 | Separate from native Codex harness |
+| Use case                                             | Configure                                                        | Verify                                  | Notes                                             |
+| ---------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ------------------------------------------------- |
+| ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*` plus enabled `codex` plugin                       | `/status` shows `Runtime: OpenAI Codex` | Recommended path                                  |
+| Fail closed if Codex is unavailable                  | Provider or model `agentRuntime.id: "codex"`                     | Turn fails instead of PI fallback       | Use for Codex-only deployments                    |
+| Direct OpenAI API-key traffic through PI             | Provider or model `agentRuntime.id: "pi"` and normal OpenAI auth | `/status` shows PI runtime              | Use only when PI is intentional                   |
+| Explicit Codex provider route                        | `openai-codex/gpt-*`                                             | `openclaw doctor --fix` preserves it    | Use when the provider id must stay on Codex OAuth |
+| ACP/acpx Codex adapter                               | ACP `sessions_spawn({ runtime: "acp" })`                         | ACP task/session status                 | Separate from native Codex harness                |
 
-`agents.defaults.imageModel` follows the same prefix split. Use `openai/gpt-*`
-for the normal OpenAI route and `codex/gpt-*` only when image understanding
-should run through a bounded Codex app-server turn. Do not use
-`openai-codex/gpt-*`; doctor rewrites that legacy prefix to `openai/gpt-*`.
+`agents.defaults.imageModel` follows a media-specific prefix split. Use
+`openai/gpt-*` for the normal OpenAI route and `codex/gpt-*` only when image
+understanding should run through a bounded Codex app-server turn. For text agent
+model refs, explicit `openai-codex/gpt-*` routes remain supported when the
+provider id itself should carry the Codex OAuth/subscription route; doctor
+preserves those explicit refs.
 
 ## Deployment patterns
 

@@ -305,8 +305,9 @@ Choose your preferred auth method and follow the setup steps.
     openclaw models auth list --agent <id> --provider openai-codex
     ```
 
-    If an older config still has `openai-codex/gpt-*` or a stale OpenAI PI
-    session pin without explicit runtime config, repair it:
+    If an older config has generic `openai/gpt-*` refs explicitly paired with
+    the Codex runtime, or stale Codex fallback notices in session state, repair
+    it:
 
     ```bash
     openclaw doctor --fix
@@ -321,8 +322,9 @@ Choose your preferred auth method and follow the setup steps.
     openclaw models status --probe --probe-provider openai-codex
     ```
 
-    `openai-codex` remains the auth/profile provider id. `openai/*` is the
-    model route for OpenAI agent turns through Codex.
+    `openai-codex` remains the auth/profile provider id and can also be used
+    intentionally in model refs when the provider route itself should stay on
+    Codex OAuth/subscription auth.
 
     ### Status indicator
 
@@ -333,9 +335,10 @@ Choose your preferred auth method and follow the setup steps.
 
     ### Doctor warning
 
-    If `openai-codex/*` routes or stale OpenAI PI pins remain in config or
-    session state, `openclaw doctor --fix` rewrites them to `openai/*` with the
-    Codex runtime unless PI is explicitly configured.
+    If generic `openai/*` routes are explicitly paired with the Codex runtime,
+    `openclaw doctor --fix` rewrites those risky refs to `openai-codex/*`.
+    Explicit `openai-codex/*` routes are preserved, and stale fallback-only
+    session notices are cleared.
 
     ### Context window cap
 

@@ -629,12 +629,16 @@ function scanCodexSessionStoreRoutes(store: Record<string, SessionEntry>): strin
     if (!entry) {
       return [];
     }
+    const hasStaleFallbackNotice =
+      isOpenAICodexModelRef(entry.fallbackNoticeSelectedModel) ||
+      isOpenAICodexModelRef(entry.fallbackNoticeActiveModel);
     const hasLegacyRoute =
-      normalizeString(entry.agentRuntimeOverride ?? entry.agentHarnessId) === "codex" &&
-      (normalizeString(entry.modelProvider) === "openai" ||
-        normalizeString(entry.providerOverride) === "openai" ||
-        isOpenAIModelRef(entry.model) ||
-        isOpenAIModelRef(entry.modelOverride));
+      hasStaleFallbackNotice ||
+      (normalizeString(entry.agentRuntimeOverride ?? entry.agentHarnessId) === "codex" &&
+        (normalizeString(entry.modelProvider) === "openai" ||
+          normalizeString(entry.providerOverride) === "openai" ||
+          isOpenAIModelRef(entry.model) ||
+          isOpenAIModelRef(entry.modelOverride)));
     return hasLegacyRoute ? [sessionKey] : [];
   });
 }
@@ -670,9 +674,9 @@ export async function maybeRepairCodexSessionRoutes(params: {
         stale.length > 0
           ? [
               [
-                "- Generic `openai/*` session route state is paired with the Codex runtime.",
+                "- Generic `openai/*` session route state is paired with the Codex runtime, or stale Codex fallback notices remain.",
                 `- Affected sessions: ${stale.length}.`,
-                "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins to `openai-codex/*` across all agent session stores.",
+                "- Run `openclaw doctor --fix` to rewrite stale session model/provider pins to `openai-codex/*` and clear stale fallback notices across all agent session stores.",
               ].join("\n"),
             ]
           : [],
@@ -707,7 +711,7 @@ export async function maybeRepairCodexSessionRoutes(params: {
         ? [
             `Repaired Codex session routes: moved ${repairedSessions} session${
               repairedSessions === 1 ? "" : "s"
-            } across ${repairedStores} store${repairedStores === 1 ? "" : "s"} to openai-codex/* while preserving runtime policy.`,
+            } across ${repairedStores} store${repairedStores === 1 ? "" : "s"} to openai-codex/* or cleared stale fallback notices while preserving runtime policy.`,
           ]
         : [],
   };
