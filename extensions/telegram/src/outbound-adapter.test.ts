@@ -74,13 +74,17 @@ describe("telegramOutbound", () => {
       deps: { sendTelegram: sendMessageTelegramMock },
     });
 
-    const options = callOptionsAt(sendMessageTelegramMock, 0, "12345", "hello");
-    expect(options.mediaUrl).toBe("/tmp/image.png");
-    expect(options.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
-    expect(options.accountId).toBe("ops");
-    expect(options.replyToMessageId).toBe(900);
-    expect(options.messageThreadId).toBe(12);
-    expect(options.textMode).toBe("html");
+    expect(sendMessageTelegramMock).toHaveBeenCalledWith(
+      "12345",
+      "hello",
+      expect.objectContaining({
+        mediaUrl: "/tmp/image.png",
+        mediaLocalRoots: ["/tmp/agent-root"],
+        accountId: "ops",
+        replyToMessageId: 900,
+        messageThreadId: 12,
+      }),
+    );
     expect(result).toEqual({ channel: "telegram", messageId: "tg-media" });
   });
 
@@ -189,6 +193,7 @@ describe("telegramOutbound", () => {
         cfg: {} as never,
         to: "12345",
         text: "hello",
+        formatting: { parseMode: "HTML" },
         deps: { sendTelegram: sendMessageTelegramMock },
       });
       const options = lastCallOptions(sendMessageTelegramMock, "12345", "hello");

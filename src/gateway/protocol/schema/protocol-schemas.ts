@@ -202,6 +202,10 @@ import {
 } from "./plugin-approvals.js";
 import {
   PluginControlUiDescriptorSchema,
+  PluginsSessionActionFailureResultSchema,
+  PluginsSessionActionParamsSchema,
+  PluginsSessionActionResultSchema,
+  PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResultSchema,
 } from "./plugins.js";
@@ -469,6 +473,10 @@ export const ProtocolSchemas = {
   PluginApprovalRequestParams: PluginApprovalRequestParamsSchema,
   PluginApprovalResolveParams: PluginApprovalResolveParamsSchema,
   PluginControlUiDescriptor: PluginControlUiDescriptorSchema,
+  PluginsSessionActionFailureResult: PluginsSessionActionFailureResultSchema,
+  PluginsSessionActionParams: PluginsSessionActionParamsSchema,
+  PluginsSessionActionResult: PluginsSessionActionResultSchema,
+  PluginsSessionActionSuccessResult: PluginsSessionActionSuccessResultSchema,
   PluginsUiDescriptorsParams: PluginsUiDescriptorsParamsSchema,
   PluginsUiDescriptorsResult: PluginsUiDescriptorsResultSchema,
   DevicePairListParams: DevicePairListParamsSchema,
