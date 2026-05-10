@@ -266,8 +266,6 @@ export interface SubagentRuns {
   agent_dir: string | null;
   announce_retry_count: number | null;
   archive_at_ms: number | null;
-  attachments_dir: string | null;
-  attachments_root_dir: string | null;
   child_session_key: string;
   cleanup: string;
   cleanup_completed_at: number | null;
@@ -299,7 +297,6 @@ export interface SubagentRuns {
   requester_display_key: string;
   requester_origin_json: string | null;
   requester_session_key: string;
-  retain_attachments_on_keep: number | null;
   run_id: string;
   run_timeout_seconds: number | null;
   session_started_at: number | null;

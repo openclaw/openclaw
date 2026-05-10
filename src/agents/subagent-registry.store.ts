@@ -205,9 +205,6 @@ function rowToRunRecord(row: SubagentRunRow): SubagentRunRecord | null {
     pendingFinalDeliveryLastError: row.pending_final_delivery_last_error,
     pendingFinalDeliveryPayload: parseJsonValue(row.pending_final_delivery_payload_json),
     completionAnnouncedAt: normalizeNumber(row.completion_announced_at),
-    attachmentsDir: row.attachments_dir ?? undefined,
-    attachmentsRootDir: row.attachments_root_dir ?? undefined,
-    retainAttachmentsOnKeep: normalizeBoolean(row.retain_attachments_on_keep),
   };
   return (
     normalizePersistedRunRecords({
@@ -262,9 +259,6 @@ function runRecordToRow(record: SubagentRunRecord): Insertable<SubagentRunsTable
     pending_final_delivery_last_error: record.pendingFinalDeliveryLastError ?? null,
     pending_final_delivery_payload_json: serializeJson(record.pendingFinalDeliveryPayload),
     completion_announced_at: record.completionAnnouncedAt ?? null,
-    attachments_dir: record.attachmentsDir ?? null,
-    attachments_root_dir: record.attachmentsRootDir ?? null,
-    retain_attachments_on_keep: booleanToInteger(record.retainAttachmentsOnKeep),
     payload_json: JSON.stringify(record),
   };
 }
@@ -325,9 +319,6 @@ function upsertSubagentRunRow(db: DatabaseSync, row: Insertable<SubagentRunsTabl
           pending_final_delivery_payload_json: (eb) =>
             eb.ref("excluded.pending_final_delivery_payload_json"),
           completion_announced_at: (eb) => eb.ref("excluded.completion_announced_at"),
-          attachments_dir: (eb) => eb.ref("excluded.attachments_dir"),
-          attachments_root_dir: (eb) => eb.ref("excluded.attachments_root_dir"),
-          retain_attachments_on_keep: (eb) => eb.ref("excluded.retain_attachments_on_keep"),
           payload_json: (eb) => eb.ref("excluded.payload_json"),
         }),
       ),

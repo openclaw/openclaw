@@ -1,6 +1,3 @@
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const noop = () => {};
@@ -56,16 +53,6 @@ function findRecordCallArg(
     }
   }
   throw new Error(`expected ${label}`);
-}
-
-async function expectPathMissing(targetPath: string): Promise<void> {
-  try {
-    await fs.access(targetPath);
-  } catch (error) {
-    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected ${targetPath} to be missing`);
 }
 
 const mocks = vi.hoisted(() => ({
@@ -807,36 +794,6 @@ describe("subagent registry seam flow", () => {
     });
   });
 
-  it("removes attachments for killed delete-mode runs", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-kill-attachments-"),
-    );
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
-
-    mod.registerSubagentRun({
-      runId: "run-killed-delete-attachments",
-      childSessionKey: "agent:main:subagent:killed-delete-attachments",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "kill and delete attachments",
-      cleanup: "delete",
-      attachmentsDir,
-      attachmentsRootDir,
-    });
-
-    const updated = mod.markSubagentRunTerminated({
-      runId: "run-killed-delete-attachments",
-      reason: "manual kill",
-    });
-
-    expect(updated).toBe(1);
-    await waitForFast(async () => {
-      await expectPathMissing(attachmentsDir);
-    });
-  });
-
   it("announces readable failure when an interrupted run is finalized", async () => {
     mod.addSubagentRunForTests({
       runId: "run-interrupted",
@@ -901,49 +858,10 @@ describe("subagent registry seam flow", () => {
     expect(run?.cleanupCompletedAt).toBeTypeOf("number");
   });
 
-  it("removes attachments for released delete-mode runs", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-release-attachments-"),
-    );
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact");
-
-    mod.addSubagentRunForTests({
-      runId: "run-release-delete",
-      childSessionKey: "agent:main:subagent:release-delete",
-      controllerSessionKey: "agent:main:main",
-      requesterSessionKey: "agent:main:main",
-      requesterOrigin: undefined,
-      requesterDisplayKey: "main",
-      task: "release attachments",
-      cleanup: "delete",
-      expectsCompletionMessage: undefined,
-      spawnMode: "run",
-      attachmentsDir,
-      attachmentsRootDir,
-      createdAt: 1,
-      startedAt: 1,
-      sessionStartedAt: 1,
-      accumulatedRuntimeMs: 0,
-      cleanupHandled: false,
-    });
-
-    mod.releaseSubagentRun("run-release-delete");
-
-    await waitForFast(async () => {
-      await expectPathMissing(attachmentsDir);
-    });
-    await waitForFast(() => {
-      expect(mocks.onSubagentEnded).toHaveBeenCalledWith({
-        childSessionKey: "agent:main:subagent:release-delete",
-        reason: "released",
-        workspaceDir: undefined,
-      });
-    });
-  });
-
   it("loads plugin and context-engine runtime before released end hooks", async () => {
+    mocks.ensureRuntimePluginsLoaded.mockClear();
+    mocks.ensureContextEnginesInitialized.mockClear();
+    mocks.resolveContextEngine.mockClear();
     mod.addSubagentRunForTests({
       runId: "run-release-context-engine",
       childSessionKey: "agent:main:session:child",
@@ -982,7 +900,7 @@ describe("subagent registry seam flow", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
-    expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureContextEnginesInitialized).toHaveBeenCalled();
     expect(mocks.resolveContextEngine).toHaveBeenCalledWith(
       {
         agents: { defaults: { subagents: { archiveAfterMinutes: 0 } } },

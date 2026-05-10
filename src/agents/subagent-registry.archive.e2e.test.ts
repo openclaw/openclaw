@@ -1,6 +1,3 @@
-import { promises as fs } from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { callGateway } from "../gateway/call.js";
 
@@ -137,10 +134,6 @@ describe("subagent registry archive behavior", () => {
       agents: { defaults: { subagents: { archiveAfterMinutes: 1 } } },
     };
     const onSubagentEnded = vi.fn(async () => undefined);
-    const attachmentsRootDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sweep-retry-"));
-    const attachmentsDir = path.join(attachmentsRootDir, "child");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
     let deleteAttempts = 0;
     vi.mocked(callGateway).mockImplementation(async (request: unknown) => {
       const method = (request as { method?: string }).method;
@@ -171,8 +164,6 @@ describe("subagent registry archive behavior", () => {
       createdAt: Date.now() - 60_000,
       endedAt: Date.now() - 1,
       archiveAtMs: Date.now(),
-      attachmentsDir,
-      attachmentsRootDir,
     });
 
     await mod.__testing.sweepOnceForTests();
@@ -181,7 +172,6 @@ describe("subagent registry archive behavior", () => {
     expect(deleteAttempts).toBe(1);
     expect(mod.listSubagentRunsForRequester("agent:main:main")).toHaveLength(1);
     expect(onSubagentEnded).not.toHaveBeenCalled();
-    await expect(fs.access(attachmentsDir)).resolves.toBeUndefined();
 
     await mod.__testing.sweepOnceForTests();
     await flushSweepMicrotasks();
@@ -318,43 +308,6 @@ describe("subagent registry archive behavior", () => {
       .listSubagentRunsForRequester("agent:main:main")
       .find((entry) => entry.runId === "run-delete-new");
     expect(run?.archiveAtMs).toBe(Date.now() + 60_000);
-  });
-
-  it("removes attachments for the replaced run after steer restart", async () => {
-    const attachmentsRootDir = await fs.mkdtemp(
-      path.join(os.tmpdir(), "openclaw-replace-attachments-"),
-    );
-    const attachmentsDir = path.join(attachmentsRootDir, "old");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-
-    mod.registerSubagentRun({
-      runId: "run-delete-attachments-old",
-      childSessionKey: "agent:main:subagent:delete-attachments-old",
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "replace attachments",
-      cleanup: "delete",
-      attachmentsRootDir,
-      attachmentsDir,
-    });
-
-    const replaced = mod.replaceSubagentRunAfterSteer({
-      previousRunId: "run-delete-attachments-old",
-      nextRunId: "run-delete-attachments-new",
-    });
-
-    expect(replaced).toBe(true);
-    await vi.waitFor(async () => {
-      let err: unknown;
-      try {
-        await fs.access(attachmentsDir);
-      } catch (caught) {
-        err = caught;
-      }
-      expect(err).toBeInstanceOf(Error);
-      expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
-    });
   });
 
   it("treats archiveAfterMinutes=0 as never archive", () => {

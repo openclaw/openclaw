@@ -37,7 +37,6 @@ import {
   reconcileOrphanedRun,
   resolveAnnounceRetryDelayMs,
   resolveSubagentRunOrphanReason,
-  safeRemoveAttachmentsDir,
 } from "./subagent-registry-helpers.js";
 import { createSubagentRegistryLifecycleController } from "./subagent-registry-lifecycle.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -839,9 +838,6 @@ async function sweepSubagentRuns() {
           });
           subagentRuns.delete(runId);
           mutated = true;
-          if (!entry.retainAttachmentsOnKeep) {
-            await safeRemoveAttachmentsDir(entry);
-          }
         }
         continue;
       }
@@ -869,8 +865,6 @@ async function sweepSubagentRuns() {
       }
       subagentRuns.delete(runId);
       mutated = true;
-      // Archive/purge is terminal for the run record; remove any retained attachments too.
-      await safeRemoveAttachmentsDir(entry);
       void notifyContextEngineSubagentEnded({
         childSessionKey: entry.childSessionKey,
         reason: "swept",

@@ -736,48 +736,6 @@ describe("subagent registry persistence", () => {
     ).toBe(true);
   });
 
-  it("removes attachments when pruning orphaned restored runs", async () => {
-    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
-    process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    const attachmentsRootDir = path.join(tempStateDir, "attachments");
-    const attachmentsDir = path.join(attachmentsRootDir, "ghost");
-    await fs.mkdir(attachmentsDir, { recursive: true });
-    await fs.writeFile(path.join(attachmentsDir, "artifact.txt"), "artifact", "utf8");
-
-    const persisted = createPersistedEndedRun({
-      runId: "run-orphan-attachments",
-      childSessionKey: "agent:main:subagent:ghost-attachments",
-      task: "orphan attachments",
-      cleanup: "delete",
-    });
-    Object.assign(persisted.runs["run-orphan-attachments"] as Record<string, unknown>, {
-      attachmentsRootDir,
-      attachmentsDir,
-    });
-
-    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
-    saveSubagentRegistryToState(
-      normalizeSubagentRunRecordsSnapshot({
-        runsRaw: persisted.runs,
-        isLegacy: false,
-      }),
-    );
-
-    restartRegistry();
-    await waitForRegistryWork(async () => {
-      try {
-        await fs.access(attachmentsDir);
-        return false;
-      } catch (err) {
-        return (err as NodeJS.ErrnoException).code === "ENOENT";
-      }
-    });
-
-    await expect(fs.access(attachmentsDir)).rejects.toMatchObject({ code: "ENOENT" });
-    await expect(readPersistedRun(registryPath, "run-orphan-attachments")).resolves.toBeUndefined();
-    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
   it("prefers active runs and can resolve them from persisted registry snapshots", async () => {
     const childSessionKey = "agent:main:subagent:state-active";
     await writePersistedRegistry(

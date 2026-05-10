@@ -339,9 +339,6 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   pending_final_delivery_last_error TEXT,
   pending_final_delivery_payload_json TEXT,
   completion_announced_at INTEGER,
-  attachments_dir TEXT,
-  attachments_root_dir TEXT,
-  retain_attachments_on_keep INTEGER,
   payload_json TEXT NOT NULL DEFAULT '{}'
 );
 

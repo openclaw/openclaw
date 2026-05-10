@@ -632,7 +632,8 @@ sessionId}` and session key context.
 - Subagent inline attachments no longer materialize under workspace
   `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
   inline runs seed those entries into the per-agent runtime scratch namespace,
-  and disk-backed tools overlay that SQLite scratch for attachment paths.
+  and disk-backed tools overlay that SQLite scratch for attachment paths. The
+  old subagent-run attachment-dir registry columns and cleanup hooks are gone.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
   diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
   instead of `logs/*.jsonl` files.
