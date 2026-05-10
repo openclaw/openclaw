@@ -166,6 +166,30 @@ function requireThinkingConfig(config: Record<string, unknown>): Record<string, 
   return thinkingConfig as Record<string, unknown>;
 }
 
+type GoogleTestContentTurn = Record<string, unknown> & {
+  parts: Array<Record<string, unknown>>;
+};
+
+function isModelTurnWithParts(content: Record<string, unknown>): content is GoogleTestContentTurn {
+  return content.role === "model" && Array.isArray(content.parts);
+}
+
+function getFirstModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
+  const turn = contents.find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
+}
+
+function getLastModelTurn(contents: Array<Record<string, unknown>>): GoogleTestContentTurn {
+  const turn = contents.toReversed().find(isModelTurnWithParts);
+  if (!turn) {
+    throw new Error("Expected at least one Google model turn");
+  }
+  return turn;
+}
+
 describe("google transport stream", () => {
   beforeAll(async () => {
     ({
@@ -797,8 +821,7 @@ describe("google transport stream", () => {
 
     // Find the last model-role content; should carry the replayed signature
     // even though the second stored toolCall block had none.
-    const modelTurns = params.contents.filter((c: { role: string }) => c.role === "model");
-    expect(modelTurns[modelTurns.length - 1]).toMatchObject({
+    expect(getLastModelTurn(params.contents)).toMatchObject({
       role: "model",
       parts: [
         {
@@ -855,23 +878,23 @@ describe("google transport stream", () => {
       ],
     } as never);
 
-    // The foreign signature should be omitted from the Gemini outbound payload
-    const modelTurns = params.contents.filter((c: { role: string }) => c.role === "model");
-    expect(modelTurns[0]).toMatchObject({
+    // The foreign signature should not be replayed into the Gemini payload.
+    // Gemini 3 still needs the documented skip fallback for unsigned function
+    // calls that came from another route.
+    const firstModelTurn = getFirstModelTurn(params.contents);
+    expect(firstModelTurn).toMatchObject({
       role: "model",
       parts: [
         {
+          thoughtSignature: "skip_thought_signature_validator",
           functionCall: { name: "lookup", args: { q: "hello" } },
         },
       ],
     });
-    // Confirm thoughtSignature is absent — not replayed from a foreign route
-    expect(
-      (modelTurns[0] as { parts: Array<Record<string, unknown>> }).parts[0].thoughtSignature,
-    ).toBeUndefined();
+    expect(firstModelTurn.parts[0].thoughtSignature).not.toBe("msg_01XFDUDYJgAACcnSM2TTgQsA");
   });
 
-  it("drops non-base64 Gemini tool-call thought signatures like reasoning", () => {
+  it("replaces non-base64 Gemini tool-call thought signatures with the skip fallback", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
@@ -900,11 +923,13 @@ describe("google transport stream", () => {
     } as never);
 
     const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
-    expect(part).toMatchObject({ functionCall: { name: "lookup", args: { q: "hello" } } });
-    expect(part).not.toHaveProperty("thoughtSignature");
+    expect(part).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup", args: { q: "hello" } },
+    });
   });
 
-  it("drops skip-validator thought signatures before Gemini replay serialization", () => {
+  it("preserves the skip-validator fallback for unsigned Gemini tool-call replay", () => {
     const model = buildGeminiModel({
       id: "gemini-3.1-pro-preview",
       name: "Gemini 3.1 Pro Preview",
@@ -933,8 +958,10 @@ describe("google transport stream", () => {
     } as never);
 
     const part = (params.contents[0] as { parts: Array<Record<string, unknown>> }).parts[0];
-    expect(part).toMatchObject({ functionCall: { name: "lookup", args: { q: "hello" } } });
-    expect(part).not.toHaveProperty("thoughtSignature");
+    expect(part).toMatchObject({
+      thoughtSignature: "skip_thought_signature_validator",
+      functionCall: { name: "lookup", args: { q: "hello" } },
+    });
   });
 
   it("does not trust cross-provider tool-call thought signatures for non-Gemini-3 models", () => {

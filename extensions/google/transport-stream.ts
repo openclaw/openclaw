@@ -205,6 +205,15 @@ function sanitizeGeminiToolCallThoughtSignature(
   return trimmed;
 }
 
+function isSameGoogleTransportRoute(
+  source: { api?: string; provider?: string; model?: string },
+  model: GoogleTransportModel,
+): boolean {
+  return (
+    source.provider === model.provider && source.api === model.api && source.model === model.id
+  );
+}
+
 function collectToolCallThoughtSignatures(
   context: Context,
   model: GoogleTransportModel,
@@ -219,9 +228,7 @@ function collectToolCallThoughtSignatures(
     // sanitizer but are not valid Gemini-issued values and must not be
     // replayed. Gemini requires its own signatures returned exactly as issued.
     const source = msg as { api?: string; provider?: string; model?: string };
-    const isSameRoute =
-      source.provider === model.provider && source.api === model.api && source.model === model.id;
-    if (!isSameRoute) {
+    if (!isSameGoogleTransportRoute(source, model)) {
       continue;
     }
     for (const block of msg.content) {
@@ -497,7 +504,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
     }
 
     if (msg.role === "assistant") {
-      const isSameProviderAndModel = msg.provider === model.provider && msg.model === model.id;
+      const isSameRoute = isSameGoogleTransportRoute(msg, model);
       const parts: Array<Record<string, unknown>> = [];
       for (const block of msg.content) {
         if (block.type === "text") {
@@ -506,7 +513,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           }
           parts.push({
             text: sanitizeTransportPayloadText(block.text),
-            ...(isSameProviderAndModel && block.textSignature
+            ...(isSameRoute && block.textSignature
               ? { thoughtSignature: block.textSignature }
               : {}),
           });
@@ -516,7 +523,7 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           if (!block.thinking.trim()) {
             continue;
           }
-          if (isSameProviderAndModel) {
+          if (isSameRoute) {
             parts.push({
               thought: true,
               text: sanitizeTransportPayloadText(block.thinking),
@@ -533,13 +540,14 @@ function convertGoogleMessages(model: GoogleTransportModel, context: Context) {
           // otherwise fall back to a same-route replayed value from context.
           // Never replay signatures from foreign providers — Gemini requires
           // its own signatures returned exactly as issued.
-          const ownSignature = isSameProviderAndModel ? block.thoughtSignature : undefined;
-          const thoughtSignature = sanitizeGeminiToolCallThoughtSignature(
+          const ownSignature = isSameRoute
+            ? sanitizeGeminiToolCallThoughtSignature(block.thoughtSignature)
+            : undefined;
+          const thoughtSignature =
             retainThoughtSignature(ownSignature, replayedThoughtSignature) ??
-              (requiresToolCallThoughtSignature(model.id)
-                ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
-                : undefined),
-          );
+            (requiresToolCallThoughtSignature(model.id)
+              ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+              : undefined);
           parts.push({
             functionCall: {
               name: block.name,
