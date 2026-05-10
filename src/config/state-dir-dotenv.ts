@@ -5,6 +5,7 @@ import { parse as parseDotEnv } from "dotenv";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
+  isTrustedGithubCredentialEnvVarName,
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
@@ -16,7 +17,7 @@ function isBlockedServiceEnvVar(key: string): boolean {
   return (
     key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
     isDangerousHostEnvVarName(key) ||
-    isDangerousHostEnvOverrideVarName(key)
+    (isDangerousHostEnvOverrideVarName(key) && !isTrustedGithubCredentialEnvVarName(key))
   );
 }
 
@@ -73,16 +74,17 @@ function parseStateDirDotEnvContent(content: string | Buffer): ParsedStateDirDot
     if (isBlockedServiceEnvVar(key)) {
       continue;
     }
+    const serviceKey = isTrustedGithubCredentialEnvVarName(key) ? key.toUpperCase() : key;
     // Skip values whose entire content is an unresolved shell variable reference
     // ($VAR, ${VAR}, or $(cmd)). dotenv does not expand them, so persisting them
     // into a single-quoted LaunchAgent/systemd env file would store the literal
     // reference string rather than the intended credential value.
     // Values that merely contain $ (e.g. a password like "abc$2!") are kept.
     if (isUnresolvedShellReference(value)) {
-      skippedShellReferenceKeys.push(key);
+      skippedShellReferenceKeys.push(serviceKey);
       continue;
     }
-    entries[key] = value;
+    entries[serviceKey] = value;
   }
   return { entries, skippedShellReferenceKeys };
 }

@@ -1189,6 +1189,54 @@ describe("buildGatewayInstallPlan — dotenv merge", () => {
     );
   });
 
+  it("tracks operator-curated GH_TOKEN from ~/.openclaw/.env as a managed durable key", async () => {
+    await writeStateDirDotEnv(
+      [
+        "GH_TOKEN=test-token-placeholder",
+        "GITHUB_TOKEN=test-token-placeholder",
+        "AWS_ACCESS_KEY_ID=test-token-placeholder",
+        "NPM_TOKEN=test-token-placeholder",
+        "",
+      ].join("\n"),
+      {
+        stateDir: path.join(tmpDir, ".openclaw"),
+      },
+    );
+    mockNodeGatewayPlanFixture({
+      serviceEnvironment: {
+        HOME: "/from-service",
+        OPENCLAW_PORT: "3000",
+      },
+    });
+
+    const plan = await buildGatewayInstallPlan({
+      env: { HOME: tmpDir },
+      port: 3000,
+      runtime: "node",
+    });
+
+    // Values are file-only (never inlined into plan.environment).
+    expect(plan.environment.GH_TOKEN).toBeUndefined();
+    expect(plan.environment.GITHUB_TOKEN).toBeUndefined();
+    expect(plan.environment.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(plan.environment.NPM_TOKEN).toBeUndefined();
+
+    // Only approved state-dir GitHub credentials get trusted-exec provenance.
+    const managedKeys = (plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS ?? "")
+      .split(",")
+      .filter(Boolean);
+    expect(managedKeys).toContain("GH_TOKEN");
+    expect(managedKeys).toContain("GITHUB_TOKEN");
+    expect(managedKeys).not.toContain("AWS_ACCESS_KEY_ID");
+    expect(managedKeys).not.toContain("NPM_TOKEN");
+    expect(plan.environment.OPENCLAW_SERVICE_TRUSTED_GITHUB_ENV_KEYS).toBe("GH_TOKEN,GITHUB_TOKEN");
+    expect(plan.environmentValueSources?.OPENCLAW_SERVICE_TRUSTED_GITHUB_ENV_KEYS).toBe("inline");
+    // Linux loads these values from the state-dir EnvironmentFile; they are
+    // intentionally absent from the inline service plan and its source map.
+    expect(plan.environmentValueSources?.GH_TOKEN).toBeUndefined();
+    expect(plan.environmentValueSources?.GITHUB_TOKEN).toBeUndefined();
+  });
+
   it("retains managed .env values for macOS LaunchAgent env files", async () => {
     await writeStateDirDotEnv("TAVILY_API_KEY=dotenv-tavily\nOPENROUTER_API_KEY=or-key\n", {
       stateDir: path.join(tmpDir, ".openclaw"),

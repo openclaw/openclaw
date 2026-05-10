@@ -1,10 +1,12 @@
 // Filters host environment variables before passing them to runtimes.
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import type { ExecAsk, ExecHost, ExecSecurity } from "./exec-approvals.js";
 import { HOST_ENV_SECURITY_POLICY } from "./host-env-security-policy.js";
 import { markOpenClawExecEnv } from "./openclaw-exec-env.js";
 
 const PORTABLE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/;
 const WINDOWS_COMPAT_OVERRIDE_ENV_VAR_KEY = /^[A-Za-z_][A-Za-z0-9_()]*$/;
+const TRUSTED_GITHUB_CREDENTIAL_ENV_KEYS = new Set(["GH_TOKEN", "GITHUB_TOKEN"]);
 
 const HOST_DANGEROUS_ENV_KEY_VALUES: readonly string[] = Object.freeze([
   ...HOST_ENV_SECURITY_POLICY.blockedKeys,
@@ -86,6 +88,11 @@ export function normalizeEnvVarKey(
     return null;
   }
   return key;
+}
+
+export function isTrustedGithubCredentialEnvVarName(rawKey: string): boolean {
+  const normalized = normalizeEnvVarKey(rawKey, { portable: true });
+  return normalized ? TRUSTED_GITHUB_CREDENTIAL_ENV_KEYS.has(normalized.toUpperCase()) : false;
 }
 
 export function normalizeHostOverrideEnvVarKey(rawKey: string): string | null {
@@ -259,17 +266,38 @@ export function sanitizeHostExecEnvWithDiagnostics(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  execPosture?: { host: ExecHost; security: ExecSecurity; ask: ExecAsk };
+  trustedGithubEnvKeys?: string;
 }): HostExecEnvSanitizationResult {
   const baseEnv = params?.baseEnv ?? process.env;
+  const posture = params?.execPosture;
+  const trustedPosture =
+    posture?.host === "gateway" && posture.security === "full" && posture.ask === "off";
+  const trustedGithubEnvKeys = new Set(
+    (params?.trustedGithubEnvKeys?.split(",") ?? []).flatMap((rawKey) => {
+      const normalized = normalizeEnvVarKey(rawKey, { portable: true });
+      return normalized && isTrustedGithubCredentialEnvVarName(normalized)
+        ? [normalized.toUpperCase()]
+        : [];
+    }),
+  );
 
   const merged: Record<string, string> = {};
   for (const [key, value] of listNormalizedEnvEntries(baseEnv)) {
     const sanitizedEntry = sanitizeHostInheritedEnvEntry(key, value);
-    if (!sanitizedEntry) {
+    if (sanitizedEntry) {
+      const [sanitizedKey, sanitizedValue] = sanitizedEntry;
+      merged[sanitizedKey] = sanitizedValue;
       continue;
     }
-    const [sanitizedKey, sanitizedValue] = sanitizedEntry;
-    merged[sanitizedKey] = sanitizedValue;
+    const allowTrustedGithubCredential =
+      trustedPosture &&
+      trustedGithubEnvKeys.has(key.toUpperCase()) &&
+      isTrustedGithubCredentialEnvVarName(key);
+    if (!allowTrustedGithubCredential || isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    merged[key] = value;
   }
 
   const overrideResult = sanitizeHostEnvOverridesWithDiagnostics({
@@ -304,6 +332,8 @@ export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;
   blockPathOverrides?: boolean;
+  execPosture?: { host: ExecHost; security: ExecSecurity; ask: ExecAsk };
+  trustedGithubEnvKeys?: string;
 }): Record<string, string> {
   return sanitizeHostExecEnvWithDiagnostics(params).env;
 }

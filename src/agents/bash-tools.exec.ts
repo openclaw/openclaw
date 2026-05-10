@@ -12,6 +12,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeChatChannelId } from "../channels/ids.js";
+import { TRUSTED_GITHUB_ENV_KEYS_VAR } from "../daemon/service-managed-env.js";
 import {
   type ExecAsk,
   type ExecHost,
@@ -71,7 +72,11 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import {
   type ExecWorkdirResolution,
   formatUnavailableWorkdirFailure,
@@ -1809,6 +1814,8 @@ export function createExecTool(
                 baseEnv: inheritedBaseEnv,
                 overrides: requestedEnv,
                 blockPathOverrides: true,
+                execPosture: { host, security, ask },
+                trustedGithubEnvKeys: inheritedBaseEnv[TRUSTED_GITHUB_ENV_KEYS_VAR],
               });
         if (
           hostEnvResult &&

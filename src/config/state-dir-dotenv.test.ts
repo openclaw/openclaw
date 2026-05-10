@@ -1,19 +1,18 @@
 // Covers state-directory dotenv discovery, parsing, and merge behavior.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { readStateDirDotEnvFromStateDir } from "./state-dir-dotenv.js";
+import { withTempHome, writeStateDirDotEnv } from "./test-helpers.js";
+
+const FIXTURE = "REDACTED-FIXTURE";
 
 describe("readStateDirDotEnvFromStateDir", () => {
   async function withDotEnv<T>(content: string, run: (dir: string) => T | Promise<T>): Promise<T> {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-test-"));
-    await fs.writeFile(path.join(dir, ".env"), content, "utf8");
-    try {
-      return await run(dir);
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    return await withTempHome(async (home) => {
+      const stateDir = path.join(home, ".openclaw");
+      await writeStateDirDotEnv(content, { stateDir });
+      return await run(stateDir);
+    });
   }
 
   it("returns real credential values from the state-dir dotenv", async () => {
@@ -21,6 +20,70 @@ describe("readStateDirDotEnvFromStateDir", () => {
       const result = readStateDirDotEnvFromStateDir(dir).entries;
       expect(result["SUPERMEMORY_API_KEY"]).toBe("sm_real_credential_value");
     });
+  });
+
+  it("retains only approved GitHub credentials from override-only keys", async () => {
+    await withDotEnv(
+      [
+        "GH_TOKEN=test-token-placeholder",
+        "GITHUB_TOKEN=test-token-placeholder",
+        "AWS_ACCESS_KEY_ID=test-token-placeholder",
+        "NPM_TOKEN=test-token-placeholder",
+        "SSH_AUTH_SOCK=test-token-placeholder",
+        "DATABASE_URL=test-token-placeholder",
+        "",
+      ].join("\n"),
+      (dir) => {
+        const parsed = readStateDirDotEnvFromStateDir(dir).entries;
+
+        expect(parsed.GH_TOKEN).toBe("test-token-placeholder");
+        expect(parsed.GITHUB_TOKEN).toBe("test-token-placeholder");
+        expect(parsed.AWS_ACCESS_KEY_ID).toBeUndefined();
+        expect(parsed.NPM_TOKEN).toBeUndefined();
+        expect(parsed.SSH_AUTH_SOCK).toBeUndefined();
+        expect(parsed.DATABASE_URL).toBeUndefined();
+      },
+    );
+  });
+
+  it("still strips truly everywhere-dangerous keys from ~/.openclaw/.env", async () => {
+    await withDotEnv(
+      [
+        "LD_PRELOAD=/tmp/evil.so",
+        "NODE_OPTIONS=--require /tmp/evil.js",
+        "BASH_ENV=/tmp/evil.sh",
+        "DYLD_LIBRARY_PATH=/tmp/evil-lib",
+        "DYLD_INSERT_LIBRARIES=/tmp/evil-insert",
+        "GIT_DIR=/tmp/evil-git",
+        // Surviving sentinel proves the parser still ran.
+        `SAFE_KEY=${FIXTURE}-safe`,
+        "",
+      ].join("\n"),
+      (dir) => {
+        const parsed = readStateDirDotEnvFromStateDir(dir).entries;
+
+        expect(parsed.LD_PRELOAD).toBeUndefined();
+        expect(parsed.NODE_OPTIONS).toBeUndefined();
+        expect(parsed.BASH_ENV).toBeUndefined();
+        expect(parsed.DYLD_LIBRARY_PATH).toBeUndefined();
+        expect(parsed.DYLD_INSERT_LIBRARIES).toBeUndefined();
+        expect(parsed.GIT_DIR).toBeUndefined();
+        expect(parsed.SAFE_KEY).toBe(`${FIXTURE}-safe`);
+      },
+    );
+  });
+
+  it("skips empty values and ignores unknown safe keys", async () => {
+    await withDotEnv(
+      ["EMPTY_KEY=", "WHITESPACE_KEY=   ", `MY_CUSTOM_KEY=${FIXTURE}-custom`, ""].join("\n"),
+      (dir) => {
+        const parsed = readStateDirDotEnvFromStateDir(dir).entries;
+
+        expect(parsed.EMPTY_KEY).toBeUndefined();
+        expect(parsed.WHITESPACE_KEY).toBeUndefined();
+        expect(parsed.MY_CUSTOM_KEY).toBe(`${FIXTURE}-custom`);
+      },
+    );
   });
 
   it("skips values that are unresolved shell variable references", async () => {
@@ -84,11 +147,8 @@ describe("readStateDirDotEnvFromStateDir", () => {
   });
 
   it("returns empty object when .env is missing", async () => {
-    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-dotenv-missing-"));
-    try {
-      expect(readStateDirDotEnvFromStateDir(dir).entries).toEqual({});
-    } finally {
-      await fs.rm(dir, { recursive: true, force: true });
-    }
+    await withTempHome(async (home) => {
+      expect(readStateDirDotEnvFromStateDir(path.join(home, ".openclaw")).entries).toEqual({});
+    });
   });
 });

@@ -1024,6 +1024,81 @@ describe("sanitizeHostExecEnv", () => {
   });
 });
 
+describe("sanitizeHostExecEnv trusted GitHub credentials", () => {
+  it("allows only named GitHub credentials in full/off gateway exec", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        GH_TOKEN: "test-token-placeholder",
+        AWS_ACCESS_KEY_ID: "test-token-placeholder",
+        NPM_TOKEN: "test-token-placeholder",
+        OK: "1",
+      },
+      execPosture: { host: "gateway", security: "full", ask: "off" },
+      trustedGithubEnvKeys: "gh_token,GITHUB_TOKEN,AWS_ACCESS_KEY_ID,NPM_TOKEN",
+    });
+
+    expect(env.GH_TOKEN).toBe("test-token-placeholder");
+    expect(env.AWS_ACCESS_KEY_ID).toBeUndefined();
+    expect(env.NPM_TOKEN).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.OK).toBe("1");
+  });
+
+  it("still strips everywhere-dangerous keys and PATH", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+        LD_PRELOAD: "/tmp/evil.so",
+        DYLD_INSERT_LIBRARIES: "/tmp/evil-insert",
+        BASH_ENV: "/tmp/evil.sh",
+      },
+      execPosture: { host: "gateway", security: "full", ask: "off" },
+      trustedGithubEnvKeys: "LD_PRELOAD,DYLD_INSERT_LIBRARIES,BASH_ENV,PATH",
+    });
+
+    expect(env.LD_PRELOAD).toBeUndefined();
+    expect(env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+    expect(env.BASH_ENV).toBeUndefined();
+    expect(env.PATH).toBe("/usr/bin:/bin");
+  });
+
+  it("does not let the trusted marker authorize request overrides", () => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: {
+        PATH: "/usr/bin:/bin",
+      },
+      overrides: {
+        PATH: "/tmp/evil",
+        GH_TOKEN: "test-token-placeholder",
+      },
+      execPosture: { host: "gateway", security: "full", ask: "off" },
+      trustedGithubEnvKeys: "GH_TOKEN,PATH",
+    });
+
+    // baseEnv PATH survives, override PATH is rejected — allowlist must not
+    // bypass the request-override PATH guard.
+    expect(env.PATH).toBe("/usr/bin:/bin");
+    expect(env.GH_TOKEN).toBeUndefined();
+  });
+
+  it.each([
+    { host: "sandbox", security: "full", ask: "off" },
+    { host: "node", security: "full", ask: "off" },
+    { host: "gateway", security: "allowlist", ask: "off" },
+    { host: "gateway", security: "deny", ask: "off" },
+    { host: "gateway", security: "full", ask: "on-miss" },
+    { host: "gateway", security: "full", ask: "always" },
+  ] as const)("blocks credentials for posture $host/$security/$ask", (execPosture) => {
+    const env = sanitizeHostExecEnv({
+      baseEnv: { GH_TOKEN: "test-token-placeholder" },
+      execPosture,
+      trustedGithubEnvKeys: "GH_TOKEN",
+    });
+    expect(env.GH_TOKEN).toBeUndefined();
+  });
+});
+
 describe("isDangerousHostEnvOverrideVarName", () => {
   it("matches override-only blocked keys case-insensitively", () => {
     expect(isDangerousHostEnvOverrideVarName("HOME")).toBe(true);

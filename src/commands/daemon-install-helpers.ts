@@ -23,8 +23,10 @@ import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
+  formatTrustedGithubEnvKeys,
   hasEnvironmentFileSource,
   readManagedServiceEnvKeysFromEnvironment,
+  TRUSTED_GITHUB_ENV_KEYS_VAR,
 } from "../daemon/service-managed-env.js";
 import { isNonMinimalServicePathEntry } from "../daemon/service-path-policy.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
@@ -697,6 +699,14 @@ async function buildGatewayInstallEnvironment(params: {
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
     includeRawKeys: true,
   });
+  const trustedGithubEnvKeys = formatTrustedGithubEnvKeys(stateDirDotEnvEnvironment);
+  if (trustedGithubEnvKeys) {
+    plan.environment[TRUSTED_GITHUB_ENV_KEYS_VAR] = trustedGithubEnvKeys;
+    plan.environmentValueSources[TRUSTED_GITHUB_ENV_KEYS_VAR] = "inline";
+  } else {
+    delete plan.environment[TRUSTED_GITHUB_ENV_KEYS_VAR];
+    delete plan.environmentValueSources[TRUSTED_GITHUB_ENV_KEYS_VAR];
+  }
   const mergedPath = mergeServicePath(
     params.serviceEnvironment.PATH,
     params.existingEnvironment?.PATH,
