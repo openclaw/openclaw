@@ -1369,7 +1369,11 @@ promote_supported_node_binary() {
         if [[ -z "$candidate" || ! -x "$candidate" ]]; then
             continue
         fi
-        dir="$(cd "$(dirname "$candidate")" && pwd 2>/dev/null || true)"
+        if dir="$(cd "$(dirname "$candidate")" && pwd 2>/dev/null)"; then
+            :
+        else
+            dir=""
+        fi
         if [[ -z "$dir" || "$seen_dirs" == *":$dir:"* ]]; then
             continue
         fi
