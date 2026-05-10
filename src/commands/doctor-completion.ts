@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { resolveCliName } from "../cli/cli-name.js";
+import { getShellProfilePath } from "../cli/completion-cli.js";
 import {
   completionCacheExists,
   installCompletion,
@@ -107,8 +108,9 @@ export async function doctorShellCompletion(
 
     // Upgrade profile to use cached file
     await installCompletion(status.shell, true, cliName);
+    const profilePath = getShellProfilePath(status.shell);
     note(
-      `Shell completion upgraded. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
+      `Shell completion upgraded. Restart your shell or run: source ${profilePath}`,
       "Shell completion",
     );
     return;
@@ -157,8 +159,9 @@ export async function doctorShellCompletion(
 
       // Then install to profile
       await installCompletion(status.shell, true, cliName);
+      const profilePath = getShellProfilePath(status.shell);
       note(
-        `Shell completion installed. Restart your shell or run: source ~/.${status.shell === "zsh" ? "zshrc" : status.shell === "bash" ? "bashrc" : "config/fish/config.fish"}`,
+        `Shell completion installed. Restart your shell or run: source ${profilePath}`,
         "Shell completion",
       );
     }
