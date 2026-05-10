@@ -10,8 +10,10 @@ import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engi
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
+  chunkMarkdownWithOffset,
   hashText,
   remapChunkLines,
+  type ChunkWithOffset,
   type MemoryChunk,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -726,5 +728,384 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     const sample = embeddings.find((embedding) => embedding.length > 0);
     const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
     this.writeChunks(entry, options.source, this.provider.model, chunks, embeddings, vectorReady);
+  }
+
+  private deleteChunksById(ids: string[]): void {
+    if (ids.length === 0) {
+      return;
+    }
+    const placeholders = ids.map(() => "?").join(", ");
+    if (this.vector.enabled) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id IN (${placeholders})`)
+          .run(...ids);
+      } catch {}
+    }
+    if (this.fts.enabled && this.fts.available) {
+      try {
+        this.db
+          .prepare(`DELETE FROM ${FTS_TABLE} WHERE id IN (${placeholders})`)
+          .run(...ids);
+      } catch {}
+    }
+    this.db
+      .prepare(`DELETE FROM chunks WHERE id IN (${placeholders})`)
+      .run(...ids);
+  }
+
+  protected async indexSessionFileIncremental(
+    entry: MemoryIndexEntry & { content: string },
+    options: { source: MemorySource; content: string },
+  ) {
+    // 1. Chunk the full content with offset-aware chunking
+    const baseChunks: ChunkWithOffset[] = filterNonEmptyMemoryChunks(
+      chunkMarkdownWithOffset(options.content, this.settings.chunking),
+    );
+
+    if ("lineMap" in entry && entry.lineMap) {
+      remapChunkLines(baseChunks, entry.lineMap);
+    }
+
+    const allChunks: ChunkWithOffset[] = this.provider
+      ? enforceEmbeddingMaxInputTokens(
+          this.provider,
+          baseChunks,
+          EMBEDDING_BATCH_MAX_TOKENS,
+        )
+      : baseChunks;
+
+    // 2. FTS-only mode: write keyword-searchable chunks without embeddings
+    if (!this.provider) {
+      this.writeOffsetChunks(entry, options.source, "fts-only", allChunks, [], false);
+      return;
+    }
+
+    // 3. Read all existing chunks from database for this session file
+    const existingRows = this.db
+      .prepare(
+        `SELECT id, start_line, end_line, hash, model, text, embedding, updated_at
+         FROM chunks
+         WHERE path = ? AND source = ?`,
+      )
+      .all(entry.path, options.source) as Array<{
+      id: string;
+      start_line: number;
+      end_line: number;
+      hash: string;
+      model: string;
+      text: string;
+      embedding: string;
+      updated_at: number;
+    }>;
+
+    // 4. Build lookup by hash for existing chunks
+    const existingByHash = new Map<string, Array<(typeof existingRows)[0]>>();
+    const usedExistingIds = new Set<string>();
+    for (const row of existingRows) {
+      const bucket = existingByHash.get(row.hash) ?? [];
+      bucket.push(row);
+      existingByHash.set(row.hash, bucket);
+    }
+
+    // 5. Categorize chunks by matching hash
+    const chunksToEmbed: ChunkWithOffset[] = [];
+    const chunksToUpdate: Array<{ existing: (typeof existingRows)[0]; chunk: ChunkWithOffset }> = [];
+    const chunksToRefreshMetadata: Array<{
+      existing: (typeof existingRows)[0];
+      chunk: ChunkWithOffset;
+    }> = [];
+
+    for (const chunk of allChunks) {
+      const bucket = existingByHash.get(chunk.hash);
+      const existing = bucket?.shift();
+      if (existing && existing.model === this.provider.model) {
+        usedExistingIds.add(existing.id);
+        chunksToRefreshMetadata.push({ existing, chunk });
+      } else if (existing && existing.model !== this.provider.model) {
+        usedExistingIds.add(existing.id);
+        chunksToUpdate.push({ existing, chunk });
+      } else {
+        chunksToEmbed.push(chunk);
+      }
+    }
+
+    // 6. Identify chunks to delete (but do NOT delete yet - compute embeddings first)
+    const chunksToDelete = existingRows
+      .filter((row) => !usedExistingIds.has(row.id))
+      .map((row) => row.id);
+
+    // 7. Compute embeddings for new/changed chunks BEFORE any deletions
+    // This ensures embedding failures don't leave the index partially pruned.
+    const allNeedEmbedding = [
+      ...chunksToEmbed,
+      ...chunksToUpdate.map((u) => u.chunk),
+    ];
+    let embeddings: number[][] = [];
+    if (allNeedEmbedding.length > 0) {
+      embeddings = this.batch.enabled
+        ? await this.embedChunksWithBatch(allNeedEmbedding, entry, options.source)
+        : await this.embedChunksInBatches(allNeedEmbedding);
+    }
+
+    const sample = embeddings.find((embedding) => embedding.length > 0);
+    const vectorReady = sample ? await this.ensureVectorReady(sample.length) : false;
+
+    // 8. Now that embeddings succeeded, delete stale chunks
+    if (chunksToDelete.length > 0) {
+      this.deleteChunksById(chunksToDelete);
+    }
+
+    const now = Date.now();
+    const model = this.provider.model;
+
+    // 9. Refresh line/offset metadata for hash-matched chunks
+    // This handles cases where session truncation changes line numbers
+    // without changing content. Also refresh FTS rows so keyword search
+    // returns correct citation ranges.
+    for (const { existing, chunk } of chunksToRefreshMetadata) {
+      this.db
+        .prepare(
+          `UPDATE chunks SET start_line = ?, end_line = ?, start_offset = ?, end_offset = ?, updated_at = ?
+           WHERE id = ?`,
+        )
+        .run(
+          chunk.startLine,
+          chunk.endLine,
+          chunk.startOffset,
+          chunk.endOffset,
+          now,
+          existing.id,
+        );
+      if (this.fts.enabled && this.fts.available) {
+        // Refresh FTS with updated line ranges
+        try {
+          this.db
+            .prepare(`DELETE FROM ${FTS_TABLE} WHERE id = ?`)
+            .run(existing.id);
+        } catch {}
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, existing.id, entry.path, options.source, model, chunk.startLine, chunk.endLine);
+      }
+    }
+
+    // 10. Compute and write new embeddings (embeddingsToEmbed), then update model-changed chunks
+    const embedChunks = chunksToEmbed;
+    const embedVectors = embeddings.slice(0, embedChunks.length);
+    const updateEmbeddings = embeddings.slice(embedChunks.length);
+
+    // Write new chunks with ON CONFLICT for idempotency
+    for (let i = 0; i < embedChunks.length; i++) {
+      const chunk = embedChunks[i];
+      const embedding = embedVectors[i] ?? [];
+      const id = hashText(
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, start_offset, end_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at,
+             start_offset=excluded.start_offset,
+             end_offset=excluded.end_offset`,
+        )
+        .run(
+          id,
+          entry.path,
+          options.source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+          chunk.startOffset,
+          chunk.endOffset,
+        );
+      if (vectorReady && embedding.length > 0) {
+        replaceMemoryVectorRow({
+          db: this.db,
+          tableName: VECTOR_TABLE,
+          id,
+          embedding,
+        });
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, id, entry.path, options.source, model, chunk.startLine, chunk.endLine);
+      }
+    }
+
+    // 11. Update chunks where hash matches but model changed
+    for (let i = 0; i < chunksToUpdate.length; i++) {
+      const { existing, chunk } = chunksToUpdate[i];
+      const embedding = updateEmbeddings[i] ?? [];
+      const newId = hashText(
+        `${options.source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+      );
+
+      if (newId !== existing.id) {
+        if (this.vector.enabled) {
+          try {
+            this.db
+              .prepare(`DELETE FROM ${VECTOR_TABLE} WHERE id = ?`)
+              .run(existing.id);
+          } catch {}
+        }
+        if (this.fts.enabled && this.fts.available) {
+          try {
+            this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE id = ?`).run(existing.id);
+          } catch {}
+        }
+        this.db.prepare(`DELETE FROM chunks WHERE id = ?`).run(existing.id);
+      }
+
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, start_offset, end_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at,
+             start_offset=excluded.start_offset,
+             end_offset=excluded.end_offset`,
+        )
+        .run(
+          newId,
+          entry.path,
+          options.source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+          chunk.startOffset,
+          chunk.endOffset,
+        );
+      if (vectorReady && embedding.length > 0) {
+        replaceMemoryVectorRow({
+          db: this.db,
+          tableName: VECTOR_TABLE,
+          id: newId,
+          embedding,
+        });
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            chunk.text,
+            newId,
+            entry.path,
+            options.source,
+            model,
+            chunk.startLine,
+            chunk.endLine,
+          );
+      }
+    }
+
+    this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
+      vectorEnabled: this.vector.enabled,
+      vectorReady,
+      chunkCount: allChunks.length,
+      warningShown: this.vectorDegradedWriteWarningShown,
+      loadError: this.vector.loadError,
+      warn: (message) => log.warn(message),
+    });
+    this.upsertFileRecord(entry, options.source);
+  }
+
+  private writeOffsetChunks(
+    entry: MemoryIndexEntry,
+    source: MemorySource,
+    model: string,
+    chunks: ChunkWithOffset[],
+    embeddings: number[][],
+    vectorReady: boolean,
+  ): void {
+    const now = Date.now();
+    this.clearIndexedFileData(entry.path, source);
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const embedding = embeddings[i] ?? [];
+      const id = hashText(
+        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at, start_offset, end_offset)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(id) DO UPDATE SET
+             hash=excluded.hash,
+             model=excluded.model,
+             text=excluded.text,
+             embedding=excluded.embedding,
+             updated_at=excluded.updated_at,
+             start_offset=excluded.start_offset,
+             end_offset=excluded.end_offset`,
+        )
+        .run(
+          id,
+          entry.path,
+          source,
+          chunk.startLine,
+          chunk.endLine,
+          chunk.hash,
+          model,
+          chunk.text,
+          JSON.stringify(embedding),
+          now,
+          chunk.startOffset,
+          chunk.endOffset,
+        );
+      if (vectorReady && embedding.length > 0) {
+        replaceMemoryVectorRow({
+          db: this.db,
+          tableName: VECTOR_TABLE,
+          id,
+          embedding,
+        });
+      }
+      if (this.fts.enabled && this.fts.available) {
+        this.db
+          .prepare(
+            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+      }
+    }
+    this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
+      vectorEnabled: this.vector.enabled,
+      vectorReady,
+      chunkCount: chunks.length,
+      warningShown: this.vectorDegradedWriteWarningShown,
+      loadError: this.vector.loadError,
+      warn: (message) => log.warn(message),
+    });
+    this.upsertFileRecord(entry, source);
   }
 }
