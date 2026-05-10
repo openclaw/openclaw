@@ -69,4 +69,26 @@ describe("getFeishuSequentialKey", () => {
       }),
     ).toBe("feishu:default:oc_dm_chat:btw");
   });
+
+  it("handles events with missing content and mention metadata", () => {
+    const event = createTextEvent({ text: "hello" });
+    delete (event.message as { content?: string }).content;
+    event.message.mentions = [
+      {
+        key: "@_user_1",
+        id: {
+          open_id: "ou_bot_1",
+        },
+        name: "OpenClaw",
+      },
+    ];
+
+    expect(
+      getFeishuSequentialKey({
+        accountId: "default",
+        event,
+        botOpenId: "ou_bot_1",
+      }),
+    ).toBe("feishu:default:oc_dm_chat");
+  });
 });
