@@ -258,10 +258,10 @@ export async function maybeRepairLegacyCronStore(params: {
     previewLines.push("- Job definitions still live in legacy `cron/jobs.json`");
   }
   if (hasLegacyStateSidecar) {
-    previewLines.push("- Runtime state still lives in the legacy `jobs-state.json` sidecar");
+    previewLines.push("- Legacy runtime state is still present in `jobs-state.json`");
   }
   if (hasLegacyRunLogs) {
-    previewLines.push("- Run history still lives in legacy `cron/runs/*.jsonl` files");
+    previewLines.push("- Legacy run history is still present in `cron/runs/*.jsonl` files");
   }
   if (previewLines.length === 0) {
     return;
