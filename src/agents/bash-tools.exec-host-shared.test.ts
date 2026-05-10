@@ -42,10 +42,12 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
 describe("sendExecApprovalFollowupResult", () => {
   const sendExecApprovalFollowup = vi.fn();
   const logWarn = vi.fn();
+  const logError = vi.fn();
 
   beforeEach(() => {
     sendExecApprovalFollowup.mockReset();
     logWarn.mockReset();
+    logError.mockReset();
     mocks.resolveExecApprovals.mockReset();
     mocks.resolveExecApprovals.mockReturnValue({
       defaults: {
@@ -73,7 +75,7 @@ describe("sendExecApprovalFollowupResult", () => {
       approvalId: "approval-log-once",
       sessionKey: "agent:main:main",
     };
-    const deps = { sendExecApprovalFollowup, logWarn };
+    const deps = { sendExecApprovalFollowup, logWarn, logError, retryDelaysMs: [] as number[] };
     await sendExecApprovalFollowupResult(target, "Exec finished", deps);
     await sendExecApprovalFollowupResult(target, "Exec finished", deps);
 
@@ -85,7 +87,7 @@ describe("sendExecApprovalFollowupResult", () => {
 
   it("evicts oldest followup failure dedupe keys after reaching the cap", async () => {
     sendExecApprovalFollowup.mockRejectedValue(new Error("Channel is required"));
-    const deps = { sendExecApprovalFollowup, logWarn };
+    const deps = { sendExecApprovalFollowup, logWarn, logError, retryDelaysMs: [] as number[] };
 
     for (let i = 0; i <= maxExecApprovalFollowupFailureLogKeys; i += 1) {
       await sendExecApprovalFollowupResult(
@@ -196,6 +198,37 @@ describe("sendExecApprovalFollowupResult", () => {
     expect(call).not.toHaveProperty("internalRuntimeHandoffId");
     expect(call).not.toHaveProperty("idempotencyKey");
     expect(call).not.toHaveProperty("bashElevated");
+  });
+
+  it("retries transient failures before logging", async () => {
+    sendExecApprovalFollowup
+      .mockRejectedValueOnce(new Error("transient"))
+      .mockResolvedValueOnce(true);
+
+    await sendExecApprovalFollowupResult(
+      { approvalId: "approval-retry-ok", sessionKey: "agent:main:main" },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn, logError, retryDelaysMs: [0] },
+    );
+
+    expect(sendExecApprovalFollowup).toHaveBeenCalledTimes(2);
+    expect(logWarn).not.toHaveBeenCalled();
+    expect(logError).not.toHaveBeenCalled();
+  });
+
+  it("logs error after all retry attempts are exhausted", async () => {
+    sendExecApprovalFollowup.mockRejectedValue(new Error("permanent"));
+
+    await sendExecApprovalFollowupResult(
+      { approvalId: "approval-retry-fail", sessionKey: "agent:main:main" },
+      "Exec finished",
+      { sendExecApprovalFollowup, logWarn, logError, retryDelaysMs: [10, 10] },
+    );
+
+    expect(sendExecApprovalFollowup).toHaveBeenCalledTimes(3);
+    expect(logError).toHaveBeenCalledTimes(1);
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("failed after 3 attempts"));
+    expect(logWarn).toHaveBeenCalledTimes(1);
   });
 });
 
