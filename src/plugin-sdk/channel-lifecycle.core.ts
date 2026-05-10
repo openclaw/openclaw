@@ -1,5 +1,11 @@
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
 import { createRunStateMachine, type RunStateStatusSink } from "../channels/run-state-machine.js";
+import {
+  GatewayDrainingError,
+  isGatewayDraining,
+  runWithGatewayDrainInternalContext,
+} from "../process/command-queue.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import { KeyedAsyncQueue } from "./keyed-async-queue.js";
 
 type CloseAwareServer = {
@@ -19,6 +25,10 @@ export type ChannelRunQueueTaskContext = {
 
 export type ChannelRunQueue = {
   enqueue: (key: string, task: (context: ChannelRunQueueTaskContext) => Promise<void>) => void;
+  enqueueInternal?: (
+    key: string,
+    task: (context: ChannelRunQueueTaskContext) => Promise<void>,
+  ) => void;
   deactivate: () => void;
 };
 
@@ -27,6 +37,47 @@ export type ChannelRunQueueParams = {
   abortSignal?: AbortSignal;
   onError?: (error: unknown) => void;
 };
+
+type ChannelRunQueueDrainHandle = {
+  getPendingCount: () => number;
+};
+
+const CHANNEL_RUN_QUEUES_KEY = Symbol.for("openclaw.channelRunQueues");
+const CHANNEL_RUN_QUEUES = resolveGlobalMap<symbol, ChannelRunQueueDrainHandle>(
+  CHANNEL_RUN_QUEUES_KEY,
+);
+
+export async function waitForChannelRunQueueDrain(
+  timeoutMs: number,
+): Promise<{ drained: boolean; remaining: number }> {
+  const deadline = Date.now() + timeoutMs;
+  const pollIntervalMs = 50;
+  const getPendingCount = () => {
+    let total = 0;
+    for (const handle of CHANNEL_RUN_QUEUES.values()) {
+      total += handle.getPendingCount();
+    }
+    return total;
+  };
+
+  let remaining = getPendingCount();
+  if (remaining === 0) {
+    return { drained: true, remaining: 0 };
+  }
+
+  while (Date.now() < deadline) {
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, Math.min(pollIntervalMs, deadline - Date.now()));
+      timer.unref?.();
+    });
+    remaining = getPendingCount();
+    if (remaining === 0) {
+      return { drained: true, remaining: 0 };
+    }
+  }
+
+  return { drained: false, remaining };
+}
 
 /** Bind a fixed account id into a status writer so lifecycle code can emit partial snapshots. */
 export function createAccountStatusSink(params: {
@@ -45,9 +96,14 @@ export function createAccountStatusSink(params: {
  */
 export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRunQueue {
   const queue = new KeyedAsyncQueue();
+  let pendingCount = 0;
   const runState = createRunStateMachine({
     setStatus: params.setStatus,
     abortSignal: params.abortSignal,
+  });
+  const registryKey = Symbol();
+  CHANNEL_RUN_QUEUES.set(registryKey, {
+    getPendingCount: () => pendingCount,
   });
   const reportError = (error: unknown) => {
     try {
@@ -57,27 +113,55 @@ export function createChannelRunQueue(params: ChannelRunQueueParams): ChannelRun
       // secondary unhandled rejection from their reporting hook.
     }
   };
-
-  return {
-    enqueue(key, task) {
-      void queue
-        .enqueue(key, async () => {
+  const enqueueAccepted = (
+    key: string,
+    task: (context: ChannelRunQueueTaskContext) => Promise<void>,
+    allowDuringGatewayDrain: boolean,
+  ) => {
+    pendingCount += 1;
+    void queue
+      .enqueue(key, async () => {
+        if (!runState.isActive()) {
+          return;
+        }
+        runState.onRunStart();
+        try {
           if (!runState.isActive()) {
             return;
           }
-          runState.onRunStart();
-          try {
-            if (!runState.isActive()) {
-              return;
-            }
+          const runTask = async () => {
             await task({ lifecycleSignal: params.abortSignal });
-          } finally {
-            runState.onRunEnd();
+          };
+          if (allowDuringGatewayDrain) {
+            await runWithGatewayDrainInternalContext(runTask);
+          } else {
+            await runTask();
           }
-        })
-        .catch(reportError);
+        } finally {
+          runState.onRunEnd();
+        }
+      })
+      .catch(reportError)
+      .finally(() => {
+        pendingCount = Math.max(0, pendingCount - 1);
+      });
+  };
+
+  return {
+    enqueue(key, task) {
+      if (isGatewayDraining()) {
+        reportError(new GatewayDrainingError());
+        return;
+      }
+      enqueueAccepted(key, task, true);
     },
-    deactivate: runState.deactivate,
+    enqueueInternal(key, task) {
+      enqueueAccepted(key, task, true);
+    },
+    deactivate() {
+      runState.deactivate();
+      CHANNEL_RUN_QUEUES.delete(registryKey);
+    },
   };
 }
 

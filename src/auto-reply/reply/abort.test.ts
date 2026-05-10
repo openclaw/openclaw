@@ -29,6 +29,8 @@ vi.mock("../../agents/pi-embedded.js", () => ({
 
 const commandQueueMocks = vi.hoisted(() => ({
   clearCommandLane: vi.fn(() => 1),
+  isGatewayDrainInternalContext: vi.fn(() => false),
+  isGatewayDraining: vi.fn(() => false),
 }));
 
 vi.mock("../../process/command-queue.js", () => commandQueueMocks);

@@ -11,6 +11,9 @@ const gatewayLog = createSubsystemLogger("gateway");
 const LAUNCHD_SUPERVISED_RESTART_EXIT_DELAY_MS = 1500;
 const DEFAULT_RESTART_DRAIN_TIMEOUT_MS = 300_000;
 const RESTART_DRAIN_STILL_PENDING_WARN_MS = 30_000;
+const FOLLOWUP_DRAIN_TIMEOUT_MS = 5_000;
+const CHANNEL_RUN_QUEUE_DRAIN_TIMEOUT_MS = 5_000;
+const INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_TIMEOUT_MS = 10_000;
 const UPDATE_RESPAWN_HEALTH_POLL_MS = 200;
 
@@ -361,8 +364,12 @@ export async function runGatewayLoop(params: {
             getActiveEmbeddedRunCount,
             getActiveTaskCount,
             markGatewayDraining,
+            runWithGatewayDrainInternalContext,
+            flushAllInboundDebouncers,
+            waitForChannelRunQueueDrain,
             waitForActiveEmbeddedRuns,
             waitForActiveTasks,
+            waitForFollowupQueueDrain,
           } = await loadGatewayLifecycleRuntimeModule();
           const formatTaskBlockers = () => {
             const blockers = getInspectableActiveTaskRestartBlockers();
@@ -396,6 +403,17 @@ export async function runGatewayLoop(params: {
           // Reject new enqueues immediately during the drain window so
           // sessions get an explicit restart error instead of silent task loss.
           markGatewayDraining();
+          const flushedBuffers = await runWithGatewayDrainInternalContext(() =>
+            flushAllInboundDebouncers({
+              timeoutMs: INBOUND_DEBOUNCE_FLUSH_TIMEOUT_MS,
+            }),
+          );
+          if (flushedBuffers > 0) {
+            gatewayLog.info(
+              `flushed ${flushedBuffers} pending inbound debounce buffer(s) before restart`,
+            );
+          }
+
           const activeTasks = getActiveTaskCount();
           const activeRuns = getActiveEmbeddedRunCount();
 
@@ -435,6 +453,26 @@ export async function runGatewayLoop(params: {
                 abortEmbeddedPiRun(undefined, { mode: "all" });
               }
             }
+          }
+
+          const channelRunQueueResult = await waitForChannelRunQueueDrain(
+            CHANNEL_RUN_QUEUE_DRAIN_TIMEOUT_MS,
+          );
+          if (channelRunQueueResult.drained) {
+            gatewayLog.info("channel run queues drained before restart");
+          } else {
+            gatewayLog.warn(
+              `channel run queue drain timeout; ${channelRunQueueResult.remaining} item(s) still pending`,
+            );
+          }
+
+          const followupResult = await waitForFollowupQueueDrain(FOLLOWUP_DRAIN_TIMEOUT_MS);
+          if (followupResult.drained) {
+            gatewayLog.info("followup queues drained before restart");
+          } else {
+            gatewayLog.warn(
+              `followup queue drain timeout; ${followupResult.remaining} item(s) still pending`,
+            );
           }
         }
 

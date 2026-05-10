@@ -47,6 +47,9 @@ const getInspectableActiveTaskRestartBlockers = vi.fn(
     }>,
 );
 const markGatewayDraining = vi.fn();
+const runWithGatewayDrainInternalContext = vi.fn(
+  async <T>(task: () => Promise<T>): Promise<T> => task(),
+);
 const waitForActiveTasks = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
 const resetAllLanes = vi.fn();
 const reloadTaskRegistryFromStore = vi.fn();
@@ -69,6 +72,15 @@ const abortEmbeddedPiRun = vi.fn(
 );
 const getActiveEmbeddedRunCount = vi.fn(() => 0);
 const waitForActiveEmbeddedRuns = vi.fn(async (_timeoutMs?: number) => ({ drained: true }));
+const flushAllInboundDebouncers = vi.fn(async (_options?: { timeoutMs?: number }) => 0);
+const waitForFollowupQueueDrain = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+  remaining: 0,
+}));
+const waitForChannelRunQueueDrain = vi.fn(async (_timeoutMs: number) => ({
+  drained: true,
+  remaining: 0,
+}));
 const DRAIN_TIMEOUT_LOG = "drain timeout reached; proceeding with restart";
 const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const loadConfig = vi.fn<() => { gateway: { reload: { deferralTimeoutMs?: number } } }>(() => ({
@@ -83,6 +95,15 @@ const gatewayLog = {
   warn: vi.fn(),
   error: vi.fn(),
 };
+
+vi.mock("../../auto-reply/inbound-debounce.js", () => ({
+  flushAllInboundDebouncers: (options?: { timeoutMs?: number }) =>
+    flushAllInboundDebouncers(options),
+}));
+
+vi.mock("../../auto-reply/reply/queue/drain-all.js", () => ({
+  waitForFollowupQueueDrain: (timeoutMs: number) => waitForFollowupQueueDrain(timeoutMs),
+}));
 
 vi.mock("../../infra/gateway-lock.js", () => ({
   acquireGatewayLock: (opts?: { port?: number }) => acquireGatewayLock(opts),
@@ -124,9 +145,16 @@ vi.mock("../../infra/restart-handoff.js", () => ({
 
 vi.mock("../../process/command-queue.js", () => ({
   getActiveTaskCount: () => getActiveTaskCount(),
+  getGatewayDrainingStartedAt: () => undefined,
   markGatewayDraining: () => markGatewayDraining(),
+  runWithGatewayDrainInternalContext: <T>(task: () => Promise<T>) =>
+    runWithGatewayDrainInternalContext(task),
   waitForActiveTasks: (timeoutMs?: number) => waitForActiveTasks(timeoutMs),
   resetAllLanes: () => resetAllLanes(),
+}));
+
+vi.mock("../../plugin-sdk/channel-lifecycle.core.js", () => ({
+  waitForChannelRunQueueDrain: (timeoutMs: number) => waitForChannelRunQueueDrain(timeoutMs),
 }));
 
 vi.mock("../../tasks/runtime-internal.js", () => ({
@@ -604,6 +632,106 @@ describe("runGatewayLoop", () => {
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
       );
+    });
+  });
+
+  it("gates ingress before flushing and draining restart queues on SIGUSR1", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const drainEvents: string[] = [];
+      runWithGatewayDrainInternalContext.mockImplementationOnce(
+        async <T>(task: () => Promise<T>): Promise<T> => {
+          drainEvents.push("start");
+          try {
+            return await task();
+          } finally {
+            drainEvents.push("end");
+          }
+        },
+      );
+      flushAllInboundDebouncers.mockImplementationOnce(async () => {
+        drainEvents.push("flush");
+        return 2;
+      });
+      waitForChannelRunQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: true,
+        remaining: 0,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(markGatewayDraining).toHaveBeenCalledTimes(1);
+      expect(runWithGatewayDrainInternalContext).toHaveBeenCalledTimes(1);
+      expect(flushAllInboundDebouncers).toHaveBeenCalledWith({ timeoutMs: 10_000 });
+      expect(drainEvents).toEqual(["start", "flush", "end"]);
+      expect(waitForChannelRunQueueDrain).toHaveBeenCalledWith(5_000);
+      expect(waitForFollowupQueueDrain).toHaveBeenCalledWith(5_000);
+      expect(markGatewayDraining.mock.invocationCallOrder[0]).toBeLessThan(
+        runWithGatewayDrainInternalContext.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(runWithGatewayDrainInternalContext.mock.invocationCallOrder[0]).toBeLessThan(
+        flushAllInboundDebouncers.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(flushAllInboundDebouncers.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForChannelRunQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(waitForChannelRunQueueDrain.mock.invocationCallOrder[0]).toBeLessThan(
+        waitForFollowupQueueDrain.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+      );
+      expect(gatewayLog.info).toHaveBeenCalledWith(
+        "flushed 2 pending inbound debounce buffer(s) before restart",
+      );
+      expect(gatewayLog.info).toHaveBeenCalledWith("channel run queues drained before restart");
+      expect(gatewayLog.info).toHaveBeenCalledWith("followup queues drained before restart");
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
+    });
+  });
+
+  it("logs restart drain queue timeouts", async () => {
+    vi.clearAllMocks();
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      waitForChannelRunQueueDrain.mockResolvedValueOnce({
+        drained: false,
+        remaining: 2,
+      });
+      waitForFollowupQueueDrain.mockResolvedValueOnce({
+        drained: false,
+        remaining: 3,
+      });
+
+      const { exited } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+      const sigterm = captureSignal("SIGTERM");
+
+      sigusr1();
+
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "channel run queue drain timeout; 2 item(s) still pending",
+      );
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "followup queue drain timeout; 3 item(s) still pending",
+      );
+
+      sigterm();
+      await expect(exited).resolves.toBe(0);
     });
   });
 

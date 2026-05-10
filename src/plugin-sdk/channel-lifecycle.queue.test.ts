@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
-import { createChannelRunQueue } from "./channel-lifecycle.core.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { markGatewayDraining, resetAllLanes } from "../process/command-queue.js";
+import { createChannelRunQueue, waitForChannelRunQueueDrain } from "./channel-lifecycle.core.js";
 
 function createDeferred() {
   let resolve: (() => void) | undefined;
@@ -16,6 +17,10 @@ async function flushAsyncWork() {
 }
 
 describe("createChannelRunQueue", () => {
+  afterEach(() => {
+    resetAllLanes();
+  });
+
   it("serializes work per key while allowing unrelated keys to run", async () => {
     const first = createDeferred();
     const second = createDeferred();
@@ -110,5 +115,37 @@ describe("createChannelRunQueue", () => {
     await flushAsyncWork();
 
     expect(task).not.toHaveBeenCalled();
+  });
+
+  it("drains accepted work and rejects external enqueue after gateway draining starts", async () => {
+    const first = createDeferred();
+    const calls: string[] = [];
+    const onError = vi.fn();
+    const queue = createChannelRunQueue({ onError });
+
+    queue.enqueue("key", async () => {
+      calls.push("start:first");
+      await first.promise;
+      calls.push("end:first");
+    });
+    await flushAsyncWork();
+
+    markGatewayDraining();
+    queue.enqueue("key", async () => {
+      calls.push("external-after-drain");
+    });
+    queue.enqueueInternal?.("key", async () => {
+      calls.push("internal-after-drain");
+    });
+
+    const pending = waitForChannelRunQueueDrain(1_000);
+    await flushAsyncWork();
+    first.resolve?.();
+    await first.promise;
+    await pending;
+    await flushAsyncWork();
+
+    expect(calls).toEqual(["start:first", "end:first", "internal-after-drain"]);
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({ name: "GatewayDrainingError" });
   });
 });

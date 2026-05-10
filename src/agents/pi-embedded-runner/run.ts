@@ -375,14 +375,20 @@ export async function runEmbeddedPiAgent(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const withGatewayDrainOption = (
+    opts?: CommandQueueEnqueueOptions,
+  ): CommandQueueEnqueueOptions | undefined =>
+    params.allowGatewayDrain ? { ...opts, allowDuringGatewayDrain: true } : opts;
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+    withEmbeddedRunLaneTimeout(withGatewayDrainOption(opts), laneTaskTimeoutMs);
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
+    params.enqueue
+      ? params.enqueue(task, withGatewayDrainOption(opts))
+      : enqueueCommandInLane(sessionLane, task, withGatewayDrainOption(opts));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

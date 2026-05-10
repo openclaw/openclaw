@@ -1,4 +1,9 @@
 import { channelRouteCompactKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  getGatewayDrainingStartedAt,
+  isGatewayDrainInternalContext,
+  runWithGatewayDrainInternalContext,
+} from "../../../process/command-queue.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import {
@@ -167,6 +172,32 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   return key ? { key } : { cross: true };
 }
 
+function shouldRunFollowupDuringGatewayDrain(run: FollowupRun): boolean {
+  if (run.allowDuringGatewayDrain || isGatewayDrainInternalContext()) {
+    return true;
+  }
+  const drainingStartedAt = getGatewayDrainingStartedAt();
+  return drainingStartedAt !== undefined && run.enqueuedAt <= drainingStartedAt;
+}
+
+async function runFollowupWithDrainContext(
+  run: FollowupRun,
+  runFollowup: (run: FollowupRun) => Promise<void>,
+): Promise<void> {
+  if (!shouldRunFollowupDuringGatewayDrain(run)) {
+    await runFollowup(run);
+    return;
+  }
+  await runWithGatewayDrainInternalContext(async () => {
+    await runFollowup({ ...run, allowDuringGatewayDrain: true });
+  });
+}
+
+function queueWasAcceptedBeforeGatewayDrain(lastEnqueuedAt: number): boolean {
+  const drainingStartedAt = getGatewayDrainingStartedAt();
+  return drainingStartedAt !== undefined && lastEnqueuedAt <= drainingStartedAt;
+}
+
 export function scheduleFollowupDrain(
   key: string,
   runFollowup: (run: FollowupRun) => Promise<void>,
@@ -176,6 +207,9 @@ export function scheduleFollowupDrain(
     return;
   }
   const effectiveRunFollowup = FOLLOWUP_RUN_CALLBACKS.get(key) ?? runFollowup;
+  const runTrustedFollowup = async (run: FollowupRun) => {
+    await runFollowupWithDrainContext(run, effectiveRunFollowup);
+  };
   // Cache callback only when a drain actually starts. Avoid keeping stale
   // callbacks around from finalize calls where no queue work is pending.
   rememberFollowupDrainCallback(key, effectiveRunFollowup);
@@ -197,16 +231,17 @@ export function scheduleFollowupDrain(
             collectState,
             isCrossChannel,
             items: queue.items,
-            run: effectiveRunFollowup,
+            run: runTrustedFollowup,
           });
           if (collectDrainResult === "empty") {
             const summaryOnlyPrompt = previewQueueSummaryPrompt({ state: queue, noun: "message" });
             const run = queue.lastRun;
             if (summaryOnlyPrompt && run) {
-              await effectiveRunFollowup({
+              await runTrustedFollowup({
                 prompt: summaryOnlyPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
                 ...collectQueuedImages(queue.items),
               });
               clearQueueSummaryState(queue);
@@ -226,10 +261,11 @@ export function scheduleFollowupDrain(
             if (!summary || !run) {
               break;
             }
-            await effectiveRunFollowup({
+            await runTrustedFollowup({
               prompt: summary,
               run,
               enqueuedAt: Date.now(),
+              allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
             });
             clearQueueSummaryState(queue);
             continue;
@@ -249,12 +285,13 @@ export function scheduleFollowupDrain(
               summary: pendingSummary,
               renderItem: renderCollectItem,
             });
-            await effectiveRunFollowup({
+            await runTrustedFollowup({
               prompt,
               run,
               enqueuedAt: Date.now(),
               ...routing,
               ...collectQueuedImages(groupItems),
+              allowDuringGatewayDrain: groupItems.some(shouldRunFollowupDuringGatewayDrain),
             });
             queue.items.splice(0, groupItems.length);
             if (pendingSummary) {
@@ -273,10 +310,11 @@ export function scheduleFollowupDrain(
           }
           if (
             !(await drainNextQueueItem(queue.items, async (item) => {
-              await effectiveRunFollowup({
+              await runTrustedFollowup({
                 prompt: summaryPrompt,
                 run,
                 enqueuedAt: Date.now(),
+                allowDuringGatewayDrain: shouldRunFollowupDuringGatewayDrain(item),
                 originatingChannel: item.originatingChannel,
                 originatingTo: item.originatingTo,
                 originatingAccountId: item.originatingAccountId,
@@ -291,7 +329,7 @@ export function scheduleFollowupDrain(
           continue;
         }
 
-        if (!(await drainNextQueueItem(queue.items, effectiveRunFollowup))) {
+        if (!(await drainNextQueueItem(queue.items, runTrustedFollowup))) {
           break;
         }
       }

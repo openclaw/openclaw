@@ -24,6 +24,7 @@ type DiscordMessageRunQueueParams = {
 
 type DiscordMessageRunQueue = {
   enqueue: (job: DiscordInboundJob) => void;
+  enqueueInternal: (job: DiscordInboundJob) => void;
   deactivate: () => void;
 };
 
@@ -88,6 +89,17 @@ export function createDiscordMessageRunQueue(
   return {
     enqueue(job) {
       runQueue.enqueue(job.queueKey, async ({ lifecycleSignal }) => {
+        await processDiscordQueuedMessage({
+          job,
+          lifecycleSignal,
+          replayGuard,
+          testing: params.__testing,
+        });
+      });
+    },
+    enqueueInternal(job) {
+      const enqueue = runQueue.enqueueInternal ?? runQueue.enqueue;
+      enqueue(job.queueKey, async ({ lifecycleSignal }) => {
         await processDiscordQueuedMessage({
           job,
           lifecycleSignal,

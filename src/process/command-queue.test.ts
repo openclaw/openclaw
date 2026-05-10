@@ -29,11 +29,15 @@ let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
 let getActiveTaskCount: CommandQueueModule["getActiveTaskCount"];
 let getCommandLaneSnapshot: CommandQueueModule["getCommandLaneSnapshot"];
 let getCommandLaneSnapshots: CommandQueueModule["getCommandLaneSnapshots"];
+let getGatewayDrainingStartedAt: CommandQueueModule["getGatewayDrainingStartedAt"];
 let getQueueSize: CommandQueueModule["getQueueSize"];
+let isGatewayDrainInternalContext: CommandQueueModule["isGatewayDrainInternalContext"];
+let isGatewayDraining: CommandQueueModule["isGatewayDraining"];
 let markGatewayDraining: CommandQueueModule["markGatewayDraining"];
 let resetAllLanes: CommandQueueModule["resetAllLanes"];
 let resetCommandLane: CommandQueueModule["resetCommandLane"];
 let resetCommandQueueStateForTest: CommandQueueModule["resetCommandQueueStateForTest"];
+let runWithGatewayDrainInternalContext: CommandQueueModule["runWithGatewayDrainInternalContext"];
 let setCommandLaneConcurrency: CommandQueueModule["setCommandLaneConcurrency"];
 let waitForActiveTasks: CommandQueueModule["waitForActiveTasks"];
 
@@ -74,11 +78,15 @@ describe("command queue", () => {
       getActiveTaskCount,
       getCommandLaneSnapshot,
       getCommandLaneSnapshots,
+      getGatewayDrainingStartedAt,
       getQueueSize,
+      isGatewayDrainInternalContext,
+      isGatewayDraining,
       markGatewayDraining,
       resetAllLanes,
       resetCommandLane,
       resetCommandQueueStateForTest,
+      runWithGatewayDrainInternalContext,
       setCommandLaneConcurrency,
       waitForActiveTasks,
     } = await import("./command-queue.js"));
@@ -519,9 +527,25 @@ describe("command queue", () => {
 
   it("rejects new enqueues with GatewayDrainingError after markGatewayDraining", async () => {
     markGatewayDraining();
+    expect(isGatewayDraining()).toBe(true);
+    expect(typeof getGatewayDrainingStartedAt()).toBe("number");
     await expect(enqueueCommand(async () => "blocked")).rejects.toBeInstanceOf(
       GatewayDrainingError,
     );
+  });
+
+  it("allows explicit internal enqueues while gateway is draining", async () => {
+    markGatewayDraining();
+
+    await expect(enqueueCommand(async () => "ok", { allowDuringGatewayDrain: true })).resolves.toBe(
+      "ok",
+    );
+    await expect(
+      runWithGatewayDrainInternalContext(async () => {
+        expect(isGatewayDrainInternalContext()).toBe(true);
+        return await enqueueCommandInLane("internal", async () => "nested-ok");
+      }),
+    ).resolves.toBe("nested-ok");
   });
 
   it("does not affect already-active tasks after markGatewayDraining", async () => {

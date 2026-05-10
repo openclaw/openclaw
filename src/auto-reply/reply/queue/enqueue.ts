@@ -1,5 +1,9 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import {
+  isGatewayDrainInternalContext,
+  isGatewayDraining,
+} from "../../../process/command-queue.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
@@ -64,6 +68,12 @@ export function enqueueFollowupRun(
   runFollowup?: (run: FollowupRun) => Promise<void>,
   restartIfIdle = true,
 ): boolean {
+  if (isGatewayDraining() && !run.allowDuringGatewayDrain && !isGatewayDrainInternalContext()) {
+    return false;
+  }
+  if (isGatewayDrainInternalContext()) {
+    run.allowDuringGatewayDrain = true;
+  }
   const queue = getFollowupQueue(key, settings);
   const recentMessageIdKey = dedupeMode !== "none" ? buildRecentMessageIdKey(run, key) : undefined;
   if (recentMessageIdKey && RECENT_QUEUE_MESSAGE_IDS.peek(recentMessageIdKey)) {

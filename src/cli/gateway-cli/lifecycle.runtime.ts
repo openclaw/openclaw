@@ -3,6 +3,8 @@ export {
   getActiveEmbeddedRunCount,
   waitForActiveEmbeddedRuns,
 } from "../../agents/pi-embedded-runner/runs.js";
+export { flushAllInboundDebouncers } from "../../auto-reply/inbound-debounce.js";
+export { waitForFollowupQueueDrain } from "../../auto-reply/reply/queue/drain-all.js";
 export { getRuntimeConfig } from "../../config/config.js";
 export {
   respawnGatewayProcessForUpdate,
@@ -24,10 +26,13 @@ export { markUpdateRestartSentinelFailure } from "../../infra/restart-sentinel.j
 export { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 export { writeDiagnosticStabilityBundleForFailureSync } from "../../logging/diagnostic-stability-bundle.js";
 export {
+  getGatewayDrainingStartedAt,
   getActiveTaskCount,
   markGatewayDraining,
   resetAllLanes,
+  runWithGatewayDrainInternalContext,
   waitForActiveTasks,
 } from "../../process/command-queue.js";
+export { waitForChannelRunQueueDrain } from "../../plugin-sdk/channel-lifecycle.core.js";
 export { getInspectableActiveTaskRestartBlockers } from "../../tasks/task-registry.maintenance.js";
 export { reloadTaskRegistryFromStore } from "../../tasks/runtime-internal.js";
