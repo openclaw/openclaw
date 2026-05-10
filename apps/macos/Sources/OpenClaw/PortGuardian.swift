@@ -26,17 +26,11 @@ actor PortGuardian {
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
     #endif
-    private nonisolated static let appSupportDir: URL = {
-        let base = FileManager().urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return base.appendingPathComponent("OpenClaw", isDirectory: true)
-    }()
-
-    private nonisolated static var recordPath: URL {
-        self.appSupportDir.appendingPathComponent("port-guard.json", isDirectory: false)
-    }
+    private nonisolated static let recordsScope = "macos.port-guardian"
+    private nonisolated static let recordsKey = "records"
 
     init() {
-        self.records = Self.loadRecords(from: Self.recordPath)
+        self.records = Self.loadRecords()
     }
 
     func sweep(mode: AppState.ConnectionMode) async {
@@ -82,7 +76,6 @@ actor PortGuardian {
     }
 
     func record(port: Int, pid: Int32, command: String, mode: AppState.ConnectionMode) async {
-        try? FileManager().createDirectory(at: Self.appSupportDir, withIntermediateDirectories: true)
         self.records.removeAll { $0.pid == pid }
         self.records.append(
             Record(
@@ -401,8 +394,9 @@ actor PortGuardian {
         return await self.probeGatewayHealth(port: port)
     }
 
-    private static func loadRecords(from url: URL) -> [Record] {
-        guard let data = try? Data(contentsOf: url),
+    private static func loadRecords() -> [Record] {
+        guard let raw = OpenClawSQLiteKVStore.readString(scope: self.recordsScope, key: self.recordsKey),
+              let data = raw.data(using: .utf8),
               let decoded = try? JSONDecoder().decode([Record].self, from: data)
         else { return [] }
         return decoded
@@ -410,7 +404,8 @@ actor PortGuardian {
 
     private func save() {
         guard let data = try? JSONEncoder().encode(self.records) else { return }
-        try? data.write(to: Self.recordPath, options: [.atomic])
+        guard let raw = String(data: data, encoding: .utf8) else { return }
+        try? OpenClawSQLiteKVStore.writeString(scope: Self.recordsScope, key: Self.recordsKey, value: raw)
     }
 }
 

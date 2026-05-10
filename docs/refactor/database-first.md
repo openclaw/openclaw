@@ -660,6 +660,8 @@ sessionId}` and session key context.
   commands can materialize files explicitly from database rows.
 - The macOS companion no longer has a rolling `diagnostics.jsonl` writer. App
   logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
+- The macOS port-guardian record list now uses shared SQLite KV under
+  `macos.port-guardian/records` instead of an Application Support JSON file.
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock
   files. Done.
 - Gateway restart sentinel state now uses shared SQLite KV instead of
