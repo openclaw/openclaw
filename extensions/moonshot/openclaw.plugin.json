@@ -36,6 +36,9 @@
     "aliases": {
       "moonshotai": {
         "provider": "moonshot"
+      },
+      "moonshot-ai": {
+        "provider": "moonshot"
       }
     },
     "providers": {

@@ -159,6 +159,9 @@ describe("manifest model catalog planner", () => {
                 moonshotai: {
                   provider: "moonshot",
                 },
+                "moonshot-ai": {
+                  provider: "moonshot",
+                },
               },
               discovery: {
                 moonshot: "static",
@@ -190,6 +193,42 @@ describe("manifest model catalog planner", () => {
         ref: "moonshotai/kimi-k2.6",
         api: "openai-completions",
         baseUrl: "https://api.moonshot.ai/v1",
+      }),
+    ]);
+  });
+
+  it("plans moonshot-ai alias rows from the moonshot provider catalog", () => {
+    const plan = planManifestModelCatalogRows({
+      providerFilter: "moonshot-ai",
+      registry: {
+        plugins: [
+          {
+            id: "moonshot",
+            providers: ["moonshot"],
+            modelCatalog: {
+              aliases: {
+                "moonshot-ai": {
+                  provider: "moonshot",
+                },
+              },
+              providers: {
+                moonshot: {
+                  api: "openai-completions",
+                  baseUrl: "https://api.moonshot.ai/v1",
+                  models: [{ id: "kimi-k2.6", name: "Kimi K2.6" }],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(plan.rows).toEqual([
+      expect.objectContaining({
+        provider: "moonshot-ai",
+        id: "kimi-k2.6",
+        ref: "moonshot-ai/kimi-k2.6",
       }),
     ]);
   });
