@@ -128,6 +128,29 @@ describe("startGatewayMaintenanceTimers", () => {
     stopMaintenanceTimers(timers);
   });
 
+  it("notifies systemd readiness and watchdog liveness from the gateway tick", async () => {
+    vi.useFakeTimers();
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const systemdNotify = {
+      ready: vi.fn(),
+      watchdog: vi.fn(),
+    };
+
+    const timers = startGatewayMaintenanceTimers({
+      ...createMaintenanceTimerDeps(),
+      systemdNotify,
+    });
+
+    await Promise.resolve();
+    expect(systemdNotify.ready).toHaveBeenCalledTimes(1);
+    expect(systemdNotify.watchdog).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(systemdNotify.watchdog).toHaveBeenCalledTimes(2);
+
+    stopMaintenanceTimers(timers);
+  });
+
   it("skips overlapping media cleanup runs", async () => {
     vi.useFakeTimers();
     let resolveCleanup = () => {};

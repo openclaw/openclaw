@@ -104,6 +104,8 @@ For VM hosts using `systemd`, consider:
 - Keep restart behavior explicit:
   - `Restart=always`
   - `RestartSec=2`
+  - `WatchdogSec=90s`
+  - `NotifyAccess=all`
   - `TimeoutStartSec=90`
 - Prefer SSD-backed disks for state/cache paths to reduce random-I/O cold-start penalties.
 
@@ -119,6 +121,8 @@ Environment=OPENCLAW_NO_RESPAWN=1
 Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
 Restart=always
 RestartSec=2
+WatchdogSec=90s
+NotifyAccess=all
 TimeoutStartSec=90
 ```
 

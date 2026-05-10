@@ -1,5 +1,10 @@
 import type { HealthSummary } from "../commands/health.js";
 import { sweepStaleRunContexts } from "../infra/agent-events.js";
+import {
+  createSystemdNotifier,
+  runSystemdNotifier,
+  type SystemdNotifier,
+} from "../infra/systemd-notify.js";
 import { cleanOldMedia } from "../media/store.js";
 import { abortChatRunById, type ChatAbortControllerEntry } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
@@ -45,6 +50,7 @@ export function startGatewayMaintenanceTimers(params: {
   agentRunSeq: Map<string, number>;
   nodeSendToSession: (sessionKey: string, event: string, payload: unknown) => void;
   mediaCleanupTtlMs?: number;
+  systemdNotify?: SystemdNotifier;
 }): {
   tickInterval: ReturnType<typeof setInterval>;
   healthInterval: ReturnType<typeof setInterval>;
@@ -60,12 +66,16 @@ export function startGatewayMaintenanceTimers(params: {
     });
     params.nodeSendToAllSubscribed("health", snap);
   });
+  const systemdNotify = params.systemdNotify ?? createSystemdNotifier({ log: params.logHealth });
+  runSystemdNotifier(systemdNotify.ready, params.logHealth);
+  runSystemdNotifier(systemdNotify.watchdog, params.logHealth);
 
   // periodic keepalive
   const tickInterval = setInterval(() => {
     const payload = { ts: Date.now() };
     params.broadcast("tick", payload);
     params.nodeSendToAllSubscribed("tick", payload);
+    runSystemdNotifier(systemdNotify.watchdog, params.logHealth);
   }, TICK_INTERVAL_MS);
 
   // periodic health refresh to keep cached snapshot warm

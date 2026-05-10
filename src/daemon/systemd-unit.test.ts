@@ -25,6 +25,8 @@ describe("buildSystemdUnit", () => {
     expect(unit).toContain("StartLimitBurst=5");
     expect(unit).toContain("StartLimitIntervalSec=60");
     expect(unit).toContain("RestartPreventExitStatus=78");
+    expect(unit).toContain("WatchdogSec=90s");
+    expect(unit).toContain("NotifyAccess=all");
   });
 
   it("rejects environment values with line breaks", () => {

@@ -77,6 +77,10 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
+    "WatchdogSec=90s",
+    // Gateway watchdog pings are sent through the systemd-notify helper
+    // process, so systemd must accept notifications from the service cgroup.
+    "NotifyAccess=all",
     "TimeoutStopSec=30",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
