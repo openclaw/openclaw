@@ -369,12 +369,11 @@ function assertCronSelfRemoveScope(
   if (!selfRemoveOnlyJobId || isCronSelfIntrospectionAction(action)) {
     return;
   }
-  if (action !== "remove") {
-    throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
-  }
-  const id = readCronJobIdParam(params);
-  if (id && id === selfRemoveOnlyJobId) {
-    return;
+  if (action === "remove" || action === "runs") {
+    const id = readCronJobIdParam(params);
+    if (id && id === selfRemoveOnlyJobId) {
+      return;
+    }
   }
   throw new Error(CRON_SELF_REMOVE_SCOPE_ERROR);
 }
@@ -693,7 +692,7 @@ CRITICAL CONSTRAINTS:
 Default: prefer isolated agentTurn jobs unless the user explicitly wants current-session binding.
 
 RESTRICTED CRON RUNS:
-- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, and mutation actions remain limited to removing the current cron job.
+- Some isolated cron runs receive a narrow cron grant for self-cleanup. In that mode, read-only status and list are for self-introspection only, runs (job run history) is allowed for the current job only, and mutation actions remain limited to removing the current cron job.
 
 WAKE MODES (for wake action):
 - "next-heartbeat" (default): Wake on next heartbeat
@@ -735,20 +734,23 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
           const includeDisabled = Boolean(params.includeDisabled);
           let offset = 0;
           let result: unknown;
-          for (;;) {
+          let shouldContinue = true;
+          while (shouldContinue) {
             result = await callGateway("cron.list", gatewayOpts, {
               includeDisabled,
               agentId: listAgentId,
               ...(selfRemoveOnlyJobId ? { limit: 200, offset } : {}),
             });
             if (!selfRemoveOnlyJobId || cronListResultHasJob(result, selfRemoveOnlyJobId)) {
-              break;
+              shouldContinue = false;
+            } else {
+              const nextOffset = readCronListNextOffset(result, offset);
+              if (nextOffset === undefined) {
+                shouldContinue = false;
+              } else {
+                offset = nextOffset;
+              }
             }
-            const nextOffset = readCronListNextOffset(result, offset);
-            if (nextOffset === undefined) {
-              break;
-            }
-            offset = nextOffset;
           }
           return jsonResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,

@@ -27,8 +27,12 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
 import { resolveProviderTransportTurnStateWithPlugin } from "../plugins/provider-runtime.js";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./copilot-dynamic-headers.js";
+import { createDeepSeekTextFilter } from "./deepseek-text-filter.js";
 import { detectOpenAICompletionsCompat } from "./openai-completions-compat.js";
-import { flattenCompletionMessagesToStringContent } from "./openai-completions-string-content.js";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "./openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortMap } from "./openai-reasoning-compat.js";
 import {
   isOpenAIGpt54MiniModel,
@@ -58,6 +62,7 @@ import { mergeTransportMetadata, sanitizeTransportPayloadText } from "./transpor
 
 const DEFAULT_AZURE_OPENAI_API_VERSION = "2024-12-01-preview";
 const OPENAI_CODEX_RESPONSES_EMPTY_INPUT_TEXT = " ";
+const GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP = "skip_thought_signature_validator";
 const log = createSubsystemLogger("openai-transport");
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
@@ -399,10 +404,11 @@ function convertResponsesTools(
       type: "function" as const,
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true) as Record<
-        string,
-        unknown
-      >,
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ) as Record<string, unknown>,
     };
     return strict === undefined ? (base as FunctionTool) : { ...base, strict };
   });
@@ -1349,6 +1355,9 @@ async function processOpenAICompletionsStream(
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const MAX_TOOL_CALL_ARGUMENT_BUFFER_BYTES = 256_000;
   const compat = getCompat(model as OpenAIModeModel);
+  const deepSeekTextFilter = shouldFilterDeepSeekDsmlText(compat)
+    ? createDeepSeekTextFilter()
+    : null;
   let currentBlock:
     | { type: "text"; text: string }
     | { type: "thinking"; thinking: string; thinkingSignature?: string }
@@ -1464,6 +1473,31 @@ async function processOpenAICompletionsStream(
     flushPendingPostToolCallDeltas();
     appendTextDeltaInternal(text);
   };
+  const appendVisibleTextDelta = (text: string) => {
+    if (!text) {
+      return;
+    }
+    if (currentBlock?.type === "toolCall") {
+      queuePostToolCallDelta({ kind: "text", text });
+    } else {
+      appendTextDelta(text);
+    }
+  };
+  const appendFilteredVisibleTextDelta = (text: string) => {
+    const parts = deepSeekTextFilter?.push(text) ?? [text];
+    for (const part of parts) {
+      appendVisibleTextDelta(part);
+    }
+  };
+  const flushDeepSeekTextFilterAtEnd = () => {
+    const parts = deepSeekTextFilter?.flush();
+    if (!parts) {
+      return;
+    }
+    for (const part of parts) {
+      appendVisibleTextDelta(part);
+    }
+  };
   for await (const rawChunk of responseStream as AsyncIterable<unknown>) {
     if (!rawChunk || typeof rawChunk !== "object") {
       continue;
@@ -1488,19 +1522,28 @@ async function processOpenAICompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    if (!choice.delta) {
+    const choiceDelta =
+      choice.delta ??
+      (choice as unknown as { message?: ChatCompletionChunk["choices"][number]["delta"] }).message;
+    if (!choiceDelta) {
       continue;
     }
-    if (choice.delta.content) {
-      if (currentBlock?.type === "toolCall") {
-        queuePostToolCallDelta({ kind: "text", text: choice.delta.content });
-      } else {
-        appendTextDelta(choice.delta.content);
+    if (choiceDelta.content) {
+      // Structured content can contain visible text and thinking blocks in the
+      // same delta, so route each extracted block through the normal stream path.
+      const contentDeltas = getCompletionsContentDeltas(choiceDelta.content);
+      for (const contentDelta of contentDeltas) {
+        if (contentDelta.kind === "text") {
+          appendFilteredVisibleTextDelta(contentDelta.text);
+        } else if (currentBlock?.type === "toolCall") {
+          queuePostToolCallDelta(contentDelta);
+        } else {
+          appendThinkingDelta(contentDelta);
+        }
       }
-      continue;
     }
     const reasoningDeltas = getCompletionsReasoningDeltas(
-      choice.delta as Record<string, unknown>,
+      choiceDelta as Record<string, unknown>,
       compat.visibleReasoningDetailTypes,
     );
     for (const reasoningDelta of reasoningDeltas) {
@@ -1514,8 +1557,8 @@ async function processOpenAICompletionsStream(
         appendThinkingDelta(reasoningDelta);
       }
     }
-    if (choice.delta.tool_calls && choice.delta.tool_calls.length > 0) {
-      for (const toolCall of choice.delta.tool_calls) {
+    if (choiceDelta.tool_calls && choiceDelta.tool_calls.length > 0) {
+      for (const toolCall of choiceDelta.tool_calls) {
         if (
           !currentBlock ||
           currentBlock.type !== "toolCall" ||
@@ -1575,6 +1618,7 @@ async function processOpenAICompletionsStream(
     }
     flushPendingPostToolCallDeltas();
   }
+  flushDeepSeekTextFilterAtEnd();
   finishCurrentBlock();
   if (currentBlock?.type === "toolCall") {
     currentBlock = null;
@@ -1596,6 +1640,53 @@ type CompletionsReasoningDelta =
       kind: "text";
       text: string;
     };
+
+function shouldFilterDeepSeekDsmlText(compat: ReturnType<typeof getCompat>) {
+  return compat.thinkingFormat === "deepseek";
+}
+
+function getCompletionsContentDeltas(content: unknown): CompletionsReasoningDelta[] {
+  if (typeof content === "string") {
+    return content ? [{ kind: "text", text: content }] : [];
+  }
+  if (Array.isArray(content)) {
+    return content.flatMap((item) => getCompletionsContentDeltas(item));
+  }
+  if (!content || typeof content !== "object") {
+    return [];
+  }
+  const record = content as Record<string, unknown>;
+  const type = typeof record.type === "string" ? record.type.toLowerCase() : "";
+  // Some OpenAI-compatible providers, notably Mistral thinking models, stream
+  // `delta.content` as typed objects. Never coerce those objects directly or
+  // they become persisted visible text like "[object Object]".
+  const extractText = (value: unknown): string => {
+    if (typeof value === "string") {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.map((item) => extractText(item)).join("");
+    }
+    if (value && typeof value === "object") {
+      const nested = value as Record<string, unknown>;
+      return extractText(nested.text ?? nested.content ?? nested.thinking);
+    }
+    return "";
+  };
+  const text = extractText(record.text ?? record.content ?? record.thinking);
+  if (!text) {
+    return [];
+  }
+  // Preserve provider reasoning as OpenClaw thinking blocks so channel/UI
+  // surfaces can decide whether to show it instead of leaking it as answer text.
+  if (type.includes("thinking") || type.includes("reasoning")) {
+    return [{ kind: "thinking", signature: "content", text }];
+  }
+  if (type === "text" || type === "output_text" || type.endsWith(".output_text")) {
+    return [{ kind: "text", text }];
+  }
+  return [];
+}
 
 function getCompletionsReasoningDeltas(
   delta: Record<string, unknown>,
@@ -1686,6 +1777,7 @@ function getCompat(model: OpenAIModeModel): {
   supportsStrictMode: boolean;
   supportsPromptCacheKey: boolean;
   requiresStringContent: boolean;
+  strictMessageKeys: boolean;
   visibleReasoningDetailTypes: string[];
 } {
   const detected = detectCompat(model);
@@ -1715,6 +1807,7 @@ function getCompat(model: OpenAIModeModel): {
     supportsStrictMode: compat.supportsStrictMode ?? detected.supportsStrictMode,
     supportsPromptCacheKey: compat.supportsPromptCacheKey === true,
     requiresStringContent: compat.requiresStringContent ?? false,
+    strictMessageKeys: compat.strictMessageKeys === true,
     visibleReasoningDetailTypes:
       compat.visibleReasoningDetailTypes ?? detected.visibleReasoningDetailTypes,
   };
@@ -1746,6 +1839,44 @@ function resolveOpenAICompletionsReasoningEffort(options: OpenAICompletionsOptio
   return options?.reasoningEffort ?? options?.reasoning ?? "high";
 }
 
+function isQwenOpenAICompletionsThinkingFormat(format: string): boolean {
+  return format === "qwen" || format === "qwen-chat-template";
+}
+
+function isOpenAICompletionsThinkingEnabled(effort: OpenAIReasoningEffort): boolean {
+  const normalized = effort.trim().toLowerCase();
+  return normalized !== "off" && normalized !== "none";
+}
+
+function setQwenChatTemplateThinking(params: Record<string, unknown>, enabled: boolean): void {
+  const existing = params.chat_template_kwargs;
+  params.chat_template_kwargs =
+    existing && typeof existing === "object" && !Array.isArray(existing)
+      ? { ...(existing as Record<string, unknown>), enable_thinking: enabled }
+      : { enable_thinking: enabled };
+}
+
+function applyQwenOpenAICompletionsThinkingParams(params: {
+  compatThinkingFormat: string;
+  modelReasoning: boolean;
+  payload: Record<string, unknown>;
+  requestedEffort: OpenAIReasoningEffort;
+}): boolean {
+  if (
+    !params.modelReasoning ||
+    !isQwenOpenAICompletionsThinkingFormat(params.compatThinkingFormat)
+  ) {
+    return false;
+  }
+  const enabled = isOpenAICompletionsThinkingEnabled(params.requestedEffort);
+  if (params.compatThinkingFormat === "qwen-chat-template") {
+    setQwenChatTemplateThinking(params.payload, enabled);
+  } else {
+    params.payload.enable_thinking = enabled;
+  }
+  return true;
+}
+
 function convertTools(
   tools: NonNullable<Context["tools"]>,
   compat: ReturnType<typeof getCompat>,
@@ -1767,7 +1898,11 @@ function convertTools(
     function: {
       name: tool.name,
       description: tool.description,
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, strict === true),
+      parameters: normalizeOpenAIStrictToolParameters(
+        tool.parameters,
+        strict === true,
+        model.compat,
+      ),
       ...(strict === undefined ? {} : { strict }),
     },
   }));
@@ -1800,6 +1935,10 @@ function isGoogleOpenAICompatModel(model: OpenAIModeModel): boolean {
   );
 }
 
+function requiresGoogleCompatToolCallThoughtSignature(model: OpenAIModeModel): boolean {
+  return model.id.toLowerCase().includes("gemini-3");
+}
+
 function injectToolCallThoughtSignatures(
   outgoingMessages: unknown[],
   context: Context,
@@ -1809,18 +1948,14 @@ function injectToolCallThoughtSignatures(
     return;
   }
   const sigById = new Map<string, string>();
+  const fallbackSig = requiresGoogleCompatToolCallThoughtSignature(model)
+    ? GEMINI_THOUGHT_SIGNATURE_VALIDATOR_SKIP
+    : undefined;
   for (const msg of context.messages ?? []) {
     if ((msg as { role?: string }).role !== "assistant") {
       continue;
     }
     const source = msg as { api?: string; provider?: string; model?: string; content?: unknown };
-    if (
-      source.api !== model.api ||
-      source.provider !== model.provider ||
-      source.model !== model.id
-    ) {
-      continue;
-    }
     if (!Array.isArray(source.content)) {
       continue;
     }
@@ -1831,11 +1966,18 @@ function injectToolCallThoughtSignatures(
       const id = block.id;
       const sig = block.thoughtSignature;
       if (typeof id === "string" && typeof sig === "string" && sig.length > 0) {
-        sigById.set(id, sig);
+        const isSameRoute =
+          source.api === model.api &&
+          source.provider === model.provider &&
+          source.model === model.id;
+        if (!isSameRoute && !fallbackSig) {
+          continue;
+        }
+        sigById.set(id, isSameRoute ? sig : (fallbackSig ?? sig));
       }
     }
   }
-  if (sigById.size === 0) {
+  if (sigById.size === 0 && !fallbackSig) {
     return;
   }
   for (const message of outgoingMessages) {
@@ -1848,7 +1990,7 @@ function injectToolCallThoughtSignatures(
       if (typeof id !== "string") {
         continue;
       }
-      const sig = sigById.get(id);
+      const sig = sigById.get(id) ?? fallbackSig;
       if (!sig) {
         continue;
       }
@@ -1880,8 +2022,11 @@ export function buildOpenAICompletionsParams(
         systemPrompt: stripSystemPromptCacheBoundary(context.systemPrompt),
       }
     : context;
-  const messages = convertMessages(model as never, completionsContext, compat as never);
+  let messages = convertMessages(model as never, completionsContext, compat as never);
   injectToolCallThoughtSignatures(messages as unknown[], context, model);
+  if (compat.strictMessageKeys) {
+    messages = stripCompletionMessagesToRoleContent(messages) as typeof messages;
+  }
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const params: Record<string, unknown> = {
     model: model.id,
@@ -1934,6 +2079,12 @@ export function buildOpenAICompletionsParams(
     : undefined;
   const omitGpt54MiniToolReasoningEffort =
     isOpenAIGpt54MiniModel(model) && Array.isArray(params.tools) && params.tools.length > 0;
+  const handledQwenThinkingFormat = applyQwenOpenAICompletionsThinkingParams({
+    compatThinkingFormat: compat.thinkingFormat,
+    modelReasoning: model.reasoning,
+    payload: params,
+    requestedEffort: completionsReasoningEffort,
+  });
   if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
@@ -1946,6 +2097,7 @@ export function buildOpenAICompletionsParams(
     resolvedCompletionsReasoningEffort &&
     model.reasoning &&
     compat.supportsReasoningEffort &&
+    !handledQwenThinkingFormat &&
     !omitGpt54MiniToolReasoningEffort
   ) {
     params.reasoning_effort = resolvedCompletionsReasoningEffort;

@@ -4,6 +4,20 @@ import { discoverGatewayBeacons } from "./bonjour-discovery.js";
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
+
 describe("bonjour-discovery", () => {
   it("discovers beacons on darwin across local + wide-area domains", async () => {
     const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
@@ -102,7 +116,7 @@ describe("bonjour-discovery", () => {
     expect(browseCalls.map((c) => c.argv[3])).toEqual(
       expect.arrayContaining(["local.", WIDE_AREA_DOMAIN]),
     );
-    expect(browseCalls.every((c) => c.timeoutMs === 1234)).toBe(true);
+    expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
   it("decodes dns-sd octal escapes in TXT displayName", async () => {
@@ -269,8 +283,8 @@ describe("bonjour-discovery", () => {
       }),
     ]);
 
-    expect(calls.some((c) => c.argv[0] === "tailscale" && c.argv[1] === "status")).toBe(true);
-    expect(calls.some((c) => c.argv[0] === "dig")).toBe(true);
+    expect(calls.map((c) => c.argv.slice(0, 2).join(" "))).toContain("tailscale status");
+    expect(calls.map((c) => c.argv[0])).toContain("dig");
   });
 
   it("normalizes domains and respects domains override", async () => {
@@ -293,9 +307,13 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(calls.filter((c) => c[1] === "-B").map((c) => c[3])).toEqual(
-      expect.arrayContaining(["local.", "openclaw.internal."]),
-    );
+    expect(
+      collectMatching(
+        calls,
+        (c) => c[1] === "-B",
+        (c) => c[3],
+      ),
+    ).toEqual(expect.arrayContaining(["local.", "openclaw.internal."]));
 
     calls.length = 0;
     await discoverGatewayBeacons({
@@ -305,7 +323,7 @@ describe("bonjour-discovery", () => {
       run: run as unknown as typeof runCommandWithTimeout,
     });
 
-    expect(calls.filter((c) => c[1] === "-B")).toHaveLength(1);
+    expect(calls.reduce((count, c) => count + (c[1] === "-B" ? 1 : 0), 0)).toBe(1);
     expect(calls.find((c) => c[1] === "-B")?.[3]).toBe("local.");
   });
 });

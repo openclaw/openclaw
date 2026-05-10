@@ -2,7 +2,7 @@ import {
   createPluginRuntimeMock,
   createStartAccountContext,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "./channel.js";
 import type { TelegramMonitorFn } from "./monitor.types.js";
@@ -63,14 +63,16 @@ function startTelegramAccount(
   const cfg = createTelegramConfig(accountId, telegramOverrides);
   const account = telegramPlugin.config.resolveAccount(cfg, accountId);
   const startAccount = telegramPlugin.gateway?.startAccount;
-  expect(startAccount).toBeDefined();
+  if (!startAccount) {
+    throw new Error("expected Telegram startAccount gateway handler");
+  }
   const ctx = createStartAccountContext({
     account,
     cfg,
   });
   return {
     ctx,
-    task: startAccount!(ctx),
+    task: startAccount(ctx),
   };
 }
 

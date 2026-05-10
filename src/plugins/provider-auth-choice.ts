@@ -6,6 +6,7 @@ import {
 import { upsertAuthProfile } from "../agents/auth-profiles.js";
 import { formatLiteralProviderPrefixedModelRef } from "../agents/model-ref-shared.js";
 import { resolveDefaultAgentWorkspaceDir } from "../agents/workspace.js";
+import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { sanitizeTerminalText } from "../terminal/safe-text.js";
@@ -134,6 +135,8 @@ async function applyDefaultModelFromAuthChoice(params: {
   selectedModelDisplay?: string;
   preserveExistingDefaultModel: boolean | undefined;
   prompter: WizardPrompter;
+  runtime: RuntimeEnv;
+  workspaceDir?: string;
   runSelectedModelHook: (config: OpenClawConfig) => Promise<void>;
 }): Promise<OpenClawConfig> {
   const defaultModelBaseConfig = params.configBeforeProviderAuth ?? params.config;
@@ -146,10 +149,21 @@ async function applyDefaultModelFromAuthChoice(params: {
     params.preserveExistingDefaultModel === true
       ? restoreConfiguredPrimaryModel(params.config, defaultModelBaseConfig)
       : params.config;
-  const nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
+  let nextConfig = applyDefaultModel(defaultModelConfig, params.selectedModel, {
     preserveExistingPrimary: params.preserveExistingDefaultModel === true,
   });
   if (!preservesDifferentPrimary) {
+    const { ensureCodexRuntimePluginForModelSelection } =
+      await import("../commands/codex-runtime-plugin-install.js");
+    nextConfig = (
+      await ensureCodexRuntimePluginForModelSelection({
+        cfg: nextConfig,
+        model: params.selectedModel,
+        prompter: params.prompter,
+        runtime: params.runtime,
+        ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      })
+    ).cfg;
     await params.runSelectedModelHook(nextConfig);
   }
   await noteDefaultModelResult({
@@ -276,9 +290,13 @@ export async function runProviderPluginAuthMethod(params: {
     await params.prompter.note(result.notes.join("\n"), "Provider notes");
   }
 
+  const defaultModel = result.defaultModel
+    ? normalizeAgentModelRefForConfig(result.defaultModel)
+    : undefined;
+
   return {
     config: nextConfig,
-    defaultModel: result.defaultModel,
+    ...(defaultModel ? { defaultModel } : {}),
   };
 }
 
@@ -425,6 +443,8 @@ export async function applyAuthChoiceLoadedPluginProvider(
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir,
         runSelectedModelHook: async (config) => {
           await runProviderModelSelectedHook({
             config,
@@ -517,6 +537,8 @@ export async function applyAuthChoicePluginProvider(
         selectedModelDisplay,
         preserveExistingDefaultModel: params.preserveExistingDefaultModel,
         prompter: params.prompter,
+        runtime: params.runtime,
+        workspaceDir,
         runSelectedModelHook: async (config) => {
           await runProviderModelSelectedHook({
             config,

@@ -3,7 +3,7 @@ import {
   createDirectoryTestRuntime,
   expectDirectorySurface,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
   googlechatDirectoryAdapter,
@@ -107,10 +107,12 @@ vi.mock("./channel.deps.runtime.js", () => {
     GoogleChatConfigSchema: {},
     buildChannelConfigSchema: () => ({}),
     chunkTextForOutbound: (text: string, maxChars: number) => {
-      const words = text.split(/\s+/).filter(Boolean);
       const chunks: string[] = [];
       let current = "";
-      for (const word of words) {
+      for (const word of text.split(/\s+/)) {
+        if (!word) {
+          continue;
+        }
         const next = current ? `${current} ${word}` : word;
         if (current && next.length > maxChars) {
           chunks.push(current);
@@ -171,6 +173,12 @@ afterEach(() => {
   resolveGoogleChatAccountMock.mockImplementation(resolveGoogleChatAccountImpl);
   mockGoogleChatOutboundSpaceResolution();
   mockGoogleChatMediaLoaders();
+});
+
+afterAll(() => {
+  vi.doUnmock("./channel.runtime.js");
+  vi.doUnmock("./channel.deps.runtime.js");
+  vi.resetModules();
 });
 
 function createGoogleChatCfg(): OpenClawConfig {
@@ -449,7 +457,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected invalid target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 
   it("errors when no target is provided", () => {
@@ -461,7 +471,9 @@ describe("googlechatPlugin outbound resolveTarget", () => {
     if (result.ok) {
       throw new Error("Expected missing target to fail");
     }
-    expect(result.error).toBeDefined();
+    expect(result.error.message).toBe(
+      "Google Chat target is required (<spaces/{space}|users/{user}>)",
+    );
   });
 });
 
@@ -507,7 +519,7 @@ describe("googlechatPlugin outbound cfg threading", () => {
       expect.objectContaining({
         account,
         space: "spaces/WORK",
-        text: expect.any(String),
+        text: googlechatPairingTextAdapter.message,
       }),
     );
   });

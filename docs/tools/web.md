@@ -231,13 +231,12 @@ fallbacks after its dedicated web-search config and `GEMINI_API_KEY`. See the
 provider pages for examples.
 
 `tools.web.search.provider` is validated against the web-search provider ids
-declared by bundled and installed plugin manifests, plus known installable
-provider plugins. A typo such as `"brvae"` fails config validation instead of
-silently falling back to auto-detection. If the configured provider is known but
-the owning plugin is unavailable, OpenClaw keeps startup resilient and reports a
-warning so you can run `openclaw doctor --fix` to install or enable the plugin.
-The same warning behavior applies to stale plugin evidence, such as a leftover
-`plugins.entries.<plugin>` block after uninstalling a third-party plugin.
+declared by bundled and installed plugin manifests. A typo such as `"brvae"`
+fails config validation instead of silently falling back to auto-detection. If a
+configured provider only has stale plugin evidence, such as a leftover
+`plugins.entries.<plugin>` block after uninstalling a third-party plugin,
+OpenClaw keeps startup resilient and reports a warning so you can reinstall the
+plugin or run `openclaw doctor --fix` to clean up the stale config.
 
 `web_fetch` fallback provider selection is separate:
 
@@ -256,7 +255,8 @@ When you choose **Kimi** during `openclaw onboard` or
 - the default Kimi web-search model (defaults to `kimi-k2.6`)
 
 For `x_search`, configure `plugins.entries.xai.config.xSearch.*`. It uses the
-same `XAI_API_KEY` fallback as Grok web search.
+same xAI auth profile as chat, or the `XAI_API_KEY` / plugin web-search
+credential used by Grok web search.
 Legacy `tools.web.x_search.*` config is auto-migrated by `openclaw doctor --fix`.
 When you choose Grok during `openclaw onboard` or `openclaw configure --section web`,
 OpenClaw can also offer optional `x_search` setup with the same key.
@@ -368,7 +368,7 @@ tool on the request that serves this tool call.
             cacheTtlMinutes: 15,
           },
           webSearch: {
-            apiKey: "xai-...", // optional if XAI_API_KEY is set
+            apiKey: "xai-...", // optional if an xAI auth profile or XAI_API_KEY is set
             baseUrl: "https://api.x.ai/v1", // optional shared xAI Responses base URL
           },
         },

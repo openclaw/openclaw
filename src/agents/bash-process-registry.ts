@@ -25,6 +25,9 @@ export type SessionStdin = {
   // When backed by a real Node stream (child.stdin), this exists; for PTY wrappers it may not.
   destroy?: () => void;
   destroyed?: boolean;
+  writable?: boolean;
+  writableEnded?: boolean;
+  writableFinished?: boolean;
 };
 
 export interface ProcessSession {
@@ -247,9 +250,17 @@ function capPendingBuffer(buffer: string[], pendingChars: number, cap: number) {
     buffer.push(last.slice(last.length - cap));
     return cap;
   }
-  while (buffer.length && pendingChars - buffer[0].length >= cap) {
-    pendingChars -= buffer[0].length;
-    buffer.shift();
+  let dropCount = 0;
+  while (dropCount < buffer.length) {
+    const chunk = buffer[dropCount];
+    if (chunk === undefined || pendingChars - chunk.length < cap) {
+      break;
+    }
+    pendingChars -= chunk.length;
+    dropCount += 1;
+  }
+  if (dropCount > 0) {
+    buffer.splice(0, dropCount);
   }
   if (buffer.length && pendingChars > cap) {
     const overflow = pendingChars - cap;

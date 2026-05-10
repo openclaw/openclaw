@@ -38,6 +38,9 @@ import {
   SkillsSearchParamsSchema,
   SkillsSearchResultSchema,
   SkillsStatusParamsSchema,
+  SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParamsSchema,
   SkillsUpdateParamsSchema,
   ToolCatalogEntrySchema,
   ToolCatalogGroupSchema,
@@ -239,6 +242,15 @@ import {
 } from "./sessions.js";
 import { PresenceEntrySchema, SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 import {
+  TasksCancelParamsSchema,
+  TasksCancelResultSchema,
+  TasksGetParamsSchema,
+  TasksGetResultSchema,
+  TasksListParamsSchema,
+  TasksListResultSchema,
+  TaskSummarySchema,
+} from "./tasks.js";
+import {
   WizardCancelParamsSchema,
   WizardNextParamsSchema,
   WizardNextResultSchema,
@@ -328,6 +340,13 @@ export const ProtocolSchemas = {
   SessionsDeleteParams: SessionsDeleteParamsSchema,
   SessionsCompactParams: SessionsCompactParamsSchema,
   SessionsUsageParams: SessionsUsageParamsSchema,
+  TaskSummary: TaskSummarySchema,
+  TasksListParams: TasksListParamsSchema,
+  TasksListResult: TasksListResultSchema,
+  TasksGetParams: TasksGetParamsSchema,
+  TasksGetResult: TasksGetResultSchema,
+  TasksCancelParams: TasksCancelParamsSchema,
+  TasksCancelResult: TasksCancelResultSchema,
   ConfigGetParams: ConfigGetParamsSchema,
   ConfigSetParams: ConfigSetParamsSchema,
   ConfigApplyParams: ConfigApplyParamsSchema,
@@ -423,6 +442,9 @@ export const ProtocolSchemas = {
   SkillsSearchResult: SkillsSearchResultSchema,
   SkillsDetailParams: SkillsDetailParamsSchema,
   SkillsDetailResult: SkillsDetailResultSchema,
+  SkillsUploadBeginParams: SkillsUploadBeginParamsSchema,
+  SkillsUploadChunkParams: SkillsUploadChunkParamsSchema,
+  SkillsUploadCommitParams: SkillsUploadCommitParamsSchema,
   SkillsInstallParams: SkillsInstallParamsSchema,
   SkillsUpdateParams: SkillsUpdateParamsSchema,
   CronJob: CronJobSchema,
@@ -468,4 +490,4 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
 
-export { PROTOCOL_VERSION } from "../version.js";
+export { MIN_PROBE_PROTOCOL_VERSION, PROTOCOL_VERSION } from "../version.js";

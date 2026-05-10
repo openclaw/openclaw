@@ -11,6 +11,7 @@ import {
   DEFAULT_OAUTH_WARN_MS,
   formatRemainingShort,
 } from "../../agents/auth-health.js";
+import { resolveAuthProfileOrder } from "../../agents/auth-profiles/order.js";
 import { resolveAuthStorePathForDisplay } from "../../agents/auth-profiles/paths.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles as ensureAuthProfileStore } from "../../agents/auth-profiles/store.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
@@ -20,16 +21,20 @@ import {
   resolveProviderEnvApiKeyCandidates,
   resolveProviderEnvAuthEvidence,
 } from "../../agents/model-auth-env-vars.js";
-import { resolveEnvApiKey } from "../../agents/model-auth.js";
+import { resolveEnvApiKey, resolveUsableCustomProviderApiKey } from "../../agents/model-auth.js";
 import {
   buildModelAliasIndex,
   isCliProvider,
   modelKey,
   normalizeProviderId,
-  parseModelRef,
   resolveConfiguredModelRef,
   resolveModelRefFromString,
 } from "../../agents/model-selection.js";
+import {
+  OPENAI_CODEX_PROVIDER_ID,
+  openAIProviderUsesCodexRuntimeByDefault,
+} from "../../agents/openai-codex-routing.js";
+import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { resolveDefaultAgentWorkspaceDir } from "../../agents/workspace.js";
 import { createConfigIO } from "../../config/config.js";
 import {
@@ -245,19 +250,46 @@ export async function modelsStatusCommand(
       .map((p) => (typeof p === "string" ? normalizeProviderId(p) : ""))
       .filter(Boolean),
   );
+  const aliasIndex = buildModelAliasIndex({
+    cfg,
+    defaultProvider: DEFAULT_PROVIDER,
+    ...DISPLAY_MODEL_PARSE_OPTIONS,
+  });
+  const resolveStatusModelRef = (raw: string | undefined) => {
+    const modelRef = raw?.trim();
+    if (!modelRef) {
+      return undefined;
+    }
+    return resolveModelRefFromString({
+      cfg,
+      raw: modelRef,
+      defaultProvider: DEFAULT_PROVIDER,
+      aliasIndex,
+      ...DISPLAY_MODEL_PARSE_OPTIONS,
+    })?.ref;
+  };
   const providersFromModels = new Set<string>();
-  const providersInUse = new Set<string>();
+  const providerUses: Array<{ provider: string; allowCodexRuntimeFallback: boolean }> = [];
+  const addProviderUse = (raw: string | undefined, allowCodexRuntimeFallback: boolean) => {
+    const ref = resolveStatusModelRef(raw);
+    if (ref?.provider) {
+      providerUses.push({
+        provider: normalizeProviderId(ref.provider),
+        allowCodexRuntimeFallback,
+      });
+    }
+  };
   for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks, ...allowed]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersFromModels.add(normalizeProviderId(parsed.provider));
+    const ref = resolveStatusModelRef(raw);
+    if (ref?.provider) {
+      providersFromModels.add(normalizeProviderId(ref.provider));
     }
   }
-  for (const raw of [defaultLabel, ...fallbacks, imageModel, ...imageFallbacks]) {
-    const parsed = parseModelRef(raw ?? "", DEFAULT_PROVIDER, DISPLAY_MODEL_PARSE_OPTIONS);
-    if (parsed?.provider) {
-      providersInUse.add(normalizeProviderId(parsed.provider));
-    }
+  for (const raw of [defaultLabel, ...fallbacks]) {
+    addProviderUse(raw, true);
+  }
+  for (const raw of [imageModel, ...imageFallbacks]) {
+    addProviderUse(raw, false);
   }
 
   const providersFromEnv = new Set<string>();
@@ -293,12 +325,15 @@ export async function modelsStatusCommand(
         providerConfig: resolveProviderConfigForStatus(cfg, normalized),
       },
     });
+    if (!resolved) {
+      continue;
+    }
     syntheticAuthByProvider.set(normalized, {
       value: "plugin-owned",
-      source: resolved?.source ?? "plugin synthetic auth",
-      credential: resolved?.apiKey,
-      mode: resolved?.mode,
-      expiresAt: resolved?.expiresAt,
+      source: resolved.source,
+      credential: resolved.apiKey,
+      mode: resolved.mode,
+      expiresAt: resolved.expiresAt,
     });
   }
   const runtimeCredentialsByProvider = new Map(
@@ -344,9 +379,64 @@ export async function modelsStatusCommand(
       return hasAny;
     });
   const providerAuthMap = new Map(providerAuth.map((entry) => [entry.provider, entry]));
-  const missingProvidersInUse = Array.from(providersInUse)
-    .filter((provider) => !providerAuthMap.has(provider))
-    .filter((provider) => !syntheticAuthByProvider.has(provider))
+  const resolveProviderAuthHealthId = (provider: string): string =>
+    resolveProviderIdForAuth(provider, { config: cfg, workspaceDir });
+  const hasUsableNonProfileAuth = (provider: string): boolean => {
+    const authProvider = resolveProviderAuthHealthId(provider);
+    for (const candidate of new Set([provider, authProvider])) {
+      const auth = providerAuthMap.get(candidate);
+      if (
+        auth?.env ||
+        auth?.syntheticAuth ||
+        syntheticAuthByProvider.has(candidate) ||
+        resolveUsableCustomProviderApiKey({ cfg, provider: candidate })
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hasUsableProviderAuth = (provider: string): boolean => {
+    const authProvider = resolveProviderAuthHealthId(provider);
+    for (const candidate of new Set([provider, authProvider])) {
+      const orderedProfiles = resolveAuthProfileOrder({
+        cfg,
+        store,
+        provider: candidate,
+      });
+      if (orderedProfiles.length > 0 || hasUsableNonProfileAuth(candidate)) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const hasUsableAuthForProviderInUse = (
+    provider: string,
+    options: { allowCodexRuntimeFallback: boolean },
+  ): boolean => {
+    if (hasUsableProviderAuth(provider)) {
+      return true;
+    }
+    if (!options.allowCodexRuntimeFallback) {
+      return false;
+    }
+    return (
+      openAIProviderUsesCodexRuntimeByDefault({ provider, config: cfg }) &&
+      hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+    );
+  };
+  const missingProvidersInUse = Array.from(
+    new Set(
+      providerUses
+        .filter(
+          (usage) =>
+            !hasUsableAuthForProviderInUse(usage.provider, {
+              allowCodexRuntimeFallback: usage.allowCodexRuntimeFallback,
+            }),
+        )
+        .map((usage) => usage.provider),
+    ),
+  )
     .filter((provider) => !isCliProvider(provider, cfg))
     .toSorted((a, b) => a.localeCompare(b));
 
@@ -373,11 +463,6 @@ export async function modelsStatusCommand(
     throw new Error("--probe-max-tokens must be > 0.");
   }
 
-  const aliasIndex = buildModelAliasIndex({
-    cfg,
-    defaultProvider: DEFAULT_PROVIDER,
-    ...DISPLAY_MODEL_PARSE_OPTIONS,
-  });
   const rawCandidates = [
     rawModel || resolvedLabel,
     ...fallbacks,
@@ -481,10 +566,31 @@ export async function modelsStatusCommand(
   })();
 
   const checkStatus = (() => {
+    const providersInUse = new Set<string>();
+    for (const usage of providerUses) {
+      providersInUse.add(usage.provider);
+      providersInUse.add(resolveProviderAuthHealthId(usage.provider));
+      if (
+        usage.allowCodexRuntimeFallback &&
+        openAIProviderUsesCodexRuntimeByDefault({ provider: usage.provider, config: cfg }) &&
+        hasUsableProviderAuth(OPENAI_CODEX_PROVIDER_ID)
+      ) {
+        providersInUse.add(OPENAI_CODEX_PROVIDER_ID);
+      }
+    }
     const hasExpiredOrMissing =
-      oauthProfiles.some((profile) => ["expired", "missing"].includes(profile.status)) ||
-      missingProvidersInUse.length > 0;
-    const hasExpiring = oauthProfiles.some((profile) => profile.status === "expiring");
+      authHealth.providers.some(
+        (provider) =>
+          providersInUse.has(provider.provider) &&
+          ["expired", "missing"].includes(provider.status) &&
+          !hasUsableNonProfileAuth(provider.provider),
+      ) || missingProvidersInUse.length > 0;
+    const hasExpiring = authHealth.providers.some(
+      (provider) =>
+        providersInUse.has(provider.provider) &&
+        provider.status === "expiring" &&
+        !hasUsableNonProfileAuth(provider.provider),
+    );
     if (hasExpiredOrMissing) {
       return 1;
     }

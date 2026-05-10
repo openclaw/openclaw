@@ -1,7 +1,7 @@
 import { ChannelType } from "discord-api-types/v10";
 import type { NativeCommandSpec } from "openclaw/plugin-sdk/command-auth";
 import { resolveDirectStatusReplyForSession } from "openclaw/plugin-sdk/command-status-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   clearPluginCommands,
   executePluginCommand,

@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildPluginBindingApprovalCustomId } from "openclaw/plugin-sdk/conversation-runtime";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { type DiscordComponentEntry, type DiscordModalEntry } from "../components.js";
@@ -308,6 +308,16 @@ describe("discord component interactions", () => {
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(lastDispatchCtx?.BodyForAgent).toBe('Clicked "Approve".');
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
+    expect(dispatchReplyMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        dispatcherOptions: expect.objectContaining({
+          responsePrefixContextProvider: expect.any(Function),
+        }),
+        replyOptions: expect.objectContaining({
+          onModelSelected: expect.any(Function),
+        }),
+      }),
+    );
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 
@@ -392,7 +402,11 @@ describe("discord component interactions", () => {
     await button.run(secondInteraction, { cid: "btn_1" } as ComponentData);
 
     expect(dispatchReplyMock).toHaveBeenCalledTimes(2);
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord component entry");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons when allowedUsers does not match", async () => {
@@ -411,7 +425,11 @@ describe("discord component interactions", () => {
       ephemeral: true,
     });
     expect(dispatchReplyMock).not.toHaveBeenCalled();
-    expect(resolveDiscordComponentEntry({ id: "btn_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordComponentEntry({ id: "btn_1", consume: false });
+    if (!entry) {
+      throw new Error("expected unauthorized Discord component entry to remain active");
+    }
+    expect(entry.id).toBe("btn_1");
   });
 
   it("blocks buttons from guilds removed from the allowlist", async () => {
@@ -590,7 +608,11 @@ describe("discord component interactions", () => {
     const { acknowledge } = await runModalSubmission({ reusable: true });
 
     expect(acknowledge).toHaveBeenCalledTimes(1);
-    expect(resolveDiscordModalEntry({ id: "mdl_1", consume: false })).not.toBeNull();
+    const entry = resolveDiscordModalEntry({ id: "mdl_1", consume: false });
+    if (!entry) {
+      throw new Error("expected reusable Discord modal entry");
+    }
+    expect(entry.id).toBe("mdl_1");
   });
 
   it("passes false auth to plugin Discord interactions for non-allowlisted guild users", async () => {

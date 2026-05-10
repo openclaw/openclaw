@@ -1352,7 +1352,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -2016,8 +2022,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2432,28 +2438,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
     expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
@@ -2641,7 +2637,7 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }

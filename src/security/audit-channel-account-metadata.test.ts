@@ -37,6 +37,19 @@ function stubChannelPlugin(): ChannelPlugin {
   };
 }
 
+function requireDangerousMatchingFinding(
+  findings: Awaited<ReturnType<typeof collectChannelSecurityFindings>>,
+) {
+  const finding = findings.find(
+    (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
+  );
+  if (!finding) {
+    throw new Error("Expected dangerous name matching finding");
+  }
+  expect(finding.checkId).toBe("channels.discord.allowFrom.dangerous_name_matching_enabled");
+  return finding;
+}
+
 describe("security audit channel account metadata", () => {
   it("does not treat prototype properties as explicit account config paths", async () => {
     const cfg: OpenClawConfig = {
@@ -55,10 +68,7 @@ describe("security audit channel account metadata", () => {
       plugins: [stubChannelPlugin()],
     });
 
-    const dangerousMatchingFinding = findings.find(
-      (entry) => entry.checkId === "channels.discord.allowFrom.dangerous_name_matching_enabled",
-    );
-    expect(dangerousMatchingFinding).toBeDefined();
-    expect(dangerousMatchingFinding?.title).not.toContain("(account: toString)");
+    const dangerousMatchingFinding = requireDangerousMatchingFinding(findings);
+    expect(dangerousMatchingFinding.title).not.toContain("(account: toString)");
   });
 });

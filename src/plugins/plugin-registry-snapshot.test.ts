@@ -5,6 +5,7 @@ import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index
 import { loadInstalledPluginIndex, type InstalledPluginIndex } from "./installed-plugin-index.js";
 import { loadPluginRegistrySnapshotWithMetadata } from "./plugin-registry-snapshot.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
+import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
 
@@ -51,61 +52,6 @@ function writePackagePlugin(rootDir: string) {
   );
 }
 
-function writeManagedNpmPlugin(params: {
-  stateDir: string;
-  packageName: string;
-  pluginId: string;
-  version: string;
-  dependencySpec?: string;
-}): string {
-  const npmRoot = path.join(params.stateDir, "npm");
-  const rootManifestPath = path.join(npmRoot, "package.json");
-  fs.mkdirSync(npmRoot, { recursive: true });
-  const rootManifest = fs.existsSync(rootManifestPath)
-    ? (JSON.parse(fs.readFileSync(rootManifestPath, "utf8")) as {
-        dependencies?: Record<string, string>;
-      })
-    : {};
-  fs.writeFileSync(
-    rootManifestPath,
-    JSON.stringify(
-      {
-        ...rootManifest,
-        private: true,
-        dependencies: {
-          ...rootManifest.dependencies,
-          [params.packageName]: params.dependencySpec ?? params.version,
-        },
-      },
-      null,
-      2,
-    ),
-    "utf8",
-  );
-
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
-  fs.mkdirSync(path.join(packageDir, "dist"), { recursive: true });
-  fs.writeFileSync(
-    path.join(packageDir, "package.json"),
-    JSON.stringify({
-      name: params.packageName,
-      version: params.version,
-      openclaw: { extensions: ["./dist/index.js"] },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(
-    path.join(packageDir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id: params.pluginId,
-      configSchema: { type: "object" },
-    }),
-    "utf8",
-  );
-  fs.writeFileSync(path.join(packageDir, "dist", "index.js"), "export {};\n", "utf8");
-  return packageDir;
-}
-
 function replaceFilePreservingSizeAndMtime(filePath: string, contents: string) {
   const previous = fs.statSync(filePath);
   expect(Buffer.byteLength(contents)).toBe(previous.size);
@@ -149,7 +95,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       stateDir,
       installRecords: {},
     });
-    expect(staleIndex.plugins.some((plugin) => plugin.pluginId === "whatsapp")).toBe(false);
+    expect(staleIndex.plugins.map((plugin) => plugin.pluginId)).not.toContain("whatsapp");
     writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
@@ -204,7 +150,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("keeps persisted package plugins when file hashes match", () => {
@@ -220,8 +166,19 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     writePackagePlugin(rootDir);
     const index = loadInstalledPluginIndex({ config, env });
     const [record] = index.plugins;
-    expect(record?.manifestFile).toBeDefined();
-    expect(record?.packageJson?.fileSignature).toBeDefined();
+    if (!record?.packageJson?.fileSignature || !record.manifestFile) {
+      throw new Error("expected package plugin index record with file signatures");
+    }
+    expect(record.manifestFile).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "openclaw.plugin.json")).size,
+      }),
+    );
+    expect(record.packageJson.fileSignature).toEqual(
+      expect.objectContaining({
+        size: fs.statSync(path.join(rootDir, "package.json")).size,
+      }),
+    );
     writePersistedInstalledPluginIndexSync(index, { stateDir });
 
     const result = loadPluginRegistrySnapshotWithMetadata({
@@ -231,7 +188,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     });
 
     expect(result.source).toBe("persisted");
-    expect(result.diagnostics).toEqual([]);
+    expect(result.diagnostics).toStrictEqual([]);
   });
 
   it("detects same-size same-mtime manifest replacements", () => {
@@ -350,5 +307,80 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: "persisted-registry-stale-source" }),
     );
+  });
+
+  it("treats persisted registry as stale when a plugin diagnostic source path no longer exists", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
+    const config = {};
+    const ghostDir = path.join(tempRoot, "extensions", "lossless-claw");
+    const npmPluginDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@martian-engineering/lossless-claw",
+      pluginId: "lossless-claw",
+      version: "0.9.4",
+    });
+    const staleIndex: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "warn",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js",
+          pluginId: "lossless-claw",
+          source: ghostDir,
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expect(result.snapshot.diagnostics).not.toContainEqual(
+      expect.objectContaining({ source: ghostDir }),
+    );
+    expect(result.snapshot.plugins).toContainEqual(
+      expect.objectContaining({
+        pluginId: "lossless-claw",
+        origin: "global",
+        source: fs.realpathSync(path.join(npmPluginDir, "dist", "index.js")),
+      }),
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+  });
+
+  it("keeps persisted registry when a non-plugin diagnostic source path still does not exist", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-plugin");
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "error",
+          message: `plugin path not found: ${missingConfiguredPath}`,
+          source: missingConfiguredPath,
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.diagnostics).toContainEqual(
+      expect.objectContaining({ source: missingConfiguredPath }),
+    );
+    expect(result.diagnostics).toStrictEqual([]);
   });
 });

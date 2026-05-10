@@ -635,7 +635,7 @@ barrel when authoring new plugins. Core subpaths:
 | `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
-`setup-runtime`, `setup-adapter-runtime`, `setup-tools`, `channel-pairing`,
+`setup-runtime`, `setup-tools`, `channel-pairing`,
 `channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
 `channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate
@@ -645,7 +645,7 @@ plugin fields. See [Channel plugins](/plugins/sdk-channel-plugins).
 Runtime and config helpers live under matching focused `*-runtime` subpaths
 (`approval-runtime`, `agent-runtime`, `lazy-runtime`, `directory-runtime`,
 `text-runtime`, `runtime-store`, `system-event-runtime`, `heartbeat-runtime`,
-`channel-activity-runtime`, etc.). Prefer `config-types`,
+`channel-activity-runtime`, etc.). Prefer `config-contracts`,
 `plugin-config-runtime`, `runtime-config-snapshot`, and `config-mutation`
 instead of the broad `config-runtime` compatibility barrel.
 
@@ -764,10 +764,21 @@ built-in implicit providers:
 Later providers win on key collision, so plugins can intentionally override a
 built-in provider entry with the same provider id.
 
+Plugins can also publish read-only model rows through
+`api.registerModelCatalogProvider({ provider, kinds, staticCatalog, liveCatalog
+})`. This is the forward path for list/help/picker surfaces and supports
+`text`, `image_generation`, `video_generation`, and `music_generation` rows.
+Provider plugins still own live endpoint calls, token exchange, and vendor
+response mapping; core owns the common row shape, source labels, and media tool
+help formatting. Media-generation provider registrations synthesize static
+catalog rows automatically from `defaultModel`, `models`, and `capabilities`.
+
 Compatibility:
 
-- `discovery` still works as a legacy alias
+- `discovery` still works as a legacy alias, but emits a deprecation warning
 - if both `catalog` and `discovery` are registered, OpenClaw uses `catalog`
+- `augmentModelCatalog` is deprecated; bundled providers should publish
+  supplemental rows through `registerModelCatalogProvider`
 
 ## Read-only channel inspection
 

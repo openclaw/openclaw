@@ -270,6 +270,25 @@ describe("sanitizeSessionHistory", () => {
       | undefined;
   };
 
+  const expectAssistantUsageSnapshot = (assistant: unknown) => {
+    expect(assistant).toMatchObject({
+      usage: {
+        input: expect.any(Number),
+        output: expect.any(Number),
+        cacheRead: expect.any(Number),
+        cacheWrite: expect.any(Number),
+        totalTokens: expect.any(Number),
+        cost: {
+          input: expect.any(Number),
+          output: expect.any(Number),
+          cacheRead: expect.any(Number),
+          cacheWrite: expect.any(Number),
+          total: expect.any(Number),
+        },
+      },
+    });
+  };
+
   beforeAll(async () => {
     const harness = await loadSanitizeSessionHistoryWithCleanMocks();
     sanitizeSessionHistory = harness.sanitizeSessionHistory;
@@ -472,8 +491,9 @@ describe("sanitizeSessionHistory", () => {
     const staleAssistant = result.find((message) => message.role === "assistant") as
       | (AgentMessage & { usage?: unknown })
       | undefined;
-    expect(staleAssistant).toBeDefined();
-    expect(staleAssistant?.usage).toEqual(makeZeroUsageSnapshot());
+    expect(staleAssistant).toMatchObject({
+      usage: makeZeroUsageSnapshot(),
+    });
   });
 
   it("preserves fresh assistant usage snapshots created after latest compaction summary", async () => {
@@ -497,7 +517,7 @@ describe("sanitizeSessionHistory", () => {
     const assistants = getAssistantMessages(result);
     expect(assistants).toHaveLength(2);
     expect(assistants[0]?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(assistants[1]?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(assistants[1]);
   });
 
   it("adds a zeroed assistant usage snapshot when usage is missing", async () => {
@@ -655,7 +675,7 @@ describe("sanitizeSessionHistory", () => {
       JSON.stringify(message.content).includes("fresh answer"),
     );
     expect(keptAssistant?.usage).toEqual(makeZeroUsageSnapshot());
-    expect(freshAssistant?.usage).toBeDefined();
+    expectAssistantUsageSnapshot(freshAssistant);
   });
 
   it("keeps reasoning-only assistant messages for openai-responses", async () => {
@@ -920,7 +940,7 @@ describe("sanitizeSessionHistory", () => {
       allowedToolNames: ["read"],
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning even when the model has not changed", async () => {
@@ -941,7 +961,7 @@ describe("sanitizeSessionHistory", () => {
       sessionManager,
     });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("downgrades orphaned openai reasoning when the model changes too", async () => {
@@ -1176,7 +1196,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
+  it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1195,8 +1215,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -1206,7 +1226,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("preserves current Gemma 4 tool-call reasoning during tool continuation replay", async () => {
+  it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1231,8 +1251,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });

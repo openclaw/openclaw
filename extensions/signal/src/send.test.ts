@@ -5,7 +5,7 @@ const resolveOutboundAttachmentFromUrlMock = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => ({ path: "/tmp/image.png", contentType: "image/png" })),
 );
 
-vi.mock("./client.js", () => ({
+vi.mock("./client-adapter.js", () => ({
   signalRpcRequest: (...args: unknown[]) => signalRpcRequestMock(...args),
 }));
 
@@ -106,6 +106,6 @@ describe("sendMessageSignal receipts", () => {
     });
 
     expect(result.messageId).toBe("unknown");
-    expect(result.receipt.platformMessageIds).toEqual([]);
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 });

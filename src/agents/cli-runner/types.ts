@@ -50,9 +50,17 @@ export type RunCliAgentParams = {
   messageProvider?: string;
   agentAccountId?: string;
   senderIsOwner?: boolean;
+  /** Runtime tool allow-list. CLI harnesses fail closed when this is set. */
+  toolsAllow?: string[];
   disableTools?: boolean;
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
+  onExecutionPhase?: (info: {
+    phase: "model_call_started";
+    provider?: string;
+    model?: string;
+    firstModelCallStarted?: boolean;
+  }) => void;
   replyOperation?: ReplyOperation;
   /**
    * Close any long-lived CLI live session created for this run after the run

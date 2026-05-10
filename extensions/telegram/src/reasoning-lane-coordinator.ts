@@ -1,10 +1,8 @@
 import { formatReasoningMessage } from "openclaw/plugin-sdk/agent-runtime";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-runtime";
-import {
-  normalizeLowercaseStringOrEmpty,
-  stripReasoningTagsFromText,
-} from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { findCodeRegions, isInsideCode } from "openclaw/plugin-sdk/text-chunking";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 
 const REASONING_MESSAGE_PREFIX = "Reasoning:\n";
 const REASONING_TAG_PREFIXES = [
@@ -62,7 +60,10 @@ type TelegramReasoningSplit = {
   answerText?: string;
 };
 
-export function splitTelegramReasoningText(text?: string): TelegramReasoningSplit {
+export function splitTelegramReasoningText(
+  text?: string,
+  isReasoning?: boolean,
+): TelegramReasoningSplit {
   if (typeof text !== "string") {
     return {};
   }
@@ -80,6 +81,10 @@ export function splitTelegramReasoningText(text?: string): TelegramReasoningSpli
 
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
+
+  if (isReasoning === true) {
+    return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
+  }
 
   if (!taggedReasoning && strippedAnswer === text) {
     return { answerText: text };

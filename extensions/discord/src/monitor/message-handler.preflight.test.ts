@@ -13,7 +13,8 @@ vi.mock("../pluralkit.js", () => ({
 vi.mock("./preflight-audio.runtime.js", () => ({
   transcribeFirstAudio: transcribeFirstAudioMock,
 }));
-vi.mock("./dm-command-auth.js", () => ({
+vi.mock("./dm-command-auth.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./dm-command-auth.js")>()),
   resolveDiscordDmCommandAccess: resolveDiscordDmCommandAccessMock,
 }));
 vi.mock("./dm-command-decision.js", () => ({
@@ -79,12 +80,23 @@ function createThreadBinding(
 }
 
 function createPreflightArgs(params: {
-  cfg: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   discordConfig: DiscordConfig;
   data: DiscordMessageEvent;
   client: DiscordClient;
 }): Parameters<typeof preflightDiscordMessage>[0] {
   return createDiscordPreflightArgs(params);
+}
+
+type DiscordPreflightResult = NonNullable<Awaited<ReturnType<typeof preflightDiscordMessage>>>;
+
+function expectPreflightResult(
+  result: Awaited<ReturnType<typeof preflightDiscordMessage>>,
+): DiscordPreflightResult {
+  if (result === null) {
+    throw new Error("Expected Discord preflight result");
+  }
+  return result;
 }
 
 function createThreadClient(params: { threadId: string; parentId: string }): DiscordClient {
@@ -177,7 +189,7 @@ async function runGuildPreflight(params: {
   guildId: string;
   message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
-  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   guildEntries?: Parameters<typeof preflightDiscordMessage>[0]["guildEntries"];
   includeGuildObject?: boolean;
 }) {
@@ -218,7 +230,7 @@ async function runDmPreflight(params: {
 }
 
 async function runUnresolvedDmPreflight(params: {
-  cfg?: import("openclaw/plugin-sdk/config-types").OpenClawConfig;
+  cfg?: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
   channelId: string;
   message: import("../internal/discord.js").Message;
   discordConfig: DiscordConfig;
@@ -306,9 +318,14 @@ describe("preflightDiscordMessage", () => {
     transcribeFirstAudioMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockReset();
     resolveDiscordDmCommandAccessMock.mockResolvedValue({
-      commandAuthorized: true,
-      decision: "allow",
-      allowMatch: { allowed: true, matchedBy: "allowFrom", value: "123" },
+      senderAccess: {
+        allowed: true,
+        decision: "allow",
+        reasonCode: "dm_policy_allowlisted",
+      },
+      commandAccess: {
+        authorized: true,
+      },
     });
     handleDiscordDmCommandDecisionMock.mockReset();
     handleDiscordDmCommandDecisionMock.mockResolvedValue(undefined);
@@ -386,8 +403,8 @@ describe("preflightDiscordMessage", () => {
       } as DiscordConfig,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.threadBinding).toMatchObject({
+    const preflight = expectPreflightResult(result);
+    expect(preflight.threadBinding).toMatchObject({
       conversation: {
         channel: "discord",
         accountId: "default",
@@ -468,11 +485,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.route.agentId).toBe("newagent");
-    expect(result?.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
-    expect(result?.boundSessionKey).toBeUndefined();
-    expect(result?.threadBinding).toBeUndefined();
+    const preflight = expectPreflightResult(result);
+    expect(preflight.route.agentId).toBe("newagent");
+    expect(preflight.route.sessionKey).toBe(`agent:newagent:discord:channel:${channelId}`);
+    expect(preflight.boundSessionKey).toBeUndefined();
+    expect(preflight.threadBinding).toBeUndefined();
   });
 
   it("preflights direct-message voice notes without mention gating", async () => {
@@ -512,9 +529,9 @@ describe("preflightDiscordMessage", () => {
         }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.isDirectMessage).toBe(true);
-    expect(result?.preflightAudioTranscript).toBe("hello openclaw from dm audio");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.isDirectMessage).toBe(true);
+    expect(preflight.preflightAudioTranscript).toBe("hello openclaw from dm audio");
   });
 
   it("keeps no-guild messages direct when channel lookup is unavailable", async () => {
@@ -542,11 +559,11 @@ describe("preflightDiscordMessage", () => {
       } as DiscordConfig,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.channelInfo).toBeNull();
-    expect(result?.isDirectMessage).toBe(true);
-    expect(result?.isGroupDm).toBe(false);
-    expect(result?.route.sessionKey).toBe("agent:main:discord:direct:user-1");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.channelInfo).toBeNull();
+    expect(preflight.isDirectMessage).toBe(true);
+    expect(preflight.isGroupDm).toBe(false);
+    expect(preflight.route.sessionKey).toBe("agent:main:discord:direct:user-1");
   });
 
   it("falls back to the default discord account for omitted-account dm authorization", async () => {
@@ -628,8 +645,7 @@ describe("preflightDiscordMessage", () => {
       registerBindingAdapter: true,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
+    expect(expectPreflightResult(result).boundSessionKey).toBe(threadBinding.targetSessionKey);
   });
 
   it("drops hydrated bound-thread webhook copies after fetching an empty payload", async () => {
@@ -759,9 +775,9 @@ describe("preflightDiscordMessage", () => {
         config: expect.objectContaining({ enabled: true }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.sender.isPluralKit).toBe(true);
-    expect(result?.canonicalMessageId).toBe("orig-123");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.sender.isPluralKit).toBe(true);
+    expect(preflight.canonicalMessageId).toBe("orig-123");
   });
 
   it("skips PluralKit lookup for bound-thread webhook echoes", async () => {
@@ -823,7 +839,7 @@ describe("preflightDiscordMessage", () => {
       createPreflightArgs({
         cfg: {
           ...DEFAULT_PREFLIGHT_CFG,
-        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
         discordConfig: {
           allowBots: true,
         } as DiscordConfig,
@@ -837,9 +853,9 @@ describe("preflightDiscordMessage", () => {
       }),
     );
 
-    expect(result).not.toBeNull();
-    expect(result?.boundSessionKey).toBe(threadBinding.targetSessionKey);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.boundSessionKey).toBe(threadBinding.targetSessionKey);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("drops bot messages without mention when allowBots=mentions", async () => {
@@ -878,7 +894,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {
@@ -924,7 +940,7 @@ describe("preflightDiscordMessage", () => {
       botUserId: botId,
     });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-hydrated");
   });
 
   it("still drops bot control commands without a real mention when allowBots=mentions", async () => {
@@ -963,7 +979,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-command-with-mention");
   });
 
   it("routes ordinary guild text control commands through authorization instead of dropping them", async () => {
@@ -1005,11 +1021,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.baseText).toBe("/steer keep digging");
-    expect(result?.commandAuthorized).toBe(true);
-    expect(result?.shouldRequireMention).toBe(true);
-    expect(result?.shouldBypassMention).toBe(true);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.baseText).toBe("/steer keep digging");
+    expect(preflight.commandAuthorized).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(true);
+    expect(preflight.shouldBypassMention).toBe(true);
   });
 
   it("still drops Discord native command echo messages", async () => {
@@ -1078,7 +1094,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1138,9 +1154,9 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.shouldRequireMention).toBe(true);
-    expect(result?.wasMentioned).toBe(true);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.shouldRequireMention).toBe(true);
+    expect(preflight.wasMentioned).toBe(true);
   });
 
   it("accepts allowlisted guild messages when guild object is missing", async () => {
@@ -1173,10 +1189,10 @@ describe("preflightDiscordMessage", () => {
       includeGuildObject: false,
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.guildInfo?.id).toBe("guild-1");
-    expect(result?.channelConfig?.allowed).toBe(true);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.guildInfo?.id).toBe("guild-1");
+    expect(preflight.channelConfig?.allowed).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("inherits parent thread allowlist when guild object is missing", async () => {
@@ -1221,11 +1237,11 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.guildInfo?.id).toBe("guild-1");
-    expect(result?.threadParentId).toBe(parentId);
-    expect(result?.channelConfig?.allowed).toBe(true);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.guildInfo?.id).toBe("guild-1");
+    expect(preflight.threadParentId).toBe(parentId);
+    expect(preflight.channelConfig?.allowed).toBe(true);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("handles partial thread channel owner getters during mention preflight", async () => {
@@ -1284,9 +1300,9 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.threadParentId).toBe(parentId);
-    expect(result?.shouldRequireMention).toBe(false);
+    const preflight = expectPreflightResult(result);
+    expect(preflight.threadParentId).toBe(parentId);
+    expect(preflight.shouldRequireMention).toBe(false);
   });
 
   it("drops guild messages that mention another user when ignoreOtherMentions=true", async () => {
@@ -1326,8 +1342,7 @@ describe("preflightDiscordMessage", () => {
 
     const result = await runIgnoreOtherMentionsPreflight({ channelId, guildId, message });
 
-    expect(result).not.toBeNull();
-    expect(result?.hasAnyMention).toBe(true);
+    expect(expectPreflightResult(result).hasAnyMention).toBe(true);
   });
 
   it("ignores bot-sent @everyone mentions for detection", async () => {
@@ -1367,8 +1382,7 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.hasAnyMention).toBe(false);
+    expect(expectPreflightResult(result).hasAnyMention).toBe(false);
   });
 
   it("does not treat bot-sent @everyone as wasMentioned", async () => {
@@ -1408,8 +1422,7 @@ describe("preflightDiscordMessage", () => {
       },
     });
 
-    expect(result).not.toBeNull();
-    expect(result?.wasMentioned).toBe(false);
+    expect(expectPreflightResult(result).wasMentioned).toBe(false);
   });
 
   it("uses attachment content_type for guild audio preflight mention detection", async () => {
@@ -1446,7 +1459,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1477,9 +1490,9 @@ describe("preflightDiscordMessage", () => {
         }),
       }),
     );
-    expect(result).not.toBeNull();
-    expect(result?.wasMentioned).toBe(true);
-    expect(result?.preflightAudioTranscript).toBe("hey openclaw");
+    const preflight = expectPreflightResult(result);
+    expect(preflight.wasMentioned).toBe(true);
+    expect(preflight.preflightAudioTranscript).toBe("hey openclaw");
   });
 
   it("does not transcribe guild audio from unauthorized members", async () => {
@@ -1515,7 +1528,7 @@ describe("preflightDiscordMessage", () => {
               mentionPatterns: ["openclaw"],
             },
           },
-        } as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+        } as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
         discordConfig: {} as DiscordConfig,
         data: createGuildEvent({
           channelId,
@@ -1622,7 +1635,7 @@ describe("preflightDiscordMessage", () => {
           "guild-1": { channels: { [channelId]: { enabled: true, requireMention: true } } },
         },
       });
-      expect(result).not.toBeNull();
+      expect(expectPreflightResult(result).message.id).toBe("m-binding-2");
     } finally {
       routeSpy.mockRestore();
       ensureSpy.mockRestore();
@@ -1694,7 +1707,10 @@ describe("shouldIgnoreBoundThreadWebhookMessage", () => {
       webhookId: "wh-1",
       webhookToken: "tok-1",
     });
-    expect(binding).not.toBeNull();
+    expect(binding).toMatchObject({
+      threadId: "thread-1",
+      targetSessionKey: "agent:main:subagent:child-1",
+    });
 
     manager.unbindThread({
       threadId: "thread-1",

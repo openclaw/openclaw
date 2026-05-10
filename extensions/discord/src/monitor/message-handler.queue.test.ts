@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordRetryableInboundError } from "./inbound-dedupe.js";
 import {
@@ -440,7 +440,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await flushQueueWork();
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-      expect(capturedAbortSignals[0]?.aborted).not.toBe(true);
+      expect(capturedAbortSignals).toEqual([undefined]);
       expect(params.runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("timed out"));
 
       firstRun.resolve();
@@ -448,7 +448,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
       await flushQueueWork();
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-      expect(capturedAbortSignals[1]?.aborted).not.toBe(true);
+      expect(capturedAbortSignals).toEqual([undefined, undefined]);
 
       secondRun.resolve();
       await secondRun.promise;

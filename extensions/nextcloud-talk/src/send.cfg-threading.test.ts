@@ -3,7 +3,7 @@ import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
 } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { OpenClawConfig as CoreConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig as CoreConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => ({
@@ -175,6 +175,18 @@ describe("nextcloud-talk send cfg threading", () => {
         },
       ],
     });
+  });
+
+  it("explains that 401 sends can mean the response feature is missing", async () => {
+    const cfg = { source: "provided" } as const;
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 401 }));
+
+    await expect(
+      sendMessageNextcloudTalk("room:abc123", "hello", {
+        cfg,
+        accountId: "work",
+      }),
+    ).rejects.toThrow("--feature response");
   });
 
   it("declares message adapter durable text, media, and reply with receipt proofs", async () => {

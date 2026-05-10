@@ -227,8 +227,10 @@ describe("voice-call plugin", () => {
     );
     const { service, methods } = setup({ provider: "mock" });
 
-    expect(service).toBeDefined();
-    expect(service!.start(createServiceContext())).toBeUndefined();
+    if (!service) {
+      throw new Error("expected voice-call service");
+    }
+    expect(service.start(createServiceContext())).toBeUndefined();
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 
     resolveRuntime?.(runtimeStub);
@@ -805,7 +807,9 @@ describe("voice-call plugin", () => {
       | undefined;
     expect(startPayload).toEqual(
       expect.objectContaining({
-        operationId: expect.any(String),
+        operationId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu,
+        ),
         status: "pending",
         pollTimeoutMs: 180000,
       }),

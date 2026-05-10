@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
   registerProviderPlugin,
@@ -144,6 +144,7 @@ describe("openai plugin", () => {
   });
 
   afterEach(() => {
+    vi.unstubAllGlobals();
     vi.restoreAllMocks();
   });
 
@@ -385,7 +386,7 @@ describe("openai plugin", () => {
         } as never,
         tools: [noParamsTool],
       } as never),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       codexProvider.inspectToolSchemas?.({
         provider: "openai-codex",
@@ -399,7 +400,7 @@ describe("openai plugin", () => {
         } as never,
         tools: [noParamsTool],
       } as never),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("registers GPT-5 system prompt contributions when the friendly overlay is enabled", async () => {

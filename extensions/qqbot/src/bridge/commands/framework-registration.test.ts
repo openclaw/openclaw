@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   OpenClawPluginApi,
   OpenClawPluginCommandDefinition,
@@ -49,8 +49,10 @@ function findCommand(
   name: string,
 ): OpenClawPluginCommandDefinition {
   const command = commands.find((entry) => entry.name === name);
-  expect(command).toBeDefined();
-  return command as OpenClawPluginCommandDefinition;
+  if (!command) {
+    throw new Error(`expected QQBot command ${name}`);
+  }
+  return command;
 }
 
 function createCommandContext(

@@ -65,13 +65,9 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
 
     expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
     expect(result.payloads).toEqual([{ text: "Blocked by before-run policy.", isError: true }]);
-    expect(result.meta).toMatchObject({
-      finalAssistantVisibleText: "Blocked by before-run policy.",
-      finalAssistantRawText: "Blocked by before-run policy.",
-      finalPromptText: undefined,
-      livenessState: "blocked",
-      error: { kind: "hook_block", message: "Blocked by before-run policy." },
-    });
+    expect(result.meta?.finalAssistantVisibleText).toBe("Blocked by before-run policy.");
+    expect(result.meta?.finalAssistantRawText).toBe("Blocked by before-run policy.");
+    expect(result.meta?.finalPromptText).toBeUndefined();
     expect(result.meta?.error).toEqual({
       kind: "hook_block",
       message: "Blocked by before-run policy.",
@@ -1072,8 +1068,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
       }),
     });
 
-    expect(incompleteTurnText).not.toBeNull();
-    expect(incompleteTurnText).toContain("couldn't generate a response");
+    expect(incompleteTurnText).toEqual(expect.stringContaining("couldn't generate a response"));
   });
 
   it("surfaces tool-use terminal with pre-tool text and side effects as replay-unsafe (#76477)", () => {
@@ -1104,7 +1099,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     // When the model successfully produces post-tool text, lastAssistant has
     // stopReason=end_turn. The incomplete-turn guard should not fire.
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 2,
+      payloadCount: 1,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({

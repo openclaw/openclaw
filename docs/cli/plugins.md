@@ -90,6 +90,10 @@ openclaw plugins install <plugin> --marketplace <name>  # marketplace (explicit)
 openclaw plugins install <plugin> --marketplace https://github.com/<owner>/<repo>
 ```
 
+Maintainers testing setup-time installs can override automatic plugin install
+sources with guarded environment variables. See
+[Plugin install overrides](/plugins/install-overrides).
+
 <Warning>
 Bare package names install from npm by default during the launch cutover. Use `clawhub:<package>` for ClawHub. Treat plugin installs like running code. Prefer pinned versions.
 </Warning>
@@ -129,7 +133,7 @@ is available, then fall back to `latest`.
 
     This CLI flag applies to plugin install/update flows. Gateway-backed skill dependency installs use the matching `dangerouslyForceUnsafeInstall` request override, while `openclaw skills install` remains a separate ClawHub skill download/install flow.
 
-    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/tools/clawhub).
+    If a plugin you published on ClawHub is blocked by a registry scan, use the publisher steps in [ClawHub](/clawhub/security).
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -359,7 +363,7 @@ openclaw plugins inspect <id> --json
 
 Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
 
-Plugin-owned CLI commands are installed as root `openclaw` command groups. After `inspect --runtime` shows a command under `cliCommands`, run it as `openclaw <command> ...`; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
+Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 
 Each plugin is classified by what it actually registers at runtime:
 
@@ -417,4 +421,4 @@ Marketplace list accepts a local marketplace path, a `marketplace.json` path, a 
 
 - [Building plugins](/plugins/building-plugins)
 - [CLI reference](/cli)
-- [Community plugins](/plugins/community)
+- [ClawHub](/clawhub)

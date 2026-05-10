@@ -227,6 +227,21 @@ async function resolveCustomProviderAuth(
   });
 }
 
+function expectAuthFields(
+  auth: Awaited<ReturnType<typeof resolveApiKeyForProvider>>,
+  expected: {
+    apiKey: string;
+    mode: "api-key" | "oauth";
+    source?: string;
+  },
+) {
+  expect(auth.apiKey).toBe(expected.apiKey);
+  expect(auth.mode).toBe(expected.mode);
+  if (expected.source !== undefined) {
+    expect(auth.source).toBe(expected.source);
+  }
+}
+
 describe("resolveAwsSdkEnvVarName", () => {
   it("prefers bearer token over access keys and profile", () => {
     const env = {
@@ -518,6 +533,36 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
+  it("resolves legacy __env__ markers from process env for custom providers", () => {
+    const previous = process.env.BAILIAN_API_KEY;
+    process.env.BAILIAN_API_KEY = "sk-bailian-env"; // pragma: allowlist secret
+    try {
+      const resolved = resolveUsableCustomProviderApiKey({
+        cfg: {
+          models: {
+            providers: {
+              bailian: {
+                baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+                api: "openai-completions",
+                apiKey: "__env__:BAILIAN_API_KEY", // pragma: allowlist secret
+                models: [],
+              },
+            },
+          },
+        },
+        provider: "bailian",
+      });
+      expect(resolved?.apiKey).toBe("sk-bailian-env");
+      expect(resolved?.source).toContain("BAILIAN_API_KEY");
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BAILIAN_API_KEY;
+      } else {
+        process.env.BAILIAN_API_KEY = previous;
+      }
+    }
+  });
+
   it("does not resolve env SecretRefs when provider allowlist excludes the env id", () => {
     const previous = process.env.MY_CUSTOM_KEY;
     process.env.MY_CUSTOM_KEY = "sk-custom-secretref-env"; // pragma: allowlist secret
@@ -705,7 +750,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-fallback-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -749,7 +794,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "plugin-web-runtime-key",
       source: "plugins.entries.plugin-web.config.webSearch.apiKey",
       mode: "api-key",
@@ -831,7 +876,7 @@ describe("resolveApiKeyForProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "sk-config-live",
       source: "models.json",
       mode: "api-key",
@@ -855,7 +900,7 @@ describe("resolveApiKeyForProvider", () => {
       }),
     );
 
-    expect(resolved).toMatchObject({
+    expectAuthFields(resolved, {
       apiKey: "ollama-local",
       mode: "api-key",
     });
@@ -972,7 +1017,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: "ollama-local",
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1006,7 +1051,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: "ollama-local",
       source: "models.providers.ollama-gpu1 (synthetic local key)",
       mode: "api-key",
@@ -1041,7 +1086,7 @@ describe("resolveApiKeyForProvider – synthetic local auth for custom providers
       store: { version: 1, profiles: {} },
     });
 
-    expect(auth).toMatchObject({
+    expectAuthFields(auth, {
       apiKey: CUSTOM_LOCAL_AUTH_MARKER,
       source: "models.json (local marker)",
       mode: "api-key",
@@ -1196,10 +1241,8 @@ describe("applyLocalNoAuthHeaderOverride", () => {
       },
     );
 
-    expect(model.headers).toMatchObject({
-      Authorization: null,
-      "X-Test": "1",
-    });
+    expect(model.headers?.Authorization).toBeNull();
+    expect(model.headers?.["X-Test"]).toBe("1");
   });
 });
 

@@ -551,6 +551,21 @@ const ToolLoopDetectionSchema = z
   })
   .optional();
 
+const ToolSearchSchema = z
+  .union([
+    z.boolean(),
+    z
+      .object({
+        enabled: z.boolean().optional(),
+        mode: z.enum(["code", "tools"]).optional(),
+        codeTimeoutMs: z.number().int().positive().optional(),
+        searchDefaultLimit: z.number().int().positive().optional(),
+        maxSearchLimit: z.number().int().positive().optional(),
+      })
+      .strict(),
+  ])
+  .optional();
+
 const SandboxSshSchema = z
   .object({
     target: z.string().min(1).optional(),
@@ -847,6 +862,19 @@ export const AgentEntrySchema = z
     agentRuntime: AgentRuntimePolicySchema,
     embeddedHarness: AgentEmbeddedHarnessSchema,
     model: AgentModelSchema.optional(),
+    models: z
+      .record(
+        z.string(),
+        z
+          .object({
+            alias: z.string().optional(),
+            params: z.record(z.string(), z.unknown()).optional(),
+            agentRuntime: AgentRuntimePolicySchema,
+            streaming: z.boolean().optional(),
+          })
+          .strict(),
+      )
+      .optional(),
     thinkingDefault: z
       .enum(["off", "minimal", "low", "medium", "high", "xhigh", "adaptive", "max"])
       .optional(),
@@ -866,6 +894,7 @@ export const AgentEntrySchema = z
     groupChat: GroupChatSchema,
     subagents: z
       .object({
+        delegationMode: z.enum(["suggest", "prefer"]).optional(),
         allowAgents: z.array(z.string()).optional(),
         model: z
           .union([
@@ -909,6 +938,7 @@ export const ToolsSchema = z
       .strict()
       .optional(),
     loopDetection: ToolLoopDetectionSchema,
+    toolSearch: ToolSearchSchema,
     message: z
       .object({
         allowCrossContextSend: z.boolean().optional(),

@@ -1,5 +1,5 @@
 import type { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { createIMessageRpcClient, IMessageRpcClient } from "./client.js";
 import { monitorIMessageProvider } from "./monitor.js";
 import type { attachIMessageMonitorAbortHandler } from "./monitor/abort-handler.js";
@@ -71,6 +71,13 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     vi.useRealTimers();
   });
 
+  afterAll(() => {
+    vi.doUnmock("openclaw/plugin-sdk/transport-ready-runtime");
+    vi.doUnmock("./client.js");
+    vi.doUnmock("./monitor/abort-handler.js");
+    vi.resetModules();
+  });
+
   it("retries a transient watch.subscribe startup timeout without tearing down the monitor", async () => {
     const runtime = createRuntime();
     const firstClient = createRpcClient({
@@ -96,6 +103,11 @@ describe("monitorIMessageProvider watch.subscribe startup retry", () => {
     expect(firstClient.stop).toHaveBeenCalledTimes(1);
     expect(secondClient.waitForClose).toHaveBeenCalledTimes(1);
     expect(secondClient.stop).toHaveBeenCalledTimes(1);
+    expect(secondClient.request).toHaveBeenCalledWith(
+      "watch.subscribe",
+      { attachments: false, include_reactions: true },
+      expect.any(Object),
+    );
     expect(runtime.log).toHaveBeenCalledWith(
       expect.stringContaining("watch.subscribe startup failed"),
     );

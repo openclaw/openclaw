@@ -31,7 +31,22 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
+- For live/provider bugs, check keys on the local Mac before downgrading to
+  mocks: source local `~/.profile` and test only presence/length. If Crabbox
+  does not already have the key, copy only the exact needed key into the remote
+  process environment for that one command. Do not print it, do not sync it as a
+  repo file, and do not leave it in remote shell history or logs. If no
+  secret-safe injection path is available, say true live provider auth is
+  blocked instead of silently using a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
+- Do not treat inherited shell env as operator intent. In particular,
+  `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
+  to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
+  lint/typecheck fan-out onto the laptop.
+- Only use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` when the user explicitly
+  asks for local proof in the current task. If Testbox is queued or capacity is
+  constrained, report the blocker and keep only targeted local edit-loop checks
+  running.
 
 ## macOS And Windows Targets
 
@@ -123,6 +138,81 @@ unclear:
 blacksmith testbox list
 ```
 
+## Efficient Bug E2E Verification
+
+Use the smallest Crabbox lane that proves the reported user path, not just the
+touched code. Aim for one after-fix E2E proof before commenting, closing, or
+opening a PR for a user-visible bug.
+
+Pick the lane by symptom:
+
+- Docker/setup/install bug: build a package tarball and run the matching
+  `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
+  install paths, runtime deps, config writes, and container behavior.
+- Provider/model/auth bug: prefer true live E2E. First source local Mac
+  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+  unrelated provider env vars in the child command so interactive defaults do
+  not drift to another provider. If only a dummy key is used, label the proof
+  narrowly, e.g. "UI/install path only; live provider auth not exercised."
+- Channel delivery bug: use the channel Docker/live lane when available; include
+  setup, config, gateway start, send/receive or agent-turn proof, and redacted
+  logs.
+- Gateway/session/tool bug: prefer an end-to-end CLI or Gateway RPC command that
+  creates real state and inspects the resulting files/API output.
+- Pure parser/config bug: targeted tests may be enough, but still run a
+  Crabbox command when OS, package, Docker, secrets, or service lifecycle could
+  change behavior.
+
+Efficient flow:
+
+1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
+   reproduced, capture the exact command and observed behavior instead.
+2. Patch locally and run narrow local tests for edit speed.
+3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
+   package install, Docker setup, onboarding, channel add, gateway start, or
+   agent turn as appropriate.
+4. Record proof as: Testbox id, command, environment shape, redacted secret
+   source, and copied success/failure output.
+5. If the issue says "cannot reproduce", ask for the missing config/log fields
+   that would distinguish the tested path from the reporter's path.
+
+Keep it efficient:
+
+- Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use one-shot Crabbox for a single proof; use a reusable Testbox only when
+  several commands must share built images, installed packages, or live state.
+- Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
+  candidate tarball; prefer the repo's package helper instead of direct source
+  execution when the bug might be packaging/install related.
+- Keep secrets redacted. It is fine to report key presence, source, and length;
+  never print secret values.
+- Include `--timing-json` on broad or flaky runs when command duration or sync
+  behavior matters.
+
+Interactive CLI/onboarding:
+
+- For full-screen or prompt-heavy CLI flows, run the target command inside tmux
+  on the Crabbox and drive it with `tmux send-keys`; capture proof with
+  `tmux capture-pane`, redacted through `sed`.
+- Prefer deterministic arrow navigation over search typing for Clack-style
+  searchable selects. Raw `send-keys -l openai` may not trigger filtering in a
+  tmux pane; inspect option order locally or on-box and send exact Down/Enter
+  sequences.
+- Isolate mutable state with `OPENCLAW_STATE_DIR=$(mktemp -d)`. Plugin npm
+  installs live under that state dir (`npm/node_modules/...`), not under
+  `OPENCLAW_CONFIG_DIR`. Verify downloads by checking the state dir, package
+  lock, and installed package metadata.
+- To test automatic setup installs against local package artifacts, use
+  `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1` plus
+  `OPENCLAW_PLUGIN_INSTALL_OVERRIDES='{"plugin-id":"npm-pack:/tmp/plugin.tgz"}'`.
+  Pack with `npm pack`, set an isolated `OPENCLAW_STATE_DIR`, and verify the
+  package under `npm/node_modules`. Overrides are test-only and must not be
+  treated as official/trusted-source installs.
+- For OpenAI/Codex onboarding proof, the useful markers are the UI line
+  `Installed Codex plugin`, `npm/node_modules/@openclaw/codex`, and the
+  package-lock entry showing the bundled `@openai/codex` dependency. A dummy
+  OpenAI-shaped key can prove only UI/install behavior; it is not live auth.
+
 ## Reuse And Keepalive
 
 For most Blacksmith-backed Crabbox calls, one-shot is enough. Use reuse only
@@ -198,6 +288,10 @@ Common Crabbox-only failures:
   printed Actions URL.
 - Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
   created.
+- Testbox queued/capacity pressure: do not convert a broad changed gate or full
+  suite into local `OPENCLAW_LOCAL_CHECK_MODE=throttled pnpm ...`. Leave the
+  remote lane queued, switch to a narrower targeted local check, or stop and
+  report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
 use direct Blacksmith from the repo root:
@@ -228,21 +322,6 @@ Raw Blacksmith footguns:
 - Raw commit SHAs are not reliable `warmup --ref` refs; use a branch or tag.
 - Treat `blacksmith testbox list` as cleanup diagnostics, not a shared reusable
   queue.
-
-Blacksmith queue/outage mode:
-
-```sh
-blacksmith --version
-blacksmith testbox list --all
-blacksmith testbox status --id <tbx_id>
-```
-
-If the CLI can list/status boxes but new warmups stay `queued` with no IP or
-Actions run URL after a couple of minutes, treat it as Blacksmith provider,
-org-limit, billing, or queue pressure. Stop the queued ids you created and do
-not warm more boxes into the same stalled queue. Check the Blacksmith dashboard,
-billing, and org limits out-of-band, then use Owned Cloud Fallback below for
-maintainer proof.
 
 Escalate to owned AWS/Hetzner only when Blacksmith is down, quota-limited,
 missing the needed environment, or owned capacity is the explicit goal. Use the
@@ -277,9 +356,6 @@ Important Blacksmith footguns:
 
 - Always run from repo root. The CLI syncs the current directory.
 - Raw commit SHAs are not reliable `warmup --ref` refs; use a branch or tag.
-- If `blacksmith testbox list --all` works but warmups stay `queued`, this is
-  not a Crabbox bug. Stop the queued ids and switch to owned AWS/Hetzner instead
-  of retrying.
 - If auth is missing and browser auth is acceptable:
 
 ```sh
@@ -291,45 +367,8 @@ blacksmith auth login --non-interactive --organization openclaw
 Use AWS/Hetzner only when Blacksmith is down, quota-limited, missing the needed
 environment, or owned capacity is explicitly the goal.
 
-When AWS capacity is under pressure, do not start with `class=beast`.
-`beast` begins at 48xlarge instances and can burn 192 vCPU quota per request.
-OpenClaw's owned-cloud default is `standard`; escalate to `fast`, then `large`,
-and only use `beast` when the work is explicitly CPU-bound and the smaller class
-already failed the goal.
-Keep capacity hints enabled so brokered AWS leases print selected region/market,
-quota pressure, Spot fallback, and high-pressure class warnings. The OpenClaw
-repo config sets `capacity.hints: true`; use `CRABBOX_CAPACITY_HINTS=0` only
-when debugging hint rendering itself.
-
-Use `beast` only for exceptional lanes:
-
-- full-suite or all-plugin Docker matrices where wall time is dominated by CPU,
-  not dependency install or network;
-- release/blocker validation where a maintainer explicitly asks for the largest
-  owned AWS class;
-- performance profiling where the point is to compare high-core behavior.
-
-Do not use `beast` for `pnpm check:changed`, focused tests, docs-only work,
-ordinary lint/typecheck, small E2E repros, or Blacksmith outage triage. Those
-should use `standard` first and `fast` only when the extra cores materially help.
-
-Preferred AWS pressure-relief flow:
-
 ```sh
-CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
-  pnpm crabbox:warmup -- --provider aws --class standard --market on-demand --idle-timeout 90m
-pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
-pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm check:changed"
-pnpm crabbox:stop -- <cbx_id-or-slug>
-```
-
-Use `--market spot` only when testing Spot behavior or saving cost matters more
-than launch reliability. Use `--market on-demand` when diagnosing quota/capacity
-because it removes Spot market churn from the failure.
-
-```sh
-CRABBOX_CAPACITY_REGIONS=eu-west-1,eu-west-2,eu-central-1,us-east-1,us-west-2 \
-  pnpm crabbox:warmup -- --provider aws --class fast --market on-demand --idle-timeout 90m
+pnpm crabbox:warmup -- --provider aws --class beast --market on-demand --idle-timeout 90m
 pnpm crabbox:hydrate -- --id <cbx_id-or-slug>
 pnpm crabbox:run -- --id <cbx_id-or-slug> --timing-json --shell -- "env NODE_OPTIONS=--max-old-space-size=4096 OPENCLAW_TEST_PROJECTS_PARALLEL=6 OPENCLAW_VITEST_MAX_WORKERS=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=900000 pnpm test:changed"
 pnpm crabbox:stop -- <cbx_id-or-slug>
@@ -339,8 +378,26 @@ Install/auth for owned Crabbox if needed:
 
 ```sh
 brew install openclaw/tap/crabbox
-printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin
+crabbox login --url https://crabbox.openclaw.ai --provider aws
 ```
+
+New users should self-resolve broker auth before anyone asks for AWS keys:
+
+```sh
+crabbox config show
+crabbox doctor
+crabbox whoami
+```
+
+- If broker auth is missing, run `crabbox login --url https://crabbox.openclaw.ai --provider aws`.
+- If the CLI asks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or AWS
+  profile setup during normal OpenClaw validation, assume the agent selected
+  the wrong path. Use brokered `crabbox login`, `--provider blacksmith-testbox`,
+  or an existing brokered lease before asking the user for cloud credentials.
+- Ask for AWS keys only for explicit direct-provider/account administration,
+  not for normal brokered OpenClaw proof.
+- Trusted automation may still use
+  `printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin`.
 
 macOS config lives at:
 

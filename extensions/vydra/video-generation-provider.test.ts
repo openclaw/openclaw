@@ -30,7 +30,7 @@ describe("vydra video-generation provider", () => {
         status: "completed",
         videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
       }),
-      binaryResponse("mp4-data", "video/mp4"),
+      binaryResponse("webm-data", "video/webm"),
     );
 
     const provider = buildVydraVideoGenerationProvider();
@@ -41,20 +41,22 @@ describe("vydra video-generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://www.vydra.ai/api/v1/models/veo3",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({ prompt: "tiny city at sunrise" }),
-      }),
-    );
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://www.vydra.ai/api/v1/jobs/job-123",
-      expect.objectContaining({ method: "GET" }),
-    );
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    const createCall = fetchMock.mock.calls[0];
+    expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/veo3");
+    const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
+    expect(createInit?.method).toBe("POST");
+    expect(createInit?.body).toBe(JSON.stringify({ prompt: "tiny city at sunrise" }));
+    const pollCall = fetchMock.mock.calls[1];
+    expect(pollCall?.[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-123");
+    const pollInit = pollCall?.[1] as { method?: string } | undefined;
+    expect(pollInit?.method).toBe("GET");
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated Vydra video");
+    }
+    expect(video.mimeType).toBe("video/webm");
+    expect(video.fileName).toBe("video-1.webm");
     expect(result.metadata).toEqual({
       jobId: "job-123",
       videoUrl: "https://cdn.vydra.ai/generated/test.mp4",
@@ -99,19 +101,23 @@ describe("vydra video-generation provider", () => {
       inputImages: [{ url: "https://example.com/reference.png" }],
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://www.vydra.ai/api/v1/models/kling",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "animate this image",
-          image_url: "https://example.com/reference.png",
-          video_url: "https://example.com/reference.png",
-        }),
+    const createCall = fetchMock.mock.calls[0];
+    expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/kling");
+    const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
+    expect(createInit?.method).toBe("POST");
+    expect(createInit?.body).toBe(
+      JSON.stringify({
+        prompt: "animate this image",
+        image_url: "https://example.com/reference.png",
+        video_url: "https://example.com/reference.png",
       }),
     );
-    expect(result.videos[0]?.mimeType).toBe("video/mp4");
+    expect(result.videos).toHaveLength(1);
+    const [video] = result.videos;
+    if (!video) {
+      throw new Error("Expected generated Vydra kling video");
+    }
+    expect(video.mimeType).toBe("video/mp4");
     expect(result.metadata).toEqual({
       jobId: "job-kling",
       videoUrl: "https://cdn.vydra.ai/generated/kling.mp4",

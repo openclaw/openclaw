@@ -146,7 +146,7 @@ describe("wrapFetchWithAbortSignal", () => {
       await Promise.resolve();
       await waitForMicrotaskTurn();
 
-      expect(unhandled).toEqual([]);
+      expect(unhandled).toStrictEqual([]);
       expect(removeEventListener).toHaveBeenCalledOnce();
     } finally {
       process.off("unhandledRejection", onUnhandled);
@@ -286,7 +286,7 @@ describe("wrapFetchWithAbortSignal", () => {
       preconnect: (url: string, init?: { credentials?: RequestCredentials }) => unknown;
     };
 
-    expect(() => wrapped.preconnect("https://example.com")).not.toThrow();
+    expect(wrapped.preconnect("https://example.com")).toBeUndefined();
   });
 
   it.each([
@@ -303,7 +303,7 @@ describe("wrapFetchWithAbortSignal", () => {
 
       const seenHeaders = getSeenInit()?.headers;
       expect(seenHeaders).not.toBe(init.headers);
-      expect(Object.getOwnPropertySymbols(seenHeaders as object)).toEqual([]);
+      expect(Object.getOwnPropertySymbols(seenHeaders as object)).toStrictEqual([]);
       expect(new Headers(seenHeaders).get("content-type")).toBe("application/json");
       expect(Object.getOwnPropertySymbols(init.headers as object)).toHaveLength(1);
     },

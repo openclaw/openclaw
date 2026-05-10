@@ -54,15 +54,14 @@ function formatLegacyIssuePreview(issues: Partial<Record<string, number>>): stri
   if (issues.legacyPayloadKind) {
     lines.push(`- ${pluralize(issues.legacyPayloadKind, "job")} needs payload kind normalization`);
   }
+  if (issues.legacyPayloadCodexModel) {
+    lines.push(
+      `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
   if (issues.legacyPayloadProvider) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadProvider, "job")} still uses payload \`provider\` as a delivery alias`,
-    );
-  }
-  if (issues.invalidCronPayloadModel) {
-    const verb = issues.invalidCronPayloadModel === 1 ? "stores" : "store";
-    lines.push(
-      `- ${pluralize(issues.invalidCronPayloadModel, "job")} ${verb} an invalid cron payload model inheritance sentinel`,
     );
   }
   if (issues.legacyTopLevelPayloadFields) {

@@ -145,9 +145,12 @@ function selectorSpecificity(selector: string): [number, number, number] {
   const ids = selector.match(/#[\w-]+/g)?.length ?? 0;
   const classes = selector.match(/\.[\w-]+/g)?.length ?? 0;
   const withoutIdsOrClasses = selector.replace(/#[\w-]+|\.[\w-]+/g, " ");
-  const elements = withoutIdsOrClasses
-    .split(/[\s>+~]+/)
-    .filter((part) => /^[a-z][\w-]*$/i.test(part)).length;
+  let elements = 0;
+  for (const part of withoutIdsOrClasses.split(/[\s>+~]+/)) {
+    if (/^[a-z][\w-]*$/i.test(part)) {
+      elements++;
+    }
+  }
   return [ids, classes, elements];
 }
 
@@ -165,6 +168,13 @@ function firstSelectorForDisplay(css: string, display: string, startAt: number):
   displayRule.lastIndex = startAt;
   const match = displayRule.exec(css);
   return match?.[1]?.split(",").at(-1)?.trim() ?? null;
+}
+
+function requireElement<T extends Element>(element: T | null, message: string): T {
+  if (!element) {
+    throw new Error(message);
+  }
+  return element;
 }
 
 describe("export html sidebar trigger affordance", () => {
@@ -233,10 +243,9 @@ describe("export html security hardening", () => {
     };
 
     const { document } = await renderTemplate(session);
-    const messages = document.getElementById("messages");
-    expect(messages).toBeTruthy();
-    expect(messages?.querySelector("img[onerror]")).toBeNull();
-    expect(messages?.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector("img[onerror]")).toBeNull();
+    expect(messages.innerHTML).toContain("&lt;img src=x onerror=alert(1)&gt;");
   });
 
   it("escapes tree and header metadata fields", async () => {
@@ -300,14 +309,15 @@ describe("export html security hardening", () => {
     };
 
     const { document } = await renderTemplate(headerSession);
-    const tree = document.getElementById("tree-container");
-    const header = document.getElementById("header-container");
-    expect(tree).toBeTruthy();
-    expect(header).toBeTruthy();
-    expect(tree?.querySelector("img[onerror]")).toBeNull();
-    expect(header?.querySelector("img[onerror]")).toBeNull();
-    expect(tree?.innerHTML).toContain("&lt;img src=x onerror=alert(9)&gt;");
-    expect(header?.innerHTML).toContain("&lt;img src=x onerror=alert(9)&gt;");
+    const tree = requireElement(document.getElementById("tree-container"), "tree root missing");
+    const header = requireElement(
+      document.getElementById("header-container"),
+      "header root missing",
+    );
+    expect(tree.querySelector("img[onerror]")).toBeNull();
+    expect(header.querySelector("img[onerror]")).toBeNull();
+    expect(tree.innerHTML).toContain("&lt;img src=x onerror=alert(9)&gt;");
+    expect(header.innerHTML).toContain("&lt;img src=x onerror=alert(9)&gt;");
 
     const modelLeafSession: SessionData = {
       header: { id: "session-2-model", timestamp: now() },
@@ -363,10 +373,12 @@ describe("export html security hardening", () => {
     };
 
     const { document } = await renderTemplate(session);
-    const img = document.querySelector("#messages .message-image");
-    expect(img).toBeTruthy();
-    expect(img?.getAttribute("onerror")).toBeNull();
-    expect(img?.getAttribute("src")).toBe("data:application/octet-stream;base64,AAAA");
+    const img = requireElement(
+      document.querySelector("#messages .message-image"),
+      "message image missing",
+    );
+    expect(img.getAttribute("onerror")).toBeNull();
+    expect(img.getAttribute("src")).toBe("data:application/octet-stream;base64,AAAA");
   });
 
   it("flattens remote markdown images but keeps data-image markdown", async () => {
@@ -396,11 +408,10 @@ describe("export html security hardening", () => {
     };
 
     const { document } = await renderTemplate(session);
-    const messages = document.getElementById("messages");
-    expect(messages).toBeTruthy();
-    expect(messages?.querySelector('img[src^="https://"]')).toBeNull();
-    expect(messages?.textContent).toContain("exfil");
-    expect(messages?.querySelector(`img[src="${dataImage}"]`)).toBeTruthy();
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.querySelector('img[src^="https://"]')).toBeNull();
+    expect(messages.textContent).toContain("exfil");
+    requireElement(messages.querySelector(`img[src="${dataImage}"]`), "data markdown image missing");
   });
 
   it("escapes markdown data-image attributes", async () => {
@@ -430,10 +441,9 @@ describe("export html security hardening", () => {
     };
 
     const { document } = await renderTemplate(session);
-    const img = document.querySelector("#messages img");
-    expect(img).toBeTruthy();
-    expect(img?.getAttribute("onerror")).toBeNull();
-    expect(img?.getAttribute("alt")).toBe('x" onerror="alert(1)');
-    expect(img?.getAttribute("src")).toBe(dataImage);
+    const img = requireElement(document.querySelector("#messages img"), "message image missing");
+    expect(img.getAttribute("onerror")).toBeNull();
+    expect(img.getAttribute("alt")).toBe('x" onerror="alert(1)');
+    expect(img.getAttribute("src")).toBe(dataImage);
   });
 });

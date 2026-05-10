@@ -5,7 +5,7 @@ import {
   createTestWizardPrompter,
   runSetupWizardConfigure,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuProbeResult } from "./types.js";
 
 const { probeFeishuMock } = vi.hoisted(() => ({
@@ -76,13 +76,19 @@ async function getStatusWithEnvRefs(params: { appIdKey: string; appSecretKey: st
 const feishuConfigure = createPluginSetupWizardConfigure(feishuPlugin);
 const feishuGetStatus = createPluginSetupWizardStatus(feishuPlugin);
 
+afterAll(() => {
+  vi.doUnmock("./probe.js");
+  vi.doUnmock("./app-registration.js");
+  vi.resetModules();
+});
+
 describe("feishu setup wizard", () => {
   beforeEach(() => {
     probeFeishuMock.mockReset();
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
   });
 
-  it("does not throw when config appId/appSecret are SecretRef objects", async () => {
+  it("prompts over SecretRef appId/appSecret config objects", async () => {
     const text = vi
       .fn()
       .mockResolvedValueOnce("cli_from_prompt")
@@ -95,21 +101,24 @@ describe("feishu setup wizard", () => {
       ) as never,
     });
 
-    await expect(
-      runSetupWizardConfigure({
-        configure: feishuConfigure,
-        cfg: {
-          channels: {
-            feishu: {
-              appId: { source: "env", id: "FEISHU_APP_ID", provider: "default" },
-              appSecret: { source: "env", id: "FEISHU_APP_SECRET", provider: "default" },
-            },
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {
+        channels: {
+          feishu: {
+            appId: { source: "env", id: "FEISHU_APP_ID", provider: "default" },
+            appSecret: { source: "env", id: "FEISHU_APP_SECRET", provider: "default" },
           },
-        } as never,
-        prompter,
-        runtime: createNonExitingRuntimeEnv(),
-      }),
-    ).resolves.toBeTruthy();
+        },
+      } as never,
+      prompter,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(result.cfg.channels?.feishu).toMatchObject({
+      appId: "cli_from_prompt",
+      appSecret: "secret_from_prompt",
+    });
   });
 });
 

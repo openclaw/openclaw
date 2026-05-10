@@ -447,10 +447,12 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     allowBundled: ["gemini", "peekaboo"],
     load: {
       extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/agent-scripts/skills"],
     },
     install: {
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
       "image-lab": {
@@ -463,6 +465,26 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   },
 }
 ```
+
+### Symlinked sibling skill repo
+
+Use this when a built-in skill root contains a symlink into a sibling repo, for
+example `~/.agents/skills/manager -> ~/Projects/manager/skills`.
+
+```json5
+{
+  skills: {
+    load: {
+      extraDirs: ["~/Projects/manager/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
+    },
+  },
+}
+```
+
+- `extraDirs` scans the sibling repo as an explicit skill root.
+- `allowSymlinkTargets` lets symlinked skill folders resolve into that trusted
+  real target root without allowing arbitrary symlink escapes.
 
 ## Common patterns
 
@@ -654,7 +676,7 @@ Only enable direct mutable name/email/nick matching with each channel's `dangero
 
 - If you set `dmPolicy: "open"`, the matching `allowFrom` list must include `"*"`.
 - Provider IDs differ (phone numbers, user IDs, channel IDs). Use the provider docs to confirm the format.
-- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `canvasHost`, `talk`, `signal`, `imessage`.
+- Optional sections to add later: `web`, `browser`, `ui`, `discovery`, `plugins`, `talk`, `signal`, `imessage`.
 - See [Providers](/providers) and [Troubleshooting](/gateway/troubleshooting) for deeper setup notes.
 
 ## Related

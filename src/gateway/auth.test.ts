@@ -249,7 +249,7 @@ describe("gateway auth", () => {
     });
   });
 
-  it("does not throw when req is missing socket", async () => {
+  it("authorizes matching token auth when req is missing socket", async () => {
     const res = await authorizeGatewayConnect({
       auth: { mode: "token", token: "secret", allowTailscale: false },
       connectAuth: { token: "secret" },
@@ -384,7 +384,7 @@ describe("gateway auth", () => {
       lockoutMs: 60_000,
       exemptLoopback: false,
     });
-    let releaseWhois!: () => void;
+    let releaseWhois: (() => void) | undefined;
     const whoisGate = new Promise<void>((resolve) => {
       releaseWhois = resolve;
     });
@@ -408,6 +408,9 @@ describe("gateway auth", () => {
     const first = authorizeGatewayConnect(baseParams);
     const second = authorizeGatewayConnect(baseParams);
 
+    if (!releaseWhois) {
+      throw new Error("Expected Tailscale whois release callback to be initialized");
+    }
     releaseWhois();
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -550,12 +553,12 @@ describe("gateway auth", () => {
     });
 
     expect(auth.password).toBe("env-password");
-    expect(() =>
+    expect(
       assertGatewayAuthConfigured(auth, {
         mode: "password",
         password: rawPasswordRef,
       }),
-    ).not.toThrow();
+    ).toBeUndefined();
   });
 
   it("throws generic error when password mode has no password at all", () => {
@@ -964,7 +967,7 @@ describe("trusted-proxy auth", () => {
       expect(res.reason).toBe("trusted_proxy_loopback_source");
     });
 
-    it("accepts local-direct password fallback when trusted-proxy auth fails", async () => {
+    it("rejects local-direct password credentials when trusted-proxy auth fails", async () => {
       const limiter = createLimiterSpy();
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
@@ -972,13 +975,13 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: true, method: "password" });
-      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.reset).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
+      expect(limiter.check).not.toHaveBeenCalled();
+      expect(limiter.reset).not.toHaveBeenCalled();
       expect(limiter.recordFailure).not.toHaveBeenCalled();
     });
 
-    it("rejects wrong local-direct password fallback and records the failure", async () => {
+    it("ignores wrong local-direct password credentials when trusted-proxy auth fails", async () => {
       const limiter = createLimiterSpy();
       const res = await authorizeLocalDirect({
         password: "local-password", // pragma: allowlist secret
@@ -986,13 +989,13 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({ ok: false, reason: "password_mismatch" });
-      expect(limiter.check).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
-      expect(limiter.recordFailure).toHaveBeenCalledWith("127.0.0.1", "shared-secret");
+      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
+      expect(limiter.check).not.toHaveBeenCalled();
+      expect(limiter.recordFailure).not.toHaveBeenCalled();
       expect(limiter.reset).not.toHaveBeenCalled();
     });
 
-    it("enforces rate-limit lockout before local-direct password fallback", async () => {
+    it("does not apply shared-secret rate limits to trusted-proxy failures", async () => {
       const limiter = createLimiterSpy();
       limiter.check.mockReturnValueOnce({
         allowed: false,
@@ -1006,12 +1009,8 @@ describe("trusted-proxy auth", () => {
         rateLimiter: limiter,
       });
 
-      expect(res).toEqual({
-        ok: false,
-        reason: "rate_limited",
-        rateLimited: true,
-        retryAfterMs: 2500,
-      });
+      expect(res).toEqual({ ok: false, reason: "trusted_proxy_loopback_source" });
+      expect(limiter.check).not.toHaveBeenCalled();
       expect(limiter.recordFailure).not.toHaveBeenCalled();
       expect(limiter.reset).not.toHaveBeenCalled();
     });

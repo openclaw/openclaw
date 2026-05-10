@@ -2,7 +2,10 @@ import {
   registerProviderPlugin,
   registerSingleProviderPlugin,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
+import {
+  expectPassthroughReplayPolicy,
+  expectUnifiedModelCatalogProviderRegistration,
+} from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it, vi } from "vitest";
 import openrouterPlugin from "./index.js";
 import {
@@ -12,25 +15,38 @@ import {
 import { resolveThinkingProfile } from "./provider-policy-api.js";
 
 describe("openrouter provider hooks", () => {
-  it("registers OpenRouter speech alongside model and media providers", async () => {
+  it("registers OpenRouter speech alongside model, media, and catalog providers", async () => {
     const { providers, speechProviders, mediaProviders, imageProviders, videoProviders } =
       await registerProviderPlugin({
         plugin: openrouterPlugin,
         id: "openrouter",
         name: "OpenRouter Provider",
       });
+    const modelCatalogProvider = expectUnifiedModelCatalogProviderRegistration({
+      plugin: openrouterPlugin,
+      pluginId: "openrouter",
+      pluginName: "OpenRouter Provider",
+      provider: "openrouter",
+      kind: "video_generation",
+    });
 
     expect(providers).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(speechProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(mediaProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(imageProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
     expect(videoProviders).toEqual([expect.objectContaining({ id: "openrouter" })]);
+    expect(modelCatalogProvider.liveCatalog).toEqual(expect.any(Function));
   });
 
-  it("includes Kimi K2.6 in the bundled catalog", () => {
-    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain(
-      "moonshotai/kimi-k2.6",
+  it("includes current Kimi models in the bundled catalog", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toEqual(
+      expect.arrayContaining(["moonshotai/kimi-k2.6", "moonshotai/kimi-k2.5"]),
     );
+  });
+
+  it("uses the canonical prefixed OpenRouter auto model id", () => {
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).toContain("openrouter/auto");
+    expect(buildOpenrouterProvider().models?.map((model) => model.id)).not.toContain("auto");
   });
 
   it("does not include retired stealth models in the bundled catalog", () => {
@@ -263,7 +279,7 @@ describe("openrouter provider hooks", () => {
       } as never,
     );
 
-    expect(capturedPayload).toEqual({});
+    expect(capturedPayload).toStrictEqual({});
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 

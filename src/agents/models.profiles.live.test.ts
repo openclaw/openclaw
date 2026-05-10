@@ -273,6 +273,14 @@ describe("isProviderUnavailableErrorMessage", () => {
       isProviderUnavailableErrorMessage("provider returned error: 502 Internal Server Error"),
     ).toBe(true);
   });
+
+  it("matches xAI temporary capacity errors", () => {
+    expect(
+      isProviderUnavailableErrorMessage(
+        "Service temporarily unavailable. The model is at capacity and currently cannot serve this request. Please try again later.",
+      ),
+    ).toBe(true);
+  });
 });
 
 function isChatGPTUsageLimitErrorMessage(raw: string): boolean {
@@ -314,6 +322,7 @@ function isProviderUnavailableErrorMessage(raw: string): boolean {
     msg.includes("upstream provider unavailable") ||
     msg.includes("upstream error from google") ||
     msg.includes("temporarily rate-limited upstream") ||
+    (msg.includes("service temporarily unavailable") && msg.includes("capacity")) ||
     msg.includes("unable to access non-serverless model") ||
     msg.includes("create and start a new dedicated endpoint") ||
     msg.includes("no available capacity was found for the model") ||
@@ -635,10 +644,10 @@ async function runDeepSeekV4ReplayRegression(params: {
     toolCall = first.content.find((block) => block.type === "toolCall");
   }
 
-  expect(toolCall).toBeTruthy();
   if (!toolCall || toolCall.type !== "toolCall") {
     throw new Error("expected DeepSeek V4 tool call");
   }
+  expect(toolCall.name).toBe("noop");
 
   const second = await completeSimpleWithTimeout(
     params.model,
@@ -1016,11 +1025,11 @@ describeLive("live models (profile keys)", () => {
                   .trim();
               }
 
-              expect(toolCall).toBeTruthy();
               expect(firstText.length).toBe(0);
               if (!toolCall || toolCall.type !== "toolCall") {
                 throw new Error("expected tool call");
               }
+              expect(toolCall.name).toBe("noop");
 
               const second = await completeSimpleWithTimeout(
                 model,

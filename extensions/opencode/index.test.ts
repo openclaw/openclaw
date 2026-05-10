@@ -14,17 +14,12 @@ describe("opencode provider plugin", () => {
       name: "OpenCode Zen Provider",
     });
 
-    expect(mediaProviders).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "opencode",
-          capabilities: ["image"],
-          defaultModels: { image: "gpt-5-nano" },
-          describeImage: expect.any(Function),
-          describeImages: expect.any(Function),
-        }),
-      ]),
-    );
+    const mediaProvider = mediaProviders.find((provider) => provider.id === "opencode");
+    expect(mediaProvider).toBeDefined();
+    expect(mediaProvider?.capabilities).toEqual(["image"]);
+    expect(mediaProvider?.defaultModels).toEqual({ image: "gpt-5-nano" });
+    expect(typeof mediaProvider?.describeImage).toBe("function");
+    expect(typeof mediaProvider?.describeImages).toBe("function");
   });
 
   it("owns passthrough-gemini replay policy for Gemini-backed models", async () => {
@@ -51,7 +46,10 @@ describe("opencode provider plugin", () => {
       name: "OpenCode Zen Provider",
     });
     const provider = requireRegisteredProvider(providers, "opencode");
-    const resolveThinkingProfile = provider.resolveThinkingProfile!;
+    const resolveThinkingProfile = provider.resolveThinkingProfile;
+    if (!resolveThinkingProfile) {
+      throw new Error("Expected OpenCode provider resolveThinkingProfile");
+    }
 
     expect(
       resolveThinkingProfile({
@@ -70,9 +68,9 @@ describe("opencode provider plugin", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(opus46Profile?.levels.some((level) => level.id === "xhigh" || level.id === "max")).toBe(
-      false,
-    );
+    const opus46LevelIds = opus46Profile?.levels.map((level) => level.id) ?? [];
+    expect(opus46LevelIds).not.toContain("xhigh");
+    expect(opus46LevelIds).not.toContain("max");
     const sonnet46Profile = resolveThinkingProfile({
       provider: "opencode",
       modelId: "claude-sonnet-4-6",
@@ -81,8 +79,8 @@ describe("opencode provider plugin", () => {
       levels: expect.arrayContaining([{ id: "adaptive" }]),
       defaultLevel: "adaptive",
     });
-    expect(
-      sonnet46Profile?.levels.some((level) => level.id === "xhigh" || level.id === "max"),
-    ).toBe(false);
+    const sonnet46LevelIds = sonnet46Profile?.levels.map((level) => level.id) ?? [];
+    expect(sonnet46LevelIds).not.toContain("xhigh");
+    expect(sonnet46LevelIds).not.toContain("max");
   });
 });

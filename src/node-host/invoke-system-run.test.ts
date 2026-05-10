@@ -131,6 +131,14 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     );
   }
 
+  function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
+    const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
+    if (!args) {
+      throw new Error("expected runCommand args");
+    }
+    return args;
+  }
+
   function expectApprovalRequiredDenied(params: {
     sendNodeEvent: MockedSendNodeEvent;
     sendInvokeResult: MockedSendInvokeResult;
@@ -598,8 +606,12 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
           continue;
         }
 
-        const runArgs = vi.mocked(invoke.runCommand).mock.calls[0]?.[0] as string[] | undefined;
-        expect(runArgs).toEqual(["env", "sh", "-c", "echo SAFE"]);
+        expect(requireFirstRunCommandArgs(invoke.runCommand)).toEqual([
+          "env",
+          "sh",
+          "-c",
+          "echo SAFE",
+        ]);
         expect(fs.existsSync(marker)).toBe(false);
         expectInvokeOk(invoke.sendInvokeResult);
       }
@@ -621,12 +633,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(transparent.runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
       } else {
-        const runArgs = vi.mocked(transparent.runCommand).mock.calls[0]?.[0] as
-          | string[]
-          | undefined;
-        expect(runArgs).toBeDefined();
-        expect(runArgs?.[0]).toMatch(/(^|[/\\])tr$/);
-        expect(runArgs?.slice(1)).toEqual(["a", "b"]);
+        expect(requireFirstRunCommandArgs(transparent.runCommand)).toEqual([
+          expect.stringMatching(/(^|[/\\])tr$/),
+          "a",
+          "b",
+        ]);
         expectInvokeOk(transparent.sendInvokeResult);
       }
 
@@ -1312,7 +1323,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           expect(runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
     } finally {
@@ -1416,7 +1427,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
           expect(runCommand).toHaveBeenCalledTimes(1);
           expectInvokeOk(sendInvokeResult, { payloadContains: "inline-eval-ok" });
-          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toEqual([]);
+          expect(loadExecApprovals().agents?.main?.allowlist ?? []).toStrictEqual([]);
         },
       });
     } finally {
@@ -1530,7 +1541,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
 
     const tempDir = createFixtureDir("openclaw-shell-wrapper-allow-");
     const prepared = buildSystemRunApprovalPlan({
-      command: ["/bin/sh", "-lc", "cd ."],
+      command: ["/bin/sh", "-c", "cd ."],
       cwd: tempDir,
     });
     expect(prepared.ok).toBe(true);

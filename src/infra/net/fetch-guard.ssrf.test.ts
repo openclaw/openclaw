@@ -65,12 +65,36 @@ function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function getDispatcherClassName(value: unknown): string | null {
   if (!value || typeof value !== "object") {
     return null;
   }
   const ctor = (value as { constructor?: unknown }).constructor;
   return typeof ctor === "function" && ctor.name ? ctor.name : null;
+}
+
+function expectDispatcherAttached(value: unknown): void {
+  expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
@@ -141,7 +165,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     }
   }
 
-  async function runProxyModeDispatcherTest(params: {
+  async function runProxyModeDispatcherExpectation(params: {
     mode: (typeof GUARDED_FETCH_MODE)[keyof typeof GUARDED_FETCH_MODE];
     expectEnvProxy: boolean;
   }): Promise<void> {
@@ -157,9 +181,9 @@ describe("fetchWithSsrFGuard hardening", () => {
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
       if (params.expectEnvProxy) {
-        expect(requestInit.dispatcher).toBeDefined();
+        expectDispatcherAttached(requestInit.dispatcher);
       } else {
-        expect(requestInit.dispatcher).toBeDefined();
+        expectDispatcherAttached(requestInit.dispatcher);
         expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       }
       return okResponse();
@@ -669,7 +693,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(result.response.status).toBe(200);
     const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
     expect(firstHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toStrictEqual([]);
     const secondHeaders = getSecondRequestHeaders(fetchImpl);
     expect(secondHeaders.get("authorization")).toBeNull();
     expect(secondHeaders.get("accept")).toBe("application/json");
@@ -1070,7 +1094,7 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it("ignores env proxy by default to preserve DNS-pinned destination binding", async () => {
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.STRICT,
       expectEnvProxy: false,
     });
@@ -1079,20 +1103,20 @@ describe("fetchWithSsrFGuard hardening", () => {
   it("uses the env proxy in strict mode when the SSRF proxy lifecycle is active", async () => {
     vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
 
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.STRICT,
       expectEnvProxy: true,
     });
   });
 
   it("routes through env proxy when trusted proxy mode is explicitly enabled", async () => {
-    await runProxyModeDispatcherTest({
+    await runProxyModeDispatcherExpectation({
       mode: GUARDED_FETCH_MODE.TRUSTED_ENV_PROXY,
       expectEnvProxy: true,
     });
   });
 
-  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured", async () => {
+  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured without policy allowlist", async () => {
     clearProxyEnv();
     vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -1197,13 +1221,14 @@ describe("fetchWithSsrFGuard hardening", () => {
       timeoutMs: 1,
     });
 
-    const outcome = await Promise.race([
+    const outcome = await raceWithTimeoutResult(
       fetchPromise.then(
         () => "resolved",
         (error: unknown) => (error instanceof Error ? error.name : "rejected"),
       ),
-      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 250)),
-    ]);
+      250,
+      "hung",
+    );
 
     expect(outcome).toBe("TimeoutError");
   });
@@ -1417,7 +1442,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });
@@ -1454,7 +1479,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured", async () => {
+  it("keeps DNS pinning in trusted proxy mode when only ALL_PROXY is configured after allowlist checks", async () => {
     clearProxyEnv();
     vi.stubEnv("ALL_PROXY", "http://127.0.0.1:7890");
     (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
@@ -1466,7 +1491,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });
@@ -1491,7 +1516,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     const lookupFn = createPublicLookup();
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
       const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(requestInit.dispatcher).toBeDefined();
+      expectDispatcherAttached(requestInit.dispatcher);
       expect(getDispatcherClassName(requestInit.dispatcher)).not.toBe("EnvHttpProxyAgent");
       return okResponse();
     });

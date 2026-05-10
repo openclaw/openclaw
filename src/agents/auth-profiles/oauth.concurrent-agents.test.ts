@@ -117,9 +117,11 @@ describe("resolveApiKeyForProfile cross-agent refresh coordination (#26322)", ()
     expect(callCount).toBe(1);
     expect(results).toHaveLength(agentCount);
     for (const result of results) {
-      expect(result).not.toBeNull();
-      expect(result?.apiKey).toBe("cross-agent-refreshed-access");
-      expect(result?.provider).toBe(provider);
+      if (!result) {
+        throw new Error("Expected refreshed OAuth credential result");
+      }
+      expect(result.apiKey).toBe("cross-agent-refreshed-access");
+      expect(result.provider).toBe(provider);
     }
   }, 10_000);
 });

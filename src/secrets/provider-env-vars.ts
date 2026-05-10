@@ -1,5 +1,6 @@
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
@@ -128,9 +129,21 @@ function resolveProviderMetadataSnapshot(
     config,
     env,
     ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedSnapshot: true,
   });
   if (current) {
     return current;
+  }
+  if (normalizePluginsConfig(config.plugins).loadPaths.length === 0) {
+    const unscopedCurrent = getCurrentPluginMetadataSnapshot({
+      env,
+      ...(params?.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      allowWorkspaceScopedSnapshot: true,
+      requireDefaultDiscoveryContext: true,
+    });
+    if (unscopedCurrent) {
+      return unscopedCurrent;
+    }
   }
   return loadPluginMetadataSnapshot({
     config,

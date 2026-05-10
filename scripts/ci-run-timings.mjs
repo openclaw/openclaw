@@ -2,10 +2,6 @@
 
 import { execFileSync } from "node:child_process";
 
-const DEFAULT_REPOSITORY = "openclaw/openclaw";
-const CI_WORKFLOW_ID = "ci.yml";
-const GH_MAX_BUFFER = 32 * 1024 * 1024;
-
 function parseTime(value) {
   if (!value || value === "0001-01-01T00:00:00Z") {
     return null;
@@ -22,36 +18,15 @@ function formatSeconds(value) {
   return value === null ? "" : `${value}s`;
 }
 
-function normalizeRun(run) {
-  return {
-    ...run,
-    createdAt: run.createdAt ?? run.created_at,
-    databaseId: run.databaseId ?? run.id,
-    displayTitle: run.displayTitle ?? run.display_title,
-    event: run.event,
-    headSha: run.headSha ?? run.head_sha,
-    runStartedAt: run.runStartedAt ?? run.run_started_at,
-    status: run.status,
-    conclusion: run.conclusion,
-    updatedAt: run.updatedAt ?? run.updated_at,
-  };
-}
-
-function normalizeJob(job) {
-  return {
-    ...job,
-    completedAt: job.completedAt ?? job.completed_at,
-    runnerName: job.runnerName ?? job.runner_name,
-    startedAt: job.startedAt ?? job.started_at,
-  };
+function parseRunList(raw) {
+  const parsed = JSON.parse(raw);
+  return Array.isArray(parsed) ? parsed : [];
 }
 
 function collectRunTimingContext(run) {
-  const normalizedRun = normalizeRun(run);
-  const created = parseTime(normalizedRun.createdAt);
-  const runUpdated = parseTime(normalizedRun.updatedAt);
-  const jobs = (normalizedRun.jobs ?? [])
-    .map(normalizeJob)
+  const created = parseTime(run.createdAt);
+  const updated = parseTime(run.updatedAt);
+  const jobs = (run.jobs ?? [])
     .filter((job) => !job.name?.startsWith("matrix."))
     .map((job) => {
       const started = parseTime(job.startedAt);
@@ -67,18 +42,11 @@ function collectRunTimingContext(run) {
       };
     });
 
-  const completedTimes = jobs.map((job) => job.completed).filter((completed) => completed !== null);
-  const lastCompleted = completedTimes.length === 0 ? null : Math.max(...completedTimes);
-  const updated =
-    runUpdated !== null && lastCompleted !== null
-      ? Math.max(runUpdated, lastCompleted)
-      : (runUpdated ?? lastCompleted);
-
-  return { created, jobs, run: normalizedRun, updated };
+  return { created, jobs, updated };
 }
 
 export function summarizeRunTimings(run, limit = 15) {
-  const { created, jobs, run: normalizedRun, updated } = collectRunTimingContext(run);
+  const { created, jobs, updated } = collectRunTimingContext(run);
   const byDuration = [...jobs]
     .filter((job) => job.durationSeconds !== null)
     .toSorted((left, right) => right.durationSeconds - left.durationSeconds)
@@ -94,15 +62,15 @@ export function summarizeRunTimings(run, limit = 15) {
   return {
     byDuration,
     byQueue,
-    conclusion: normalizedRun.conclusion ?? "",
-    status: normalizedRun.status ?? "",
+    conclusion: run.conclusion ?? "",
+    status: run.status ?? "",
     wallSeconds: secondsBetween(created, updated),
     badJobs,
   };
 }
 
 export function selectLatestMainPushCiRun(runs, headSha = null) {
-  const pushRuns = runs.map(normalizeRun).filter((run) => run.event === "push");
+  const pushRuns = runs.filter((run) => run.event === "push");
   if (headSha) {
     const matchingRun = pushRuns.find((run) => run.headSha === headSha);
     if (matchingRun) {
@@ -112,37 +80,13 @@ export function selectLatestMainPushCiRun(runs, headSha = null) {
   return pushRuns[0] ?? null;
 }
 
-function repositorySlug() {
-  return process.env.GITHUB_REPOSITORY || DEFAULT_REPOSITORY;
-}
-
-function ghApiJson(path) {
-  return JSON.parse(
-    execFileSync("gh", ["api", path], {
-      encoding: "utf8",
-      maxBuffer: GH_MAX_BUFFER,
-    }),
-  );
-}
-
-function listMainCiRuns(limit) {
-  const runs = [];
-  const perPage = Math.max(1, Math.min(100, limit));
-  for (let page = 1; runs.length < limit && page <= 10; page += 1) {
-    const data = ghApiJson(
-      `repos/${repositorySlug()}/actions/workflows/${CI_WORKFLOW_ID}/runs?branch=main&per_page=${perPage}&page=${page}&exclude_pull_requests=true`,
-    );
-    const pageRuns = (data.workflow_runs ?? []).map(normalizeRun);
-    runs.push(...pageRuns);
-    if (pageRuns.length < perPage) {
-      break;
-    }
-  }
-  return runs.slice(0, limit);
-}
-
 function getLatestCiRunId() {
-  const runs = listMainCiRuns(1);
+  const raw = execFileSync(
+    "gh",
+    ["run", "list", "--branch", "main", "--workflow", "CI", "--limit", "1", "--json", "databaseId"],
+    { encoding: "utf8" },
+  );
+  const runs = JSON.parse(raw);
   const runId = runs[0]?.databaseId;
   if (!runId) {
     throw new Error("No CI runs found on main");
@@ -161,7 +105,23 @@ function getRemoteMainSha() {
 
 function getLatestMainPushCiRunId() {
   const headSha = getRemoteMainSha();
-  const run = selectLatestMainPushCiRun(listMainCiRuns(40), headSha);
+  const raw = execFileSync(
+    "gh",
+    [
+      "run",
+      "list",
+      "--branch",
+      "main",
+      "--workflow",
+      "CI",
+      "--limit",
+      "20",
+      "--json",
+      "databaseId,headSha,event,status,conclusion",
+    ],
+    { encoding: "utf8" },
+  );
+  const run = selectLatestMainPushCiRun(parseRunList(raw), headSha);
   if (!run?.databaseId) {
     throw new Error(`No push CI run found for origin/main ${headSha.slice(0, 10)}`);
   }
@@ -169,30 +129,37 @@ function getLatestMainPushCiRunId() {
 }
 
 function listRecentSuccessfulCiRuns(limit) {
-  return listMainCiRuns(Math.max(limit * 12, 100))
+  const raw = execFileSync(
+    "gh",
+    [
+      "run",
+      "list",
+      "--branch",
+      "main",
+      "--workflow",
+      "CI",
+      "--limit",
+      String(Math.max(limit * 4, limit)),
+      "--json",
+      "databaseId,headSha,status,conclusion",
+    ],
+    { encoding: "utf8" },
+  );
+  return JSON.parse(raw)
     .filter((run) => run.status === "completed" && run.conclusion === "success")
     .slice(0, limit);
 }
 
 function loadRun(runId) {
-  const repository = repositorySlug();
-  const run = normalizeRun(ghApiJson(`repos/${repository}/actions/runs/${runId}`));
-  const jobs = [];
-  for (let page = 1; page <= 10; page += 1) {
-    const data = ghApiJson(
-      `repos/${repository}/actions/runs/${runId}/jobs?per_page=100&page=${page}`,
-    );
-    const pageJobs = data.jobs ?? [];
-    jobs.push(...pageJobs.map(normalizeJob));
-    if (pageJobs.length < 100) {
-      break;
-    }
-  }
-  return {
-    ...run,
-    createdAt: run.createdAt ?? run.runStartedAt,
-    jobs,
-  };
+  return JSON.parse(
+    execFileSync(
+      "gh",
+      ["run", "view", runId, "--json", "status,conclusion,createdAt,updatedAt,jobs"],
+      {
+        encoding: "utf8",
+      },
+    ),
+  );
 }
 
 function summarizeJobs(run) {
@@ -278,12 +245,7 @@ async function main() {
     process.argv.slice(2),
   );
   if (recentLimit !== null) {
-    const runs = listRecentSuccessfulCiRuns(recentLimit);
-    if (runs.length === 0) {
-      console.log("No recent successful main CI runs found in the latest 100 runs.");
-      return;
-    }
-    for (const run of runs) {
+    for (const run of listRecentSuccessfulCiRuns(recentLimit)) {
       const summary = summarizeJobs(loadRun(run.databaseId));
       console.log(
         [

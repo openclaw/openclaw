@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withEnv, withEnvAsync, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __testing, createGeminiWebSearchProvider } from "./src/gemini-web-search-provider.js";
@@ -24,7 +24,7 @@ function installGeminiFetch() {
         }),
     } as Response),
   );
-  global.fetch = withFetchPreconnect(mockFetch);
+  vi.stubGlobal("fetch", withFetchPreconnect(mockFetch));
   return mockFetch;
 }
 
@@ -69,6 +69,7 @@ function parseGeminiFetchBody(mockFetch: ReturnType<typeof installGeminiFetch>):
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("google web search provider", () => {

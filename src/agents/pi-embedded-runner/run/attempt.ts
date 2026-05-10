@@ -8,8 +8,16 @@ import {
   SessionManager,
 } from "@mariozechner/pi-coding-agent";
 import { isAcpRuntimeSpawnAvailable } from "../../../acp/runtime/availability.js";
+import { buildHierarchyReinforcementMessage } from "../../../auto-reply/handoff-summarizer.js";
 import { filterHeartbeatPairs } from "../../../auto-reply/heartbeat-filter.js";
 import { getRuntimeConfig } from "../../../config/config.js";
+import { resolveStorePath } from "../../../config/sessions/paths.js";
+import {
+  loadSessionStore,
+  runQuotaSuspensionMaintenance,
+  updateSessionStoreEntry,
+} from "../../../config/sessions/store.js";
+import { resolveContextEngineOwnerPluginId } from "../../../context-engine/registry.js";
 import type { AssembleResult } from "../../../context-engine/types.js";
 import { emitTrustedDiagnosticEvent } from "../../../infra/diagnostic-events.js";
 import {
@@ -48,12 +56,12 @@ import {
   createTrajectoryRuntimeRecorder,
   toTrajectoryToolDefinitions,
 } from "../../../trajectory/runtime.js";
-import { buildTtsSystemPromptHint } from "../../../tts/tts.js";
 import { resolveUserPath } from "../../../utils.js";
 import { normalizeMessageChannel } from "../../../utils/message-channel.js";
 import { isReasoningTagProvider } from "../../../utils/provider-utils.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../../agent-scope.js";
 import { createAnthropicPayloadLogger } from "../../anthropic-payload-log.js";
+import { listActiveProcessSessionReferences } from "../../bash-process-references.js";
 import {
   analyzeBootstrapBudget,
   buildBootstrapPromptWarning,
@@ -82,12 +90,9 @@ import { isTimeoutError } from "../../failover-error.js";
 import { resolveHeartbeatPromptForSystemPrompt } from "../../heartbeat-system-prompt.js";
 import { resolveImageSanitizationLimits } from "../../image-sanitization.js";
 import { stripHistoricalRuntimeContextCustomMessages } from "../../internal-runtime-context.js";
-import { buildModelAliasLines } from "../../model-alias-lines.js";
 import { resolveModelAuthMode } from "../../model-auth.js";
 import { resolveDefaultModelForAgent } from "../../model-selection.js";
 import { supportsModelTools } from "../../model-tool-support.js";
-import { releaseWsSession } from "../../openai-ws-stream.js";
-import { resolveOwnerDisplaySetting } from "../../owner-display.js";
 import { createBundleLspToolRuntime } from "../../pi-bundle-lsp-runtime.js";
 import {
   getOrCreateSessionMcpRuntime,
@@ -116,7 +121,11 @@ import {
   findClientToolNameConflicts,
   toClientToolDefinitions,
 } from "../../pi-tool-definition-adapter.js";
-import { createOpenClawCodingTools, resolveToolLoopDetectionConfig } from "../../pi-tools.js";
+import {
+  createOpenClawCodingTools,
+  resolveProcessToolScopeKey,
+  resolveToolLoopDetectionConfig,
+} from "../../pi-tools.js";
 import {
   resolveEffectiveToolPolicy,
   resolveGroupToolPolicy,
@@ -150,6 +159,7 @@ import {
   applySkillEnvOverridesFromSnapshot,
   resolveSkillsPromptForRun,
 } from "../../skills.js";
+import { buildActiveSubagentSystemPromptAddition } from "../../subagent-active-context.js";
 import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
@@ -157,12 +167,29 @@ import {
 import { resolveSystemPromptOverride } from "../../system-prompt-override.js";
 import { buildSystemPromptParams } from "../../system-prompt-params.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
+import { appendModelIdentitySystemPrompt } from "../../system-prompt.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
+import { normalizeToolName } from "../../tool-policy.js";
+import {
+  addClientToolsToToolSearchCatalog,
+  applyToolSearchCatalog,
+  clearToolSearchCatalog,
+  createToolSearchCatalogRef,
+  projectToolSearchTargetTranscriptMessages,
+  resolveToolSearchConfig,
+  TOOL_CALL_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  type ToolSearchCatalogRef,
+  type ToolSearchCatalogToolExecutor,
+  type ToolSearchTargetTranscriptProjection,
+} from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
 import { DEFAULT_BOOTSTRAP_FILENAME } from "../../workspace.js";
@@ -217,6 +244,7 @@ import { applySystemPromptOverrideToSession } from "../system-prompt.js";
 import { dropReasoningFromHistory, dropThinkingBlocks } from "../thinking.js";
 import {
   collectAllowedToolNames,
+  collectCoreBuiltinToolNames,
   collectRegisteredToolNames,
   PI_RESERVED_TOOL_NAMES,
   toSessionToolAllowlist,
@@ -296,7 +324,6 @@ import {
   composeSystemPromptWithHookContext,
   resolveAttemptSpawnWorkspaceDir,
   shouldPersistCompletedBootstrapTurn,
-  shouldUseOpenAIWebSocketTransportForAttempt,
 } from "./attempt.thread-helpers.js";
 import {
   shouldRepairMalformedToolCallArguments,
@@ -335,7 +362,7 @@ import {
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
-  buildCurrentTurnPromptContextSuffix,
+  buildCurrentTurnPromptContextPrefix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
   resolveRuntimeContextPromptParts,
@@ -379,6 +406,114 @@ export {
 };
 
 const MAX_BTW_SNAPSHOT_MESSAGES = 100;
+const TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES = [
+  TOOL_SEARCH_CODE_MODE_TOOL_NAME,
+  TOOL_SEARCH_RAW_TOOL_NAME,
+  TOOL_DESCRIBE_RAW_TOOL_NAME,
+  TOOL_CALL_RAW_TOOL_NAME,
+];
+
+export function buildCallableToolNamesForEmptyAllowlistCheck(params: {
+  effectiveToolNames: string[];
+  autoAddedToolSearchControlNames?: Set<string>;
+  toolSearchCatalogToolCount: number;
+}): string[] {
+  return [
+    ...params.effectiveToolNames.filter(
+      (toolName) => !params.autoAddedToolSearchControlNames?.has(toolName),
+    ),
+    ...Array.from(
+      { length: params.toolSearchCatalogToolCount },
+      (_, index) => `tool-search:${index}`,
+    ),
+  ];
+}
+
+export function buildAutoAddedToolSearchControlNamesForAllowlistCheck(params: {
+  toolSearchControlsEnabled: boolean;
+  explicitAllowlistSources: Array<{ entries: string[] }>;
+  controlNames?: readonly string[];
+}): Set<string> | undefined {
+  if (!params.toolSearchControlsEnabled) {
+    return undefined;
+  }
+  const explicitlyAllowed = new Set(
+    params.explicitAllowlistSources.flatMap((source) =>
+      source.entries.map((entry) => normalizeToolName(entry)),
+    ),
+  );
+  return new Set(
+    (params.controlNames ?? TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES).filter(
+      (controlName) => !explicitlyAllowed.has(normalizeToolName(controlName)),
+    ),
+  );
+}
+
+export type ToolSearchRunPlan = {
+  visibleAllowedToolNames: Set<string>;
+  replayAllowedToolNames: Set<string>;
+  autoAddedControlNames?: Set<string>;
+  emptyAllowlistCallableNames: string[];
+};
+
+type CollectAllowedToolNamesParams = Parameters<typeof collectAllowedToolNames>[0];
+
+function collectExplicitlyAllowedClientToolNames(params: {
+  clientTools?: CollectAllowedToolNamesParams["clientTools"];
+  explicitAllowlistSources: Array<{ entries: string[] }>;
+}): string[] {
+  const explicitNames = new Set(
+    params.explicitAllowlistSources.flatMap((source) =>
+      source.entries.map((entry) => normalizeToolName(entry)),
+    ),
+  );
+  return (params.clientTools ?? [])
+    .map((tool) => tool.function?.name)
+    .filter((name): name is string => Boolean(name?.trim()))
+    .filter((name) => explicitNames.has(normalizeToolName(name)));
+}
+
+export function buildToolSearchRunPlan(params: {
+  visibleTools: CollectAllowedToolNamesParams["tools"];
+  uncompactedTools: CollectAllowedToolNamesParams["tools"];
+  clientTools?: CollectAllowedToolNamesParams["clientTools"];
+  catalogRegistered: boolean;
+  catalogToolCount: number;
+  controlsEnabled: boolean;
+  explicitAllowlistSources: Array<{ entries: string[] }>;
+}): ToolSearchRunPlan {
+  const visibleAllowedToolNames = collectAllowedToolNames({
+    tools: params.visibleTools,
+    clientTools: params.catalogRegistered ? undefined : params.clientTools,
+  });
+  const replayAllowedToolNames = collectAllowedToolNames({
+    tools: params.uncompactedTools,
+    clientTools: params.clientTools,
+  });
+  const autoAddedControlNames = buildAutoAddedToolSearchControlNamesForAllowlistCheck({
+    toolSearchControlsEnabled: params.controlsEnabled,
+    explicitAllowlistSources: params.explicitAllowlistSources,
+  });
+  const clientCatalogCallableNames = params.catalogRegistered
+    ? collectExplicitlyAllowedClientToolNames({
+        clientTools: params.clientTools,
+        explicitAllowlistSources: params.explicitAllowlistSources,
+      }).map((name) => `tool-search-client:${name}`)
+    : [];
+  return {
+    visibleAllowedToolNames,
+    replayAllowedToolNames,
+    autoAddedControlNames,
+    emptyAllowlistCallableNames: [
+      ...buildCallableToolNamesForEmptyAllowlistCheck({
+        effectiveToolNames: [...visibleAllowedToolNames],
+        autoAddedToolSearchControlNames: autoAddedControlNames,
+        toolSearchCatalogToolCount: params.catalogToolCount,
+      }),
+      ...clientCatalogCallableNames,
+    ],
+  };
+}
 
 export function resolveUnknownToolGuardThreshold(loopDetection?: {
   enabled?: boolean;
@@ -781,6 +916,7 @@ export async function runEmbeddedAttempt(
       );
     }
     const activeContextEngine = isRawModelRun ? undefined : params.contextEngine;
+    const activeContextEnginePluginId = resolveContextEngineOwnerPluginId(activeContextEngine);
     const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
     const diagnosticTrace = freezeDiagnosticTraceContext(
       createDiagnosticTraceContextFromActiveScope(),
@@ -826,7 +962,25 @@ export async function runEmbeddedAttempt(
       isRawModelRun,
       toolsAllow: params.toolsAllow,
     });
-    const toolsRaw = !toolConstructionPlan.constructTools
+    const toolsEnabled = supportsModelTools(params.model);
+    const toolSearchControlsEnabledForRun =
+      toolsEnabled &&
+      params.disableTools !== true &&
+      !isRawModelRun &&
+      params.toolsAllow?.length !== 0 &&
+      resolveToolSearchConfig(params.config).enabled;
+    const effectiveToolsAllow =
+      toolSearchControlsEnabledForRun && params.toolsAllow
+        ? [...new Set([...params.toolsAllow, ...TOOL_SEARCH_CONTROL_ALLOWLIST_NAMES])]
+        : params.toolsAllow;
+    const shouldConstructTools =
+      toolConstructionPlan.constructTools || toolSearchControlsEnabledForRun;
+    let toolSearchCatalogExecutor: ToolSearchCatalogToolExecutor | undefined;
+    const toolSearchCatalogRef: ToolSearchCatalogRef | undefined = toolSearchControlsEnabledForRun
+      ? createToolSearchCatalogRef()
+      : undefined;
+    const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
+    const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
           const allTools = createOpenClawCodingTools({
@@ -863,6 +1017,7 @@ export async function runEmbeddedAttempt(
                 : undefined,
             sessionId: params.sessionId,
             runId: params.runId,
+            toolSearchCatalogRef,
             agentDir,
             workspaceDir: effectiveWorkspace,
             // When sandboxing uses a copied workspace (`ro` or `none`), effectiveWorkspace points
@@ -885,12 +1040,20 @@ export async function runEmbeddedAttempt(
             currentThreadTs: params.currentThreadTs,
             currentMessageId: params.currentMessageId,
             includeCoreTools: toolConstructionPlan.includeCoreTools,
+            includeToolSearchControls: true,
+            toolSearchCatalogExecutor: (toolParams) => {
+              if (!toolSearchCatalogExecutor) {
+                throw new Error("Tool Search catalog executor is unavailable for this run.");
+              }
+              return toolSearchCatalogExecutor(toolParams);
+            },
             toolConstructionPlan: toolConstructionPlan.codingToolConstructionPlan,
             replyToMode: params.replyToMode,
             hasRepliedRef: params.hasRepliedRef,
             modelHasVision: params.model.input?.includes("image") ?? false,
             requireExplicitMessageTarget:
               params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
             disableMessageTool: params.disableMessageTool,
             forceMessageTool: params.forceMessageTool,
             enableHeartbeatTool: params.enableHeartbeatTool,
@@ -907,7 +1070,7 @@ export async function runEmbeddedAttempt(
             },
           });
           corePluginToolStages.mark("attempt:create-openclaw-coding-tools");
-          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, params.toolsAllow, {
+          const filteredTools = applyEmbeddedAttemptToolsAllow(allTools, effectiveToolsAllow, {
             toolMeta: (tool) => getPluginToolMeta(tool),
           });
           corePluginToolStages.mark("attempt:tools-allow");
@@ -915,7 +1078,6 @@ export async function runEmbeddedAttempt(
         })();
     prepStages.mark("core-plugin-tools");
     emitCorePluginToolStageSummary("core-plugin-tools", corePluginToolStages.snapshot());
-    const toolsEnabled = supportsModelTools(params.model);
     const bootstrapHasFileAccess = toolsEnabled && toolsRaw.some((tool) => tool.name === "read");
     const bootstrapWarn = makeBootstrapWarn({
       sessionLabel,
@@ -1113,12 +1275,40 @@ export async function runEmbeddedAttempt(
       ownerOnlyToolAllowlist: params.ownerOnlyToolAllowlist,
       warn: (message) => log.warn(message),
     });
-    const effectiveTools = [...tools, ...filteredBundledTools];
-    prepStages.mark("bundle-tools");
-    const allowedToolNames = collectAllowedToolNames({
+    const uncompactedEffectiveTools = [...tools, ...filteredBundledTools];
+    let effectiveTools = uncompactedEffectiveTools;
+    const toolSearch = applyToolSearchCatalog({
       tools: effectiveTools,
-      clientTools,
+      config: params.config,
+      sessionId: params.sessionId,
+      sessionKey: sandboxSessionKey,
+      agentId: sessionAgentId,
+      runId: params.runId,
+      catalogRef: toolSearchCatalogRef,
+      toolHookContext: {
+        agentId: sessionAgentId,
+        config: params.config,
+        cwd: effectiveWorkspace,
+        sessionKey: sandboxSessionKey,
+        sessionId: params.sessionId,
+        runId: params.runId,
+        channelId: params.currentChannelId,
+        trace: runTrace,
+        loopDetection: resolveToolLoopDetectionConfig({
+          cfg: params.config,
+          agentId: sessionAgentId,
+        }),
+        onToolOutcome: params.onToolOutcome,
+      },
     });
+    effectiveTools = toolSearch.tools;
+    if (toolSearch.compacted) {
+      prepStages.mark("tool-search");
+      log.info(
+        `tool-search: cataloged ${toolSearch.catalogToolCount} tools behind compact prompt surface`,
+      );
+    }
+    prepStages.mark("bundle-tools");
     const explicitToolAllowlistSources = collectAttemptExplicitToolAllowlistSources({
       config: params.config,
       sessionKey: params.sessionKey,
@@ -1139,9 +1329,20 @@ export async function runEmbeddedAttempt(
       sandboxToolPolicy: sandbox?.tools,
       toolsAllow: params.toolsAllow,
     });
+    const toolSearchRunPlan = buildToolSearchRunPlan({
+      visibleTools: effectiveTools,
+      uncompactedTools: uncompactedEffectiveTools,
+      clientTools,
+      catalogRegistered: toolSearch.catalogRegistered,
+      catalogToolCount: toolSearch.catalogToolCount,
+      controlsEnabled: toolSearchControlsEnabledForRun,
+      explicitAllowlistSources: explicitToolAllowlistSources,
+    });
+    const allowedToolNames = toolSearchRunPlan.visibleAllowedToolNames;
+    const replayAllowedToolNames = toolSearchRunPlan.replayAllowedToolNames;
     const emptyExplicitToolAllowlistError = buildEmptyExplicitToolAllowlistError({
       sources: explicitToolAllowlistSources,
-      callableToolNames: effectiveTools.map((tool) => tool.name),
+      callableToolNames: toolSearchRunPlan.emptyAllowlistCallableNames,
       toolsEnabled,
       disableTools: params.disableTools,
     });
@@ -1212,6 +1413,12 @@ export async function runEmbeddedAttempt(
       agentId: sessionAgentId,
     });
     const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
+    const activeProcessSessions = listActiveProcessSessionReferences({
+      scopeKey: resolveProcessToolScopeKey({
+        sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
+      }),
+    });
     const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
       config: params.config,
       agentId: sessionAgentId,
@@ -1228,6 +1435,7 @@ export async function runEmbeddedAttempt(
         channel: runtimeChannel,
         capabilities: runtimeCapabilities,
         channelActions,
+        activeProcessSessions,
       },
     });
     const isDefaultAgent = sessionAgentId === defaultAgentId;
@@ -1244,10 +1452,6 @@ export async function runEmbeddedAttempt(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
-    const ttsHint = params.config
-      ? buildTtsSystemPromptHint(params.config, sessionAgentId)
-      : undefined;
-    const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
       config: params.config,
       agentId: sessionAgentId,
@@ -1294,19 +1498,18 @@ export async function runEmbeddedAttempt(
       systemPromptOverrideText,
       transformProviderSystemPrompt,
       embeddedSystemPrompt: {
+        config: params.config,
+        agentId: sessionAgentId,
         workspaceDir: effectiveWorkspace,
         defaultThinkLevel: params.thinkLevel,
         reasoningLevel: params.reasoningLevel ?? "off",
         extraSystemPrompt: params.extraSystemPrompt,
         ownerNumbers: params.ownerNumbers,
-        ownerDisplay: ownerDisplay.ownerDisplay,
-        ownerDisplaySecret: ownerDisplay.ownerDisplaySecret,
         reasoningTagHint,
         heartbeatPrompt,
         skillsPrompt: effectiveSkillsPrompt,
         docsPath: openClawReferences.docsPath ?? undefined,
         sourcePath: openClawReferences.sourcePath ?? undefined,
-        ttsHint,
         workspaceNotes: workspaceNotes?.length ? workspaceNotes : undefined,
         reactionGuidance,
         promptMode: effectivePromptMode,
@@ -1321,7 +1524,6 @@ export async function runEmbeddedAttempt(
         messageToolHints,
         sandboxInfo,
         tools: effectiveTools,
-        modelAliasLines: buildModelAliasLines(params.config),
         userTimezone,
         userTime,
         userTimeFormat,
@@ -1329,7 +1531,6 @@ export async function runEmbeddedAttempt(
         bootstrapMode,
         bootstrapTruncationNotice,
         includeMemorySection: !activeContextEngine || activeContextEngine.info.id === "legacy",
-        memoryCitationsMode: params.config?.memory?.citations,
         promptContribution,
       },
       providerTransform: {
@@ -1435,7 +1636,7 @@ export async function runEmbeddedAttempt(
           params.model.api === "openai-codex-responses"
             ? "aborted"
             : undefined,
-        allowedToolNames,
+        allowedToolNames: replayAllowedToolNames,
         suppressNextUserMessagePersistence: params.suppressNextUserMessagePersistence,
         onUserMessagePersisted: (message) => {
           params.onUserMessagePersisted?.(message);
@@ -1455,6 +1656,8 @@ export async function runEmbeddedAttempt(
           workspaceDir: effectiveWorkspace,
           agentDir,
           tokenBudget: params.contextTokenBudget,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginId,
         }),
         runMaintenance: async (contextParams) =>
           await runContextEngineMaintenance({
@@ -1466,6 +1669,7 @@ export async function runEmbeddedAttempt(
             sessionManager: contextParams.sessionManager as never,
             runtimeContext: contextParams.runtimeContext,
             config: params.config,
+            agentId: sessionAgentId,
           }),
         warn: (message) => log.warn(message),
       });
@@ -1568,7 +1772,7 @@ export async function runEmbeddedAttempt(
       // MEDIA: passthrough gate: a normalized alias is not sufficient — the
       // emitted tool name must match an exact registration of this run.
       const builtinToolNames = new Set(
-        effectiveTools.flatMap((tool) => {
+        uncompactedEffectiveTools.flatMap((tool) => {
           const name = (tool.name ?? "").trim();
           return name ? [name] : [];
         }),
@@ -1578,15 +1782,10 @@ export async function runEmbeddedAttempt(
       // plugin tool names. MEDIA passthrough is still gated by the raw-name
       // set above, so a client tool that normalize-collides with a plugin
       // tool cannot inherit the plugin's local-media trust.
-      const coreBuiltinToolNames = new Set(
-        effectiveTools.flatMap((tool) => {
-          const name = (tool.name ?? "").trim();
-          if (!name || getPluginToolMeta(tool)) {
-            return [];
-          }
-          return [name];
-        }),
-      );
+      const coreBuiltinToolNames = collectCoreBuiltinToolNames(uncompactedEffectiveTools, {
+        isPluginTool: (tool) =>
+          Boolean(getPluginToolMeta(tool as Parameters<typeof getPluginToolMeta>[0])),
+      });
       const clientToolNameConflicts = findClientToolNameConflicts({
         tools: clientTools ?? [],
         existingToolNames: [...coreBuiltinToolNames, ...PI_RESERVED_TOOL_NAMES],
@@ -1594,7 +1793,7 @@ export async function runEmbeddedAttempt(
       if (clientToolNameConflicts.length > 0) {
         throw createClientToolNameConflictError(clientToolNameConflicts);
       }
-      const clientToolDefs = clientTools
+      let clientToolDefs = clientTools
         ? toClientToolDefinitions(
             clientTools,
             {
@@ -1636,6 +1835,21 @@ export async function runEmbeddedAttempt(
             },
           )
         : [];
+      const clientToolSearch = addClientToolsToToolSearchCatalog({
+        tools: clientToolDefs,
+        config: params.config,
+        sessionId: params.sessionId,
+        sessionKey: sandboxSessionKey,
+        agentId: sessionAgentId,
+        runId: params.runId,
+        catalogRef: toolSearchCatalogRef,
+      });
+      clientToolDefs = clientToolSearch.tools;
+      if (clientToolSearch.compacted) {
+        log.info(
+          `tool-search: cataloged ${clientToolSearch.catalogToolCount} client tools behind compact prompt surface`,
+        );
+      }
 
       const allCustomTools = [...customTools, ...clientToolDefs];
       // Pi treats `tools` as a name allowlist during session creation. Pass the
@@ -1687,6 +1901,7 @@ export async function runEmbeddedAttempt(
           await baseConvertToLlm(normalizeMessagesForLlmBoundary(messages));
       }
       let prePromptMessageCount = activeSession.messages.length;
+      let contextEngineAfterTurnCheckpoint: number | null = null;
       let unwindowedContextEngineMessagesForPrecheck: AgentMessage[] | undefined;
       let contextEnginePromptAuthority: NonNullable<AssembleResult["promptAuthority"]> =
         "assembled";
@@ -1744,6 +1959,9 @@ export async function runEmbeddedAttempt(
           tokenBudget: params.contextTokenBudget,
           modelId: params.modelId,
           getPrePromptMessageCount: () => prePromptMessageCount,
+          onAfterTurnCheckpoint: (messageCount) => {
+            contextEngineAfterTurnCheckpoint = messageCount;
+          },
           getRuntimeContext: ({ messages, prePromptMessageCount: loopPrePromptMessageCount }) =>
             buildAfterTurnRuntimeContext({
               attempt: params,
@@ -1890,38 +2108,15 @@ export async function runEmbeddedAttempt(
         agentDir,
         workspaceDir: effectiveWorkspace,
       });
-      const shouldUseWebSocketTransport = shouldUseOpenAIWebSocketTransportForAttempt({
-        provider: params.provider,
-        modelApi: params.model.api,
-        modelBaseUrl: params.model.baseUrl,
-        streamParams: params.streamParams,
-        effectiveExtraParams,
-        modelParams: (params.model as { params?: Record<string, unknown> }).params,
-      });
-      const wsApiKey = shouldUseWebSocketTransport
-        ? await resolveEmbeddedAgentApiKey({
-            provider: params.provider,
-            resolvedApiKey: params.resolvedApiKey,
-            authStorage: params.authStorage,
-          })
-        : undefined;
-      if (shouldUseWebSocketTransport && !wsApiKey) {
-        log.warn(
-          `[ws-stream] no API key for provider=${params.provider}; keeping session-managed HTTP transport`,
-        );
-      }
       const streamStrategy = describeEmbeddedAgentStreamStrategy({
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
         model: params.model,
+        resolvedApiKey: params.resolvedApiKey,
       });
       activeSession.agent.streamFn = resolveEmbeddedAgentStreamFn({
         currentStreamFn: defaultSessionStreamFn,
         providerStreamFn,
-        shouldUseWebSocketTransport,
-        wsApiKey,
         sessionId: params.sessionId,
         signal: runAbortController.signal,
         model: params.model,
@@ -2047,7 +2242,7 @@ export async function runEmbeddedAttempt(
           const nextMessages = sanitizeReplayToolCallIdsForStream({
             messages: messages as AgentMessage[],
             mode,
-            allowedToolNames,
+            allowedToolNames: replayAllowedToolNames,
             preserveNativeAnthropicToolUseIds: transcriptPolicy.preserveNativeAnthropicToolUseIds,
             preserveReplaySafeThinkingToolCallIds: shouldAllowProviderOwnedThinkingReplay({
               modelApi: (model as { api?: unknown })?.api as string | null | undefined,
@@ -2178,6 +2373,14 @@ export async function runEmbeddedAttempt(
           transport: effectiveAgentTransport,
           trace: runTrace,
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+          onStarted: () => {
+            params.onExecutionPhase?.({
+              phase: "model_call_started",
+              provider: params.provider,
+              model: params.modelId,
+              firstModelCallStarted: true,
+            });
+          },
         },
       );
 
@@ -2196,7 +2399,7 @@ export async function runEmbeddedAttempt(
             modelApi: params.model.api,
             modelId: params.modelId,
             provider: params.provider,
-            allowedToolNames,
+            allowedToolNames: replayAllowedToolNames,
             config: params.config,
             workspaceDir: effectiveWorkspace,
             env: process.env,
@@ -2218,6 +2421,58 @@ export async function runEmbeddedAttempt(
             sessionId: params.sessionId,
             policy: transcriptPolicy,
           });
+
+          if (params.sessionKey && !isRawModelRun) {
+            const storePath = resolveStorePath(params.config?.session?.store, {
+              agentId: sessionAgentId,
+            });
+            await runQuotaSuspensionMaintenance({ storePath });
+            const store = loadSessionStore(storePath, { skipCache: true });
+            const sessionEntry = store[params.sessionKey];
+            const suspension = sessionEntry?.quotaSuspension;
+            if (suspension?.state === "resuming") {
+              const subagents = Object.values(store)
+                .filter((s) => s.spawnedBy === sessionEntry.sessionId)
+                .map((s) => ({
+                  sessionId: s.sessionId,
+                  role: s.subagentRole,
+                  lastStatus: s.status,
+                }));
+              const handoffMsg = buildHierarchyReinforcementMessage({
+                summary: suspension.summary ?? "No recovery briefing was captured.",
+                activeSubagents: subagents,
+              });
+              validated.push(handoffMsg);
+              await updateSessionStoreEntry({
+                storePath,
+                sessionKey: params.sessionKey,
+                update: async (entry) => {
+                  if (entry.quotaSuspension?.state !== "resuming") {
+                    return null;
+                  }
+                  return {
+                    quotaSuspension: { ...entry.quotaSuspension, state: "active" },
+                  };
+                },
+              });
+            }
+          }
+
+          if (params.sessionKey && params.config && !isRawModelRun) {
+            const activeSubagentPromptAddition = buildActiveSubagentSystemPromptAddition({
+              cfg: params.config,
+              controllerSessionKey: params.sessionKey,
+              hasSessionsYield: effectiveTools.some((tool) => tool.name === "sessions_yield"),
+            });
+            if (activeSubagentPromptAddition) {
+              systemPromptText = prependSystemPromptAddition({
+                systemPrompt: systemPromptText,
+                systemPromptAddition: activeSubagentPromptAddition,
+              });
+              applySystemPromptOverrideToSession(activeSession, systemPromptText);
+            }
+          }
+
           const heartbeatSummary =
             params.config && sessionAgentId
               ? resolveHeartbeatSummaryForAgent(params.config, sessionAgentId)
@@ -2296,6 +2551,10 @@ export async function runEmbeddedAttempt(
           agent: activeSession?.agent,
           sessionManager,
           clearPendingOnTimeout: true,
+          // PERF: If the run was aborted during the setup,
+          // skip the idle wait and clear pending results synchronously so we can
+          // immediately dispose the session and throw the error without blocking.
+          ...(params.abortSignal?.aborted ? { timeoutMs: 0 } : {}),
         });
         activeSession.dispose();
         throw err;
@@ -2387,6 +2646,7 @@ export async function runEmbeddedAttempt(
       const {
         assistantTexts,
         toolMetas,
+        runToolLifecycle,
         unsubscribe,
         waitForCompactionRetry,
         isCompactionInFlight,
@@ -2405,6 +2665,47 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
         getLastCompactionTokensAfter,
       } = subscription;
+      toolSearchCatalogExecutor = async (toolParams) => {
+        try {
+          const result = await runToolLifecycle({
+            toolName: toolParams.toolName,
+            toolCallId: toolParams.toolCallId,
+            args: toolParams.input,
+            execute: async () =>
+              await toolParams.tool.execute(
+                toolParams.toolCallId,
+                toolParams.input,
+                toolParams.signal ?? runAbortController.signal,
+                toolParams.onUpdate,
+                undefined as never,
+              ),
+          });
+          toolSearchTargetTranscriptProjections.push({
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: toolParams.input,
+            result,
+            timestamp: Date.now(),
+          });
+          return result;
+        } catch (error) {
+          const message = formatErrorMessage(error);
+          toolSearchTargetTranscriptProjections.push({
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: toolParams.input,
+            result: {
+              content: [{ type: "text", text: message }],
+              details: { status: "error", error: message },
+            },
+            isError: true,
+            timestamp: Date.now(),
+          });
+          throw error;
+        }
+      };
 
       const queueHandle: EmbeddedPiQueueHandle & {
         kind: "embedded";
@@ -2663,6 +2964,14 @@ export async function runEmbeddedAttempt(
             );
           }
         }
+        const modelAwareSystemPrompt = appendModelIdentitySystemPrompt({
+          systemPrompt: systemPromptText,
+          model: runtimeInfo.model,
+        });
+        if (modelAwareSystemPrompt !== systemPromptText) {
+          applySystemPromptOverrideToSession(activeSession, modelAwareSystemPrompt);
+          systemPromptText = modelAwareSystemPrompt;
+        }
 
         if (cacheObservabilityEnabled) {
           const cacheObservation = beginPromptCacheObservation({
@@ -2769,10 +3078,12 @@ export async function runEmbeddedAttempt(
             effectivePrompt,
             transcriptPrompt: effectiveTranscriptPrompt,
           });
-          const currentTurnPromptContextSuffix = promptSubmission.runtimeOnly
+          const currentTurnPromptContextPrefix = promptSubmission.runtimeOnly
             ? ""
-            : buildCurrentTurnPromptContextSuffix(params.currentTurnContext);
-          const promptForModel = promptSubmission.prompt + currentTurnPromptContextSuffix;
+            : buildCurrentTurnPromptContextPrefix(params.currentTurnContext);
+          const promptForModel = [currentTurnPromptContextPrefix, promptSubmission.prompt]
+            .filter(Boolean)
+            .join("\n\n");
           const runtimeSystemContext = promptSubmission.runtimeSystemContext?.trim();
           if (promptSubmission.runtimeOnly && runtimeSystemContext) {
             const runtimeSystemPrompt = composeSystemPromptWithHookContext({
@@ -2949,11 +3260,17 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               note: `images: prompt=${imageResult.images.length}`,
             });
+            const trajectoryProviderVisibleTools = toTrajectoryToolDefinitions(effectiveTools);
             trajectoryRecorder?.recordEvent("context.compiled", {
               systemPrompt: systemPromptForHook,
               prompt: promptForModel,
               messages: activeSession.messages,
-              tools: toTrajectoryToolDefinitions(effectiveTools),
+              tools: toTrajectoryToolDefinitions(
+                toolSearch.compacted ? uncompactedEffectiveTools : effectiveTools,
+              ),
+              ...(toolSearch.compacted
+                ? { providerVisibleTools: trajectoryProviderVisibleTools }
+                : {}),
               imagesCount: imageResult.images.length,
               streamStrategy,
               transport: effectiveAgentTransport,
@@ -3014,6 +3331,11 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             reserveTokens,
             trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
+          });
+          params.onExecutionPhase?.({
+            phase: "context_assembled",
+            provider: params.provider,
+            model: params.modelId,
           });
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
@@ -3322,7 +3644,10 @@ export async function runEmbeddedAttempt(
             );
           }
         }
-        messagesSnapshot = snapshotSelection.messagesSnapshot;
+        messagesSnapshot = projectToolSearchTargetTranscriptMessages(
+          snapshotSelection.messagesSnapshot,
+          toolSearchTargetTranscriptProjections,
+        );
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
         lastAssistant = messagesSnapshot
@@ -3398,6 +3723,8 @@ export async function runEmbeddedAttempt(
             tokenBudget: params.contextTokenBudget,
             lastCallUsage,
             promptCache,
+            activeAgentId: sessionAgentId,
+            contextEnginePluginId: activeContextEnginePluginId,
           });
           await finalizeAttemptContextEngineTurn({
             contextEngine: activeContextEngine,
@@ -3408,7 +3735,7 @@ export async function runEmbeddedAttempt(
             sessionKey: params.sessionKey,
             sessionFile: params.sessionFile,
             messagesSnapshot,
-            prePromptMessageCount,
+            prePromptMessageCount: contextEngineAfterTurnCheckpoint ?? prePromptMessageCount,
             tokenBudget: params.contextTokenBudget,
             runtimeContext: afterTurnRuntimeContext,
             runMaintenance: async (contextParams) =>
@@ -3421,6 +3748,7 @@ export async function runEmbeddedAttempt(
                 sessionManager: contextParams.sessionManager as never,
                 runtimeContext: contextParams.runtimeContext,
                 config: params.config,
+                agentId: sessionAgentId,
               }),
             sessionManager,
             config: params.config,
@@ -3781,18 +4109,29 @@ export async function runEmbeddedAttempt(
       // See: https://github.com/openclaw/openclaw/issues/8643
       let cleanupError: unknown;
       try {
+        clearToolSearchCatalog({
+          sessionId: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          agentId: sessionAgentId,
+          runId: params.runId,
+          catalogRef: toolSearchCatalogRef,
+        });
         await cleanupEmbeddedAttemptResources({
           removeToolResultContextGuard,
           flushPendingToolResultsAfterIdle,
           session,
           sessionManager,
-          releaseWsSession,
-          allowWsSessionPool:
-            !promptError && !aborted && !timedOut && !idleTimedOut && !timedOutDuringCompaction,
-          sessionId: params.sessionId,
           bundleMcpRuntime,
           bundleLspRuntime,
           sessionLock,
+          // PERF: If the run was aborted (user stop, timeout, etc.), skip the idle wait
+          // and clear pending results synchronously so we can release the session lock ASAP.
+          aborted:
+            Boolean(params.abortSignal?.aborted) ||
+            aborted ||
+            timedOut ||
+            idleTimedOut ||
+            timedOutDuringCompaction,
         });
       } catch (err) {
         cleanupError = err;

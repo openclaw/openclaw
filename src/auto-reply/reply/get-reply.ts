@@ -36,13 +36,17 @@ import {
   shouldUseReplyFastTestRuntime,
 } from "./get-reply-fast-path.js";
 import { handleInlineActions } from "./get-reply-inline-actions.js";
+import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
@@ -248,16 +252,7 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
-  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
-    useFastTestBootstrap
-      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
-      : await ensureAgentWorkspace({
-          dir: workspaceDirRaw,
-          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
-          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
-        }),
-  );
-  const workspaceDir = workspace.dir;
+  const workspaceDirForNativeCommand = workspaceDirRaw;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
   const configuredTypingSeconds =
@@ -274,6 +269,41 @@ export async function getReplyFromConfig(
   opts?.onTypingController?.(typing);
 
   const finalized = finalizeInboundContext(ctx);
+  const nativeSlashCommandFastReply = await traceGetReplyPhase(
+    "reply.native_slash_command_fast_path",
+    () =>
+      maybeResolveNativeSlashCommandFastReply({
+        ctx: finalized,
+        cfg,
+        agentId,
+        agentDir,
+        agentCfg,
+        commandAuthorized: finalized.CommandAuthorized,
+        defaultProvider,
+        defaultModel,
+        aliasIndex,
+        provider,
+        model,
+        workspaceDir: workspaceDirForNativeCommand,
+        typing,
+        opts: resolvedOpts,
+        skillFilter: mergedSkillFilter,
+      }),
+  );
+  if (nativeSlashCommandFastReply.handled) {
+    return nativeSlashCommandFastReply.reply;
+  }
+
+  const workspace = await traceGetReplyPhase("reply.ensure_workspace", async () =>
+    useFastTestBootstrap
+      ? (await fs.mkdir(workspaceDirRaw, { recursive: true }), { dir: workspaceDirRaw })
+      : await ensureAgentWorkspace({
+          dir: workspaceDirRaw,
+          ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
+          skipOptionalBootstrapFiles: agentCfg?.skipOptionalBootstrapFiles,
+        }),
+  );
+  const workspaceDir = workspace.dir;
 
   if (!isFastTestEnv && hasInboundMedia(finalized)) {
     await traceGetReplyPhase("reply.apply_media_understanding", () =>
@@ -405,6 +435,16 @@ export async function getReplyFromConfig(
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
+  const resolvedChannelModelOverride =
+    channelModelOverride && !hasResolvedHeartbeatModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider,
+          aliasIndex,
+        })
+      : null;
+  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -419,20 +459,33 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+  });
+  if (
+    storedModelOverride?.model &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride
+  ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
+  const hasEffectiveSessionModelOverride =
+    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasEffectiveSessionModelOverride &&
+    resolvedChannelModelOverride
+  ) {
+    provider = resolvedChannelModelOverride.ref.provider;
+    model = resolvedChannelModelOverride.ref.model;
   }
 
   if (
@@ -533,6 +586,8 @@ export async function getReplyFromConfig(
       commandAuthorized,
       defaultProvider,
       defaultModel,
+      primaryProvider,
+      primaryModel,
       aliasIndex,
       provider,
       model,
