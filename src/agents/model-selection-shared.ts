@@ -66,7 +66,7 @@ function findAgentEntryModels(
         !Array.isArray(models) &&
         Object.keys(models).length > 0
       ) {
-        return models as ConfiguredModelsRecord;
+        return models;
       }
       return undefined;
     }
