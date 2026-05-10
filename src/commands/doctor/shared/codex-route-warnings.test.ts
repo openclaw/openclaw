@@ -289,18 +289,9 @@ describe("collectCodexRouteWarnings", () => {
     ).toBe("codex");
   });
 
-  it("keeps non-agent repaired OpenAI refs on Codex runtime when OpenAI is otherwise PI/API-key routed", () => {
+  it("repairs non-agent OpenAI Codex refs when canonical OpenAI already uses Codex runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
-        models: {
-          providers: {
-            openai: {
-              baseUrl: "https://api.openai.com/v1",
-              agentRuntime: { id: "pi" },
-              models: [],
-            },
-          },
-        },
         channels: {
           modelByChannel: {
             telegram: {
@@ -333,6 +324,7 @@ describe("collectCodexRouteWarnings", () => {
       shouldRepair: true,
     });
 
+    expect(result.warnings).toStrictEqual([]);
     expect(result.cfg.channels?.modelByChannel?.telegram?.default).toBe("openai/gpt-5.5");
     expect(result.cfg.channels?.discord?.voice?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.hooks?.mappings?.[0]?.model).toBe("openai/gpt-5.4");
@@ -341,18 +333,51 @@ describe("collectCodexRouteWarnings", () => {
       fallbacks: ["openai/gpt-5.4-mini"],
     });
     expect(result.cfg.messages?.tts?.summaryModel).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": { agentRuntime: { id: "codex" } },
-      "openai/gpt-5.4": { agentRuntime: { id: "codex" } },
-      "openai/gpt-5.4-mini": { agentRuntime: { id: "codex" } },
+    expect(result.cfg.agents?.defaults?.models).toBeUndefined();
+  });
+
+  it("leaves path-scoped OpenAI Codex refs unchanged when repair would broaden default-agent runtime policy", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "pi" },
+              models: [],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            model: "openai/gpt-5.4",
+          },
+        },
+        hooks: {
+          gmail: {
+            model: "openai-codex/gpt-5.4",
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
     });
+
+    expect(result.cfg.agents?.defaults?.model).toBe("openai/gpt-5.4");
+    expect(result.cfg.agents?.defaults?.models).toBeUndefined();
+    expect(result.cfg.hooks?.gmail?.model).toBe("openai-codex/gpt-5.4");
     expect(
       resolveAgentHarnessPolicy({
         provider: "openai",
         modelId: "gpt-5.4",
         config: result.cfg,
       }).runtime,
-    ).toBe("codex");
+    ).toBe("pi");
+    expect(result.changes).toStrictEqual([]);
+    expect(result.warnings).toEqual([
+      expect.stringContaining(
+        "hooks.gmail.model: openai-codex/gpt-5.4 should become openai/gpt-5.4",
+      ),
+    ]);
   });
 
   it("repairs persisted session route refs, clears stale runtime pins, and preserves auth pins", () => {

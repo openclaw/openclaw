@@ -1,4 +1,6 @@
 import fs from "node:fs";
+import { resolveModelRuntimePolicy } from "../../../agents/model-runtime-policy.js";
+import { openAIProviderUsesCodexRuntimeByDefault } from "../../../agents/openai-codex-routing.js";
 import { AGENT_MODEL_CONFIG_KEYS } from "../../../config/model-refs.js";
 import { loadSessionStore, updateSessionStore } from "../../../config/sessions/store.js";
 import { resolveAllAgentSessionStoreTargetsSync } from "../../../config/sessions/targets.js";
@@ -506,26 +508,100 @@ function ensureCodexRuntimePolicy(params: {
   );
 }
 
-function ensureDefaultCodexRuntimePolicy(params: {
+function canonicalOpenAIModelUsesCodexRuntime(params: {
   cfg: OpenClawConfig;
   modelRef: string;
-  changes: string[];
+}): boolean {
+  const slash = params.modelRef.indexOf("/");
+  if (slash <= 0 || slash >= params.modelRef.length - 1) {
+    return false;
+  }
+  const provider = params.modelRef.slice(0, slash);
+  const modelId = params.modelRef.slice(slash + 1);
+  const configured = normalizeString(
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider,
+      modelId,
+    }).policy?.id,
+  );
+  if (configured && configured !== "auto" && configured !== "default") {
+    return configured === "codex";
+  }
+  return openAIProviderUsesCodexRuntimeByDefault({ provider, config: params.cfg });
+}
+
+function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  hits: CodexRouteHit[];
+  container: MutableRecord | undefined;
+  key: string;
+  path: string;
 }): void {
-  const cfgRecord = params.cfg as MutableRecord;
-  const agents = asMutableRecord(cfgRecord.agents) ?? {};
-  if (cfgRecord.agents !== agents) {
-    cfgRecord.agents = agents;
+  const value = params.container?.[params.key];
+  if (typeof value !== "string") {
+    return;
   }
-  const defaults = asMutableRecord(agents.defaults) ?? {};
-  if (agents.defaults !== defaults) {
-    agents.defaults = defaults;
+  const canonicalModel = toCanonicalOpenAIModelRef(value.trim());
+  if (
+    !canonicalModel ||
+    !canonicalOpenAIModelUsesCodexRuntime({ cfg: params.cfg, modelRef: canonicalModel })
+  ) {
+    return;
   }
-  ensureCodexRuntimePolicy({
-    agent: defaults,
-    agentPath: "agents.defaults",
-    modelRef: params.modelRef,
-    changes: params.changes,
+  rewriteStringModelSlot({
+    hits: params.hits,
+    container: params.container,
+    key: params.key,
+    path: params.path,
   });
+}
+
+function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
+  cfg: OpenClawConfig;
+  hits: CodexRouteHit[];
+  container: MutableRecord | undefined;
+  key: string;
+  path: string;
+}): void {
+  const value = params.container?.[params.key];
+  if (typeof value === "string") {
+    rewriteStringModelSlotIfCanonicalCodexRuntime(params);
+    return;
+  }
+  const record = asMutableRecord(value);
+  if (!record) {
+    return;
+  }
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    hits: params.hits,
+    container: record,
+    key: "primary",
+    path: `${params.path}.primary`,
+  });
+  const fallbacks = Array.isArray(record.fallbacks) ? record.fallbacks : undefined;
+  if (!fallbacks) {
+    return;
+  }
+  for (const [index, entry] of fallbacks.entries()) {
+    if (typeof entry !== "string") {
+      continue;
+    }
+    const canonicalModel = toCanonicalOpenAIModelRef(entry.trim());
+    if (
+      !canonicalModel ||
+      !canonicalOpenAIModelUsesCodexRuntime({ cfg: params.cfg, modelRef: canonicalModel })
+    ) {
+      continue;
+    }
+    fallbacks[index] = canonicalModel;
+    params.hits.push({
+      path: `${params.path}.fallbacks.${index}`,
+      model: entry.trim(),
+      canonicalModel,
+    });
+  }
 }
 
 function clearLegacyAgentRuntimePolicy(
@@ -563,15 +639,6 @@ function rewriteConfigModelRefs(params: {
   const nextConfig = structuredClone(params.cfg);
   const hits: CodexRouteHit[] = [];
   const runtimePolicyChanges: string[] = [];
-  const preserveDefaultCodexRuntimePolicyForNewHits = (fromIndex: number) => {
-    for (const hit of hits.slice(fromIndex)) {
-      ensureDefaultCodexRuntimePolicy({
-        cfg: nextConfig,
-        modelRef: hit.canonicalModel,
-        changes: runtimePolicyChanges,
-      });
-    }
-  };
   const defaultsRuntime = nextConfig.agents?.defaults?.agentRuntime;
   rewriteAgentModelRefs({
     hits,
@@ -603,59 +670,53 @@ function rewriteConfigModelRefs(params: {
         continue;
       }
       for (const targetId of Object.keys(targets)) {
-        const start = hits.length;
-        rewriteStringModelSlot({
+        rewriteStringModelSlotIfCanonicalCodexRuntime({
+          cfg: nextConfig,
           hits,
           container: targets,
           key: targetId,
           path: `channels.modelByChannel.${channelId}.${targetId}`,
         });
-        preserveDefaultCodexRuntimePolicyForNewHits(start);
       }
     }
   }
   for (const [index, mapping] of (nextConfig.hooks?.mappings ?? []).entries()) {
-    const start = hits.length;
-    rewriteStringModelSlot({
+    rewriteStringModelSlotIfCanonicalCodexRuntime({
+      cfg: nextConfig,
       hits,
       container: mapping as MutableRecord,
       key: "model",
       path: `hooks.mappings.${index}.model`,
     });
-    preserveDefaultCodexRuntimePolicyForNewHits(start);
   }
-  let start = hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: nextConfig,
     hits,
     container: asMutableRecord(nextConfig.hooks?.gmail),
     key: "model",
     path: "hooks.gmail.model",
   });
-  preserveDefaultCodexRuntimePolicyForNewHits(start);
-  start = hits.length;
-  rewriteModelConfigSlot({
+  rewriteModelConfigSlotIfCanonicalCodexRuntime({
+    cfg: nextConfig,
     hits,
     container: asMutableRecord(nextConfig.tools?.subagents),
     key: "model",
     path: "tools.subagents.model",
   });
-  preserveDefaultCodexRuntimePolicyForNewHits(start);
-  start = hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: nextConfig,
     hits,
     container: asMutableRecord(nextConfig.messages?.tts),
     key: "summaryModel",
     path: "messages.tts.summaryModel",
   });
-  preserveDefaultCodexRuntimePolicyForNewHits(start);
-  start = hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: nextConfig,
     hits,
     container: asMutableRecord(asMutableRecord(nextConfig.channels?.discord)?.voice),
     key: "model",
     path: "channels.discord.voice.model",
   });
-  preserveDefaultCodexRuntimePolicyForNewHits(start);
   const runtimePinChanges =
     hits.length > 0 ? clearConfigLegacyAgentRuntimePolicies(nextConfig) : [];
   return {
@@ -716,16 +777,19 @@ export function maybeRepairCodexRoutes(params: {
     cfg: params.cfg,
     env: params.env,
   });
+  const warnings = collectCodexRouteWarnings({ cfg: repaired.cfg, env: params.env });
+  const changes =
+    repaired.changes.length > 0
+      ? [
+          `Repaired Codex model routes:\n${repaired.changes
+            .map((hit) => `- ${formatCodexRouteChange(hit)}`)
+            .join("\n")}`,
+        ]
+      : [];
   return {
     cfg: repaired.cfg,
-    warnings: [],
-    changes: [
-      `Repaired Codex model routes:\n${repaired.changes
-        .map((hit) => `- ${formatCodexRouteChange(hit)}`)
-        .join("\n")}`,
-      ...repaired.runtimePolicyChanges,
-      ...repaired.runtimePinChanges,
-    ],
+    warnings,
+    changes: [...changes, ...repaired.runtimePolicyChanges, ...repaired.runtimePinChanges],
   };
 }
 
