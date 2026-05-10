@@ -162,8 +162,25 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
   });
 
-  it("adds Tool Search control tools when tools.toolSearch is enabled", () => {
+  it("does not add Tool Search control tools from the shared factory by default", () => {
     const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(false);
+    expect(names.has("tool_search")).toBe(false);
+    expect(names.has("tool_describe")).toBe(false);
+    expect(names.has("tool_call")).toBe(false);
+  });
+
+  it("adds PI Tool Search control tools when explicitly requested", () => {
+    const tools = createOpenClawCodingTools({
+      includeToolSearchControls: true,
       config: {
         tools: {
           toolSearch: true,
