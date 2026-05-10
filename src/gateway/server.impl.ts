@@ -45,6 +45,7 @@ import {
 import type { PluginHookGatewayCronService } from "../plugins/hook-types.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginGatewayRuntimeRegistry,
   pinActivePluginHttpRouteRegistry,
 } from "../plugins/runtime.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
@@ -1081,6 +1082,7 @@ export async function startGatewayServer(
       attachedPluginGatewayHandlerKeys = new Set(Object.keys(pluginRegistry.gatewayHandlers));
       pinActivePluginHttpRouteRegistry(pluginRegistry);
       pinActivePluginChannelRegistry(pluginRegistry);
+      pinActivePluginGatewayRuntimeRegistry(pluginRegistry);
     };
     const refreshAttachedGatewayDiscovery = async (nextPluginRegistry: typeof pluginRegistry) => {
       if (minimalTestGateway) {

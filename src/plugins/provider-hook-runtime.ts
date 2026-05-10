@@ -22,7 +22,7 @@ import type {
 } from "./types.js";
 
 const providerRuntimePluginCache: ConfigScopedRuntimeCache<ProviderPlugin | null> = new WeakMap();
-const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel"] as const;
+const PREPARED_PROVIDER_RUNTIME_SURFACES = ["channel", "gateway-runtime"] as const;
 
 export type ProviderRuntimePluginLookupParams = {
   provider: string;

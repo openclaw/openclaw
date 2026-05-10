@@ -10,6 +10,7 @@ import {
 import type { PluginRegistry } from "../registry-types.js";
 import {
   pinActivePluginChannelRegistry,
+  pinActivePluginGatewayRuntimeRegistry,
   pinActivePluginHttpRouteRegistry,
   setActivePluginRegistry,
 } from "../runtime.js";
@@ -41,6 +42,9 @@ function installStandaloneRegistry(
       break;
     case "channel":
       pinActivePluginChannelRegistry(registry);
+      break;
+    case "gateway-runtime":
+      pinActivePluginGatewayRuntimeRegistry(registry);
       break;
     case "http-route":
       pinActivePluginHttpRouteRegistry(registry);
@@ -80,6 +84,9 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
         break;
       case "channel":
         pinActivePluginChannelRegistry(registry);
+        break;
+      case "gateway-runtime":
+        pinActivePluginGatewayRuntimeRegistry(registry);
         break;
       case "http-route":
         pinActivePluginHttpRouteRegistry(registry);

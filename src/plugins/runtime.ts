@@ -32,11 +32,25 @@ const state: RegistryState = (() => {
         registry: null,
         pinned: false,
         version: 0,
+        key: null,
+        workspaceDir: null,
+        runtimeSubagentMode: "default",
       },
       channel: {
         registry: null,
         pinned: false,
         version: 0,
+        key: null,
+        workspaceDir: null,
+        runtimeSubagentMode: "default",
+      },
+      gatewayRuntime: {
+        registry: null,
+        pinned: false,
+        version: 0,
+        key: null,
+        workspaceDir: null,
+        runtimeSubagentMode: "default",
       },
       key: null,
       workspaceDir: null,
@@ -104,30 +118,58 @@ function installSurfaceRegistry(
   surface: RegistrySurfaceState,
   registry: RegistryState["activeRegistry"],
   pinned: boolean,
+  metadata?: {
+    key?: string | null;
+    workspaceDir?: string | null;
+    runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  },
 ) {
   if (surface.registry === registry && surface.pinned === pinned) {
-    return;
+    if (!metadata) {
+      return;
+    }
+    const nextKey = metadata.key ?? surface.key;
+    const nextWorkspaceDir = metadata.workspaceDir ?? surface.workspaceDir;
+    const nextRuntimeSubagentMode = metadata.runtimeSubagentMode ?? surface.runtimeSubagentMode;
+    if (
+      surface.key === nextKey &&
+      surface.workspaceDir === nextWorkspaceDir &&
+      surface.runtimeSubagentMode === nextRuntimeSubagentMode
+    ) {
+      return;
+    }
   }
   surface.registry = registry;
   surface.pinned = pinned;
+  surface.key = metadata?.key ?? null;
+  surface.workspaceDir = metadata?.workspaceDir ?? null;
+  surface.runtimeSubagentMode = metadata?.runtimeSubagentMode ?? "default";
   surface.version += 1;
 }
 
 function syncTrackedSurface(
   surface: RegistrySurfaceState,
   registry: RegistryState["activeRegistry"],
+  metadata: {
+    key?: string | null;
+    workspaceDir?: string | null;
+    runtimeSubagentMode?: "default" | "explicit" | "gateway-bindable";
+  } = {},
   refreshVersion = false,
 ) {
   if (surface.pinned) {
     return;
   }
   if (surface.registry === registry && !surface.pinned) {
+    surface.key = metadata.key ?? null;
+    surface.workspaceDir = metadata.workspaceDir ?? null;
+    surface.runtimeSubagentMode = metadata.runtimeSubagentMode ?? "default";
     if (refreshVersion) {
       surface.version += 1;
     }
     return;
   }
-  installSurfaceRegistry(surface, registry, false);
+  installSurfaceRegistry(surface, registry, false, metadata);
 }
 
 export function setActivePluginRegistry(
@@ -141,10 +183,16 @@ export function setActivePluginRegistry(
     markPluginRegistryRetired(previousRegistry);
   }
   markPluginRegistryActive(registry);
+  const metadata = {
+    key: cacheKey ?? null,
+    workspaceDir: workspaceDir ?? null,
+    runtimeSubagentMode,
+  };
   state.activeRegistry = registry;
   state.activeVersion += 1;
-  syncTrackedSurface(state.httpRoute, registry, true);
-  syncTrackedSurface(state.channel, registry, true);
+  syncTrackedSurface(state.httpRoute, registry, metadata, true);
+  syncTrackedSurface(state.channel, registry, metadata, true);
+  syncTrackedSurface(state.gatewayRuntime, registry, metadata, true);
   state.key = cacheKey ?? null;
   state.workspaceDir = workspaceDir ?? null;
   state.runtimeSubagentMode = runtimeSubagentMode;
@@ -182,14 +230,22 @@ export function requireActivePluginRegistry(): PluginRegistry {
 }
 
 export function pinActivePluginHttpRouteRegistry(registry: PluginRegistry) {
-  installSurfaceRegistry(state.httpRoute, registry, true);
+  installSurfaceRegistry(state.httpRoute, registry, true, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
 }
 
 export function releasePinnedPluginHttpRouteRegistry(registry?: PluginRegistry) {
   if (registry && state.httpRoute.registry !== registry) {
     return;
   }
-  installSurfaceRegistry(state.httpRoute, state.activeRegistry, false);
+  installSurfaceRegistry(state.httpRoute, state.activeRegistry, false, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
 }
 
 export function getActivePluginHttpRouteRegistry(): PluginRegistry | null {
@@ -231,14 +287,22 @@ export function resolveActivePluginHttpRouteRegistry(fallback: PluginRegistry): 
  *  gateway startup after the initial plugin load so that config-schema reads
  *  and other non-primary registry loads cannot evict channel plugins. */
 export function pinActivePluginChannelRegistry(registry: PluginRegistry) {
-  installSurfaceRegistry(state.channel, registry, true);
+  installSurfaceRegistry(state.channel, registry, true, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
 }
 
 export function releasePinnedPluginChannelRegistry(registry?: PluginRegistry) {
   if (registry && state.channel.registry !== registry) {
     return;
   }
-  installSurfaceRegistry(state.channel, state.activeRegistry, false);
+  installSurfaceRegistry(state.channel, state.activeRegistry, false, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
 }
 
 /** Return the registry that should be used for channel plugin resolution.
@@ -252,6 +316,10 @@ export function getActivePluginChannelRegistryVersion(): number {
   return state.channel.registry ? state.channel.version : state.activeVersion;
 }
 
+export function getActivePluginChannelRegistryWorkspaceDir(): string | undefined {
+  return state.channel.workspaceDir ?? undefined;
+}
+
 export function requireActivePluginChannelRegistry(): PluginRegistry {
   const existing = getActivePluginChannelRegistry();
   if (existing) {
@@ -260,6 +328,44 @@ export function requireActivePluginChannelRegistry(): PluginRegistry {
   const created = requireActivePluginRegistry();
   installSurfaceRegistry(state.channel, created, false);
   return created;
+}
+
+export function pinActivePluginGatewayRuntimeRegistry(registry: PluginRegistry) {
+  installSurfaceRegistry(state.gatewayRuntime, registry, true, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
+}
+
+export function releasePinnedPluginGatewayRuntimeRegistry(registry?: PluginRegistry) {
+  if (registry && state.gatewayRuntime.registry !== registry) {
+    return;
+  }
+  installSurfaceRegistry(state.gatewayRuntime, state.activeRegistry, false, {
+    key: state.key,
+    workspaceDir: state.workspaceDir,
+    runtimeSubagentMode: state.runtimeSubagentMode,
+  });
+}
+
+export function getActivePluginGatewayRuntimeRegistry(): PluginRegistry | null {
+  return asPluginRegistry(state.gatewayRuntime.registry ?? state.activeRegistry);
+}
+
+export function getActivePluginGatewayRuntimeRegistryVersion(): number {
+  return state.gatewayRuntime.registry ? state.gatewayRuntime.version : state.activeVersion;
+}
+
+export function getActivePluginGatewayRuntimeRegistryWorkspaceDir(): string | undefined {
+  return state.gatewayRuntime.workspaceDir ?? undefined;
+}
+
+export function getActivePluginGatewayRuntimeSubagentMode():
+  | "default"
+  | "explicit"
+  | "gateway-bindable" {
+  return state.gatewayRuntime.runtimeSubagentMode;
 }
 
 export function getActivePluginRegistryKey(): string | null {
@@ -304,6 +410,7 @@ export function listImportedRuntimePluginIds(): string[] {
   collectLoadedPluginIds(asPluginRegistry(state.activeRegistry), imported);
   collectLoadedPluginIds(asPluginRegistry(state.channel.registry), imported);
   collectLoadedPluginIds(asPluginRegistry(state.httpRoute.registry), imported);
+  collectLoadedPluginIds(asPluginRegistry(state.gatewayRuntime.registry), imported);
   return [...imported].toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -312,6 +419,7 @@ export function resetPluginRuntimeStateForTest(): void {
   state.activeVersion += 1;
   installSurfaceRegistry(state.httpRoute, null, false);
   installSurfaceRegistry(state.channel, null, false);
+  installSurfaceRegistry(state.gatewayRuntime, null, false);
   state.key = null;
   state.workspaceDir = null;
   state.runtimeSubagentMode = "default";

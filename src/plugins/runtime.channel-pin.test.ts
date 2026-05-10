@@ -1,23 +1,38 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { loadChannelOutboundAdapter } from "../channels/plugins/outbound/load.js";
 import { getChannelPlugin } from "../channels/plugins/registry.js";
+import { resolveProviderRuntimePluginHandle } from "./provider-hook-runtime.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   getActivePluginChannelRegistryVersion,
+  getActivePluginGatewayRuntimeRegistry,
+  getActivePluginGatewayRuntimeRegistryVersion,
+  getActivePluginGatewayRuntimeRegistryWorkspaceDir,
+  getActivePluginGatewayRuntimeSubagentMode,
   getActivePluginRegistryVersion,
   getActivePluginChannelRegistry,
+  pinActivePluginGatewayRuntimeRegistry,
   pinActivePluginChannelRegistry,
+  releasePinnedPluginGatewayRuntimeRegistry,
   releasePinnedPluginChannelRegistry,
   requireActivePluginChannelRegistry,
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "./runtime.js";
+import type { ProviderPlugin } from "./types.js";
 
 function createRegistryWithChannel(pluginId = "demo-channel") {
   const registry = createEmptyPluginRegistry();
   const plugin = { id: pluginId, meta: {} } as never;
   registry.channels = [{ plugin }] as never;
   return { registry, plugin };
+}
+
+function createRegistryWithProvider(pluginId = "demo-provider", providerId = "demo") {
+  const registry = createEmptyPluginRegistry();
+  const provider = { id: providerId, label: providerId } as ProviderPlugin;
+  registry.providers = [{ pluginId, provider, source: "test" }] as never;
+  return { registry, provider };
 }
 
 function createChannelRegistryPair(pluginId = "demo-channel") {
@@ -37,6 +52,12 @@ function createRegistrySet() {
 
 function expectActiveChannelRegistry(registry: ReturnType<typeof createEmptyPluginRegistry>) {
   expect(getActivePluginChannelRegistry()).toBe(registry);
+}
+
+function expectActiveGatewayRuntimeRegistry(
+  registry: ReturnType<typeof createEmptyPluginRegistry>,
+) {
+  expect(getActivePluginGatewayRuntimeRegistry()).toBe(registry);
 }
 
 function expectPinnedChannelRegistry(
@@ -194,5 +215,67 @@ describe("channel registry pinning", () => {
     // The outbound loader must still find the telegram adapter from the pinned registry.
     const adapter = await loadChannelOutboundAdapter("telegram");
     expect(adapter).toBe(outboundAdapter);
+  });
+});
+
+describe("gateway runtime registry pinning", () => {
+  afterEach(() => {
+    resetPluginRuntimeStateForTest();
+  });
+
+  it("preserves pinned gateway runtime registry across active registry churn", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+
+    setActivePluginRegistry(replacement, "replacement-key", "default", "/tmp/other");
+
+    expectActiveGatewayRuntimeRegistry(startup);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBe("/tmp/workspace");
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("gateway-bindable");
+  });
+
+  it("release restores live-tracking behavior", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+    setActivePluginRegistry(replacement, "replacement-key", "default", "/tmp/other");
+
+    const gatewayVersionBeforeRelease = getActivePluginGatewayRuntimeRegistryVersion();
+    releasePinnedPluginGatewayRuntimeRegistry(startup);
+
+    expect(getActivePluginGatewayRuntimeRegistryVersion()).toBe(gatewayVersionBeforeRelease + 1);
+    expectActiveGatewayRuntimeRegistry(replacement);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBe("/tmp/other");
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("default");
+  });
+
+  it("resetPluginRuntimeStateForTest clears gateway runtime pin", () => {
+    const { startup, replacement } = createRegistrySet();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+
+    resetPluginRuntimeStateForTest();
+    setActivePluginRegistry(replacement);
+
+    expectActiveGatewayRuntimeRegistry(replacement);
+    expect(getActivePluginGatewayRuntimeRegistryWorkspaceDir()).toBeUndefined();
+    expect(getActivePluginGatewayRuntimeSubagentMode()).toBe("default");
+  });
+
+  it("provider runtime handles resolve from pinned gateway runtime registry", () => {
+    const { registry: startup, provider } = createRegistryWithProvider();
+    const replacement = createEmptyPluginRegistry();
+    setActivePluginRegistry(startup, "startup-key", "gateway-bindable", "/tmp/workspace");
+    pinActivePluginGatewayRuntimeRegistry(startup);
+
+    setActivePluginRegistry(replacement, "replacement-key", "default", "/tmp/workspace");
+
+    const handle = resolveProviderRuntimePluginHandle({
+      provider: "demo",
+      workspaceDir: "/tmp/workspace",
+    });
+    expect(handle.plugin?.id).toBe(provider.id);
+    expect((handle.plugin as { pluginId?: string } | undefined)?.pluginId).toBe("demo-provider");
   });
 });

@@ -1,5 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import { resolveGatewayStartupPluginIds } from "../plugins/gateway-startup-plugin-ids.js";
 import { getActivePluginRuntimeSubagentMode } from "../plugins/runtime.js";
 import { ensureStandaloneRuntimePluginRegistryLoaded } from "../plugins/runtime/standalone-runtime-registry-loader.js";
 import { resolveUserPath } from "../utils.js";
@@ -27,6 +28,24 @@ function resolveStartupPluginIdsFromCurrentSnapshot(params: {
   return pluginIds.filter((pluginId): pluginId is string => typeof pluginId === "string");
 }
 
+function resolveStartupPluginIds(params: {
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+}): string[] | undefined {
+  const snapshotPluginIds = resolveStartupPluginIdsFromCurrentSnapshot(params);
+  if (snapshotPluginIds !== undefined) {
+    return snapshotPluginIds;
+  }
+  if (!params.config) {
+    return undefined;
+  }
+  return resolveGatewayStartupPluginIds({
+    config: params.config,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    env: process.env,
+  });
+}
+
 export function ensureRuntimePluginsLoaded(params: {
   config?: OpenClawConfig;
   workspaceDir?: string | null;
@@ -36,7 +55,7 @@ export function ensureRuntimePluginsLoaded(params: {
     typeof params.workspaceDir === "string" && params.workspaceDir.trim()
       ? resolveUserPath(params.workspaceDir)
       : undefined;
-  const startupPluginIds = resolveStartupPluginIdsFromCurrentSnapshot({
+  const startupPluginIds = resolveStartupPluginIds({
     config: params.config,
     workspaceDir,
   });
