@@ -23,6 +23,7 @@ type AgentGatewayResult = {
     mediaUrl?: string | null;
     mediaUrls?: string[];
   }>;
+  deliveryStatus?: unknown;
   meta?: unknown;
 };
 

@@ -624,6 +624,9 @@ terminal summary, and sanitized error text.
 - `agent` requests can include `deliver=true` to request outbound delivery.
 - `bestEffortDeliver=false` keeps strict behavior: unresolved or internal-only delivery targets return `INVALID_REQUEST`.
 - `bestEffortDeliver=true` allows fallback to session-only execution when no external deliverable route can be resolved (for example internal/webchat sessions or ambiguous multi-channel configs).
+- Final `agent` results may include `result.deliveryStatus` when delivery was
+  requested, using the same `sent`, `suppressed`, `partial_failed`, and `failed`
+  statuses documented for [`openclaw agent --json --deliver`](/cli/agent#json-delivery-status).
 
 ## Versioning
 
