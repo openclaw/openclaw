@@ -24,9 +24,7 @@ type WorkerPluginRuntimeHelpers = {
 };
 type WorkerCleanupHelpers = {
   closeOpenClawAgentDatabasesForTest: typeof import("../src/state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
-  drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
-  resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
   resetModelCatalogReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelCatalogReadyCacheForTest;
 };
 
@@ -74,12 +72,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     vi.importActual<typeof import("../src/state/openclaw-agent-db.js")>(
       "../src/state/openclaw-agent-db.js",
     ),
-    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
-  ]).then(([contextRuntimeState, modelsConfigState, agentDb, fileLock]) => ({
+  ]).then(([contextRuntimeState, modelsConfigState, agentDb]) => ({
     closeOpenClawAgentDatabasesForTest: agentDb.closeOpenClawAgentDatabasesForTest,
-    drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
     resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
-    resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
     resetModelCatalogReadyCacheForTest: modelsConfigState.resetModelCatalogReadyCacheForTest,
   }));
   return globalState[WORKER_CLEANUP_HELPERS];
@@ -371,13 +366,9 @@ beforeAll(async () => {
 afterEach(async () => {
   const {
     closeOpenClawAgentDatabasesForTest,
-    drainFileLockStateForTest,
     resetContextWindowCacheForTest,
-    resetFileLockStateForTest,
     resetModelCatalogReadyCacheForTest,
   } = await loadWorkerCleanupHelpers();
-  await drainFileLockStateForTest();
-  resetFileLockStateForTest();
   closeOpenClawAgentDatabasesForTest();
   resetContextWindowCacheForTest();
   resetModelCatalogReadyCacheForTest();
@@ -385,8 +376,6 @@ afterEach(async () => {
 });
 
 afterAll(async () => {
-  const { closeOpenClawAgentDatabasesForTest, drainFileLockStateForTest } =
-    await loadWorkerCleanupHelpers();
-  await drainFileLockStateForTest();
+  const { closeOpenClawAgentDatabasesForTest } = await loadWorkerCleanupHelpers();
   closeOpenClawAgentDatabasesForTest();
 });

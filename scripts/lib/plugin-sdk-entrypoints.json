@@ -196,7 +196,6 @@
   "channel-route",
   "channel-targets",
   "context-visibility-runtime",
-  "file-lock",
   "fetch-runtime",
   "runtime-fetch",
   "response-limit-runtime",

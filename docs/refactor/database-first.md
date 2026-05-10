@@ -377,8 +377,8 @@ sessionId}` and session key context.
   SQLite transcript stats instead of filesystem stat calls.
 - Runtime session locks and the standalone legacy `.jsonl.lock` doctor
   lane have been removed.
-- The Microsoft Teams runtime barrel no longer re-exports the old plugin SDK
-  file-lock helper; its durable state paths are SQLite-backed.
+- The Microsoft Teams runtime barrel and public plugin SDK no longer re-export
+  the old file-lock helper; durable plugin state paths are SQLite-backed.
 - Session age/count pruning and explicit session cleanup have been removed.
   Doctor owns legacy import; stale sessions are reset or deleted explicitly.
 - Doctor no longer treats `agents/<agent>/sessions/` as required runtime

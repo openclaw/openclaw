@@ -449,7 +449,6 @@ releases.
     | Bounded async task concurrency | `openclaw/plugin-sdk/concurrency-runtime` |
     | Numeric coercion | `openclaw/plugin-sdk/number-runtime` |
     | Process-local async lock | `openclaw/plugin-sdk/async-lock-runtime` |
-    | File locks | `openclaw/plugin-sdk/file-lock` |
 
     Bundled plugins are scanner-guarded against `infra-runtime`, so repo code
     cannot regress to the broad barrel.
