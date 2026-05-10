@@ -142,6 +142,15 @@ function isIncludeOwnedPath(rootAuthoredConfig: unknown, path: string[]): boolea
   );
 }
 
+function findOverlappingIncludeOwnedPath(
+  rootAuthoredConfig: unknown,
+  path: string[],
+): string[] | undefined {
+  return collectIncludeOwnedPaths(rootAuthoredConfig).find(
+    (includePath) => pathStartsWith(path, includePath) || pathStartsWith(includePath, path),
+  );
+}
+
 function setPathValueCreatingParents(value: unknown, path: string[], nextValue: unknown): unknown {
   if (path.length === 0) {
     return cloneUnknown(nextValue);
@@ -385,12 +394,18 @@ export function injectExplicitlySetPaths(params: {
 
   let next = params.persistedCandidate;
   for (const path of params.explicitSetPaths) {
-    if (
-      path.length === 0 ||
-      path.some(isBlockedObjectKey) ||
-      (params.rootAuthoredConfig && isIncludeOwnedPath(params.rootAuthoredConfig, [...path]))
-    ) {
+    if (path.length === 0 || path.some(isBlockedObjectKey)) {
       continue;
+    }
+    const includeOwnedPath = params.rootAuthoredConfig
+      ? findOverlappingIncludeOwnedPath(params.rootAuthoredConfig, [...path])
+      : undefined;
+    if (includeOwnedPath) {
+      throw new Error(
+        `Config write would flatten $include-owned config at ${formatConfigPath(
+          includeOwnedPath,
+        )}; edit that include file directly or remove the $include first.`,
+      );
     }
     const nextValue = getPathValue(params.valueSource, [...path]);
     if (nextValue === undefined) {

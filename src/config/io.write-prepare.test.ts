@@ -826,4 +826,41 @@ describe("config io write prepare", () => {
       groupPolicy: "allowlist",
     });
   });
+
+  it("rejects default-valued explicit writes under include-owned paths", () => {
+    expect(() =>
+      resolvePersistCandidateForWrite({
+        runtimeConfig: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        sourceConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        rootAuthoredConfig: {
+          agents: {
+            defaults: { $include: "./agents-defaults.json" },
+          },
+        },
+        nextConfig: {
+          agents: {
+            defaults: {},
+          },
+        },
+        explicitSetValueSource: {
+          agents: {
+            defaults: {
+              params: { temperature: 0 },
+            },
+          },
+        },
+        explicitSetPaths: [["agents", "defaults", "params"]],
+      }),
+    ).toThrow("Config write would flatten $include-owned config at agents.defaults");
+  });
 });
