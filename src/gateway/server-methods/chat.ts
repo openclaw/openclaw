@@ -2305,6 +2305,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                 loadModelCatalog: () => context.loadGatewayModelCatalog(),
               })
             : sessionModelSupportsImages;
+
+        // If vision validation failed, clear the override so the turn runs on
+        // the default model with the safer media-understanding path instead of
+        // a misconfigured text-only imageModel.
+        if (!imageModelSupportsImages && modelOverride) {
+          modelOverride = undefined;
+          modelOverrideFallbacks = undefined;
+        }
+
         // Bound plugin sessions own the real recipient model, so keep image
         // attachments even when the parent OpenClaw session model is text-only.
         supportsImages ||= imageModelSupportsImages;
