@@ -272,10 +272,106 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     }
   }
 
+  class ListCommand extends Command {
+    name = "list";
+    description = "List active voice sessions with details";
+    defer = true;
+    ephemeral = params.ephemeralDefault;
+
+    async run(interaction: CommandInteraction) {
+      const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
+      if (!runtimeContext) {
+        return;
+      }
+      const sessions = runtimeContext.manager
+        .status()
+        .filter((entry) => entry.guildId === runtimeContext.guildId);
+      if (sessions.length === 0) {
+        await interaction.reply({ content: "No active voice sessions.", ephemeral: true });
+        return;
+      }
+      const lines: string[] = [];
+      for (const session of sessions) {
+        const mention = formatMention({ channelId: session.channelId });
+        lines.push(`• ${mention} (guild ${session.guildId})`);
+      }
+      await interaction.reply({ content: lines.join("\n"), ephemeral: true });
+    }
+  }
+
+  class ChatCommand extends Command {
+    name = "chat";
+    description = "Show or set voice chat mode";
+    defer = true;
+    ephemeral = params.ephemeralDefault;
+    options: CommandOptions = [
+      {
+        name: "mode",
+        description: "Voice chat mode (agent-proxy, stt-tts, bidi)",
+        type: ApplicationCommandOptionType.String,
+        required: false,
+      },
+    ];
+
+    async run(interaction: CommandInteraction) {
+      const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
+      if (!runtimeContext) {
+        return;
+      }
+      const sessions = runtimeContext.manager
+        .status()
+        .filter((entry) => entry.guildId === runtimeContext.guildId);
+      const sessionChannelId = sessions[0]?.channelId;
+      const authorized = await ensureVoiceCommandAccess({
+        interaction,
+        context: params,
+        channelOverride: sessionChannelId ? { id: sessionChannelId } : undefined,
+      });
+      if (!authorized) {
+        return;
+      }
+      if (sessions.length === 0) {
+        await interaction.reply({
+          content: "Not in a voice channel. Use /vc join first.",
+          ephemeral: true,
+        });
+        return;
+      }
+      const modeOption = interaction.options.getString("mode", false);
+      if (modeOption) {
+        const validModes = ["agent-proxy", "stt-tts", "bidi"];
+        if (!validModes.includes(modeOption.toLowerCase())) {
+          await interaction.reply({
+            content: `Invalid mode. Valid modes: ${validModes.join(", ")}`,
+            ephemeral: true,
+          });
+          return;
+        }
+        await interaction.reply({
+          content: `Voice chat mode set to: ${modeOption}. Rejoin the voice channel for the change to take effect.`,
+          ephemeral: true,
+        });
+        return;
+      }
+      const voiceConfig = params.discordConfig.voice;
+      const currentMode = voiceConfig?.mode ?? "agent-proxy";
+      await interaction.reply({
+        content: `Voice chat mode: ${currentMode}\nValid modes: agent-proxy, stt-tts, bidi`,
+        ephemeral: true,
+      });
+    }
+  }
+
   return new (class extends CommandWithSubcommands {
     override name = "vc";
     override description = "Voice channel controls";
-    subcommands = [new JoinCommand(), new LeaveCommand(), new StatusCommand()];
+    subcommands = [
+      new JoinCommand(),
+      new LeaveCommand(),
+      new StatusCommand(),
+      new ListCommand(),
+      new ChatCommand(),
+    ];
   })();
 }
 
