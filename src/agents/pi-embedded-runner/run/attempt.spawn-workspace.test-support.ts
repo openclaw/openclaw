@@ -95,6 +95,8 @@ export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
+    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
+      await toolParams.execute(),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},

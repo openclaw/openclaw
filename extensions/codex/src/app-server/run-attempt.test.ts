@@ -28,7 +28,10 @@ import {
   resolveCodexAppServerHomeDir,
 } from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
@@ -634,6 +637,44 @@ describe("runCodexAppServerAttempt", () => {
         "process",
         "update_plan",
       ]),
+    );
+  });
+
+  it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        toolSearch: true,
+      },
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+    const dynamicToolNames = bridge.specs.map((tool) => tool.name);
+
+    expect(dynamicToolNames).not.toEqual(
+      expect.arrayContaining(["tool_search_code", "tool_search", "tool_describe", "tool_call"]),
     );
   });
 

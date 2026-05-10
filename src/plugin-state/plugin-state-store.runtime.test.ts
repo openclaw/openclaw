@@ -52,7 +52,7 @@ function createTestPluginRegistry() {
           throw new Error("registry plugin runtime proxy should bind openKeyedStore");
         },
       },
-    } as PluginRuntime,
+    } as unknown as PluginRuntime,
   });
 }
 
