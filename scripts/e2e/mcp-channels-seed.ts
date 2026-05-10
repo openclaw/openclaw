@@ -97,7 +97,7 @@ async function main() {
       stateDir,
       configPath,
       agentDatabasePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
-      transcriptPath,
+      transcript: { agentId: "main", sessionId: "sess-main" },
     }) + "\n",
   );
 }
