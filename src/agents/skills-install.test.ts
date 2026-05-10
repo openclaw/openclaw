@@ -393,12 +393,16 @@ async function writeSkillWithSetupHook(
   const skillDir = path.join(workspaceDir, "skills", name);
   await fs.mkdir(skillDir, { recursive: true });
   const setupBlock: Record<string, unknown> = { script: opts.script ?? "scripts/setup.sh" };
-  if (opts.timeoutMs !== undefined) setupBlock.timeoutMs = opts.timeoutMs;
+  if (opts.timeoutMs !== undefined) {
+    setupBlock.timeoutMs = opts.timeoutMs;
+  }
   const ocMeta: Record<string, unknown> = {
     install: [{ id: "deps", kind: "node", package: "example-package" }],
     setup: setupBlock,
   };
-  if (opts.requiresEnv) ocMeta.requires = { env: opts.requiresEnv };
+  if (opts.requiresEnv) {
+    ocMeta.requires = { env: opts.requiresEnv };
+  }
   await fs.writeFile(
     path.join(skillDir, "SKILL.md"),
     `---
@@ -431,7 +435,9 @@ describe("installSkill setup hook", () => {
       loadWorkspaceSkillEntries: loadTestWorkspaceSkillEntries,
       resolveNodeInstallStateDir: () => {
         const stateDir = process.env.OPENCLAW_STATE_DIR;
-        if (!stateDir) throw new Error("OPENCLAW_STATE_DIR missing in skills install test");
+        if (!stateDir) {
+          throw new Error("OPENCLAW_STATE_DIR missing in skills install test");
+        }
         return stateDir;
       },
     });
@@ -550,7 +556,9 @@ describe("installSkill setup hook", () => {
       const skillDir = await writeInstallableSkill(workspaceDir, "escape-hook-skill");
       const entries = loadTestWorkspaceSkillEntries(workspaceDir);
       const entry = entries.find((e) => e.skill.name === "escape-hook-skill");
-      if (!entry) throw new Error("escape-hook-skill not found");
+      if (!entry) {
+        throw new Error("escape-hook-skill not found");
+      }
 
       // Inject a setup hook with an escape path bypassing frontmatter validation
       const patchedEntry = {
