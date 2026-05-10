@@ -149,29 +149,37 @@ function isDevicePairingApprovalDenied(error: unknown): boolean {
   );
 }
 
+function canUseLocalPairingFallback(opts: DevicesRpcOpts): boolean {
+  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
+    // Explicit --url might point at a remote/tunneled gateway; never silently
+    // switch to local pairing files in that case.
+    return false;
+  }
+  const connection = buildGatewayConnectionDetails();
+  if (connection.urlSource !== "local loopback") {
+    return false;
+  }
+  try {
+    return isLoopbackHost(new URL(connection.url).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function resolveLocalPairingFallback(
   opts: DevicesRpcOpts,
   error: unknown,
 ): { details: ConnectPairingRequiredDetails } | null {
   const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
   const details = readConnectPairingRequiredMessage(message);
-  if (!details) {
+  const canFallbackMissingAdminScope = message.includes("missing scope: operator.admin");
+  if (!details && !canFallbackMissingAdminScope) {
     return null;
   }
-  if (typeof opts.url === "string" && opts.url.trim().length > 0) {
-    // Explicit --url might point at a remote/tunneled gateway; never silently
-    // switch to local pairing files in that case.
+  if (!canUseLocalPairingFallback(opts)) {
     return null;
   }
-  const connection = buildGatewayConnectionDetails();
-  if (connection.urlSource !== "local loopback") {
-    return null;
-  }
-  try {
-    return isLoopbackHost(new URL(connection.url).hostname) ? { details } : null;
-  } catch {
-    return null;
-  }
+  return { details: details ?? {} };
 }
 
 function buildFallbackStateMismatchError(details: ConnectPairingRequiredDetails): Error {
@@ -259,6 +267,13 @@ async function approvePairingWithFallback(
     const gatewayRequestId = normalizeOptionalString(fallback.details.requestId);
     if (gatewayRequestId && gatewayRequestId !== requestId) {
       throw buildFallbackStateMismatchError(fallback.details);
+    }
+    if (gatewayRequestId) {
+      const local = await listDevicePairing();
+      assertLocalFallbackMatchesGatewayRequest(fallback.details, {
+        pending: local.pending as PendingDevice[],
+        paired: local.paired.map((device) => redactLocalPairedDevice(device)),
+      });
     }
     const approved = await approveDevicePairing(requestId, {
       // Local CLI fallback already assumes direct machine access; treat it as an
