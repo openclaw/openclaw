@@ -15,8 +15,8 @@ import {
   readClaudeCliFallbackSeed,
 } from "../../gateway/cli-session-history.js";
 
-/** Maximum number of JSONL records to inspect before giving up. */
-const SESSION_FILE_MAX_RECORDS = 500;
+/** Maximum number of external Claude CLI JSONL records to inspect before giving up. */
+const CLAUDE_CLI_HISTORY_MAX_RECORDS = 500;
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
@@ -27,7 +27,9 @@ function normalizeClaudeCliSessionId(sessionId: string | undefined): string | un
   return trimmed;
 }
 
-async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promise<boolean> {
+async function claudeCliHistoryJsonlHasAssistantMessage(
+  filePath: string | undefined,
+): Promise<boolean> {
   if (!filePath) {
     return false;
   }
@@ -46,7 +48,7 @@ async function jsonlFileHasAssistantMessage(filePath: string | undefined): Promi
           continue;
         }
         recordCount++;
-        if (recordCount > SESSION_FILE_MAX_RECORDS) {
+        if (recordCount > CLAUDE_CLI_HISTORY_MAX_RECORDS) {
           break;
         }
         let obj: unknown;
@@ -111,7 +113,7 @@ export async function claudeCliSessionTranscriptHasContent(params: {
       continue;
     }
     const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    if (await jsonlFileHasAssistantMessage(candidate)) {
+    if (await claudeCliHistoryJsonlHasAssistantMessage(candidate)) {
       return true;
     }
   }

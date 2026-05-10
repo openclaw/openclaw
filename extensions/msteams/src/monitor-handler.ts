@@ -199,8 +199,8 @@ async function handleFeedbackInvoke(
   const messageId = value.replyToId ?? activity.replyToId ?? "unknown";
   const isNegative = reaction === "dislike";
 
-  // Route feedback using the same chat-type logic as normal messages
-  // so session keys, agent IDs, and transcript paths match.
+  // Route feedback using the same chat-type logic as normal messages so session
+  // keys, agent IDs, and SQLite transcript identity match.
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
   const isChannel = convType === "channel";

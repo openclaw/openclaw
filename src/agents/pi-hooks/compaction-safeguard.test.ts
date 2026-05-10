@@ -72,7 +72,6 @@ function stubSessionManager(): ExtensionContext["sessionManager"] {
     getCwd: () => "/stub",
     getSessionDir: () => "/stub",
     getSessionId: () => "stub-id",
-    getSessionFile: () => undefined,
     getLeafId: () => null,
     getLeafEntry: () => undefined,
     getEntry: () => undefined,

@@ -1,4 +1,4 @@
-import { access, mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { loadSqliteSessionTranscriptEvents } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -126,17 +126,6 @@ function createFeedbackInvokeContext(params: {
     sendActivity: vi.fn(async () => ({ id: "ignored" })),
     sendActivities: async () => [],
   } as unknown as MSTeamsTurnContext;
-}
-
-async function expectFileMissing(filePath: string) {
-  let error: unknown;
-  try {
-    await access(filePath);
-  } catch (caught) {
-    error = caught;
-  }
-  expect(error).toBeInstanceOf(Error);
-  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
 }
 
 function readFeedbackTranscriptMessage(params: {
@@ -308,7 +297,12 @@ describe("msteams feedback invoke authz", () => {
         comment: "blocked feedback",
       },
       assertResult: async ({ tmpDir, originalRun }) => {
-        await expectFileMissing(path.join(tmpDir, "msteams_direct_attacker-aad.jsonl"));
+        expect(
+          readFeedbackTranscriptMessage({
+            stateDir: tmpDir,
+            sessionId: "msteams:direct:attacker-aad",
+          }),
+        ).toBeUndefined();
         expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
         expect(originalRun).not.toHaveBeenCalled();
       },
@@ -352,7 +346,12 @@ describe("msteams feedback invoke authz", () => {
         }),
       );
 
-      await expectFileMissing(path.join(tmpDir, "msteams_group_19_group_thread_tacv2.jsonl"));
+      expect(
+        readFeedbackTranscriptMessage({
+          stateDir: tmpDir,
+          sessionId: "msteams:group:19:group@thread.tacv2",
+        }),
+      ).toBeUndefined();
       expect(feedbackReflectionMockState.runFeedbackReflection).not.toHaveBeenCalled();
       expect(originalRun).not.toHaveBeenCalled();
     } finally {
