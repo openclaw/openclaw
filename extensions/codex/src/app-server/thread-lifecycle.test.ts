@@ -48,7 +48,7 @@ function createAppServerOptions() {
 }
 
 describe("Codex app-server native code mode config", () => {
-  it("enables Codex code mode on thread/start without clobbering other config", () => {
+  it("enables Codex code-mode-only on thread/start without clobbering other config", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
       dynamicTools: [],
@@ -64,17 +64,21 @@ describe("Codex app-server native code mode config", () => {
       "features.codex_hooks": true,
       apps: { _default: { enabled: false } },
       "features.code_mode": true,
+      "features.code_mode_only": true,
     });
   });
 
-  it("enables Codex code mode on thread/resume", () => {
+  it("enables Codex code-mode-only on thread/resume", () => {
     const request = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
       threadId: "thread-1",
       appServer: createAppServerOptions() as never,
       developerInstructions: "test instructions",
     });
 
-    expect(request.config).toEqual({ "features.code_mode": true });
+    expect(request.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
   });
 });
 

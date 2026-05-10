@@ -46,6 +46,7 @@ export type CodexPluginThreadConfigProvider = {
 
 const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
   "features.code_mode": true,
+  "features.code_mode_only": true,
 };
 
 export async function startOrResumeThread(params: {
