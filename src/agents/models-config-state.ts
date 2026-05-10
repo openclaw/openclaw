@@ -1,7 +1,7 @@
 const MODEL_CATALOG_STATE_KEY = Symbol.for("openclaw.modelCatalogState");
 
 type ModelCatalogState = {
-  writeLocks: Map<string, Promise<void>>;
+  writeQueues: Map<string, Promise<void>>;
   readyCache: Map<
     string,
     Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
@@ -14,7 +14,7 @@ export const MODEL_CATALOG_STATE = (() => {
   };
   if (!globalState[MODEL_CATALOG_STATE_KEY]) {
     globalState[MODEL_CATALOG_STATE_KEY] = {
-      writeLocks: new Map<string, Promise<void>>(),
+      writeQueues: new Map<string, Promise<void>>(),
       readyCache: new Map<
         string,
         Promise<{ fingerprint: string; result: { agentDir: string; wrote: boolean } }>
@@ -25,6 +25,6 @@ export const MODEL_CATALOG_STATE = (() => {
 })();
 
 export function resetModelCatalogReadyCacheForTest(): void {
-  MODEL_CATALOG_STATE.writeLocks.clear();
+  MODEL_CATALOG_STATE.writeQueues.clear();
   MODEL_CATALOG_STATE.readyCache.clear();
 }
