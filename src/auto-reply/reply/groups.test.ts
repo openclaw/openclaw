@@ -46,6 +46,8 @@ describe("group runtime loading", () => {
     });
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("If directly addressed, asked for status");
+    expect(toolOnlyContext).toContain("do not put that answer only in normal final text");
     expect(toolOnlyContext).toContain("Be a good group participant");
     expect(toolOnlyContext).toContain("wrap bare URLs");
     expect(toolOnlyContext).toContain("<https://example.com>");
@@ -101,6 +103,8 @@ describe("group runtime loading", () => {
     });
     expect(toolOnlyContext).toContain("Normal final replies are private");
     expect(toolOnlyContext).toContain("message tool with action=send");
+    expect(toolOnlyContext).toContain("If directly asked a question, asked for status");
+    expect(toolOnlyContext).toContain("do not put that answer only in normal final text");
     expect(toolOnlyContext).toContain("do not call message(action=send)");
     expect(toolOnlyContext).not.toContain("NO_REPLY");
     expect(toolOnlyContext).not.toContain("Your replies are automatically sent");
