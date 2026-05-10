@@ -909,6 +909,10 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("private by default for this source channel");
     expect(prompt).toContain("use `message(action=send)` for visible channel output");
+    expect(prompt).toContain(
+      "If directly addressed, asked for status, or completing requested work where a visible update is expected, call `message(action=send)`",
+    );
+    expect(prompt).toContain("do not put that answer only in normal final text");
     expect(prompt).toContain("The target defaults to the current source channel");
     expect(prompt).toContain("final answers are private in this mode");
     expect(prompt).not.toContain("## Silent Replies");

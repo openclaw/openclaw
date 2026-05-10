@@ -495,6 +495,7 @@ describe("tryDispatchAcpReply", () => {
     expect(text).toContain("Source channel delivery is private by default");
     expect(text).toContain("message(action=send)");
     expect(text).toContain("The target defaults to the current source channel");
+    expect(text).toContain("do not put that answer only in normal final text");
     expect(text).toContain("reply privately unless you send explicitly");
   });
 
