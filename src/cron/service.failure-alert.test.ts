@@ -131,9 +131,11 @@ describe("CronService failure alerts", () => {
     const firstAlert = expectAlertFields(sendCronFailureAlert, {
       channel: "telegram",
       to: "19098680",
+      eventTimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expect((firstAlert.job as { id?: string } | undefined)?.id).toBe(job.id);
     expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 2 times');
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:00 (UTC)");
 
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
@@ -142,6 +144,10 @@ describe("CronService failure alerts", () => {
     await cron.run(job.id, "force");
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
     expectAlertTextContaining(sendCronFailureAlert, 'Cron job "daily report" failed 4 times');
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:01 (UTC)");
+    expectAlertFields(sendCronFailureAlert, {
+      eventTimeMs: Date.parse("2026-01-01T00:01:00.000Z"),
+    });
 
     cron.stop();
     await store.cleanup();
@@ -285,11 +291,13 @@ describe("CronService failure alerts", () => {
     expectAlertFields(sendCronFailureAlert, {
       channel: "telegram",
       to: "12345",
+      eventTimeMs: Date.parse("2026-01-01T00:00:00.000Z"),
     });
     expectAlertTextContaining(
       sendCronFailureAlert,
       'Cron job "updated skipped alert job" skipped 1 times',
     );
+    expectAlertTextContaining(sendCronFailureAlert, "Last event: 2026-01-01 00:00 (UTC)");
 
     cron.stop();
     await store.cleanup();
@@ -404,7 +412,9 @@ describe("CronService failure alerts", () => {
     if (typeof alertText !== "string") {
       throw new Error("expected failure alert text");
     }
-    expect(alertText).toMatch(/Cron job "gateway restart" skipped 2 times\nSkip reason: disabled/);
+    expect(alertText).toMatch(
+      /Cron job "gateway restart" skipped 2 times\nLast event: 2026-01-01 00:00 \(UTC\)\nSkip reason: disabled/,
+    );
 
     const skippedJob = cron.getJob(job.id);
     expect(skippedJob?.state.consecutiveSkipped).toBe(2);

@@ -13,6 +13,7 @@ import {
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
 import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import { formatCronAlertEventTime } from "../alert-time.js";
 import { resolveCronDeliveryPlan } from "../delivery-plan.js";
 import {
   createCronRunDiagnosticsFromError,
@@ -565,14 +566,20 @@ function emitFailureAlert(
     mode?: "announce" | "webhook";
     accountId?: string;
     status: "error" | "skipped";
+    eventTimeMs?: number;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
   const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+  const eventTime = formatCronAlertEventTime({
+    job: params.job,
+    eventTimeMs: params.eventTimeMs,
+  });
   const text = [
     `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    ...(eventTime ? [`Last event: ${eventTime}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
 
@@ -581,6 +588,7 @@ function emitFailureAlert(
       .sendCronFailureAlert({
         job: params.job,
         text,
+        eventTimeMs: params.eventTimeMs,
         channel: params.channel,
         to: params.to,
         mode: params.mode,
@@ -613,6 +621,7 @@ function maybeEmitFailureAlert(
     status: "error" | "skipped";
     error?: string;
     consecutiveCount: number;
+    eventTimeMs?: number;
   },
 ) {
   if (!params.alertConfig || params.consecutiveCount < params.alertConfig.after) {
@@ -638,6 +647,7 @@ function maybeEmitFailureAlert(
     mode: params.alertConfig.mode,
     accountId: params.alertConfig.accountId,
     status: params.status,
+    eventTimeMs: params.eventTimeMs,
   });
   params.job.state.lastFailureAlertAtMs = now;
 }
@@ -715,6 +725,7 @@ export function applyJobResult(
       status: "error",
       error: result.error,
       consecutiveCount: job.state.consecutiveErrors,
+      eventTimeMs: result.startedAt,
     });
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
@@ -726,6 +737,7 @@ export function applyJobResult(
         status: "skipped",
         error: result.error,
         consecutiveCount: job.state.consecutiveSkipped,
+        eventTimeMs: result.startedAt,
       });
     } else {
       job.state.lastFailureAlertAtMs = undefined;
