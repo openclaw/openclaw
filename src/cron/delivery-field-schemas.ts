@@ -30,6 +30,11 @@ export const TimeoutSecondsFieldSchema = z
   .finite()
   .transform((value) => Math.max(0, value));
 
+export const TimeoutMsFieldSchema = z
+  .number()
+  .finite()
+  .transform((value) => Math.max(0, Math.floor(value)));
+
 type ParsedDeliveryInput = {
   mode?: "announce" | "none" | "webhook";
   channel?: string;

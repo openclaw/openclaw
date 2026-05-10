@@ -60,6 +60,7 @@ type CronUpdatePatch = {
       message?: string;
       model?: string;
       thinking?: string;
+      preModelTimeoutMs?: number | null;
       lightContext?: boolean;
       toolsAllow?: string[];
     };
@@ -79,6 +80,7 @@ type CronAddParams = {
   payload?: {
     model?: string;
     thinking?: string;
+    preModelTimeoutMs?: number;
     lightContext?: boolean;
     toolsAllow?: string[];
   };
@@ -687,6 +689,23 @@ describe("cron cli", () => {
     expect(params?.payload?.lightContext).toBe(true);
   });
 
+  it("sets preModelTimeoutMs on cron add when --pre-model-timeout-ms is passed", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Custom watchdog",
+      "--cron",
+      "* * * * *",
+      "--session",
+      "isolated",
+      "--message",
+      "hello",
+      "--pre-model-timeout-ms",
+      "0",
+    ]);
+
+    expect(params?.payload?.preModelTimeoutMs).toBe(0);
+  });
+
   it("splits PowerShell-style space-separated --tools on cron add", async () => {
     const params = await runCronAddAndGetParams([
       "--name",
@@ -763,6 +782,23 @@ describe("cron cli", () => {
 
     const clearPatch = await runCronEditAndGetPatch(["--no-light-context", "--message", "hello"]);
     expect(clearPatch?.patch?.payload?.lightContext).toBe(false);
+  });
+
+  it("sets and clears preModelTimeoutMs on cron edit", async () => {
+    const setPatch = await runCronEditAndGetPatch([
+      "--pre-model-timeout-ms",
+      "120000",
+      "--message",
+      "hello",
+    ]);
+    expect(setPatch?.patch?.payload?.preModelTimeoutMs).toBe(120_000);
+
+    const clearPatch = await runCronEditAndGetPatch([
+      "--clear-pre-model-timeout",
+      "--message",
+      "hello",
+    ]);
+    expect(clearPatch?.patch?.payload?.preModelTimeoutMs).toBeNull();
   });
 
   it("updates delivery settings without requiring --message", async () => {

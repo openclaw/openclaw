@@ -53,7 +53,7 @@ Cron is the Gateway's built-in scheduler. It persists jobs, wakes the agent at t
 - Isolated cron runs prefer structured execution-denial metadata from the embedded run, then fall back to known final summary/output markers such as `SYSTEM_RUN_DENIED` and `INVALID_REQUEST`, so a blocked command is not reported as a green run.
 - Isolated cron runs also treat run-level agent failures as job errors even when no reply payload is produced, so model/provider failures increment error counters and trigger failure notifications instead of clearing the job as successful.
 - When an isolated agent-turn job reaches `timeoutSeconds`, cron aborts the underlying agent run and gives it a short cleanup window. If the run does not drain, Gateway-owned cleanup force-clears that run's session ownership before cron records the timeout, so queued chat work is not left behind a stale processing session.
-- If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget.
+- If an isolated agent-turn stalls before the runner starts or before the first model call, cron records a phase-specific timeout such as `setup timed out before runner start` or `stalled before first model call (last phase: context-engine)`. These watchdogs cover embedded providers and CLI-backed providers before their external CLI process is actually started, and are capped independently from long `timeoutSeconds` values so cold-start/auth/context failures surface quickly instead of waiting for the full job budget. Configure the pre-model watchdog globally with `cron.agentTurnWatchdog.preModelTimeoutMs` or per job with `payload.preModelTimeoutMs`; `0` disables only the pre-model watchdog while `timeoutSeconds` still bounds the whole run.
 
 <a id="maintenance"></a>
 
@@ -269,7 +269,7 @@ Query-string tokens are rejected.
       -d '{"message":"Summarize inbox","name":"Email","model":"openai/gpt-5.4"}'
     ```
 
-    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `fallbacks`, `thinking`, `timeoutSeconds`.
+    Fields: `message` (required), `name`, `agentId`, `wakeMode`, `deliver`, `channel`, `to`, `model`, `fallbacks`, `thinking`, `timeoutSeconds`, `preModelTimeoutMs`.
 
   </Accordion>
   <Accordion title="Mapped hooks (POST /hooks/<name>)">
@@ -407,6 +407,9 @@ Model override note:
       backoffMs: [60000, 120000, 300000],
       retryOn: ["rate_limit", "overloaded", "network", "server_error"],
     },
+    agentTurnWatchdog: {
+      preModelTimeoutMs: 60000, // set 0 to disable only the pre-model watchdog
+    },
     webhookToken: "replace-with-dedicated-webhook-token",
     sessionRetention: "24h",
     runLog: { maxBytes: "2mb", keepLines: 2000 },
@@ -415,6 +418,8 @@ Model override note:
 ```
 
 `maxConcurrentRuns` limits both scheduled cron dispatch and isolated agent-turn execution. Isolated cron agent turns use the queue's dedicated `cron-nested` execution lane internally, so raising this value lets independent cron LLM runs progress in parallel instead of only starting their outer cron wrappers. The shared non-cron `nested` lane is not widened by this setting.
+
+`agentTurnWatchdog.preModelTimeoutMs` sets the global isolated agent-turn pre-model watchdog in milliseconds. Leave it unset to keep the default 60-second or half-job-timeout guard, set it higher for slow cold-start/auth/context setup, or set it to `0` to disable this watchdog while keeping the outer `timeoutSeconds` run limit. Individual jobs can override it with `payload.preModelTimeoutMs`.
 
 The runtime state sidecar is derived from `cron.store`: a `.json` store such as `~/clawd/cron/jobs.json` uses `~/clawd/cron/jobs-state.json`, while a store path without a `.json` suffix appends `-state.json`.
 

@@ -54,7 +54,7 @@ export { DEFAULT_JOB_TIMEOUT_MS } from "./timeout-policy.js";
 const MAX_TIMER_DELAY_MS = 60_000;
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
 const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
-const CRON_AGENT_PRE_MODEL_WATCHDOG_MS = 60_000;
+const DEFAULT_CRON_AGENT_PRE_MODEL_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS = 1_000;
 
 /**
@@ -132,6 +132,11 @@ export async function executeJobCoreWithTimeout(
 
   const deferTimeoutUntilExecutionStart =
     job.sessionTarget !== "main" && job.payload.kind === "agentTurn";
+  const preModelWatchdogMs = resolveCronAgentPreModelWatchdogMs({
+    job,
+    jobTimeoutMs,
+    cronConfig: state.deps.cronConfig,
+  });
   const triggerTimeout = (reason: string) => {
     if (runAbortController.signal.aborted) {
       return;
@@ -163,14 +168,14 @@ export async function executeJobCoreWithTimeout(
     setupTimeoutId = undefined;
   };
   const startPreModelTimeout = () => {
-    if (preModelTimeoutId || modelCallStarted) {
+    if (preModelTimeoutId || modelCallStarted || preModelWatchdogMs === undefined) {
       return;
     }
     preModelTimeoutId = setTimeout(() => {
       if (!modelCallStarted) {
         triggerTimeout(preModelTimeoutErrorMessage(activeExecution));
       }
-    }, resolveCronAgentPreModelWatchdogMs(jobTimeoutMs));
+    }, preModelWatchdogMs);
   };
   const clearPreModelTimeout = () => {
     if (!preModelTimeoutId) {
@@ -197,15 +202,15 @@ export async function executeJobCoreWithTimeout(
   const onExecutionPhase = (info: CronAgentExecutionPhaseUpdate) => {
     noteExecutionProgress(info);
   };
-  const corePromise = executeJobCore(state, job, runAbortController.signal, {
-    onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
-    onExecutionPhase: deferTimeoutUntilExecutionStart ? onExecutionPhase : undefined,
-  });
   if (!deferTimeoutUntilExecutionStart) {
     startTimeout();
   } else {
     startSetupTimeout();
   }
+  const corePromise = executeJobCore(state, job, runAbortController.signal, {
+    onExecutionStarted: deferTimeoutUntilExecutionStart ? onExecutionStarted : undefined,
+    onExecutionPhase: deferTimeoutUntilExecutionStart ? onExecutionPhase : undefined,
+  });
   void corePromise.catch((err) => {
     if (runAbortController.signal.aborted) {
       state.deps.log.warn(
@@ -300,10 +305,34 @@ function formatCronAgentExecutionPhase(execution?: CronAgentExecutionStarted): s
   return execution?.phase?.replaceAll("_", "-");
 }
 
-function resolveCronAgentPreModelWatchdogMs(jobTimeoutMs: number): number {
+function normalizeCronAgentPreModelWatchdogMs(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+    return undefined;
+  }
+  return Math.floor(value);
+}
+
+function resolveCronAgentPreModelWatchdogMs(params: {
+  job: CronJob;
+  jobTimeoutMs: number;
+  cronConfig?: CronConfig;
+}): number | undefined {
+  const jobOverride =
+    params.job.payload.kind === "agentTurn"
+      ? normalizeCronAgentPreModelWatchdogMs(params.job.payload.preModelTimeoutMs)
+      : undefined;
+  const configured =
+    jobOverride ??
+    normalizeCronAgentPreModelWatchdogMs(params.cronConfig?.agentTurnWatchdog?.preModelTimeoutMs);
+  if (configured === 0) {
+    return undefined;
+  }
+  if (configured !== undefined) {
+    return Math.max(CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS, configured);
+  }
   return Math.max(
     CRON_AGENT_PRE_MODEL_MIN_WATCHDOG_MS,
-    Math.min(CRON_AGENT_PRE_MODEL_WATCHDOG_MS, Math.floor(jobTimeoutMs / 2)),
+    Math.min(DEFAULT_CRON_AGENT_PRE_MODEL_WATCHDOG_MS, Math.floor(params.jobTimeoutMs / 2)),
   );
 }
 

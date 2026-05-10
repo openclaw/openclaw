@@ -1225,6 +1225,9 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
+    agentTurnWatchdog: {
+      preModelTimeoutMs: 60000, // set 0 to disable only the pre-model watchdog
+    },
     webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     sessionRetention: "24h", // duration string or false
@@ -1237,6 +1240,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 ```
 
 - `sessionRetention`: how long to keep completed isolated cron run sessions before pruning from `sessions.json`. Also controls cleanup of archived deleted cron transcripts. Default: `24h`; set `false` to disable.
+- `agentTurnWatchdog.preModelTimeoutMs`: global isolated agent-turn pre-model watchdog in milliseconds. Unset keeps the default 60-second or half-job-timeout guard; `0` disables this watchdog while the outer job timeout still applies. Per-job `payload.preModelTimeoutMs` overrides this value.
 - `runLog.maxBytes`: max size per run log file (`cron/runs/<jobId>.jsonl`) before pruning. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest lines retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.

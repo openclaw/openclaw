@@ -44,6 +44,31 @@ describe("cron protocol validators", () => {
     ).toBe(true);
   });
 
+  it("accepts agent-turn pre-model watchdog config on add and update params", () => {
+    expect(
+      validateCronAddParams({
+        ...minimalAddParams,
+        sessionTarget: "isolated",
+        payload: {
+          kind: "agentTurn",
+          message: "tick",
+          preModelTimeoutMs: 120_000,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      validateCronUpdateParams({
+        id: "job-1",
+        patch: {
+          payload: {
+            kind: "agentTurn",
+            preModelTimeoutMs: null,
+          },
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("rejects add params when required scheduling fields are missing", () => {
     const { wakeMode: _wakeMode, ...withoutWakeMode } = minimalAddParams;
     expect(validateCronAddParams(withoutWakeMode)).toBe(false);

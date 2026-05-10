@@ -250,6 +250,44 @@ describe("applyJobPatch", () => {
     }
   });
 
+  it("persists and clears agentTurn payload.preModelTimeoutMs updates", () => {
+    const job = createIsolatedAgentTurnJob("job-pre-model-timeout", {
+      mode: "announce",
+      channel: "telegram",
+    });
+    job.payload = {
+      kind: "agentTurn",
+      message: "do it",
+      preModelTimeoutMs: 60_000,
+    };
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        preModelTimeoutMs: 120_000,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.preModelTimeoutMs).toBe(120_000);
+    }
+
+    applyJobPatch(job, {
+      payload: {
+        kind: "agentTurn",
+        message: "do it",
+        preModelTimeoutMs: null,
+      },
+    });
+
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
+      expect(job.payload.preModelTimeoutMs).toBeUndefined();
+    }
+  });
+
   it("applies payload.lightContext when replacing payload kind via patch", () => {
     const job = createIsolatedAgentTurnJob("job-light-context-switch", {
       mode: "announce",

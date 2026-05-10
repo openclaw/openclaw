@@ -840,6 +840,11 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   if (typeof patch.timeoutSeconds === "number") {
     next.timeoutSeconds = patch.timeoutSeconds;
   }
+  if (typeof patch.preModelTimeoutMs === "number") {
+    next.preModelTimeoutMs = patch.preModelTimeoutMs;
+  } else if (patch.preModelTimeoutMs === null) {
+    delete next.preModelTimeoutMs;
+  }
   if (typeof patch.lightContext === "boolean") {
     next.lightContext = patch.lightContext;
   }
@@ -869,6 +874,8 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
+    preModelTimeoutMs:
+      typeof patch.preModelTimeoutMs === "number" ? patch.preModelTimeoutMs : undefined,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };

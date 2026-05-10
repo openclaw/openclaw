@@ -419,6 +419,9 @@ candidate contains redacted secret placeholders such as `***`.
       cron: {
         enabled: true,
         maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
+        agentTurnWatchdog: {
+          preModelTimeoutMs: 60000, // set 0 to disable only the pre-model watchdog
+        },
         sessionRetention: "24h",
         runLog: {
           maxBytes: "2mb",
@@ -429,6 +432,7 @@ candidate contains redacted secret placeholders such as `***`.
     ```
 
     - `sessionRetention`: prune completed isolated run sessions from `sessions.json` (default `24h`; set `false` to disable).
+    - `agentTurnWatchdog.preModelTimeoutMs`: tune the isolated agent-turn pre-model watchdog globally; individual cron job payloads can override it.
     - `runLog`: prune `cron/runs/<jobId>.jsonl` by size and retained lines.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 

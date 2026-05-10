@@ -176,6 +176,11 @@ type CronAgentTurnPayloadFields = {
   fallbacks?: string[];
   thinking?: string;
   timeoutSeconds?: number;
+  /**
+   * Milliseconds allowed after isolated runner start before the first model call.
+   * Omit to use global/default policy; set 0 to disable this pre-model watchdog.
+   */
+  preModelTimeoutMs?: number;
   allowUnsafeExternalContent?: boolean;
   /** Immutable external hook provenance for async dispatch. */
   externalContentSource?: HookExternalContentSource;
@@ -191,8 +196,9 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow" | "preModelTimeoutMs">> & {
     toolsAllow?: string[] | null;
+    preModelTimeoutMs?: number | null;
   };
 export type CronJobState = {
   nextRunAtMs?: number;

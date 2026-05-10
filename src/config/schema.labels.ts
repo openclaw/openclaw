@@ -767,6 +767,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "cron.enabled": "Cron Enabled",
   "cron.store": "Cron Store Path",
   "cron.maxConcurrentRuns": "Cron Max Concurrent Runs",
+  "cron.agentTurnWatchdog": "Cron Agent Turn Watchdog",
+  "cron.agentTurnWatchdog.preModelTimeoutMs": "Cron Pre-model Watchdog Timeout (ms)",
   "cron.retry": "Cron Retry Policy",
   "cron.retry.maxAttempts": "Cron Retry Max Attempts",
   "cron.retry.backoffMs": "Cron Retry Backoff (ms)",

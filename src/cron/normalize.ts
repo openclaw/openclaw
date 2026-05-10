@@ -6,6 +6,7 @@ import {
 } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import {
+  TimeoutMsFieldSchema,
   TimeoutSecondsFieldSchema,
   TrimmedNonEmptyStringFieldSchema,
   parseDeliveryInput,
@@ -40,6 +41,7 @@ function hasAgentTurnPayloadHint(payload: UnknownRecord) {
     normalizeTrimmedStringArray(payload.toolsAllow, { allowNull: true }) !== undefined ||
     hasTrimmedStringValue(payload.thinking) ||
     typeof payload.timeoutSeconds === "number" ||
+    typeof payload.preModelTimeoutMs === "number" ||
     typeof payload.lightContext === "boolean" ||
     typeof payload.allowUnsafeExternalContent === "boolean"
   );
@@ -221,6 +223,14 @@ function coercePayload(payload: UnknownRecord) {
       delete next.timeoutSeconds;
     }
   }
+  if ("preModelTimeoutMs" in next) {
+    const preModelTimeoutMs = parseOptionalField(TimeoutMsFieldSchema, next.preModelTimeoutMs);
+    if (preModelTimeoutMs !== undefined) {
+      next.preModelTimeoutMs = preModelTimeoutMs;
+    } else {
+      delete next.preModelTimeoutMs;
+    }
+  }
   if ("fallbacks" in next) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -249,6 +259,7 @@ function coercePayload(payload: UnknownRecord) {
     delete next.fallbacks;
     delete next.thinking;
     delete next.timeoutSeconds;
+    delete next.preModelTimeoutMs;
     delete next.lightContext;
     delete next.allowUnsafeExternalContent;
     delete next.toolsAllow;
@@ -382,6 +393,9 @@ function copyTopLevelAgentTurnFields(next: UnknownRecord, payload: UnknownRecord
   if (typeof payload.timeoutSeconds !== "number" && typeof next.timeoutSeconds === "number") {
     payload.timeoutSeconds = next.timeoutSeconds;
   }
+  if (typeof payload.preModelTimeoutMs !== "number" && typeof next.preModelTimeoutMs === "number") {
+    payload.preModelTimeoutMs = next.preModelTimeoutMs;
+  }
   if (!Array.isArray(payload.fallbacks) && Array.isArray(next.fallbacks)) {
     const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
     if (fallbacks !== undefined) {
@@ -411,6 +425,7 @@ function stripLegacyTopLevelFields(next: UnknownRecord) {
   delete next.model;
   delete next.thinking;
   delete next.timeoutSeconds;
+  delete next.preModelTimeoutMs;
   delete next.fallbacks;
   delete next.lightContext;
   delete next.toolsAllow;

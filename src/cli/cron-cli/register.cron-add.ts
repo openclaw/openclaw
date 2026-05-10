@@ -9,7 +9,7 @@ import {
 import { theme } from "../../terminal/theme.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import { parsePositiveIntOrUndefined } from "../program/helpers.js";
+import { parseNonNegativeIntOrUndefined, parsePositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateSchedule } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -108,6 +108,10 @@ export function registerCronAddCommand(cron: Command) {
       )
       .option("--model <model>", "Model override for agent jobs (provider/model or alias)")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option(
+        "--pre-model-timeout-ms <ms>",
+        "Pre-model watchdog timeout in ms for isolated agent jobs (0 disables)",
+      )
       .option("--light-context", "Use lightweight bootstrap context for agent jobs", false)
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
       .option("--announce", "Fallback-deliver final text to a chat", false)
@@ -159,6 +163,10 @@ export function registerCronAddCommand(cron: Command) {
               return { kind: "systemEvent" as const, text: systemEvent };
             }
             const timeoutSeconds = parsePositiveIntOrUndefined(opts.timeoutSeconds);
+            const preModelTimeoutMs = parseNonNegativeIntOrUndefined(opts.preModelTimeoutMs);
+            if (opts.preModelTimeoutMs !== undefined && preModelTimeoutMs === undefined) {
+              throw new Error("Invalid --pre-model-timeout-ms (must be a non-negative integer).");
+            }
             return {
               kind: "agentTurn" as const,
               message,
@@ -166,6 +174,7 @@ export function registerCronAddCommand(cron: Command) {
               thinking: normalizeOptionalString(opts.thinking),
               timeoutSeconds:
                 timeoutSeconds && Number.isFinite(timeoutSeconds) ? timeoutSeconds : undefined,
+              preModelTimeoutMs,
               lightContext: opts.lightContext === true ? true : undefined,
               toolsAllow: parseCronToolsAllow(opts.tools),
             };

@@ -130,6 +130,8 @@ const TARGET_KEYS = [
   "cron.enabled",
   "cron.store",
   "cron.maxConcurrentRuns",
+  "cron.agentTurnWatchdog",
+  "cron.agentTurnWatchdog.preModelTimeoutMs",
   "cron.retry",
   "cron.retry.maxAttempts",
   "cron.retry.backoffMs",
@@ -692,6 +694,11 @@ describe("config help copy quality", () => {
     const token = FIELD_HELP["cron.webhookToken"];
     expect(/token|bearer/i.test(token)).toBe(true);
     expect(/secret|env|rotate/i.test(token)).toBe(true);
+
+    const preModel = FIELD_HELP["cron.agentTurnWatchdog.preModelTimeoutMs"];
+    expect(preModel.includes("60s")).toBe(true);
+    expect(preModel.includes("0")).toBe(true);
+    expect(/overall job timeout/i.test(preModel)).toBe(true);
   });
 
   it("documents session send-policy examples and prefix semantics", () => {

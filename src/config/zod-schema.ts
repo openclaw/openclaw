@@ -685,6 +685,12 @@ export const OpenClawSchema = z
         enabled: z.boolean().optional(),
         store: z.string().optional(),
         maxConcurrentRuns: z.number().int().positive().optional(),
+        agentTurnWatchdog: z
+          .object({
+            preModelTimeoutMs: z.number().int().min(0).optional(),
+          })
+          .strict()
+          .optional(),
         retry: z
           .object({
             maxAttempts: z.number().int().min(0).max(10).optional(),

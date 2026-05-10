@@ -28,10 +28,21 @@ export type CronFailureDestinationConfig = {
   mode?: "announce" | "webhook";
 };
 
+export type CronAgentTurnWatchdogConfig = {
+  /**
+   * Milliseconds an isolated agent-turn cron job may spend after runner start
+   * before the first model call begins. Omit to keep the default 60s/half-budget
+   * guard; set 0 to disable this pre-model watchdog.
+   */
+  preModelTimeoutMs?: number;
+};
+
 export type CronConfig = {
   enabled?: boolean;
   store?: string;
   maxConcurrentRuns?: number;
+  /** Global watchdog tuning for isolated agent-turn cron jobs. */
+  agentTurnWatchdog?: CronAgentTurnWatchdogConfig;
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**

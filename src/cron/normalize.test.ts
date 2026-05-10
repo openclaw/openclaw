@@ -445,6 +445,7 @@ describe("normalizeCronJobCreate", () => {
       model: " openrouter/deepseek/deepseek-r1 ",
       thinking: " high ",
       timeoutSeconds: 45,
+      preModelTimeoutMs: 120_000,
       toolsAllow: [" exec ", " read "],
       allowUnsafeExternalContent: true,
     }) as unknown as Record<string, unknown>;
@@ -453,6 +454,7 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.model).toBe("openrouter/deepseek/deepseek-r1");
     expect(payload.thinking).toBe("high");
     expect(payload.timeoutSeconds).toBe(45);
+    expect(payload.preModelTimeoutMs).toBe(120_000);
     expect(payload.toolsAllow).toEqual(["exec", "read"]);
     expect(payload.allowUnsafeExternalContent).toBe(true);
     expect(validateCronAddParams(normalized)).toBe(true);
@@ -515,6 +517,18 @@ describe("normalizeCronJobCreate", () => {
     expect(payload.timeoutSeconds).toBe(0);
   });
 
+  it("preserves preModelTimeoutMs=0 for disabled pre-model watchdogs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "disable pre-model watchdog",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: { kind: "agentTurn", message: "hello" },
+      preModelTimeoutMs: 0,
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.preModelTimeoutMs).toBe(0);
+  });
+
   it("preserves fractional timeoutSeconds for short agentTurn deadlines", () => {
     const normalized = normalizeCronJobCreate({
       name: "fractional timeout",
@@ -557,6 +571,7 @@ describe("normalizeCronJobCreate", () => {
         fallbacks: ["openai/gpt-4.1-mini"],
         thinking: "high",
         timeoutSeconds: 45,
+        preModelTimeoutMs: 120_000,
         lightContext: true,
         toolsAllow: ["exec"],
         allowUnsafeExternalContent: true,
@@ -769,6 +784,19 @@ describe("normalizeCronJobPatch", () => {
     expect(payload.lightContext).toBe(true);
   });
 
+  it("infers agentTurn kind for preModelTimeoutMs-only payload patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        preModelTimeoutMs: 120_000,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.preModelTimeoutMs).toBe(120_000);
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
   it("maps top-level fallback lists into agentTurn payload patches", () => {
     const normalized = normalizeCronJobPatch({
       fallbacks: [" openrouter/gpt-4.1-mini ", "anthropic/claude-haiku-3-5"],
@@ -933,6 +961,7 @@ describe("normalizeCronJobPatch", () => {
         fallbacks: ["openai/gpt-4.1-mini"],
         thinking: "high",
         timeoutSeconds: 15,
+        preModelTimeoutMs: 120_000,
         lightContext: true,
         toolsAllow: ["exec"],
         allowUnsafeExternalContent: true,

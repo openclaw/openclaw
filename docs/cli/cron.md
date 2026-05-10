@@ -78,6 +78,10 @@ For CLI-backed providers, the pre-model watchdog stays active until the external
 CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are
 reported as pre-model cron failures.
 
+Use `--pre-model-timeout-ms <ms>` on `cron add` or `cron edit` to tune the
+pre-model watchdog for one isolated agent-turn job. `0` disables only that
+watchdog; the job's outer `--timeout-seconds` value still bounds the run.
+
 ## Scheduling
 
 ### One-shot jobs
@@ -185,6 +189,12 @@ Enable lightweight bootstrap context for an isolated job:
 
 ```bash
 openclaw cron edit <job-id> --light-context
+```
+
+Disable the pre-model watchdog for a slow cold-start job:
+
+```bash
+openclaw cron edit <job-id> --pre-model-timeout-ms 0
 ```
 
 Announce to a specific channel:

@@ -8,6 +8,7 @@ import {
   normalizeOptionalString,
 } from "../../shared/string-coerce.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
+import { parseNonNegativeIntOrUndefined } from "../program/helpers.js";
 import {
   applyExistingCronSchedulePatch,
   resolveCronEditScheduleRequest,
@@ -95,6 +96,11 @@ export function registerCronEditCommand(cron: Command) {
       )
       .option("--model <model>", "Model override for agent jobs")
       .option("--timeout-seconds <n>", "Timeout seconds for agent jobs")
+      .option(
+        "--pre-model-timeout-ms <ms>",
+        "Pre-model watchdog timeout in ms for isolated agent jobs (0 disables)",
+      )
+      .option("--clear-pre-model-timeout", "Use global/default pre-model watchdog timeout", false)
       .option("--light-context", "Enable lightweight bootstrap context for agent jobs")
       .option("--no-light-context", "Disable lightweight bootstrap context for agent jobs")
       .option("--tools <list>", "Tool allow-list (e.g. exec,read,write or exec read write)")
@@ -230,6 +236,14 @@ export function registerCronEditCommand(cron: Command) {
             ? Number.parseInt(String(opts.timeoutSeconds), 10)
             : undefined;
           const hasTimeoutSeconds = Boolean(timeoutSeconds && Number.isFinite(timeoutSeconds));
+          if (opts.preModelTimeoutMs !== undefined && opts.clearPreModelTimeout) {
+            throw new Error("Use --pre-model-timeout-ms or --clear-pre-model-timeout, not both.");
+          }
+          const preModelTimeoutMs = parseNonNegativeIntOrUndefined(opts.preModelTimeoutMs);
+          if (opts.preModelTimeoutMs !== undefined && preModelTimeoutMs === undefined) {
+            throw new Error("Invalid --pre-model-timeout-ms (must be a non-negative integer).");
+          }
+          const hasPreModelTimeoutMs = opts.preModelTimeoutMs !== undefined;
           const hasDeliveryModeFlag = opts.announce || typeof opts.deliver === "boolean";
           const threadId = parseCronThreadIdOption(opts.threadId);
           const hasDeliveryThreadId = typeof threadId === "number";
@@ -242,6 +256,8 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(model) ||
             Boolean(thinking) ||
             hasTimeoutSeconds ||
+            hasPreModelTimeoutMs ||
+            opts.clearPreModelTimeout ||
             typeof opts.lightContext === "boolean" ||
             typeof opts.tools === "string" ||
             Array.isArray(opts.tools) ||
@@ -264,6 +280,8 @@ export function registerCronEditCommand(cron: Command) {
             assignIf(payload, "model", model, Boolean(model));
             assignIf(payload, "thinking", thinking, Boolean(thinking));
             assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
+            assignIf(payload, "preModelTimeoutMs", preModelTimeoutMs, hasPreModelTimeoutMs);
+            assignIf(payload, "preModelTimeoutMs", null, opts.clearPreModelTimeout);
             assignIf(
               payload,
               "lightContext",

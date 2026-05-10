@@ -49,6 +49,90 @@ function requireTimestamp(value: number | undefined, label: string): number {
   return value;
 }
 
+async function startStalledPreModelRun(params: {
+  id: string;
+  scheduledAt: number;
+  payload: Extract<CronJob["payload"], { kind: "agentTurn" }>;
+  cronConfig?: Parameters<typeof createCronServiceState>[0]["cronConfig"];
+}) {
+  const store = timerRegressionFixtures.makeStorePath();
+  const cronJob = createIsolatedRegressionJob({
+    id: params.id,
+    name: params.id,
+    scheduledAt: params.scheduledAt,
+    schedule: { kind: "at", at: new Date(params.scheduledAt).toISOString() },
+    payload: params.payload,
+    state: { nextRunAtMs: params.scheduledAt },
+  });
+  await writeCronJobs(store.storePath, [cronJob]);
+
+  vi.setSystemTime(params.scheduledAt);
+  let now = params.scheduledAt;
+  const started = createDeferred<void>();
+  let abortObserved = false;
+  const cleanupTimedOutAgentRun = vi.fn(async () => {});
+  const state = createCronServiceState({
+    cronEnabled: true,
+    storePath: store.storePath,
+    cronConfig: params.cronConfig,
+    log: noopLogger,
+    nowMs: () => now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    cleanupTimedOutAgentRun,
+    runIsolatedAgentJob: vi.fn(
+      async ({
+        abortSignal,
+        onExecutionStarted,
+        onExecutionPhase,
+      }: {
+        abortSignal?: AbortSignal;
+        onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+        onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+      }) => {
+        const execution = {
+          jobId: params.id,
+          agentId: "main",
+          sessionId: "cron-run-session",
+          sessionKey: `agent:main:cron:${params.id}:run:cron-run-session`,
+        };
+        onExecutionStarted?.({
+          ...execution,
+          phase: "runner_entered",
+        });
+        onExecutionPhase?.({
+          ...execution,
+          phase: "context_engine",
+        });
+        abortSignal?.addEventListener(
+          "abort",
+          () => {
+            abortObserved = true;
+          },
+          { once: true },
+        );
+        started.resolve();
+        return await new Promise<never>(() => {});
+      },
+    ),
+  });
+
+  const timerPromise = onTimer(state);
+  await started.promise;
+  return {
+    state,
+    timerPromise,
+    cleanupTimedOutAgentRun,
+    get abortObserved() {
+      return abortObserved;
+    },
+    advance: async (ms: number) => {
+      await vi.advanceTimersByTimeAsync(ms);
+      now += ms;
+    },
+  };
+}
+
 describe("cron service timer regressions", () => {
   it("caps timer delay to 60s for far-future schedules", async () => {
     const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
@@ -1495,6 +1579,116 @@ describe("cron service timer regressions", () => {
         timeoutMs: 1_200_000,
         execution: expect.objectContaining({
           jobId: "isolated-pre-model-timeout-74803",
+          phase: "context_engine",
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("honors global pre-model watchdog config for isolated agent runs", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduledAt = Date.parse("2026-05-10T09:10:00.000Z");
+      const run = await startStalledPreModelRun({
+        id: "isolated-pre-model-global-timeout",
+        scheduledAt,
+        payload: { kind: "agentTurn", message: "work", timeoutSeconds: 1_200 },
+        cronConfig: { agentTurnWatchdog: { preModelTimeoutMs: 90_000 } },
+      });
+
+      await run.advance(60_100);
+      expect(run.abortObserved).toBe(false);
+
+      await run.advance(30_000);
+      await run.timerPromise;
+
+      const job = requireJob(run.state, "isolated-pre-model-global-timeout");
+      expect(run.abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("stalled before first model call");
+      expect(run.cleanupTimedOutAgentRun).toHaveBeenCalledWith({
+        job: expect.objectContaining({ id: "isolated-pre-model-global-timeout" }),
+        timeoutMs: 1_200_000,
+        execution: expect.objectContaining({
+          jobId: "isolated-pre-model-global-timeout",
+          phase: "context_engine",
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets per-job pre-model watchdog config override the global value", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduledAt = Date.parse("2026-05-10T09:15:00.000Z");
+      const run = await startStalledPreModelRun({
+        id: "isolated-pre-model-job-timeout",
+        scheduledAt,
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: 120,
+          preModelTimeoutMs: 5_000,
+        },
+        cronConfig: { agentTurnWatchdog: { preModelTimeoutMs: 90_000 } },
+      });
+
+      await run.advance(5_100);
+      await run.timerPromise;
+
+      const job = requireJob(run.state, "isolated-pre-model-job-timeout");
+      expect(run.abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("stalled before first model call");
+      expect(run.cleanupTimedOutAgentRun).toHaveBeenCalledWith({
+        job: expect.objectContaining({ id: "isolated-pre-model-job-timeout" }),
+        timeoutMs: 120_000,
+        execution: expect.objectContaining({
+          jobId: "isolated-pre-model-job-timeout",
+          phase: "context_engine",
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("lets per-job config disable only the pre-model watchdog", async () => {
+    vi.useFakeTimers();
+    try {
+      const scheduledAt = Date.parse("2026-05-10T09:20:00.000Z");
+      const run = await startStalledPreModelRun({
+        id: "isolated-pre-model-disabled",
+        scheduledAt,
+        payload: {
+          kind: "agentTurn",
+          message: "work",
+          timeoutSeconds: 120,
+          preModelTimeoutMs: 0,
+        },
+        cronConfig: { agentTurnWatchdog: { preModelTimeoutMs: 5_000 } },
+      });
+
+      await run.advance(60_100);
+      expect(run.abortObserved).toBe(false);
+
+      await run.advance(60_000);
+      await run.timerPromise;
+
+      const job = requireJob(run.state, "isolated-pre-model-disabled");
+      expect(run.abortObserved).toBe(true);
+      expect(job.state.lastStatus).toBe("error");
+      expect(job.state.lastError).toContain("job execution timed out");
+      expect(job.state.lastError).not.toContain("stalled before first model call");
+      expect(run.cleanupTimedOutAgentRun).toHaveBeenCalledWith({
+        job: expect.objectContaining({ id: "isolated-pre-model-disabled" }),
+        timeoutMs: 120_000,
+        execution: expect.objectContaining({
+          jobId: "isolated-pre-model-disabled",
           phase: "context_engine",
         }),
       });
