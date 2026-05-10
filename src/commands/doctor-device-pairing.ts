@@ -1,10 +1,8 @@
-import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
 import { loadDeviceAuthStore } from "../infra/device-auth-store.js";
-import { loadDeviceIdentityIfPresent } from "../infra/device-identity.js";
+import { loadDeviceIdentityIfPresentForEnv } from "../infra/device-identity.js";
 import {
   listApprovedPairedDeviceRoles,
   listDevicePairing,
@@ -391,8 +389,7 @@ function collectPairedRecordIssues(snapshot: DoctorPairingSnapshot): string[] {
 }
 
 function readLocalIdentity(env: NodeJS.ProcessEnv = process.env): StoredDeviceIdentity | null {
-  const filePath = path.join(resolveStateDir(env), "identity", "device.json");
-  const identity = loadDeviceIdentityIfPresent(filePath);
+  const identity = loadDeviceIdentityIfPresentForEnv(env);
   if (!identity?.deviceId.trim()) {
     return null;
   }
