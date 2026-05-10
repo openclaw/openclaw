@@ -43,8 +43,8 @@ vi.mock("../../infra/replace-file.js", async (importOriginal) => {
       if (
         replaceFileState.publishFailures === 0 &&
         replaceFileState.publishFailureTarget &&
-        String(options.from).includes(".openclaw-install-stage-") &&
-        String(options.to) === replaceFileState.publishFailureTarget
+        options.from.includes(".openclaw-install-stage-") &&
+        options.to === replaceFileState.publishFailureTarget
       ) {
         replaceFileState.publishFailures += 1;
         throw new Error("publish boom");
