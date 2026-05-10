@@ -102,6 +102,17 @@ function formatConfigPath(path: string[]): string {
 function getPathValue(value: unknown, path: string[]): unknown {
   let current = value;
   for (const segment of path) {
+    if (Array.isArray(current)) {
+      if (!isNumericPathSegment(segment)) {
+        return undefined;
+      }
+      const index = Number.parseInt(segment, 10);
+      if (!Number.isFinite(index) || index < 0 || index >= current.length) {
+        return undefined;
+      }
+      current = current[index];
+      continue;
+    }
     if (!isRecord(current)) {
       return undefined;
     }
@@ -114,10 +125,22 @@ function setPathValue(value: unknown, path: string[], nextValue: unknown): unkno
   if (path.length === 0) {
     return cloneUnknown(nextValue);
   }
+  const [head, ...tail] = path;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(head)) {
+      return value;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return value;
+    }
+    const next = [...value];
+    next[index] = setPathValue(value[index], tail, nextValue);
+    return next;
+  }
   if (!isRecord(value)) {
     return value;
   }
-  const [head, ...tail] = path;
   return {
     ...value,
     [head]: setPathValue(value[head], tail, nextValue),
@@ -156,6 +179,18 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
     return cloneUnknown(nextValue);
   }
   const [head, ...tail] = path;
+  if (Array.isArray(value) || isNumericPathSegment(head)) {
+    if (!isNumericPathSegment(head)) {
+      return value;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0) {
+      return value;
+    }
+    const next = Array.isArray(value) ? [...value] : [];
+    next[index] = setPathValueCreatingParents(next[index], tail, nextValue);
+    return next;
+  }
   const record = isRecord(value) ? value : {};
   return {
     ...record,
@@ -342,10 +377,20 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   if (path.length === 0) {
     return true;
   }
+  const [head, ...tail] = path;
+  if (Array.isArray(value)) {
+    if (!isNumericPathSegment(head)) {
+      return false;
+    }
+    const index = Number.parseInt(head, 10);
+    if (!Number.isFinite(index) || index < 0 || index >= value.length) {
+      return false;
+    }
+    return tail.length === 0 || hasPathValue(value[index], tail);
+  }
   if (!isRecord(value)) {
     return false;
   }
-  const [head, ...tail] = path;
   if (isBlockedObjectKey(head) || !Object.prototype.hasOwnProperty.call(value, head)) {
     return false;
   }
@@ -360,7 +405,28 @@ function mergeMissingExplicitValues(
   value: unknown;
 } {
   if (!isRecord(currentValue) || !isRecord(explicitValue)) {
-    return { changed: false, value: currentValue };
+    if (!Array.isArray(currentValue) || !Array.isArray(explicitValue)) {
+      return { changed: false, value: currentValue };
+    }
+    let changed = false;
+    const next = [...currentValue];
+    for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
+      const index = Number.parseInt(key, 10);
+      if (!Number.isFinite(index) || index < 0) {
+        continue;
+      }
+      if (index >= next.length || next[index] === undefined) {
+        next[index] = cloneUnknown(childExplicitValue);
+        changed = true;
+        continue;
+      }
+      const childMerged = mergeMissingExplicitValues(next[index], childExplicitValue);
+      if (childMerged.changed) {
+        next[index] = childMerged.value;
+        changed = true;
+      }
+    }
+    return { changed, value: changed ? next : currentValue };
   }
   let changed = false;
   const next: Record<string, unknown> = { ...currentValue };

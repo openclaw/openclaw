@@ -827,6 +827,40 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("persists explicitly set array-index children whose values match runtime defaults", () => {
+    const runtimeConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5", contextWindow: 128000 }],
+          },
+        },
+      },
+    };
+    const sourceConfig = {
+      models: {
+        providers: {
+          openai: {
+            models: [{ id: "gpt-5.5" }],
+          },
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["models", "providers", "openai", "models", "0", "contextWindow"]],
+    }) as { models?: { providers?: { openai?: { models?: Array<Record<string, unknown>> } } } };
+
+    expect(persisted.models?.providers?.openai?.models?.[0]).toEqual({
+      id: "gpt-5.5",
+      contextWindow: 128000,
+    });
+  });
+
   it("rejects default-valued explicit writes under include-owned paths", () => {
     expect(() =>
       resolvePersistCandidateForWrite({

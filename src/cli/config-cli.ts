@@ -141,6 +141,16 @@ function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
   };
 }
 
+function normalizeConfigMutationExplicitSetPath(path: PathSegment[]): PathSegment[] {
+  if (path.length >= 4 && path[0] === "agents" && path[1] === "defaults" && path[2] === "models") {
+    const normalizedModelId = normalizeAgentModelRefForConfig(path[3]);
+    return normalizedModelId === path[3]
+      ? path
+      : [...path.slice(0, 3), normalizedModelId, ...path.slice(4)];
+  }
+  return path;
+}
+
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
 const PLUGIN_INSTALL_RECORD_PATH_PREFIX: PathSegment[] = ["plugins", "installs"];
@@ -1472,6 +1482,7 @@ async function runConfigOperations(params: {
     operations,
   });
   const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+  const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
@@ -1588,7 +1599,9 @@ async function runConfigOperations(params: {
       ? {
           writeOptions: {
             ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
-            ...(explicitSetPaths.length > 0 ? { explicitSetPaths } : {}),
+            ...(normalizedExplicitSetPaths.length > 0
+              ? { explicitSetPaths: normalizedExplicitSetPaths }
+              : {}),
           },
         }
       : {}),

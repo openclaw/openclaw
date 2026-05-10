@@ -14,7 +14,10 @@ import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-captu
 
 const mockReadConfigFileSnapshot = vi.fn<() => Promise<ConfigFileSnapshot>>();
 const mockWriteConfigFile = vi.fn<
-  (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) => Promise<void>
+  (
+    cfg: OpenClawConfig,
+    options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+  ) => Promise<void>
 >(async () => {});
 const mockResolveSecretRefValue = vi.fn();
 const mockReadBestEffortRuntimeConfigSchema = vi.fn();
@@ -24,11 +27,13 @@ vi.mock("../config/config.js", async (importOriginal) => {
   return {
     ...actual,
     readConfigFileSnapshot: () => mockReadConfigFileSnapshot(),
-    writeConfigFile: (cfg: OpenClawConfig, options?: { unsetPaths?: string[][] }) =>
-      mockWriteConfigFile(cfg, options),
+    writeConfigFile: (
+      cfg: OpenClawConfig,
+      options?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] },
+    ) => mockWriteConfigFile(cfg, options),
     replaceConfigFile: (params: {
       nextConfig: OpenClawConfig;
-      writeOptions?: { unsetPaths?: string[][] };
+      writeOptions?: { unsetPaths?: string[][]; explicitSetPaths?: string[][] };
     }) => mockWriteConfigFile(params.nextConfig, params.writeOptions),
   };
 });
@@ -372,6 +377,37 @@ describe("config cli", () => {
       });
       expect(written.agents?.defaults?.models).toEqual({
         "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
+    it("normalizes explicit model-map paths before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "google/gemini-3-pro-preview": {},
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.models.google/gemini-3-pro-preview.alias",
+        "gemini",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
+        explicitSetPaths: [
+          ["agents", "defaults", "models", "google/gemini-3.1-pro-preview", "alias"],
+        ],
       });
     });
 
