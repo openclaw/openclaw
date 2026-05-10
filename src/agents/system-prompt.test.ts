@@ -4,8 +4,11 @@ import { typedCases } from "../test-utils/typed-cases.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
+  appendAgentBootstrapSystemPromptSupplement,
+  buildAgentBootstrapSystemContext,
+  buildAgentBootstrapSystemPromptSections,
+  buildAgentBootstrapSystemPromptSupplement,
   buildAgentSystemPrompt,
-  buildAgentUserPromptPrefix,
   buildRuntimeLine,
 } from "./system-prompt.js";
 
@@ -93,9 +96,23 @@ describe("buildAgentSystemPrompt", () => {
     const tokenA = lineA?.match(/[a-f0-9]{12}/)?.[0];
     const tokenB = lineB?.match(/[a-f0-9]{12}/)?.[0];
 
-    expect(tokenA).toBeDefined();
-    expect(tokenB).toBeDefined();
+    expect(tokenA).toMatch(/^[a-f0-9]{12}$/);
+    expect(tokenB).toMatch(/^[a-f0-9]{12}$/);
     expect(tokenA).not.toBe(tokenB);
+  });
+
+  it("injects the current model identity into the runtime prompt", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      runtimeInfo: {
+        agentId: "main",
+        model: "openai/gpt-5.5",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Current model identity: openai/gpt-5.5. If asked what model you are, answer with this value for the current run.",
+    );
   });
 
   it("omits extended sections in minimal prompt mode", () => {
@@ -283,7 +300,6 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       runtimeInfo: {
         channel: "webchat",
-        canvasRootDir: "/Users/example/.openclaw-dev/canvas",
       },
     });
 
@@ -297,7 +313,7 @@ describe("buildAgentSystemPrompt", () => {
       "Never use local filesystem paths or `file://...` URLs in `[embed ...]`.",
     );
     expect(prompt).toContain(
-      "The active hosted embed root for this session is: `/Users/example/.openclaw-dev/canvas`.",
+      "The active hosted embed root is profile-scoped, not workspace-scoped.",
     );
     expect(prompt).not.toContain('[embed content_type="html" title="Status"]...[/embed]');
   });
@@ -312,9 +328,24 @@ describe("buildAgentSystemPrompt", () => {
     );
     expect(prompt).toContain("Completion is push-based: it will auto-announce when done.");
     expect(prompt).toContain("Do not poll `subagents list` / `sessions_list` in a loop");
+    expect(prompt).not.toContain("use `sessions_yield` when waiting");
     expect(prompt).toContain(
       "When a first-class tool exists for an action, use the tool directly instead of asking the user to run equivalent CLI or slash commands.",
     );
+  });
+
+  it("only mentions sessions_yield wait guidance when the tool is available", () => {
+    const withoutYield = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+    const withYield = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+    });
+
+    expect(withoutYield).not.toContain("use `sessions_yield` when waiting");
+    expect(withYield).toContain("use `sessions_yield` when waiting");
   });
 
   it("lists available tools when provided", () => {
@@ -455,7 +486,10 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("- Read: Read file contents");
     expect(prompt).toContain("- Exec: Run shell commands");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+    );
+    expect(prompt).toContain(
+      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `Read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
     );
     expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
     expect(prompt).toContain(
@@ -502,29 +536,32 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("Reminder: commit your changes in this workspace after edits.");
   });
 
-  it("keeps bootstrap instructions out of the privileged system prompt", () => {
+  it("includes bootstrap instructions in system prompt when bootstrap is pending", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
-      workspaceNotes: ["Reminder: commit your changes in this workspace after edits."],
+      bootstrapMode: "full",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
     });
 
-    expect(prompt).not.toContain("## Bootstrap");
-    expect(prompt).not.toContain("Bootstrap is pending for this workspace.");
-    expect(prompt).not.toContain("BOOTSTRAP.md is present in Project Context");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(prompt).toContain("must follow BOOTSTRAP.md, not a generic greeting");
+    expect(prompt).toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(prompt).toContain("Ask who I am.");
   });
 
-  it("adds bootstrap-specific prelude text to the user prompt prefix when bootstrap is pending", () => {
-    const promptPrefix = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+  it("includes bootstrap truncation notice in system prompt without raw diagnostics", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      bootstrapTruncationNotice:
+        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
+    });
 
-    expect(promptPrefix).toContain("[Bootstrap pending]");
-    expect(promptPrefix).toContain("Please read BOOTSTRAP.md from the workspace");
-    expect(promptPrefix).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
-    expect(promptPrefix).toContain("explain the blocker briefly");
-    expect(promptPrefix).toContain("offer the simplest next step");
-    expect(promptPrefix).toContain("Do not use a generic first greeting or reply normally");
-    expect(promptPrefix).toContain(
-      "Your first user-visible reply for a bootstrap-pending workspace must follow BOOTSTRAP.md",
-    );
+    expect(prompt).toContain("## Bootstrap Context Notice");
+    expect(prompt).toContain("[Bootstrap truncation warning]");
+    expect(prompt).toContain("Treat Project Context as partial");
+    expect(prompt).not.toContain("raw ->");
+    expect(prompt).not.toContain("bootstrapMaxChars");
   });
 
   it("shows timezone section for 12h, 24h, and timezone-only modes", () => {
@@ -638,7 +675,10 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("## Skills");
     expect(prompt).toContain(
-      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it.",
+      "- If exactly one skill clearly applies: read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
+    );
+    expect(prompt).toContain(
+      "- If multiple could apply: choose the most specific one, read its SKILL.md at <location> with `read`, then follow it. You MUST use the exact <location> value from <available_skills>; never guess, fabricate, or hard-code a skill file path.",
     );
   });
 
@@ -744,19 +784,60 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["sessions_spawn", "subagents"],
     });
+    const orchestrationWaitPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "sessions_yield", "subagents"],
+    });
 
     expect(messagingPrompt).not.toContain("Sub-agent orchestration");
     expect(messagingPrompt).not.toContain("sessions_spawn(...)");
     expect(messagingPrompt).not.toContain("subagents(action=list|steer|kill)");
 
     expect(spawnOnlyPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript.',
     );
     expect(spawnOnlyPrompt).not.toContain("manage already-spawned children");
 
     expect(orchestrationPrompt).toContain(
-      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` to manage already-spawned children.',
+      '- Sub-agent orchestration → use `sessions_spawn(...)` to start delegated work; include a clear objective/output/write-scope/verification brief and `taskName` when a stable handle helps; omit `context` for isolated children, set `context:"fork"` only when the child needs the current transcript; use `subagents(action=list|steer|kill)` only for on-demand status, debugging, or intervention.',
     );
+    expect(orchestrationWaitPrompt).toContain("use `sessions_yield` to wait for completion events");
+  });
+
+  it("adds stronger sub-agent delegation guidance in prefer mode", () => {
+    const defaultPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+    const preferPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("Mode: prefer");
+    expect(preferPrompt).toContain("responsive coordinator");
+    expect(preferPrompt).toContain(
+      "Anything requiring more work than a direct reply should go through `sessions_spawn`",
+    );
+    expect(preferPrompt).toContain("objective, expected output, relevant files/inputs");
+    expect(preferPrompt).toContain("Treat child outputs as reports/evidence");
+    expect(preferPrompt).toContain(
+      "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
+    );
+  });
+
+  it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(prompt).not.toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Sub-agent orchestration");
   });
 
   it("reapplies provider prompt contributions", () => {
@@ -1044,7 +1125,6 @@ describe("buildAgentSystemPrompt", () => {
       runtimeInfo: {
         channel: "telegram",
         capabilities: ["inlineButtons"],
-        canvasRootDir: "/tmp/canvas",
       },
       contextFiles: [
         {
@@ -1073,12 +1153,15 @@ describe("buildAgentSystemPrompt", () => {
   });
 });
 
-describe("buildAgentUserPromptPrefix", () => {
+describe("buildAgentBootstrapSystemContext", () => {
   it("uses friendly full bootstrap wording that is truthful about completion blockers", () => {
-    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "full" });
+    const prompt = buildAgentBootstrapSystemContext({
+      bootstrapMode: "full",
+      hasBootstrapFileInProjectContext: true,
+    }).join("\n");
 
-    expect(prompt).toContain("[Bootstrap pending]");
-    expect(prompt).toContain("Please read BOOTSTRAP.md");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("BOOTSTRAP.md is included below in Project Context");
     expect(prompt).toContain("If this run can complete the BOOTSTRAP.md workflow, do so.");
     expect(prompt).toContain("explain the blocker briefly");
     expect(prompt).toContain("offer the simplest next step");
@@ -1087,9 +1170,9 @@ describe("buildAgentUserPromptPrefix", () => {
   });
 
   it("uses limited bootstrap wording for constrained user-facing runs", () => {
-    const prompt = buildAgentUserPromptPrefix({ bootstrapMode: "limited" });
+    const prompt = buildAgentBootstrapSystemContext({ bootstrapMode: "limited" }).join("\n");
 
-    expect(prompt).toContain("[Bootstrap pending]");
+    expect(prompt).toContain("## Bootstrap Pending");
     expect(prompt).toContain("cannot safely complete the full BOOTSTRAP.md workflow here");
     expect(prompt).toContain("Do not claim bootstrap is complete");
     expect(prompt).toContain("do not use a generic first greeting");
@@ -1097,8 +1180,54 @@ describe("buildAgentUserPromptPrefix", () => {
   });
 
   it("returns nothing when bootstrap is not pending", () => {
-    expect(buildAgentUserPromptPrefix({ bootstrapMode: "none" })).toBeUndefined();
-    expect(buildAgentUserPromptPrefix({})).toBeUndefined();
+    expect(buildAgentBootstrapSystemContext({ bootstrapMode: "none" })).toStrictEqual([]);
+    expect(buildAgentBootstrapSystemContext({})).toStrictEqual([]);
+  });
+});
+
+describe("buildAgentBootstrapSystemPromptSupplement", () => {
+  it("can render bootstrap guidance without duplicating Project Context", () => {
+    const sections = buildAgentBootstrapSystemPromptSections({
+      bootstrapMode: "full",
+      bootstrapTruncationNotice: "Bootstrap context was truncated.",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+      includeProjectContext: false,
+    }).join("\n");
+
+    expect(sections).toContain("## Bootstrap Pending");
+    expect(sections).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(sections).toContain("## Bootstrap Context Notice");
+    expect(sections).toContain("Bootstrap context was truncated.");
+    expect(sections).not.toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(sections).not.toContain("Ask who I am.");
+  });
+
+  it("adds pending bootstrap guidance and BOOTSTRAP.md contents for override prompts", () => {
+    const supplement = buildAgentBootstrapSystemPromptSupplement({
+      bootstrapMode: "full",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+    });
+
+    expect(supplement).toContain("## Bootstrap Pending");
+    expect(supplement).toContain("BOOTSTRAP.md is included below in Project Context");
+    expect(supplement).toContain("## /tmp/openclaw/BOOTSTRAP.md");
+    expect(supplement).toContain("Ask who I am.");
+  });
+
+  it("appends bootstrap supplement to configured system prompt overrides", () => {
+    const prompt = appendAgentBootstrapSystemPromptSupplement({
+      systemPrompt: "Custom override prompt.",
+      bootstrapMode: "full",
+      bootstrapTruncationNotice:
+        "[Bootstrap truncation warning]\nSome workspace bootstrap files were truncated before Project Context injection.\nTreat Project Context as partial and read the relevant files directly if details seem missing.",
+      contextFiles: [{ path: "/tmp/openclaw/BOOTSTRAP.md", content: "Ask who I am." }],
+    });
+
+    expect(prompt).toContain("Custom override prompt.");
+    expect(prompt).toContain("## Bootstrap Pending");
+    expect(prompt).toContain("Ask who I am.");
+    expect(prompt).toContain("## Bootstrap Context Notice");
+    expect(prompt).toContain("[Bootstrap truncation warning]");
   });
 });
 
@@ -1127,6 +1256,11 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
     );
+    expect(prompt).toContain(
+      "If required completions have not arrived yet and `sessions_yield` is available",
+    );
+    expect(prompt).toContain("If it is not available, do not invent polling loops");
+    expect(prompt).toContain("expected output, relevant files/inputs, write scope");
     expect(prompt).toContain(
       "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
     );

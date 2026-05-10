@@ -27,6 +27,11 @@ const hoisted = await vi.hoisted(async () => {
         await actualAccess(file);
       },
     ),
+    statMock: vi.fn(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        return await actualStat(file);
+      },
+    ),
   };
 });
 
@@ -59,6 +64,7 @@ vi.mock("node:fs/promises", async () => {
   const mockedFs = {
     ...actual,
     access: (file: fs.PathLike) => hoisted.accessMock(file, actual.access),
+    stat: (file: fs.PathLike) => hoisted.statMock(file, actual.stat),
   };
   return {
     ...mockedFs,
@@ -66,7 +72,13 @@ vi.mock("node:fs/promises", async () => {
   };
 });
 
+import {
+  buildExportTrajectoryCommandReply,
+  buildExportTrajectoryReply,
+} from "./commands-export-trajectory.js";
+
 const tempDirs: string[] = [];
+const mockedSessionFile = "/tmp/target-store/session.jsonl";
 
 function makeTempDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-export-command-"));
@@ -155,11 +167,11 @@ function createExecDeps(
 
 function readEncodedRequestFromCommand(command: string): Record<string, unknown> {
   const match = command.match(/'?--request-json-base64'?\s+'?([A-Za-z0-9_-]+)'?/u);
-  expect(match?.[1]).toBeTruthy();
-  return JSON.parse(Buffer.from(match?.[1] ?? "", "base64url").toString("utf8")) as Record<
-    string,
-    unknown
-  >;
+  const encoded = match?.[1];
+  if (encoded === undefined) {
+    throw new Error("expected encoded export request");
+  }
+  return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8")) as Record<string, unknown>;
 }
 
 describe("buildExportTrajectoryReply", () => {
@@ -173,17 +185,26 @@ describe("buildExportTrajectoryReply", () => {
         await actualAccess(file);
       },
     );
+    hoisted.statMock.mockImplementation(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          return {};
+        }
+        return await actualStat(file);
+      },
+    );
+    fs.mkdirSync(path.dirname(mockedSessionFile), { recursive: true });
+    fs.writeFileSync(mockedSessionFile, "{}\n");
   });
 
   afterEach(() => {
+    fs.rmSync(mockedSessionFile, { force: true });
     for (const dir of tempDirs.splice(0)) {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
 
   it("builds a trajectory bundle from the target session", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
-
     const reply = await buildExportTrajectoryReply(makeParams());
 
     expect(reply.text).toContain("✅ Trajectory exported!");
@@ -201,7 +222,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("keeps user-named output paths inside the workspace trajectory export directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const params = makeParams();
     params.command.commandBodyNormalized = "/export-trajectory my-bundle";
 
@@ -215,7 +235,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("rejects absolute output paths", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const params = makeParams();
     params.command.commandBodyNormalized = "/export-trajectory /tmp/outside";
 
@@ -226,7 +245,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("rejects home-relative output paths", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const params = makeParams();
     params.command.commandBodyNormalized = "/export-trajectory ~/bundle";
 
@@ -237,13 +255,21 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("does not echo absolute session paths when the transcript is missing", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
+    fs.rmSync(mockedSessionFile, { force: true });
     hoisted.accessMock.mockImplementation(
       async (file: fs.PathLike, actualAccess: (path: fs.PathLike) => Promise<void>) => {
         if (file.toString() === "/tmp/target-store/session.jsonl") {
           throw Object.assign(new Error("missing"), { code: "ENOENT" });
         }
         await actualAccess(file);
+      },
+    );
+    hoisted.statMock.mockImplementation(
+      async (file: fs.PathLike, actualStat: (path: fs.PathLike) => Promise<unknown>) => {
+        if (file.toString() === "/tmp/target-store/session.jsonl") {
+          throw Object.assign(new Error("missing"), { code: "ENOENT" });
+        }
+        return await actualStat(file);
       },
     );
 
@@ -255,7 +281,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("rejects output paths redirected by a symlinked exports directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const workspaceDir = makeTempDir();
     const outsideDir = makeTempDir();
     fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
@@ -270,7 +295,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("rejects default output paths redirected by a symlinked exports directory", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const workspaceDir = makeTempDir();
     const outsideDir = makeTempDir();
     fs.mkdirSync(path.join(workspaceDir, ".openclaw"), { recursive: true });
@@ -283,7 +307,6 @@ describe("buildExportTrajectoryReply", () => {
   });
 
   it("rejects symlinked state directories before creating export folders", async () => {
-    const { buildExportTrajectoryReply } = await import("./commands-export-trajectory.js");
     const workspaceDir = makeTempDir();
     const outsideDir = makeTempDir();
     fs.symlinkSync(outsideDir, path.join(workspaceDir, ".openclaw"));
@@ -304,7 +327,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("requests per-run exec approval for trajectory exports", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
 
     const reply = await buildExportTrajectoryCommandReply(makeParams(), deps);
@@ -344,7 +366,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("uses the originating Telegram route for native trajectory export followups", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.ctx = {
@@ -376,7 +397,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("keeps user-controlled export values out of the shell command", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.command.commandBodyNormalized = "/export-trajectory bad'; Invoke-Expression evil ;'";
@@ -394,7 +414,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("rejects oversized output paths before requesting exec approval", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.command.commandBodyNormalized = `/export-trajectory ${"a".repeat(513)}`;
@@ -406,7 +425,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("rejects oversized encoded export requests before requesting exec approval", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, deps } = createExecDeps();
     const params = makeParams();
     params.workspaceDir = `/${"workspace".repeat(1200)}`;
@@ -418,7 +436,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("routes group trajectory export approval privately", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps({
       privateTargets: [
         { channel: "telegram", to: "owner-dm", accountId: "account-1" },
@@ -451,7 +468,6 @@ describe("buildExportTrajectoryCommandReply", () => {
   });
 
   it("fails closed in groups when no private owner route is available", async () => {
-    const { buildExportTrajectoryCommandReply } = await import("./commands-export-trajectory.js");
     const { execCalls, privateReplies, deps } = createExecDeps();
     const params = makeParams();
     params.isGroup = true;

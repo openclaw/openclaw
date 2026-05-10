@@ -2,10 +2,11 @@ import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { clearSessionAuthProfileOverride } from "../../agents/auth-profiles/session-override.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { parseConfiguredModelVisibilityEntries } from "../../agents/model-selection-shared.js";
 import {
   buildConfiguredModelCatalog,
-  buildAllowedModelSet,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
@@ -13,6 +14,11 @@ import {
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
+import {
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
+} from "../../agents/model-visibility-policy.js";
+import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
@@ -123,11 +129,26 @@ export async function createModelSelectionState(params: {
   let model = params.model;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
+  const defaultProviderVisibleByWildcard = visibility.providerWildcards.has(
+    normalizeProviderId(defaultProvider),
+  );
   const configuredModelCatalog = buildConfiguredModelCatalog({ cfg });
-  const needsModelCatalog = params.hasModelDirective;
+  const needsModelCatalog =
+    params.hasModelDirective ||
+    Boolean(
+      hasAllowlist && visibility.providerWildcards.size > 0 && !defaultProviderVisibleByWildcard,
+    );
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
+  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog: configuredModelCatalog,
+    defaultProvider,
+    defaultModel,
+    agentId: params.agentId,
+  });
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
@@ -141,29 +162,29 @@ export async function createModelSelectionState(params: {
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
     logStage("catalog-loaded", `entries=${modelCatalog.length}`);
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: modelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
   } else if (hasAllowlist) {
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: configuredModelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "configured-allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
@@ -178,7 +199,7 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (allowedModelKeys.size > 0 && !allowedModelKeys.has(key)) {
+    if (!visibilityPolicy.allowsKey(key)) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -218,10 +239,24 @@ export async function createModelSelectionState(params: {
       storedOverride.model,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (allowedModelKeys.size === 0 || allowedModelKeys.has(key)) {
+    if (visibilityPolicy.allowsKey(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
     }
+  }
+
+  if (!params.hasModelDirective) {
+    const allowedInitialSelection = visibilityPolicy.resolveSelection({
+      provider,
+      model,
+    });
+    if (!allowedInitialSelection) {
+      throw new Error(
+        `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+      );
+    }
+    provider = allowedInitialSelection.provider;
+    model = allowedInitialSelection.model;
   }
 
   if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
@@ -231,8 +266,19 @@ export async function createModelSelectionState(params: {
     });
     logStage("auth-profile-store-loaded", `profiles=${Object.keys(store.profiles).length}`);
     const profile = store.profiles[sessionEntry.authProfileOverride];
-    const providerKey = normalizeProviderId(provider);
-    if (!profile || normalizeProviderId(profile.provider) !== providerKey) {
+    const profileProvider = profile ? normalizeProviderId(profile.provider) : undefined;
+    const harnessPolicy = resolveAgentHarnessPolicy({
+      provider,
+      modelId: model,
+      config: cfg,
+      agentId: params.agentId,
+      sessionKey,
+    });
+    const acceptedAuthProviders = listOpenAIAuthProfileProvidersForAgentRuntime({
+      provider,
+      harnessRuntime: harnessPolicy.runtime,
+    }).map(normalizeProviderId);
+    if (!profile || !acceptedAuthProviders.includes(profileProvider ?? "")) {
       await clearSessionAuthProfileOverride({
         sessionEntry,
         sessionStore,
@@ -328,14 +374,22 @@ export function resolveContextTokens(params: {
   provider: string;
   model: string;
 }): number {
-  return (
-    params.agentCfg?.contextTokens ??
-    resolveContextTokensForModel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-      allowAsyncLoad: false,
-    }) ??
-    DEFAULT_CONTEXT_TOKENS
-  );
+  const modelContextTokens = resolveContextTokensForModel({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    allowAsyncLoad: false,
+  });
+  const agentContextTokens =
+    typeof params.agentCfg?.contextTokens === "number" && params.agentCfg.contextTokens > 0
+      ? Math.floor(params.agentCfg.contextTokens)
+      : undefined;
+
+  if (agentContextTokens !== undefined) {
+    return modelContextTokens !== undefined
+      ? Math.min(agentContextTokens, modelContextTokens)
+      : agentContextTokens;
+  }
+
+  return modelContextTokens ?? DEFAULT_CONTEXT_TOKENS;
 }

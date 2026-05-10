@@ -213,6 +213,96 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
   });
 
+  it("mirrors delivered replies once after successful sends", async () => {
+    const runtime = createRuntime(false);
+    const transcriptMirror = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }, { text: "world" }],
+      runtime,
+      bot,
+      transcriptMirror,
+    });
+
+    expect(transcriptMirror).toHaveBeenCalledOnce();
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: "hello\n\nworld", mediaUrls: undefined });
+  });
+
+  it("renders shared interactive reply buttons as Telegram inline buttons", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          text: "Plugin bind approval required",
+          interactive: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [
+                  { label: "Allow once", value: "pluginbind:req:o", style: "success" },
+                  { label: "Always allow", value: "pluginbind:req:a", style: "primary" },
+                  { label: "Deny", value: "pluginbind:req:d", style: "danger" },
+                ],
+              },
+            ],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Plugin bind approval required",
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: "Allow once", callback_data: "pluginbind:req:o", style: "success" },
+              { text: "Always allow", callback_data: "pluginbind:req:a", style: "primary" },
+              { text: "Deny", callback_data: "pluginbind:req:d", style: "danger" },
+            ],
+          ],
+        },
+      }),
+    );
+  });
+
+  it("uses interactive button labels as fallback text for button-only replies", async () => {
+    const runtime = createRuntime(false);
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 3, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [
+        {
+          interactive: {
+            blocks: [{ type: "buttons", buttons: [{ label: "Retry", value: "cmd:retry" }] }],
+          },
+        },
+      ],
+      runtime,
+      bot,
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Retry"),
+      expect.objectContaining({
+        reply_markup: {
+          inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+        },
+      }),
+    );
+  });
+
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
     messageHookRunner.hasHooks.mockImplementation(
       (name: string) => name === "message_sending" || name === "message_sent",
@@ -354,7 +444,8 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
     expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
   });
 
@@ -372,7 +463,8 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[1]).toEqual(expect.any(String));
+    expect(sendMessage.mock.calls[0]?.[1]).toBeTypeOf("string");
+    expect(sendMessage.mock.calls[0]?.[1]).not.toBe("");
     expect(sendMessage.mock.calls[0]?.[1]?.trim()).not.toBe("NO_REPLY");
   });
 
@@ -655,32 +747,27 @@ describe("deliverReplies", () => {
     );
   });
 
-  it("retries DM topic sends without message_thread_id when thread is missing", async () => {
+  it("does not retry DM topic sends without the topic id when the topic is missing", async () => {
     const runtime = createRuntime();
-    const sendMessage = vi
-      .fn()
-      .mockRejectedValueOnce(createThreadNotFoundError("sendMessage"))
-      .mockResolvedValueOnce({
-        message_id: 7,
-        chat: { id: "123" },
-      });
+    const sendMessage = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendMessage"));
     const bot = createBot({ sendMessage });
 
-    await deliverWith({
-      replies: [{ text: "hello" }],
-      runtime,
-      bot,
-      thread: { id: 42, scope: "dm" },
-    });
+    await expect(
+      deliverWith({
+        replies: [{ text: "hello" }],
+        runtime,
+        bot,
+        thread: { id: 42, scope: "dm" },
+      }),
+    ).rejects.toThrow("message thread not found");
 
-    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({
         message_thread_id: 42,
       }),
     );
-    expect(sendMessage.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
-    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry forum sends without message_thread_id", async () => {
@@ -743,34 +830,29 @@ describe("deliverReplies", () => {
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
-  it("retries media sends without message_thread_id for DM topics", async () => {
+  it("does not retry DM topic media sends without the topic id", async () => {
     const runtime = createRuntime();
-    const sendPhoto = vi
-      .fn()
-      .mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"))
-      .mockResolvedValueOnce({
-        message_id: 8,
-        chat: { id: "123" },
-      });
+    const sendPhoto = vi.fn().mockRejectedValueOnce(createThreadNotFoundError("sendPhoto"));
     const bot = createBot({ sendPhoto });
 
     mockMediaLoad("photo.jpg", "image/jpeg", "image");
 
-    await deliverWith({
-      replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
-      runtime,
-      bot,
-      thread: { id: 42, scope: "dm" },
-    });
+    await expect(
+      deliverWith({
+        replies: [{ mediaUrl: "https://example.com/photo.jpg", text: "caption" }],
+        runtime,
+        bot,
+        thread: { id: 42, scope: "dm" },
+      }),
+    ).rejects.toThrow("message thread not found");
 
-    expect(sendPhoto).toHaveBeenCalledTimes(2);
+    expect(sendPhoto).toHaveBeenCalledTimes(1);
     expect(sendPhoto.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({
         message_thread_id: 42,
       }),
     );
-    expect(sendPhoto.mock.calls[1]?.[2]).not.toHaveProperty("message_thread_id");
-    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
   it("does not include link_preview_options when linkPreview is true", async () => {

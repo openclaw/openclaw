@@ -3,6 +3,10 @@ import type { Command } from "commander";
 import JSON5 from "json5";
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
 import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
@@ -89,6 +93,53 @@ type ConfigMutationOptions = {
   merge?: boolean | undefined;
   replace?: boolean | undefined;
 };
+
+function normalizeAgentDefaultModelValueForConfigMutation(value: unknown): unknown {
+  if (typeof value === "string") {
+    return normalizeAgentModelRefForConfig(value);
+  }
+  if (!isPlainRecord(value)) {
+    return value;
+  }
+
+  const next: Record<string, unknown> = { ...value };
+  if (typeof next.primary === "string") {
+    next.primary = normalizeAgentModelRefForConfig(next.primary);
+  }
+  if (Array.isArray(next.fallbacks)) {
+    next.fallbacks = next.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+  }
+  return next;
+}
+
+function normalizeConfigMutationModelRefs(cfg: OpenClawConfig): OpenClawConfig {
+  const defaults = cfg.agents?.defaults;
+  if (!defaults) {
+    return cfg;
+  }
+
+  return {
+    ...cfg,
+    agents: {
+      ...cfg.agents,
+      defaults: {
+        ...defaults,
+        ...(defaults.model !== undefined
+          ? {
+              model: normalizeAgentDefaultModelValueForConfigMutation(
+                defaults.model,
+              ) as typeof defaults.model,
+            }
+          : undefined),
+        ...(defaults.models !== undefined
+          ? { models: normalizeAgentModelMapForConfig(defaults.models) }
+          : undefined),
+      },
+    },
+  };
+}
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const SECRET_PROVIDER_PATH_PREFIX: PathSegment[] = ["secrets", "providers"];
@@ -235,7 +286,7 @@ function isPlainRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function formatDoctorHint(message: string): string {
-  return `Run \`${formatCliCommand("openclaw doctor")}\` ${message}`;
+  return `Run \`${formatCliCommand("openclaw doctor --fix")}\` ${message}`;
 }
 
 function formatUnsupportedSecretRefPolicyFailureMessage(issues: string[]): string {
@@ -470,27 +521,29 @@ function assertNonDestructiveReplacement(params: {
   }
 }
 
-function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolean {
+type UnsetAtPathResult = { removed: true; leafContainer: "array" | "object" } | { removed: false };
+
+function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): UnsetAtPathResult {
   let current: unknown = root;
   for (let i = 0; i < path.length - 1; i += 1) {
     const segment = path[i];
     if (!current || typeof current !== "object") {
-      return false;
+      return { removed: false };
     }
     if (Array.isArray(current)) {
       if (!isIndexSegment(segment)) {
-        return false;
+        return { removed: false };
       }
       const index = Number.parseInt(segment, 10);
       if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-        return false;
+        return { removed: false };
       }
       current = current[index];
       continue;
     }
     const record = current as Record<string, unknown>;
     if (!hasOwnPathKey(record, segment)) {
-      return false;
+      return { removed: false };
     }
     current = record[segment];
   }
@@ -498,24 +551,24 @@ function unsetAtPath(root: Record<string, unknown>, path: PathSegment[]): boolea
   const last = path[path.length - 1];
   if (Array.isArray(current)) {
     if (!isIndexSegment(last)) {
-      return false;
+      return { removed: false };
     }
     const index = Number.parseInt(last, 10);
     if (!Number.isFinite(index) || index < 0 || index >= current.length) {
-      return false;
+      return { removed: false };
     }
     current.splice(index, 1);
-    return true;
+    return { removed: true, leafContainer: "array" };
   }
   if (!current || typeof current !== "object") {
-    return false;
+    return { removed: false };
   }
   const record = current as Record<string, unknown>;
   if (!hasOwnPathKey(record, last)) {
-    return false;
+    return { removed: false };
   }
   delete record[last];
-  return true;
+  return { removed: true, leafContainer: "object" };
 }
 
 async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
@@ -523,7 +576,7 @@ async function loadValidConfig(runtime: RuntimeEnv = defaultRuntime) {
   if (snapshot.valid) {
     return snapshot;
   }
-  runtime.error(`Config invalid at ${shortenHomePath(snapshot.path)}.`);
+  runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
   for (const line of formatConfigIssueLines(snapshot.issues, "-", { normalizeRoot: true })) {
     runtime.error(line);
   }
@@ -1313,6 +1366,7 @@ function collectDryRunSchemaErrors(params: {
 }): ConfigSetDryRunError[] {
   const validated = validateConfigObjectRaw(params.config, {
     touchedPaths: params.operations.map((operation) => operation.setPath),
+    validateBundledChannels: true,
   });
   if (validated.ok) {
     return [];
@@ -1415,7 +1469,7 @@ async function runConfigOperations(params: {
     root: next,
     operations,
   });
-  const nextConfig = next as OpenClawConfig;
+  const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
   const policyIssues = collectUnsupportedSecretRefPolicyIssues(nextConfig);
   const policyIssueLines = formatConfigIssueLines(policyIssues, "", { normalizeRoot: true }).map(
     (line) => line.trim(),
@@ -1526,7 +1580,7 @@ async function runConfigOperations(params: {
   }
 
   await replaceConfigFile({
-    nextConfig: next,
+    nextConfig,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     ...(unsetPaths.length > 0 ? { writeOptions: { unsetPaths } } : {}),
   });
@@ -1659,7 +1713,11 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const redacted = redactConfigObject(snapshot.config);
     const res = getAtPath(redacted, parsedPath);
     if (!res.found) {
-      runtime.error(danger(`Config path not found: ${opts.path}`));
+      runtime.error(
+        danger(
+          `Config path not found: ${opts.path}. Run ${formatCliCommand("openclaw config validate")} to inspect config shape.`,
+        ),
+      );
       runtime.exit(1);
       return;
     }
@@ -1691,16 +1749,22 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
-    const removed = unsetAtPath(next, parsedPath);
-    if (!removed) {
-      runtime.error(danger(`Config path not found: ${opts.path}`));
+    const unsetResult = unsetAtPath(next, parsedPath);
+    if (!unsetResult.removed) {
+      runtime.error(
+        danger(
+          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
+        ),
+      );
       runtime.exit(1);
       return;
     }
     await replaceConfigFile({
       nextConfig: next,
       ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
-      writeOptions: { unsetPaths: [parsedPath] },
+      ...(unsetResult.leafContainer === "array"
+        ? {}
+        : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
     runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
   } catch (err) {
@@ -1758,6 +1822,9 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
         writeRuntimeJson(runtime, { valid: false, path: outputPath, error: "file not found" }, 0);
       } else {
         runtime.error(danger(`Config file not found: ${shortPath}`));
+        runtime.error(
+          `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
+        );
       }
       runtime.exit(1);
       return;
@@ -1769,12 +1836,13 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       if (opts.json) {
         writeRuntimeJson(runtime, { valid: false, path: outputPath, issues });
       } else {
-        runtime.error(danger(`Config invalid at ${shortPath}:`));
+        runtime.error(danger(`OpenClaw config is invalid: ${shortPath}`));
         for (const line of formatConfigIssueLines(issues, danger("×"), { normalizeRoot: true })) {
           runtime.error(`  ${line}`);
         }
         runtime.error("");
         runtime.error(formatDoctorHint("to repair, or fix the keys above manually."));
+        runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
       }
       runtime.exit(1);
       return;

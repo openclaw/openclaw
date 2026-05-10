@@ -68,6 +68,19 @@ describe("sessions_spawn tool", () => {
     });
   }
 
+  function requireSchemaProperty(
+    properties:
+      | Record<string, { description?: string; enum?: string[]; type?: string } | undefined>
+      | undefined,
+    name: string,
+  ) {
+    const property = properties?.[name];
+    if (!property) {
+      throw new Error(`expected ${name} schema property`);
+    }
+    return property;
+  }
+
   it("hides ACP runtime affordances when no ACP backend is loaded", () => {
     const tool = createSessionsSpawnTool();
     const schema = tool.parameters as {
@@ -101,17 +114,13 @@ describe("sessions_spawn tool", () => {
     expect(tool.displaySummary).toBe("Spawn sub-agent or ACP sessions.");
     expect(tool.description).toContain('runtime="acp"');
     expect(schema.properties?.runtime?.enum).toEqual(["subagent", "acp"]);
-    expect(schema.properties?.resumeSessionId).toBeDefined();
-    expect(schema.properties?.streamTo).toBeDefined();
-    expect(schema.properties?.resumeSessionId?.description).toContain("ACP-only resume target");
-    expect(schema.properties?.resumeSessionId?.description).toContain(
-      'ignored for runtime="subagent"',
-    );
-    expect(schema.properties?.resumeSessionId?.description).toContain(
-      "already recorded for this requester",
-    );
-    expect(schema.properties?.streamTo?.description).toContain("ACP-only stream target");
-    expect(schema.properties?.streamTo?.description).toContain('ignored for runtime="subagent"');
+    const resumeSessionId = requireSchemaProperty(schema.properties, "resumeSessionId");
+    const streamTo = requireSchemaProperty(schema.properties, "streamTo");
+    expect(resumeSessionId.description).toContain("ACP-only resume target");
+    expect(resumeSessionId.description).toContain('ignored for runtime="subagent"');
+    expect(resumeSessionId.description).toContain("already recorded for this requester");
+    expect(streamTo.description).toContain("ACP-only stream target");
+    expect(streamTo.description).toContain('ignored for runtime="subagent"');
   });
 
   it("hides ACP runtime affordances when the ACP backend is unhealthy", () => {
@@ -201,10 +210,10 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
     expect(schema.properties?.thread).toBeUndefined();
@@ -227,13 +236,14 @@ describe("sessions_spawn tool", () => {
       },
     });
     const schema = tool.parameters as {
-      properties?: {
-        thread?: unknown;
-        mode?: { enum?: string[] };
-      };
+      properties?: Record<
+        string,
+        { description?: string; enum?: string[]; type?: string } | undefined
+      >;
     };
 
-    expect(schema.properties?.thread).toBeDefined();
+    const thread = requireSchemaProperty(schema.properties, "thread");
+    expect(thread.type).toBe("boolean");
     expect(schema.properties?.mode?.enum).toEqual(["run", "session"]);
     expect(tool.description).toContain("thread-bound");
   });
@@ -280,6 +290,70 @@ describe("sessions_spawn tool", () => {
       }),
     );
     expect(hoisted.spawnAcpDirectMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts taskName as a stable subagent handle", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+    const schema = tool.parameters as {
+      properties?: Record<string, { description?: string; type?: string } | undefined>;
+    };
+
+    expect(requireSchemaProperty(schema.properties, "taskName").description).toContain(
+      "Stable optional alias",
+    );
+
+    const result = await tool.execute("call-task-name", {
+      task: "review subagent handling",
+      taskName: "review_subagents",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "accepted",
+      childSessionKey: "agent:main:subagent:1",
+    });
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "review subagent handling",
+        taskName: "review_subagents",
+      }),
+      expect.any(Object),
+    );
+  });
+
+  it("rejects invalid taskName before spawning", async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute("call-bad-task-name", {
+      task: "review subagent handling",
+      taskName: "Bad-Name",
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(JSON.stringify(result.details)).toContain("Invalid taskName");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
+  });
+
+  it.each(["last", "all"])("rejects reserved taskName %s before spawning", async (taskName) => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    const result = await tool.execute(`call-reserved-task-name-${taskName}`, {
+      task: "review subagent handling",
+      taskName,
+    });
+
+    expect(result.details).toMatchObject({
+      status: "error",
+    });
+    expect(JSON.stringify(result.details)).toContain("Reserved subagent targets");
+    expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -689,6 +763,25 @@ describe("sessions_spawn tool", () => {
       "resumeSessionId",
     );
     expect(hoisted.spawnSubagentDirectMock.mock.calls[0]?.[0]).not.toHaveProperty("streamTo");
+  });
+
+  it('treats model="default" as no explicit model override', async () => {
+    const tool = createSessionsSpawnTool({
+      agentSessionKey: "agent:main:main",
+    });
+
+    await tool.execute("call-model-default", {
+      task: "analyze file",
+      model: "default",
+    });
+
+    expect(hoisted.spawnSubagentDirectMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        task: "analyze file",
+        model: undefined,
+      }),
+      expect.any(Object),
+    );
   });
 
   it("keeps attachment content schema unconstrained for llama.cpp grammar safety", () => {

@@ -191,6 +191,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "/tmp/sessions.json",
       "--active",
       "120",
+      "--limit",
+      "25",
     ]);
 
     expect(setVerbose).toHaveBeenCalledWith(true);
@@ -199,6 +201,7 @@ describe("registerStatusHealthSessionsCommands", () => {
         json: true,
         store: "/tmp/sessions.json",
         active: "120",
+        limit: "25",
       }),
       runtime,
     );
@@ -236,6 +239,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--dry-run",
       "--enforce",
       "--fix-missing",
+      "--fix-dm-scope",
       "--active-key",
       "agent:main:main",
       "--json",
@@ -249,6 +253,7 @@ describe("registerStatusHealthSessionsCommands", () => {
         dryRun: true,
         enforce: true,
         fixMissing: true,
+        fixDmScope: true,
         activeKey: "agent:main:main",
         json: true,
       }),

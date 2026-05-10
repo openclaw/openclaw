@@ -4,6 +4,7 @@ import {
   OPENCLAW_RUNTIME_CONTEXT_NOTICE,
   OPENCLAW_RUNTIME_EVENT_HEADER,
 } from "../../internal-runtime-context.js";
+import type { CurrentTurnPromptContext } from "./params.js";
 export { OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE };
 
 const OPENCLAW_RUNTIME_EVENT_USER_PROMPT = "Continue the OpenClaw runtime event.";
@@ -26,6 +27,12 @@ type RuntimeContextPromptParts = {
   runtimeOnly?: boolean;
   runtimeSystemContext?: string;
 };
+
+export function buildCurrentTurnPromptContextPrefix(
+  context: CurrentTurnPromptContext | undefined,
+): string {
+  return context?.text.trim() ?? "";
+}
 
 function removeLastPromptOccurrence(text: string, prompt: string): string | null {
   const index = text.lastIndexOf(prompt);

@@ -17,6 +17,8 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
   buildSessionEntry,
+  isSessionArchiveArtifactName,
+  isUsageCountedSessionTranscriptFileName,
   listSessionFilesForAgent,
   sessionPathForFile,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
@@ -158,6 +160,7 @@ export abstract class MemoryManagerSyncOps {
   protected abstract readonly vector: {
     enabled: boolean;
     available: boolean | null;
+    semanticAvailable?: boolean;
     extensionPath?: string;
     loadError?: string;
     dims?: number;
@@ -211,6 +214,7 @@ export abstract class MemoryManagerSyncOps {
   protected resetVectorState(): void {
     this.vectorReady = null;
     this.vector.available = null;
+    this.vector.semanticAvailable = undefined;
     this.vector.loadError = undefined;
     this.vector.dims = undefined;
     this.vectorDegradedWriteWarningShown = false;
@@ -446,6 +450,12 @@ export abstract class MemoryManagerSyncOps {
     this.watcher.on("change", markDirty);
     this.watcher.on("unlink", markDirty);
     this.watcher.on("unlinkDir", markDirty);
+    this.watcher.on("error", (err) => {
+      // File watcher errors (e.g., ENOSPC) should not crash the gateway.
+      // Log the error and continue - memory search still works without auto-sync.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`memory watcher error: ${message}`);
+    });
   }
 
   protected ensureSessionListener() {
@@ -485,6 +495,24 @@ export abstract class MemoryManagerSyncOps {
     this.sessionPendingFiles.clear();
     let shouldSync = false;
     for (const sessionFile of pending) {
+      // Usage-counted session archives (`.jsonl.reset.<iso>` and
+      // `.jsonl.deleted.<iso>`) are one-shot mutation events: the file is
+      // written once by the archive rotation and then never touched again.
+      // They carry no incremental `append` semantics, so the delta-bytes /
+      // delta-messages thresholds (designed for live transcripts accumulating
+      // appended messages) cannot gate them correctly — a short archive
+      // below the threshold would simply never reindex. Mark them dirty
+      // directly and skip the delta accounting.
+      const baseName = path.basename(sessionFile);
+      if (
+        isSessionArchiveArtifactName(baseName) &&
+        isUsageCountedSessionTranscriptFileName(baseName)
+      ) {
+        this.sessionsDirtyFiles.add(sessionFile);
+        this.sessionsDirty = true;
+        shouldSync = true;
+        continue;
+      }
       const delta = await this.updateSessionDelta(sessionFile);
       if (!delta) {
         continue;
@@ -1150,6 +1178,7 @@ export abstract class MemoryManagerSyncOps {
     const tempDb = openMemoryDatabaseAtPath(tempDbPath, this.settings.store.vector.enabled);
 
     const originalDb = this.db;
+    let tempDbClosed = false;
     let originalDbClosed = false;
     const originalState = {
       ftsAvailable: this.fts.available,
@@ -1188,6 +1217,12 @@ export abstract class MemoryManagerSyncOps {
       nextMeta = await runMemoryAtomicReindex({
         targetPath: dbPath,
         tempPath: tempDbPath,
+        beforeTempCleanup: () => {
+          if (!tempDbClosed) {
+            closeMemoryDatabase(tempDb);
+            tempDbClosed = true;
+          }
+        },
         build: async () => {
           await this.seedEmbeddingCache(originalDb);
           const shouldSyncMemory = this.sources.has("memory");
@@ -1237,7 +1272,8 @@ export abstract class MemoryManagerSyncOps {
           this.writeMeta(meta);
           this.pruneEmbeddingCacheIfNeeded?.();
 
-          closeMemoryDatabase(this.db);
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
           closeMemoryDatabase(originalDb);
           originalDbClosed = true;
           return meta;
@@ -1250,7 +1286,10 @@ export abstract class MemoryManagerSyncOps {
       this.vector.dims = nextMeta?.vectorDims;
     } catch (err) {
       try {
-        closeMemoryDatabase(this.db);
+        if (!tempDbClosed && this.db === tempDb) {
+          closeMemoryDatabase(tempDb);
+          tempDbClosed = true;
+        }
       } catch {}
       restoreOriginalState();
       throw err;

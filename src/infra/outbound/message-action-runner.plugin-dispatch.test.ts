@@ -10,10 +10,30 @@ import type {
 import type { OpenClawConfig } from "../../config/config.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
 import { runMessageAction } from "./message-action-runner.js";
 import { extractToolPayload } from "./tool-payload.js";
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function readFirstPluginCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const call = mock.mock.calls[0]?.[0];
+  if (!isRecord(call)) {
+    throw new Error("expected plugin action call");
+  }
+  return call;
+}
+
+function readMediaAccess(call: Record<string, unknown>): Record<string, unknown> {
+  if (!isRecord(call.mediaAccess)) {
+    throw new Error("expected plugin mediaAccess");
+  }
+  return call.mediaAccess;
+}
 
 const mocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
@@ -439,6 +459,66 @@ describe("runMessageAction plugin dispatch", () => {
       });
     });
 
+    it("ignores gateway url overrides for backend plugin actions", async () => {
+      const gatewayPlugin = createGatewayActionPlugin({
+        pluginId: "gatewaychat",
+        label: "Gateway Chat",
+        blurb: "Gateway Chat backend action test plugin.",
+        actions: ["react"],
+        capabilities: { chatTypes: ["direct"], reactions: true },
+        handleAction: vi.fn(async () => jsonResult({ ok: true, local: true })),
+      });
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "gatewaychat",
+            source: "test",
+            plugin: gatewayPlugin,
+          },
+        ]),
+      );
+      mocks.callGatewayLeastPrivilege.mockResolvedValue({
+        ok: true,
+        added: "ok",
+      });
+
+      await runMessageAction({
+        cfg: {
+          channels: {
+            gatewaychat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "react",
+        params: {
+          channel: "gatewaychat",
+          to: "+15551234567",
+          chatJid: "+15551234567",
+          messageId: "wamid.1",
+          emoji: "ok",
+        },
+        gateway: {
+          url: "ws://127.0.0.1:18789",
+          token: "configured-token",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        },
+        dryRun: false,
+      });
+
+      expect(mocks.callGatewayLeastPrivilege).toHaveBeenCalledWith(
+        expect.objectContaining({
+          url: undefined,
+          token: "configured-token",
+          timeoutMs: 5000,
+          clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+          mode: GATEWAY_CLIENT_MODES.BACKEND,
+        }),
+      );
+    });
+
     it("routes gateway-executed plugin sends through gateway RPC instead of local dispatch", async () => {
       const handleAction = vi.fn(async () => jsonResult({ ok: true, local: true }));
       const gatewayPlugin = createGatewayActionPlugin({
@@ -588,9 +668,8 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("uses requester username policy for host-media reads", async () => {
@@ -665,9 +744,8 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const mediaAccess = readMediaAccess(readFirstPluginCall(handlePolicyCheckedAction));
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("uses requester account policy for host-media reads when destination account differs", async () => {
@@ -759,10 +837,10 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.accountId).toBe("destination");
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("destination");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
     });
 
     it("falls back to the resolved account policy when requester account is unavailable", async () => {
@@ -840,10 +918,10 @@ describe("runMessageAction plugin dispatch", () => {
         dryRun: false,
       });
 
-      const pluginCall = handlePolicyCheckedAction.mock.calls[0]?.[0];
-      expect(pluginCall?.accountId).toBe("source");
-      expect(pluginCall?.mediaAccess).toBeDefined();
-      expect(pluginCall?.mediaAccess?.readFile).toBeUndefined();
+      const pluginCall = readFirstPluginCall(handlePolicyCheckedAction);
+      expect(pluginCall.accountId).toBe("source");
+      const mediaAccess = readMediaAccess(pluginCall);
+      expect(mediaAccess.readFile).toBeUndefined();
     });
   });
 

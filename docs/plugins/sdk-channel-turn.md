@@ -64,6 +64,7 @@ The runtime exposes three preferred entry points so adapters can opt in at the l
 
 ```typescript
 runtime.channel.turn.run(...)             // adapter-driven full pipeline
+runtime.channel.turn.runAssembled(...)    // already-built context + delivery adapter
 runtime.channel.turn.runPrepared(...)     // channel owns dispatch; kernel runs record + finalize
 runtime.channel.turn.buildContext(...)    // pure facts to FinalizedMsgContext mapping
 ```
@@ -72,7 +73,7 @@ Two older runtime helpers remain available for Plugin SDK compatibility:
 
 ```typescript
 runtime.channel.turn.runResolved(...)      // deprecated compatibility alias; prefer run
-runtime.channel.turn.dispatchAssembled(...) // deprecated compatibility alias; prefer run or runPrepared
+runtime.channel.turn.dispatchAssembled(...) // deprecated compatibility alias; prefer runAssembled
 ```
 
 ### run
@@ -113,6 +114,41 @@ await runtime.channel.turn.run({
 ```
 
 `run` is the right shape when the channel has small adapter logic and benefits from owning the lifecycle through hooks.
+
+### runAssembled
+
+Use when the channel has already resolved routing, built a `FinalizedMsgContext`,
+and only needs the shared record, reply-pipeline, dispatch, and finalize
+ordering. This is the preferred shape for simple bundled inbound paths that
+would otherwise repeat `createChannelMessageReplyPipeline(...)` and
+`runPrepared(...)` boilerplate.
+
+```typescript
+await runtime.channel.turn.runAssembled({
+  cfg,
+  channel: "irc",
+  accountId,
+  agentId: route.agentId,
+  routeSessionKey: route.sessionKey,
+  storePath,
+  ctxPayload,
+  recordInboundSession: runtime.channel.session.recordInboundSession,
+  dispatchReplyWithBufferedBlockDispatcher:
+    runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+  delivery: {
+    deliver: async (payload) => {
+      await sendPlatformReply(payload);
+    },
+    onError: (err, info) => {
+      runtime.error?.(`reply ${info.kind} failed: ${String(err)}`);
+    },
+  },
+});
+```
+
+Choose `runAssembled` over `runPrepared` when the only channel-owned dispatch
+behavior is final payload delivery plus optional typing, reply options, durable
+delivery, or error logging.
 
 ### runPrepared
 
@@ -312,17 +348,23 @@ The kernel does not call the platform directly. The channel hands the kernel a `
 type ChannelTurnDeliveryAdapter = {
   deliver(payload: ReplyPayload, info: ChannelDeliveryInfo): Promise<ChannelDeliveryResult | void>;
   onError?(err: unknown, info: { kind: string }): void;
+  durable?: false | DurableInboundReplyDeliveryOptions;
 };
 
 type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
 };
 ```
 
-`deliver` is called once per buffered reply chunk. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+`deliver` is called once per buffered reply chunk. During the message-lifecycle migration, assembled channel-turn delivery is channel-owned by default: an omitted `durable` field means the kernel must call `deliver` directly and must not route through generic outbound delivery. Set `durable` only after the channel has been audited to prove the generic send path preserves the old delivery behavior, including reply/thread targets, media handling, sent-message/self-echo caches, status cleanup, and returned message ids. `durable: false` remains a compatibility spelling for "use the channel-owned callback", but unmigrated channels should not need to add it. Return platform message ids when the channel has them so the dispatcher can preserve thread anchors and edit later chunks; newer delivery paths should also return `receipt` so recovery, preview finalization, and duplicate suppression can move off `messageIds`. For observe-only turns, return `{ visibleReplySent: false }` or use `createNoopChannelTurnDeliveryAdapter()`.
+
+Channels using `runPrepared` with a fully channel-owned dispatcher do not have a `ChannelTurnDeliveryAdapter`. Those dispatchers are not durable by default. They should keep their direct delivery path until they explicitly opt in to the new send context with a complete target, replay-safe adapter, receipt contract, and channel side-effect hooks.
+
+Public compatibility helpers such as `recordInboundSessionAndDispatchReply`, `dispatchInboundReplyWithBase`, and direct-DM helpers must stay behavior-preserving during migration. They should not call generic durable delivery before caller-owned `deliver` or `reply` callbacks.
 
 ## Record options
 
@@ -388,6 +430,7 @@ Backward compatibility rules apply: new fact fields are additive, admission kind
 
 ## Related
 
+- [Message lifecycle refactor](/concepts/message-lifecycle-refactor) for the planned send/receive/live lifecycle that will wrap this kernel
 - [Building channel plugins](/plugins/sdk-channel-plugins) for the broader channel plugin contract
 - [Plugin runtime helpers](/plugins/sdk-runtime) for other `runtime.*` surfaces
 - [Plugin internals](/plugins/architecture-internals) for load pipeline and registry mechanics

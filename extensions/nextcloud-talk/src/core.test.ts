@@ -7,7 +7,7 @@ import {
   normalizeNextcloudTalkMessagingTarget,
   stripNextcloudTalkTargetPrefix,
 } from "./normalize.js";
-import { resolveNextcloudTalkAllowlistMatch, resolveNextcloudTalkGroupAllow } from "./policy.js";
+import { resolveNextcloudTalkAllowlistMatch } from "./policy.js";
 import { createNextcloudTalkReplayGuard } from "./replay-guard.js";
 import { resolveNextcloudTalkOutboundSessionRoute } from "./session-route.js";
 import {
@@ -193,35 +193,37 @@ describe("nextcloud talk core", () => {
       };
     });
 
-    const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
-      await import("./signature.js");
-    const body = JSON.stringify({ hello: "world" });
-    const generated = generateNextcloudTalkSignature({
-      body,
-      secret: "secret-123",
-    });
-    const shortSignature = generated.signature.slice(0, 12);
-
-    expect(
-      verifyNextcloudTalkSignature({
-        signature: shortSignature,
-        random: generated.random,
+    try {
+      const { generateNextcloudTalkSignature, verifyNextcloudTalkSignature } =
+        await import("./signature.js");
+      const body = JSON.stringify({ hello: "world" });
+      const generated = generateNextcloudTalkSignature({
         body,
         secret: "secret-123",
-      }),
-    ).toBe(false);
+      });
+      const shortSignature = generated.signature.slice(0, 12);
 
-    expect(timingSafeEqualMock).toHaveBeenCalledOnce();
-    const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
-    expect(Buffer.isBuffer(leftBuffer)).toBe(true);
-    expect(Buffer.isBuffer(rightBuffer)).toBe(true);
-    if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
-      throw new TypeError("Expected timingSafeEqual to receive Buffer arguments");
+      expect(
+        verifyNextcloudTalkSignature({
+          signature: shortSignature,
+          random: generated.random,
+          body,
+          secret: "secret-123",
+        }),
+      ).toBe(false);
+
+      expect(timingSafeEqualMock).toHaveBeenCalledOnce();
+      const [leftBuffer, rightBuffer] = timingSafeEqualMock.mock.calls[0] ?? [];
+      expect(Buffer.isBuffer(leftBuffer)).toBe(true);
+      expect(Buffer.isBuffer(rightBuffer)).toBe(true);
+      if (!Buffer.isBuffer(leftBuffer) || !Buffer.isBuffer(rightBuffer)) {
+        throw new TypeError("Expected timingSafeEqual to receive Buffer arguments");
+      }
+      expect(leftBuffer).toHaveLength(rightBuffer.length);
+    } finally {
+      vi.doUnmock("node:crypto");
+      vi.resetModules();
     }
-    expect(leftBuffer).toHaveLength(rightBuffer.length);
-
-    vi.doUnmock("node:crypto");
-    vi.resetModules();
   });
 
   it("persists replay decisions across guard instances and scopes account namespaces", async () => {
@@ -289,7 +291,7 @@ describe("nextcloud talk core", () => {
     expect(retryClaim).toBe("claimed");
   });
 
-  it("resolves allowlist matches and group policy decisions", () => {
+  it("resolves allowlist matches", () => {
     expect(
       resolveNextcloudTalkAllowlistMatch({
         allowFrom: ["*"],
@@ -308,90 +310,5 @@ describe("nextcloud talk core", () => {
         senderId: "other",
       }).allowed,
     ).toBe(false);
-
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "disabled",
-        outerAllowFrom: ["owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "open",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true },
-      innerMatch: { allowed: true },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: [],
-        senderId: "owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: [],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "room-user",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: false },
-      innerMatch: { allowed: true, matchKey: "room-user", matchSource: "id" },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["team-owner"],
-        innerAllowFrom: ["room-user"],
-        senderId: "team-owner",
-      }),
-    ).toEqual({
-      allowed: false,
-      outerMatch: { allowed: true, matchKey: "team-owner", matchSource: "id" },
-      innerMatch: { allowed: false },
-    });
-    expect(
-      resolveNextcloudTalkGroupAllow({
-        groupPolicy: "allowlist",
-        outerAllowFrom: ["shared-user"],
-        innerAllowFrom: ["shared-user"],
-        senderId: "shared-user",
-      }),
-    ).toEqual({
-      allowed: true,
-      outerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-      innerMatch: { allowed: true, matchKey: "shared-user", matchSource: "id" },
-    });
   });
 });

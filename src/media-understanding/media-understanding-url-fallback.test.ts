@@ -19,9 +19,11 @@ async function withBlockedLocalAttachmentFallback(
   run: (params: { cache: MediaAttachmentCache; fallbackUrl: string }) => Promise<void>,
 ) {
   await withTempDir({ prefix }, async (base) => {
+    const attachmentRoot = path.join(base, "attachment");
     const allowedRoot = path.join(base, "allowed");
-    const attachmentPath = path.join(allowedRoot, "voice-note.m4a");
+    const attachmentPath = path.join(attachmentRoot, "voice-note.m4a");
     const fallbackUrl = "https://example.com/fallback.jpg";
+    await fs.mkdir(attachmentRoot, { recursive: true });
     await fs.mkdir(allowedRoot, { recursive: true });
     await fs.writeFile(attachmentPath, "ok");
 
@@ -31,18 +33,10 @@ async function withBlockedLocalAttachmentFallback(
         localPathRoots: [allowedRoot],
       },
     );
-    const originalRealpath = fs.realpath.bind(fs);
     fetchRemoteMediaMock.mockResolvedValue({
       buffer: Buffer.from("fallback-buffer"),
       contentType: "image/jpeg",
       fileName: "fallback.jpg",
-    });
-
-    vi.spyOn(fs, "realpath").mockImplementation(async (candidatePath) => {
-      if (String(candidatePath) === attachmentPath) {
-        throw new Error("EACCES");
-      }
-      return await originalRealpath(candidatePath);
     });
 
     await run({ cache, fallbackUrl });
@@ -66,11 +60,19 @@ describe("media understanding attachment URL fallback", () => {
         });
         // getPath should fall through to getBuffer URL fetch, write a temp file,
         // and return a path to that temp file instead of throwing.
-        expect(result.path).toBeTruthy();
+        expect(result.path).toEqual(expect.stringMatching(/\S/u));
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
+          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
+          | undefined;
+        const fetchImpl = fetchInput?.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
         // Clean up the temp file
         if (result.cleanup) {
           await result.cleanup();
@@ -90,9 +92,17 @@ describe("media understanding attachment URL fallback", () => {
         });
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(fetchRemoteMediaMock).toHaveBeenCalledTimes(1);
-        expect(fetchRemoteMediaMock).toHaveBeenCalledWith(
-          expect.objectContaining({ url: fallbackUrl, maxBytes: 1024 }),
-        );
+        const fetchInput = fetchRemoteMediaMock.mock.calls[0]?.[0] as
+          | { url?: unknown; fetchImpl?: unknown; maxBytes?: unknown; ssrfPolicy?: unknown }
+          | undefined;
+        const fetchImpl = fetchInput?.fetchImpl;
+        expect(fetchInput).toStrictEqual({
+          url: fallbackUrl,
+          fetchImpl,
+          maxBytes: 1024,
+          ssrfPolicy: undefined,
+        });
+        expect(typeof fetchImpl).toBe("function");
       },
     );
   });

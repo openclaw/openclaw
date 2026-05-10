@@ -14,7 +14,10 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import type { JsonValue } from "./protocol.js";
 
 function createTool(overrides: Partial<AnyAgentTool>): AnyAgentTool {
@@ -85,6 +88,85 @@ afterEach(() => {
 });
 
 describe("createCodexDynamicToolBridge", () => {
+  it("defers OpenClaw dynamic tools behind Codex tool search by default", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [
+        createTool({ name: "web_search" }),
+        createTool({ name: "message" }),
+        createTool({ name: HEARTBEAT_RESPONSE_TOOL_NAME }),
+        createTool({ name: "sessions_yield" }),
+      ],
+      signal: new AbortController().signal,
+    });
+
+    const webSearch = bridge.specs.find((tool) => tool.name === "web_search");
+    const message = bridge.specs.find((tool) => tool.name === "message");
+    const heartbeat = bridge.specs.find((tool) => tool.name === HEARTBEAT_RESPONSE_TOOL_NAME);
+    const sessionsYield = bridge.specs.find((tool) => tool.name === "sessions_yield");
+
+    expect(webSearch).toEqual(
+      expect.objectContaining({
+        name: "web_search",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(message).toEqual(
+      expect.objectContaining({
+        name: "message",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(heartbeat).toEqual(
+      expect.objectContaining({
+        name: HEARTBEAT_RESPONSE_TOOL_NAME,
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    );
+    expect(sessionsYield).not.toHaveProperty("namespace");
+    expect(sessionsYield).not.toHaveProperty("deferLoading");
+  });
+
+  it("keeps configured direct tools in the initial Codex tool context", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message" }), createTool({ name: "web_search" })],
+      signal: new AbortController().signal,
+      directToolNames: ["message"],
+    });
+
+    expect(bridge.specs).toEqual([
+      expect.objectContaining({
+        name: "message",
+      }),
+      expect.objectContaining({
+        name: "web_search",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        deferLoading: true,
+      }),
+    ]);
+    expect(bridge.specs[0]).not.toHaveProperty("namespace");
+    expect(bridge.specs[0]).not.toHaveProperty("deferLoading");
+  });
+
+  it("can expose all dynamic tools directly for compatibility", () => {
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "web_search" }), createTool({ name: "message" })],
+      signal: new AbortController().signal,
+      loading: "direct",
+    });
+
+    expect(bridge.specs).toEqual([
+      expect.objectContaining({ name: "web_search" }),
+      expect.objectContaining({ name: "message" }),
+    ]);
+    expect(bridge.specs).toEqual([
+      expect.not.objectContaining({ namespace: expect.any(String) }),
+      expect.not.objectContaining({ namespace: expect.any(String) }),
+    ]);
+  });
+
   it.each([
     { toolName: "tts", mediaUrl: "/tmp/reply.opus", audioAsVoice: true },
     { toolName: "image_generate", mediaUrl: "/tmp/generated.png" },
@@ -179,6 +261,8 @@ describe("createCodexDynamicToolBridge", () => {
           provider: "telegram",
           to: "chat-1",
           threadId: "thread-ts-1",
+          text: "hello from Codex",
+          mediaUrls: ["/tmp/reply.png"],
         },
       ],
     });
@@ -312,7 +396,7 @@ describe("createCodexDynamicToolBridge", () => {
       details: { status: "failed", exitCode: 1 },
     });
 
-    await bridge.handleToolCall({
+    const result = await bridge.handleToolCall({
       threadId: "thread-1",
       turnId: "turn-1",
       callId: "call-1",
@@ -321,6 +405,10 @@ describe("createCodexDynamicToolBridge", () => {
       arguments: { command: "false" },
     });
 
+    expect(result).toEqual({
+      success: false,
+      contentItems: [{ type: "inputText", text: "failed output" }],
+    });
     expect(handler).toHaveBeenCalledWith(
       expect.objectContaining({ isError: true }),
       expect.objectContaining({ runtime: "codex" }),
@@ -368,7 +456,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("Generated media reply."));
-    expect(bridge.telemetry.toolMediaUrls).toEqual([]);
+    expect(bridge.telemetry.toolMediaUrls).toStrictEqual([]);
   });
 
   it("still applies legacy codex app-server extension factories after middleware", async () => {
@@ -410,6 +498,92 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual(expectInputText("legacy compacted"));
+  });
+
+  it("keeps config out of Codex tool-result contexts", async () => {
+    const config = { session: { store: "/tmp/openclaw-session-store.json" } };
+    const registry = createEmptyPluginRegistry();
+    const middlewareContexts: Record<string, unknown>[] = [];
+    const legacyContexts: Record<string, unknown>[] = [];
+    const middleware = vi.fn(async (_event: unknown, ctx: Record<string, unknown>) => {
+      middlewareContexts.push(ctx);
+      return undefined;
+    });
+    const factory = async (codex: {
+      on: (
+        event: "tool_result",
+        handler: (
+          event: unknown,
+          ctx: Record<string, unknown>,
+        ) => Promise<{ result: AgentToolResult<unknown> } | void>,
+      ) => void;
+    }) => {
+      codex.on("tool_result", async (_event, ctx) => {
+        legacyContexts.push(ctx);
+      });
+    };
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "tokenjuice",
+      pluginName: "Tokenjuice",
+      rawHandler: middleware,
+      handler: middleware,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    registry.codexAppServerExtensionFactories.push({
+      pluginId: "legacy",
+      pluginName: "Legacy",
+      rawFactory: factory,
+      factory,
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const execute = vi.fn(async () => textToolResult("done"));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "exec", execute })],
+      signal: new AbortController().signal,
+      hookContext: {
+        agentId: "agent-1",
+        config: config as never,
+        sessionId: "session-1",
+        sessionKey: "agent:agent-1:session-1",
+        runId: "run-1",
+      },
+    });
+
+    await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "exec",
+      arguments: { command: "pwd" },
+    });
+
+    expect(execute).toHaveBeenCalledWith(
+      "call-1",
+      { command: "pwd" },
+      expect.any(AbortSignal),
+      undefined,
+    );
+    expect(middlewareContexts).toHaveLength(1);
+    expect(middlewareContexts[0]).toMatchObject({
+      runtime: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(middlewareContexts[0]).not.toHaveProperty("config");
+    expect(legacyContexts).toHaveLength(1);
+    expect(legacyContexts[0]).toMatchObject({
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:agent-1:session-1",
+      runId: "run-1",
+    });
+    expect(legacyContexts[0]).not.toHaveProperty("config");
   });
 
   it("fires after_tool_call for successful codex tool executions", async () => {
@@ -553,7 +727,7 @@ describe("createCodexDynamicToolBridge", () => {
     });
 
     expect(result).toEqual({
-      success: true,
+      success: false,
       contentItems: [{ type: "inputText", text: "blocked by policy" }],
     });
     expect(execute).not.toHaveBeenCalled();
@@ -737,10 +911,17 @@ describe("createCodexDynamicToolBridge", () => {
       },
       { signal: callController.signal },
     );
-    await vi.waitFor(() => expect(capturedSignal).toBeDefined());
+    await vi.waitFor(() => {
+      if (!capturedSignal) {
+        throw new Error("expected dynamic tool call signal");
+      }
+    });
+    if (!capturedSignal) {
+      throw new Error("expected dynamic tool call signal");
+    }
 
     callController.abort(new Error("deadline"));
-    expect(capturedSignal?.aborted).toBe(true);
+    expect(capturedSignal.aborted).toBe(true);
     resolveTool?.(textToolResult("done"));
 
     await expect(result).resolves.toEqual(expectInputText("done"));

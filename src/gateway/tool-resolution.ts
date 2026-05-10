@@ -15,6 +15,7 @@ import {
 } from "../agents/tool-policy-pipeline.js";
 import {
   collectExplicitAllowlist,
+  collectExplicitDenylist,
   mergeAlsoAllowPolicy,
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
@@ -94,6 +95,7 @@ export function resolveGatewayScopedTools(params: {
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
     disablePluginTools: params.disablePluginTools,
+    wrapBeforeToolCallHook: false,
     senderIsOwner: params.senderIsOwner,
     config: params.cfg,
     workspaceDir,
@@ -107,6 +109,16 @@ export function resolveGatewayScopedTools(params: {
       groupPolicy,
       subagentPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
+    ]),
+    pluginToolDenylist: collectExplicitDenylist([
+      profilePolicy,
+      providerProfilePolicy,
+      globalPolicy,
+      globalProviderPolicy,
+      agentPolicy,
+      agentProviderPolicy,
+      groupPolicy,
+      subagentPolicy,
     ]),
   });
 

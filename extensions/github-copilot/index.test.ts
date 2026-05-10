@@ -6,7 +6,7 @@ import {
   ensureAuthProfileStore,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   githubCopilotLoginCommand: vi.fn(),
@@ -26,8 +26,14 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   vi.clearAllMocks();
+  vi.unstubAllGlobals();
   clearRuntimeAuthProfileStoreSnapshots();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
+
+afterAll(() => {
+  vi.doUnmock("./register.runtime.js");
+  vi.resetModules();
 });
 
 async function createAgentDir() {
@@ -40,8 +46,9 @@ function _registerProvider() {
   return registerProviderWithPluginConfig({});
 }
 
-function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
+function registerProviderAndCatalogWithPluginConfig(pluginConfig: Record<string, unknown>) {
   const registerProviderMock = vi.fn();
+  const registerModelCatalogProviderMock = vi.fn();
 
   plugin.register(
     createTestPluginApi({
@@ -52,11 +59,20 @@ function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>)
       pluginConfig,
       runtime: {} as never,
       registerProvider: registerProviderMock,
+      registerModelCatalogProvider: registerModelCatalogProviderMock,
     }),
   );
 
   expect(registerProviderMock).toHaveBeenCalledTimes(1);
-  return registerProviderMock.mock.calls[0]?.[0];
+  expect(registerModelCatalogProviderMock).toHaveBeenCalledTimes(1);
+  return {
+    provider: registerProviderMock.mock.calls[0]?.[0],
+    modelCatalogProvider: registerModelCatalogProviderMock.mock.calls[0]?.[0],
+  };
+}
+
+function registerProviderWithPluginConfig(pluginConfig: Record<string, unknown>) {
+  return registerProviderAndCatalogWithPluginConfig(pluginConfig).provider;
 }
 
 describe("github-copilot plugin", () => {
@@ -139,6 +155,44 @@ describe("github-copilot plugin", () => {
         models: [],
       },
     });
+  });
+
+  it("dual-publishes unified live catalog rows with existing discovery semantics", async () => {
+    mocks.resolveCopilotApiToken.mockResolvedValueOnce({
+      token: "copilot_api_token",
+      baseUrl: "https://api.githubcopilot.live",
+    });
+    const { modelCatalogProvider } = registerProviderAndCatalogWithPluginConfig({
+      discovery: { enabled: false },
+    });
+
+    const result = await modelCatalogProvider.liveCatalog({
+      config: {
+        plugins: {
+          entries: {
+            "github-copilot": {
+              config: {
+                discovery: { enabled: true },
+              },
+            },
+          },
+        },
+      },
+      agentDir: "/tmp/agent",
+      env: { GH_TOKEN: "gh_test_token" },
+      resolveProviderApiKey: () => ({ apiKey: "gh_test_token" }),
+      resolveProviderAuth: () => ({
+        apiKey: "gh_test_token",
+        mode: "token",
+        source: "env",
+      }),
+    } as never);
+
+    expect(mocks.resolveCopilotApiToken).toHaveBeenCalledWith({
+      githubToken: "gh_test_token",
+      env: { GH_TOKEN: "gh_test_token" },
+    });
+    expect(result).toEqual([]);
   });
 
   it("offers to reuse an existing token profile during interactive onboarding", async () => {
@@ -319,7 +373,7 @@ describe("github-copilot plugin", () => {
     expect(result?.agents?.defaults?.model).toEqual({
       primary: "github-copilot/claude-opus-4.7",
     });
-    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toEqual({});
+    expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toStrictEqual({});
 
     const profile = ensureAuthProfileStore(agentDir).profiles["github-copilot:github"];
     expect(profile).toEqual({

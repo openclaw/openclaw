@@ -1,8 +1,9 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
 import type { RuntimeEnv } from "./runtime-api.js";
-import { setIrcRuntime } from "./runtime.js";
+import { clearIrcRuntime, setIrcRuntime } from "./runtime.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const {
@@ -81,11 +82,23 @@ function createMessage(overrides?: Partial<IrcInboundMessage>): IrcInboundMessag
   };
 }
 
+function resetInboundMocks() {
+  buildMentionRegexesMock.mockReset().mockReturnValue([]);
+  hasControlCommandMock.mockReset().mockReturnValue(false);
+  matchesMentionPatternsMock.mockReset().mockReturnValue(false);
+  readAllowFromStoreMock.mockReset().mockResolvedValue([]);
+  shouldHandleTextCommandsMock.mockReset().mockReturnValue(false);
+  upsertPairingRequestMock.mockReset().mockResolvedValue({ code: "CODE", created: true });
+}
+
 describe("irc inbound behavior", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
+    resetInboundMocks();
     installIrcRuntime();
-    readAllowFromStoreMock.mockResolvedValue([]);
+  });
+
+  afterEach(() => {
+    clearIrcRuntime();
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
@@ -149,6 +162,32 @@ describe("irc inbound behavior", () => {
 
     expect(runtime.log).toHaveBeenCalledWith(
       "irc: drop control command (unauthorized) target=alice!ident@example.com",
+    );
+  });
+
+  it("passes the shared reply pipeline for dispatched replies", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      sendReply: vi.fn(async () => {}),
+    });
+
+    expect(coreRuntime.channel.turn.runAssembled).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyPipeline: {},
+      }),
     );
   });
 });

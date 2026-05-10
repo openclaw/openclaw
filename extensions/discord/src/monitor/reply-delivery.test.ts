@@ -3,17 +3,22 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
 
-const deliverOutboundPayloadsMock = vi.hoisted(() => vi.fn(async () => []));
+const sendDurableMessageBatchMock = vi.hoisted(() =>
+  vi.fn(async () => ({
+    status: "sent" as const,
+    results: [{ messageId: "msg-1", channelId: "channel-1" }],
+  })),
+);
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/outbound-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-runtime")>(
-    "openclaw/plugin-sdk/outbound-runtime",
+vi.mock("openclaw/plugin-sdk/channel-message", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-message")>(
+    "openclaw/plugin-sdk/channel-message",
   );
   return {
     ...actual,
-    deliverOutboundPayloads: deliverOutboundPayloadsMock,
+    sendDurableMessageBatch: sendDurableMessageBatchMock,
   };
 });
 
@@ -29,7 +34,7 @@ vi.mock("../send.js", async () => {
 let deliverDiscordReply: typeof import("./reply-delivery.js").deliverDiscordReply;
 
 function firstDeliverParams() {
-  const calls = deliverOutboundPayloadsMock.mock.calls as unknown as Array<
+  const calls = sendDurableMessageBatchMock.mock.calls as unknown as Array<
     [
       {
         cfg?: OpenClawConfig;
@@ -40,7 +45,7 @@ function firstDeliverParams() {
   >;
   const params = calls[0]?.[0];
   if (!params) {
-    throw new Error("deliverOutboundPayloads was not called");
+    throw new Error("sendDurableMessageBatch was not called");
   }
   return params;
 }
@@ -56,8 +61,11 @@ describe("deliverDiscordReply", () => {
   });
 
   beforeEach(() => {
-    deliverOutboundPayloadsMock.mockClear();
-    deliverOutboundPayloadsMock.mockResolvedValue([]);
+    sendDurableMessageBatchMock.mockClear();
+    sendDurableMessageBatchMock.mockResolvedValue({
+      status: "sent",
+      results: [{ messageId: "msg-1", channelId: "channel-1" }],
+    });
     sendMessageDiscordMock.mockReset().mockResolvedValue({
       messageId: "msg-1",
       channelId: "channel-1",
@@ -85,7 +93,7 @@ describe("deliverDiscordReply", () => {
       replyToMode: "all",
     });
 
-    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         channel: "discord",
         to: "channel:101",
@@ -102,6 +110,191 @@ describe("deliverDiscordReply", () => {
       "channel:101",
       "probe",
       expect.objectContaining({ cfg: firstDeliverParams().cfg, token: "token", rest }),
+    );
+  });
+
+  it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
+    sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
+
+    await expect(
+      deliverDiscordReply({
+        replies: [{ text: "lost reply" }],
+        target: "channel:101",
+        token: "token",
+        accountId: "default",
+        runtime,
+        cfg,
+        textLimit: 2000,
+      }),
+    ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
+  });
+
+  it("strips internal execution trace lines at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "📊 Session Status: current",
+            "🛠️ Exec: run git status",
+            "📖 Read: lines 1-40 from secret.md",
+            "Visible reply.",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "Visible reply." }],
+      }),
+    );
+  });
+
+  it("drops pure internal trace text while preserving media-only delivery", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "commentary: calling tool\nanalysis: inspect private state",
+          mediaUrl: "https://example.com/result.png",
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ mediaUrl: "https://example.com/result.png", text: undefined }],
+      }),
+    );
+  });
+
+  it("preserves component-only channelData payloads when text scrubs empty", async () => {
+    const channelData = {
+      discord: {
+        components: [
+          {
+            type: 1,
+            components: [
+              {
+                type: 2,
+                style: 1,
+                label: "Open",
+                custom_id: "open",
+              },
+            ],
+          },
+        ],
+      },
+    };
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "analysis: internal only",
+          channelData,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ channelData, text: undefined }],
+      }),
+    );
+  });
+
+  it("preserves presentation-only payloads when text scrubs empty", async () => {
+    const presentation = {
+      title: "Action required",
+      blocks: [
+        {
+          type: "buttons" as const,
+          buttons: [{ label: "Approve", value: "approve", style: "primary" as const }],
+        },
+      ],
+    };
+
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "commentary: hidden",
+          presentation,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ presentation, text: undefined }],
+      }),
+    );
+  });
+
+  it("does not strip ordinary code-fenced examples of tool-call labels", async () => {
+    const text = ["Example:", "```", "🛠️ Exec: run ls", "```"].join("\n");
+
+    await deliverDiscordReply({
+      replies: [{ text }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text }],
+      }),
+    );
+  });
+
+  it("does not strip ordinary visible labeled lines", async () => {
+    const text = [
+      "Command: restart the gateway",
+      "Search: check recent Discord logs",
+      "Open: the channel status page",
+      "Find: the failing account",
+    ].join("\n");
+
+    await deliverDiscordReply({
+      replies: [{ text }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text }],
+      }),
     );
   });
 
@@ -164,7 +357,7 @@ describe("deliverDiscordReply", () => {
       mediaLocalRoots: ["/tmp/openclaw-media"],
     });
 
-    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         payloads: replies,
         replyToId: undefined,
@@ -228,7 +421,7 @@ describe("deliverDiscordReply", () => {
       threadBindings,
     });
 
-    expect(deliverOutboundPayloadsMock).toHaveBeenCalledWith(
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
       expect.objectContaining({
         to: "channel:parent-1",
         threadId: "thread-1",

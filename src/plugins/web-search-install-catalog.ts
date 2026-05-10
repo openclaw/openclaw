@@ -16,6 +16,7 @@ export type WebSearchInstallCatalogEntry = {
   label: string;
   install: PluginPackageInstall;
   provider: PluginWebSearchProviderEntry;
+  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 function normalizeString(value: unknown): string | undefined {
@@ -144,6 +145,7 @@ export function resolveWebSearchInstallCatalogEntries(): WebSearchInstallCatalog
         label: resolveOfficialExternalPluginLabel(entry),
         install,
         provider: providerEntry,
+        trustedSourceLinkedOfficialInstall: true,
       });
     }
   }

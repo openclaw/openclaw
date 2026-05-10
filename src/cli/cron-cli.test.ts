@@ -481,6 +481,20 @@ describe("cron cli", () => {
     expect(patch.enabled).toBe(expectedEnabled);
   });
 
+  it("leaves cron list unfiltered when --agent is omitted", async () => {
+    await runCronCommand(["cron", "list"]);
+
+    const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
+    expect(listCall?.[2]).toEqual({ includeDisabled: false });
+  });
+
+  it("sends normalized agent id on cron list --agent", async () => {
+    await runCronCommand(["cron", "list", "--agent", " Ops "]);
+
+    const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
+    expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
+  });
+
   it("paginates cron show lookups", async () => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(
@@ -497,8 +511,10 @@ describe("cron cli", () => {
               nextOffset: 200,
             };
           }
+          const targetJob = createCronJob("target-job", "Target Job");
+          targetJob.state.lastDiagnosticSummary = "exec stderr tail";
           return {
-            jobs: [createCronJob("target-job", "Target Job")],
+            jobs: [targetJob],
             hasMore: false,
             nextOffset: null,
             deliveryPreviews: {
@@ -527,6 +543,7 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith(
       "delivery: announce -> telegram:-100 (resolved from last, main session)",
     );
+    expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
   it("sends agent id on cron add", async () => {

@@ -106,8 +106,12 @@ export type AppViewState = {
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
+  chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
+  sessionSwitchNotice: { id: number; text: string } | null;
+  sessionSwitchFlashKey: string | null;
+  announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
@@ -119,7 +123,20 @@ export type AppViewState = {
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkTranscript: string | null;
+  realtimeTalkOptionsOpen: boolean;
+  realtimeTalkOptions: {
+    provider: string;
+    model: string;
+    voice: string;
+    transport: string;
+    vadThreshold: string;
+    silenceDurationMs: string;
+    prefixPaddingMs: string;
+    reasoningEffort: string;
+  };
+  updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
   chatManualRefreshInFlight: boolean;
+  chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
   nodesLoading: boolean;
   nodes: Array<Record<string, unknown>>;
@@ -260,6 +277,8 @@ export type AppViewState = {
   sessionsFilterLimit: string;
   sessionsIncludeGlobal: boolean;
   sessionsIncludeUnknown: boolean;
+  sessionsShowArchived: boolean;
+  sessionsFiltersCollapsed: boolean;
   sessionsHideCron: boolean;
   sessionsSearchQuery: string;
   sessionsSortColumn: "key" | "kind" | "updated" | "tokens";
@@ -278,6 +297,7 @@ export type AppViewState = {
   usageError: string | null;
   usageStartDate: string;
   usageEndDate: string;
+  usageScope: "instance" | "family";
   usageSelectedSessions: string[];
   usageSelectedDays: string[];
   usageSelectedHours: number[];
@@ -328,6 +348,7 @@ export type AppViewState = {
   | "cronStatus"
   | "cronError"
   | "cronForm"
+  | "cronFormCollapsed"
   | "cronFieldErrors"
   | "cronEditingJobId"
   | "cronRunsJobId"

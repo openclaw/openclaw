@@ -23,7 +23,14 @@ import {
 } from "./provider-catalog.js";
 import { buildOpenRouterSpeechProvider } from "./speech-provider.js";
 import { wrapOpenRouterProviderStream } from "./stream.js";
-import { buildOpenRouterVideoGenerationProvider } from "./video-generation-provider.js";
+import {
+  resolveOpenRouterThinkingProfile,
+  supportsOpenRouterXHighThinking,
+} from "./thinking-policy.js";
+import {
+  buildOpenRouterVideoGenerationProvider,
+  listOpenRouterVideoModelCatalog,
+} from "./video-generation-provider.js";
 
 const PROVIDER_ID = "openrouter";
 const OPENROUTER_DEFAULT_MAX_TOKENS = 8192;
@@ -150,6 +157,8 @@ export default definePluginEntry({
       },
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
       resolveReasoningOutputMode: () => "native",
+      supportsXHighThinking: ({ modelId }) => supportsOpenRouterXHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) => resolveOpenRouterThinkingProfile(modelId),
       isModernModelRef: () => true,
       wrapStreamFn: wrapOpenRouterProviderStream,
       isCacheTtlEligible: (ctx) => isOpenRouterCacheTtlModel(ctx.modelId),
@@ -157,6 +166,11 @@ export default definePluginEntry({
     api.registerMediaUnderstandingProvider(openrouterMediaUnderstandingProvider);
     api.registerImageGenerationProvider(buildOpenRouterImageGenerationProvider());
     api.registerVideoGenerationProvider(buildOpenRouterVideoGenerationProvider());
+    api.registerModelCatalogProvider({
+      provider: PROVIDER_ID,
+      kinds: ["video_generation"],
+      liveCatalog: listOpenRouterVideoModelCatalog,
+    });
     api.registerSpeechProvider(buildOpenRouterSpeechProvider());
   },
 });

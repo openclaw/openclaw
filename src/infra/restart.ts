@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +9,7 @@ import {
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { replaceFileAtomicSync } from "./replace-file.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -131,10 +131,8 @@ export function writeGatewayRestartIntentSync(opts: {
     return false;
   }
   const env = opts.env ?? process.env;
-  let tmpPath: string | undefined;
   try {
     const intentPath = resolveGatewayRestartIntentPath(env);
-    fs.mkdirSync(path.dirname(intentPath), { recursive: true });
     const payload: GatewayRestartIntentPayload = {
       kind: "gateway-restart",
       pid: targetPid,
@@ -146,25 +144,14 @@ export function writeGatewayRestartIntentSync(opts: {
         ? { waitMs: Math.floor(opts.intent.waitMs) }
         : {}),
     };
-    tmpPath = path.join(
-      path.dirname(intentPath),
-      `.${path.basename(intentPath)}.${process.pid}.${Date.now()}.${randomUUID()}.tmp`,
-    );
-    let fd: number | undefined;
-    try {
-      fd = fs.openSync(tmpPath, "wx", 0o600);
-      fs.writeFileSync(fd, `${JSON.stringify(payload)}\n`, "utf8");
-    } finally {
-      if (fd !== undefined) {
-        fs.closeSync(fd);
-      }
-    }
-    fs.renameSync(tmpPath, intentPath);
+    replaceFileAtomicSync({
+      filePath: intentPath,
+      content: `${JSON.stringify(payload)}\n`,
+      mode: 0o600,
+      tempPrefix: ".gateway-restart-intent",
+    });
     return true;
   } catch (err) {
-    if (tmpPath) {
-      unlinkGatewayRestartIntentFileSync(tmpPath);
-    }
     restartLog.warn(`failed to write gateway restart intent: ${String(err)}`);
     return false;
   }
@@ -640,7 +627,7 @@ export function triggerOpenClawRestart(): RestartAttempt {
   }
 
   // kickstart fails when the service was previously booted out (deregistered from launchd).
-  // Fall back to bootstrap (re-register from plist) + kickstart.
+  // Fall back to bootstrap, which loads RunAtLoad agents without a follow-up kickstart.
   // Use env HOME to match how launchd.ts resolves the plist install path.
   const home = process.env.HOME?.trim() || os.homedir();
   const plistPath = path.join(home, "Library", "LaunchAgents", `${label}.plist`);
@@ -662,6 +649,9 @@ export function triggerOpenClawRestart(): RestartAttempt {
       detail: formatSpawnDetail(boot),
       tried,
     };
+  }
+  if (boot.status === 0) {
+    return { ok: true, method: "launchctl", tried };
   }
   const retryArgs = ["kickstart", target];
   tried.push(`launchctl ${retryArgs.join(" ")}`);

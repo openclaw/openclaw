@@ -18,15 +18,8 @@ export type {
 export type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-logging";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export {
-  evaluateSenderGroupAccessForPolicy,
-  readStoreAllowFromForDmPolicy,
-  resolveDmGroupAccessWithLists,
-  resolveEffectiveAllowFromLists,
-  resolveSenderScopedGroupPolicy,
-  resolveToolsBySender,
-} from "openclaw/plugin-sdk/channel-policy";
-export { createChannelReplyPipeline } from "openclaw/plugin-sdk/channel-reply-pipeline";
+export { resolveToolsBySender } from "openclaw/plugin-sdk/channel-policy";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
 export {
   PAIRING_APPROVED_MESSAGE,
   buildProbeChannelStatusSummary,

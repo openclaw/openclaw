@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1.7
 
-# Opt-in extension dependencies at build time (space-separated directory names).
-# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel matrix" .
+# Opt-in plugin dependencies at build time (space- or comma-separated directory names).
+# Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .
 #
 # Multi-stage build produces a minimal runtime image without build tools,
 # source code, or Bun. Works with Docker, Buildx, and Podman.
@@ -32,7 +32,7 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # Copy package.json for opted-in extensions so pnpm resolves their deps.
 RUN --mount=type=bind,source=${OPENCLAW_BUNDLED_PLUGIN_DIR},target=/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR},readonly \
     mkdir -p /out && \
-    for ext in $OPENCLAW_EXTENSIONS; do \
+    for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
       if [ -f "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" ]; then \
         mkdir -p "/out/$ext" && \
         cp "/tmp/${OPENCLAW_BUNDLED_PLUGIN_DIR}/$ext/package.json" "/out/$ext/package.json"; \
@@ -97,11 +97,11 @@ RUN for dir in /app/${OPENCLAW_BUNDLED_PLUGIN_DIR} /app/.agent /app/.agents; do 
 # Stub it so local cross-arch builds still succeed.
 RUN pnpm canvas:a2ui:bundle || \
     (echo "A2UI bundle: creating stub (non-fatal)" && \
-     mkdir -p src/canvas-host/a2ui && \
-     echo "/* A2UI bundle unavailable in this build */" > src/canvas-host/a2ui/a2ui.bundle.js && \
-     echo "stub" > src/canvas-host/a2ui/.bundle.hash && \
+     mkdir -p extensions/canvas/src/host/a2ui && \
+     echo "/* A2UI bundle unavailable in this build */" > extensions/canvas/src/host/a2ui/a2ui.bundle.js && \
+     echo "stub" > extensions/canvas/src/host/a2ui/.bundle.hash && \
      rm -rf vendor/a2ui apps/shared/OpenClawKit/Tools/CanvasA2UI)
-RUN pnpm build:docker
+RUN NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker
 # Force pnpm for UI build (Bun may fail on ARM/Synology architectures)
 ENV OPENCLAW_PREFER_PNPM=1
 RUN pnpm ui:build
@@ -118,12 +118,13 @@ ARG OPENCLAW_BUNDLED_PLUGIN_DIR
 # prune must not rediscover unrelated workspaces from the later full source
 # copy.
 RUN printf 'packages:\n  - .\n  - ui\n' > /tmp/pnpm-workspace.runtime.yaml && \
-    for ext in $OPENCLAW_EXTENSIONS; do \
+    for ext in $(printf '%s\n' "$OPENCLAW_EXTENSIONS" | tr ',' ' '); do \
       printf '  - %s/%s\n' "$OPENCLAW_BUNDLED_PLUGIN_DIR" "$ext" >> /tmp/pnpm-workspace.runtime.yaml; \
     done && \
     cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml && \
     CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod && \
     node scripts/postinstall-bundled-plugins.mjs && \
+    OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs && \
     find dist -type f \( -name '*.d.ts' -o -name '*.d.mts' -o -name '*.d.cts' -o -name '*.map' \) -delete && \
     node scripts/check-package-dist-imports.mjs /app
 
@@ -159,7 +160,7 @@ RUN --mount=type=cache,id=openclaw-bookworm-apt-cache,target=/var/cache/apt,shar
     --mount=type=cache,id=openclaw-bookworm-apt-lists,target=/var/lib/apt,sharing=locked \
     apt-get update && \
     DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      ca-certificates procps hostname curl git lsof openssl python3 && \
+      ca-certificates procps hostname curl git lsof openssl python3 tini && \
     update-ca-certificates
 
 RUN chown node:node /app
@@ -335,5 +336,6 @@ HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
 # ──── Custom: Wrap CMD with our entrypoint ────
 # The entrypoint script seeds first-run config from templates + env vars,
 # then exec's into whatever CMD specifies (the OpenClaw gateway start command below).
-ENTRYPOINT ["/usr/local/bin/openclaw-entrypoint.sh"]
+# Use tini as the container's init process so signals are forwarded correctly to the app and zombie child processes are cleaned up.
+ENTRYPOINT ["tini", "-s", "--","/usr/local/bin/openclaw-entrypoint.sh"]
 CMD ["node", "openclaw.mjs", "gateway", "--allow-unconfigured"]

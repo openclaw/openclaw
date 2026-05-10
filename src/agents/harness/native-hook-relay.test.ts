@@ -1,11 +1,18 @@
 import { statSync, writeFileSync } from "node:fs";
+import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStore, type SessionEntry } from "../../config/sessions.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../plugins/hooks.test-helpers.js";
+import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   __testing,
   buildNativeHookRelayCommand,
@@ -17,6 +24,7 @@ import {
 afterEach(() => {
   vi.useRealTimers();
   resetGlobalHookRunner();
+  setActivePluginRegistry(createEmptyPluginRegistry());
   __testing.clearNativeHookRelaysForTests();
 });
 
@@ -26,9 +34,9 @@ async function waitForNativeHookRelayBridgeRecord(
   let record: Record<string, unknown> | undefined;
   await vi.waitFor(() => {
     record = __testing.getNativeHookRelayBridgeRecordForTests(relayId);
-    expect(record).toBeDefined();
+    expect(record).toMatchObject({ relayId });
   });
-  return record!;
+  return record as Record<string, unknown>;
 }
 
 describe("native hook relay registry", () => {
@@ -197,7 +205,7 @@ describe("native hook relay registry", () => {
         },
       }),
     ).rejects.toThrow("native hook relay bridge target mismatch");
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("rejects oversized direct bridge responses", async () => {
@@ -349,7 +357,7 @@ describe("native hook relay registry", () => {
     relay.unregister();
 
     expect(__testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
-    expect(__testing.getNativeHookRelayInvocationsForTests()).toEqual([]);
+    expect(__testing.getNativeHookRelayInvocationsForTests()).toStrictEqual([]);
   });
 
   it("keeps only a bounded history of retained invocations", async () => {
@@ -376,7 +384,7 @@ describe("native hook relay registry", () => {
 
     const invocations = __testing.getNativeHookRelayInvocationsForTests();
     expect(invocations).toHaveLength(200);
-    expect(invocations.some((invocation) => invocation.toolUseId === "call-0")).toBe(false);
+    expect(invocations.map((invocation) => invocation.toolUseId)).not.toContain("call-0");
     expect(invocations.at(-1)).toEqual(expect.objectContaining({ toolUseId: "call-209" }));
   });
 
@@ -625,6 +633,141 @@ describe("native hook relay registry", () => {
         runId: "run-1",
         toolName: "exec",
         toolCallId: "native-call-1",
+      }),
+    );
+  });
+
+  it("passes config to trusted policies for native pre-tool session extension reads", async () => {
+    const stateDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-native-relay-policy-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { session: { store: storePath } };
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.sessionExtensions = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        extension: {
+          namespace: "policy",
+          description: "policy state",
+        },
+      },
+    ];
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "session-extension-policy",
+          description: "session extension policy",
+          evaluate(_event, ctx) {
+            const policyState = ctx.getSessionExtension?.("policy");
+            seen.push(policyState);
+            if ((policyState as { block?: boolean } | undefined)?.block) {
+              return { block: true, blockReason: "blocked by session extension" };
+            }
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:session-1"] = {
+          sessionId: "session-1",
+          updatedAt: Date.now(),
+        } as SessionEntry;
+      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config as never,
+          sessionKey: "agent:main:session-1",
+          pluginId: "policy-plugin",
+          namespace: "policy",
+          value: { block: true },
+        }),
+      ).resolves.toMatchObject({ ok: true });
+
+      const relay = registerNativeHookRelay({
+        provider: "codex",
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        config: config as never,
+        runId: "run-1",
+        allowedEvents: ["pre_tool_use"],
+      });
+
+      const response = await invokeNativeHookRelay({
+        provider: "codex",
+        relayId: relay.relayId,
+        event: "pre_tool_use",
+        rawPayload: {
+          hook_event_name: "PreToolUse",
+          tool_name: "Bash",
+          tool_use_id: "native-policy-call-1",
+          tool_input: { command: "rm -rf dist" },
+        },
+      });
+
+      expect(JSON.parse(response.stdout)).toEqual({
+        hookSpecificOutput: {
+          hookEventName: "PreToolUse",
+          permissionDecision: "deny",
+          permissionDecisionReason: "blocked by session extension",
+        },
+      });
+      expect(seen).toEqual([{ block: true }]);
+    } finally {
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("uses the Codex cwd when deriving apply_patch paths for PreToolUse", async () => {
+    const beforeToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "before_tool_call", handler: beforeToolCall }]),
+    );
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+    const cwd = path.join("/tmp", "openclaw-native-hook-cwd");
+    const patch = ["*** Begin Patch", "*** Add File: src/new.ts", "+x", "*** End Patch"].join("\n");
+
+    const response = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "pre_tool_use",
+      rawPayload: {
+        hook_event_name: "PreToolUse",
+        cwd,
+        tool_name: "apply_patch",
+        tool_use_id: "native-patch-1",
+        tool_input: { input: patch },
+      },
+    });
+
+    expect(response).toEqual({ stdout: "", stderr: "", exitCode: 0 });
+    expect(beforeToolCall).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "apply_patch",
+        params: { input: patch },
+        derivedPaths: [path.join(cwd, "src/new.ts")],
+      }),
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        runId: "run-1",
+        toolName: "apply_patch",
+        toolCallId: "native-patch-1",
       }),
     );
   });
@@ -1079,6 +1222,170 @@ describe("native hook relay registry", () => {
         toolInput: { command: "git push" },
       }),
     );
+  });
+
+  it("reuses allow-always PermissionRequest approvals for identical relay content", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-permission-cache",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    const first = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+    relay.unregister();
+    registerNativeHookRelay({
+      provider: "codex",
+      relayId: "codex-stable-permission-cache",
+      sessionId: "session-1",
+      runId: "run-2",
+    });
+    const second = await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-2",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+
+    expect(approvalRequester).toHaveBeenCalledTimes(1);
+    expect([first, second].map((response) => JSON.parse(response.stdout))).toEqual([
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+      {
+        hookSpecificOutput: {
+          hookEventName: "PermissionRequest",
+          decision: { behavior: "allow" },
+        },
+      },
+    ]);
+  });
+
+  it("does not reuse allow-always PermissionRequest approvals across sessions with the same relay id", async () => {
+    const relayId = "codex-stable-permission-cache-cross-session";
+    const first = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      agentId: "agent-1",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: first.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-1",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+    first.unregister();
+    const second = registerNativeHookRelay({
+      provider: "codex",
+      relayId,
+      agentId: "agent-1",
+      sessionId: "session-2",
+      sessionKey: "agent:main:session-2",
+      runId: "run-2",
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: second.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo",
+        tool_name: "Bash",
+        tool_use_id: "native-call-2",
+        tool_input: { command: "browserforce tabs" },
+      },
+    });
+
+    expect(approvalRequester).toHaveBeenCalledTimes(2);
+    expect(approvalRequester).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        agentId: "agent-1",
+        sessionId: "session-2",
+        sessionKey: "agent:main:session-2",
+        toolInput: { command: "browserforce tabs" },
+      }),
+    );
+  });
+
+  it("keeps allow-always PermissionRequest reuse scoped to matching cwd and input", async () => {
+    const relay = registerNativeHookRelay({
+      provider: "codex",
+      sessionId: "session-1",
+      runId: "run-1",
+    });
+    const approvalRequester = vi.fn(async () => "allow-always" as const);
+    __testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
+
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-a",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      },
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-b",
+        tool_name: "Bash",
+        tool_input: { command: "npm test" },
+      },
+    });
+    await invokeNativeHookRelay({
+      provider: "codex",
+      relayId: relay.relayId,
+      event: "permission_request",
+      rawPayload: {
+        hook_event_name: "PermissionRequest",
+        cwd: "/repo-a",
+        tool_name: "Bash",
+        tool_input: { command: "npm test -- --changed" },
+      },
+    });
+
+    expect(approvalRequester).toHaveBeenCalledTimes(3);
   });
 
   it("defers PermissionRequest when OpenClaw approval does not decide", async () => {

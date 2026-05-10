@@ -18,6 +18,7 @@ export type OfficialPluginOnboardingInstallEntry = {
   label: string;
   description?: string;
   install: PluginPackageInstall;
+  trustedSourceLinkedOfficialInstall?: boolean;
 };
 
 function isInstalledOrConfigured(config: OpenClawConfig, pluginId: string): boolean {
@@ -76,6 +77,7 @@ export function resolveOfficialPluginOnboardingInstallEntries(params: {
       label: resolveOfficialExternalPluginLabel(entry),
       ...(entry.description ? { description: entry.description } : {}),
       install,
+      trustedSourceLinkedOfficialInstall: true,
     });
   }
   return entries.toSorted((left, right) => left.label.localeCompare(right.label));

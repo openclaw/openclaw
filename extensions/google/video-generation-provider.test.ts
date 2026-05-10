@@ -1,4 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { createGoogleGenAIMock, downloadMock, generateVideosMock, getVideosOperationMock } =
   vi.hoisted(() => {
@@ -39,8 +41,17 @@ describe("google video generation provider", () => {
     createGoogleGenAIMock.mockClear();
   });
 
+  afterAll(() => {
+    vi.doUnmock("./google-genai-runtime.js");
+    vi.resetModules();
+  });
+
   it("declares explicit mode capabilities", () => {
-    expectExplicitVideoGenerationCapabilities(buildGoogleVideoGenerationProvider());
+    const provider = buildGoogleVideoGenerationProvider();
+    expectExplicitVideoGenerationCapabilities(provider);
+    expect(provider.capabilities.generate?.supportsAudio).toBe(false);
+    expect(provider.capabilities.imageToVideo?.supportsAudio).toBe(false);
+    expect(provider.capabilities.videoToVideo?.supportsAudio).toBe(false);
   });
 
   it("submits generation and returns inline video bytes", async () => {
@@ -86,11 +97,12 @@ describe("google video generation provider", () => {
           durationSeconds: 4,
           aspectRatio: "16:9",
           resolution: "720p",
-          generateAudio: true,
         }),
       }),
     );
+    expect(request?.config).not.toHaveProperty("generateAudio");
     expect(request?.config).not.toHaveProperty("numberOfVideos");
+    expect(request?.config).not.toHaveProperty("generateAudio");
     expect(result.videos).toHaveLength(1);
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
     expect(createGoogleGenAIMock).toHaveBeenCalledWith(
@@ -188,6 +200,46 @@ describe("google video generation provider", () => {
     expect(downloadMock).not.toHaveBeenCalled();
     expect(result.videos[0]?.buffer).toEqual(Buffer.from("direct-mp4"));
     expect(result.videos[0]?.mimeType).toBe("video/mp4");
+  });
+
+  it("stages SDK file downloads before finalizing generated video bytes", async () => {
+    vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "google-key",
+      source: "env",
+      mode: "api-key",
+    });
+    generateVideosMock.mockResolvedValue({
+      done: true,
+      response: {
+        generatedVideos: [
+          {
+            video: {
+              name: "files/generated-video",
+              mimeType: "video/mp4",
+            },
+          },
+        ],
+      },
+    });
+    downloadMock.mockImplementation(async ({ downloadPath }: { downloadPath: string }) => {
+      await writeFile(downloadPath, "sdk-video");
+    });
+
+    const provider = buildGoogleVideoGenerationProvider();
+    const result = await provider.generateVideo({
+      provider: "google",
+      model: "veo-3.1-fast-generate-preview",
+      prompt: "A tiny robot watering a windowsill garden",
+      cfg: {},
+      durationSeconds: 3,
+    });
+
+    const [{ downloadPath }] = downloadMock.mock.calls[0] ?? [{}];
+    const downloadBaseName = path.basename(String(downloadPath));
+    expect(downloadBaseName).toContain("video-1.mp4");
+    expect(downloadBaseName).toMatch(/\.part$/);
+    expect(result.videos[0]?.buffer).toEqual(Buffer.from("sdk-video"));
+    expect(result.videos[0]?.fileName).toBe("video-1.mp4");
   });
 
   it("falls back to REST predictLongRunning when text-only SDK video generation returns 404", async () => {

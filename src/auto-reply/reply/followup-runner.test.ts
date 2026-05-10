@@ -46,6 +46,16 @@ function debugFollowupTest(message: string): void {
   process.stderr.write(`[followup-runner.test] ${message}\n`);
 }
 
+function joinPromptSections(...sections: Array<string | undefined>): string {
+  const promptSections: string[] = [];
+  for (const section of sections) {
+    if (section) {
+      promptSections.push(section);
+    }
+  }
+  return promptSections.join("\n\n");
+}
+
 function registerFollowupTestSessionStore(
   storePath: string,
   sessionStore: Record<string, SessionEntry>,
@@ -931,13 +941,11 @@ describe("createFollowupRunner compaction", () => {
           sessionFile: transcriptPath,
           workspaceDir,
         });
-        params.followupRun.run.extraSystemPrompt = [
+        params.followupRun.run.extraSystemPrompt = joinPromptSections(
           params.followupRun.run.extraSystemPrompt,
           "Post-compaction context refresh",
           "Read AGENTS.md before replying.",
-        ]
-          .filter(Boolean)
-          .join("\n\n");
+        );
         const updatedEntry =
           params.sessionEntry ??
           (params.sessionKey && params.sessionStore
@@ -1145,7 +1153,7 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
 
     const { onBlockReply } = await runMessagingCase({
       agentResult: {
-        ...makeTextReplyDedupeResult(),
+        ...makeTextReplyDedupeResult({ messagingToolSentTexts: ["hello world!"] }),
         messagingToolSentTargets: [{ tool: "slack", provider: "slack", to: "channel:C1" }],
         meta: {
           agentMeta: {

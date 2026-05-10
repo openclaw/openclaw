@@ -16,6 +16,7 @@ import {
   resolveCronRunLogPath,
   resolveCronRunLogPruneOptions,
 } from "../cron/run-log.js";
+import type { CronServiceContract } from "../cron/service-contract.js";
 import { CronService } from "../cron/service.js";
 import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import { resolveCronStorePath } from "../cron/store.js";
@@ -40,7 +41,7 @@ import {
 } from "./server-cron-notifications.js";
 
 export type GatewayCronState = {
-  cron: CronService;
+  cron: CronServiceContract;
   storePath: string;
   cronEnabled: boolean;
 };
@@ -63,6 +64,7 @@ function pickDefined<T extends Record<string, unknown>>(
 function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
   return {
     id: job.id,
+    agentId: job.agentId,
     name: job.name,
     description: job.description,
     enabled: job.enabled,
@@ -356,10 +358,18 @@ export function buildGatewayCronService(params: {
       // getJob() would return undefined. `delivery` and `usage` are
       // intentionally omitted — they contain internal channel/token detail
       // that is not part of the public plugin SDK surface.
+      // Resolve job snapshot from the event or live service so top-level
+      // convenience fields (sessionTarget, agentId) are always populated
+      // when the job is known.
+      const jobSnapshot = evt.job ?? cron.getJob(evt.jobId);
+      const pluginJob = jobSnapshot ? toPluginCronJob(jobSnapshot) : undefined;
       const hookEvt: PluginHookCronChangedEvent = {
         action: evt.action,
         jobId: evt.jobId,
-        ...(evt.job ? { job: toPluginCronJob(evt.job) } : {}),
+        ...(pluginJob ? { job: pluginJob } : {}),
+        // Top-level routing fields so plugins don't have to dig into job.
+        sessionTarget: jobSnapshot?.sessionTarget,
+        agentId: jobSnapshot?.agentId,
         ...pickDefined(evt, [
           "runAtMs",
           "durationMs",
@@ -405,6 +415,7 @@ export function buildGatewayCronService(params: {
             status: evt.status,
             error: evt.error,
             summary: evt.summary,
+            diagnostics: evt.diagnostics,
             delivered: evt.delivered,
             deliveryStatus: evt.deliveryStatus,
             deliveryError: evt.deliveryError,

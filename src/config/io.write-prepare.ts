@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "../utils.js";
 import { applyMergePatch } from "./merge-patch.js";
+import { normalizeAgentModelMapForConfig, normalizeAgentModelRefForConfig } from "./model-input.js";
 import { isBlockedObjectKey } from "./prototype-keys.js";
 import type { OpenClawConfig } from "./types.js";
 
@@ -153,6 +154,23 @@ function setPathValueCreatingParents(value: unknown, path: string[], nextValue: 
   };
 }
 
+function deletePathValue(value: unknown, path: string[]): unknown {
+  if (path.length === 0 || !isRecord(value)) {
+    return value;
+  }
+  const [head, ...tail] = path;
+  if (!Object.prototype.hasOwnProperty.call(value, head)) {
+    return value;
+  }
+  const next: Record<string, unknown> = { ...value };
+  if (tail.length === 0) {
+    delete next[head];
+    return next;
+  }
+  next[head] = deletePathValue(value[head], tail);
+  return next;
+}
+
 function preserveSourceValueAtPath(params: {
   persistedCandidate: unknown;
   sourceConfig: unknown;
@@ -211,8 +229,16 @@ function preserveAuthoredAgentParams(params: {
     if (!isRecord(modelEntry) || !Object.prototype.hasOwnProperty.call(modelEntry, "params")) {
       continue;
     }
-    const modelPath = ["agents", "defaults", "models", modelId];
+    const modelPath = [
+      "agents",
+      "defaults",
+      "models",
+      normalizeAgentModelRefForConfig(modelId) || modelId,
+    ];
     const paramsPath = [...modelPath, "params"];
+    if (modelPath.at(-1) !== modelId) {
+      next = deletePathValue(next, ["agents", "defaults", "models", modelId]);
+    }
     if (getPathValue(next, modelPath) === undefined) {
       next = preserveSourceValueAtPath({
         ...params,
@@ -228,6 +254,58 @@ function preserveAuthoredAgentParams(params: {
       path: paramsPath,
       sourceValue: modelEntry.params,
     });
+  }
+  return next;
+}
+
+function normalizeAgentModelConfigForWrite(value: unknown): unknown {
+  if (typeof value === "string") {
+    const normalized = normalizeAgentModelRefForConfig(value);
+    return normalized === value ? value : normalized;
+  }
+  if (!isRecord(value)) {
+    return value;
+  }
+
+  let mutated = false;
+  const next: Record<string, unknown> = { ...value };
+  if (typeof value.primary === "string") {
+    const primary = normalizeAgentModelRefForConfig(value.primary);
+    if (primary !== value.primary) {
+      next.primary = primary;
+      mutated = true;
+    }
+  }
+  if (Array.isArray(value.fallbacks)) {
+    const fallbacks = value.fallbacks.map((fallback) =>
+      typeof fallback === "string" ? normalizeAgentModelRefForConfig(fallback) : fallback,
+    );
+    if (!isDeepStrictEqual(fallbacks, value.fallbacks)) {
+      next.fallbacks = fallbacks;
+      mutated = true;
+    }
+  }
+  return mutated ? next : value;
+}
+
+function normalizeAgentDefaultModelRefsForWrite(config: unknown): unknown {
+  const defaults = getPathValue(config, ["agents", "defaults"]);
+  if (!isRecord(defaults)) {
+    return config;
+  }
+
+  let next = config;
+  if (Object.prototype.hasOwnProperty.call(defaults, "model")) {
+    const normalizedModel = normalizeAgentModelConfigForWrite(defaults.model);
+    if (normalizedModel !== defaults.model) {
+      next = setPathValue(next, ["agents", "defaults", "model"], normalizedModel);
+    }
+  }
+  if (isRecord(defaults.models)) {
+    const normalizedModels = normalizeAgentModelMapForConfig(defaults.models);
+    if (normalizedModels !== defaults.models) {
+      next = setPathValue(next, ["agents", "defaults", "models"], normalizedModels);
+    }
   }
   return next;
 }
@@ -271,13 +349,14 @@ export function resolvePersistCandidateForWrite(params: {
     nextConfig: params.nextConfig,
     persistedCandidate: persisted,
   });
-  return preserveAuthoredAgentParams({
+  const withAuthoredParams = preserveAuthoredAgentParams({
     sourceConfig: params.sourceConfig,
     nextConfig: params.nextConfig,
     rootAuthoredConfig,
     persistedCandidate: withSchema,
     unsetPaths: params.unsetPaths,
   });
+  return normalizeAgentDefaultModelRefsForWrite(withAuthoredParams);
 }
 
 function readRootSchemaUri(value: unknown): string | undefined {

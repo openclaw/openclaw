@@ -23,7 +23,7 @@ const PRIVATE_BUNDLED_SDK_SURFACE_PATTERN =
   /\b(?:Private helper surface|Narrow plugin-sdk surface for the bundled|Narrow .*runtime exports used by the bundled)\b/i;
 const GENERIC_CORE_HELPER_FILES = ["src/polls.ts", "src/poll-params.ts"] as const;
 const GENERIC_CORE_PLUGIN_OWNER_NAME_PATTERN =
-  /\b(?:bluebubbles|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
+  /\b(?:imessage|discord|feishu|googlechat|matrix|mattermost|msteams|slack|telegram|whatsapp|zalo|zalouser)\b/gi;
 const PACKAGE_CONTRACT_SCAN_TIMEOUT_MS = 240_000;
 const DEPRECATED_EXTENSION_SDK_SPECIFIERS = new Set([
   "openclaw/plugin-sdk",
@@ -416,21 +416,8 @@ function collectWorkspaceCodeFiles(): string[] {
   return files;
 }
 
-function countIdentifierReferences(
-  files: readonly string[],
-  excludedFile: string,
-  name: string,
-): number {
-  let count = 0;
-  const pattern = new RegExp(`\\b${name}\\b`, "g");
-  for (const file of files) {
-    if (file === excludedFile) {
-      continue;
-    }
-    const source = readFileSync(file, "utf8");
-    count += [...source.matchAll(pattern)].length;
-  }
-  return count;
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function collectUnusedExtensionTestApiExports(): Array<{ file: string; exportName: string }> {
@@ -439,12 +426,54 @@ function collectUnusedExtensionTestApiExports(): Array<{ file: string; exportNam
   const testApiFiles = collectCodeFiles(resolve(REPO_ROOT, "extensions")).filter((file) =>
     file.endsWith("/test-api.ts"),
   );
+  const testApiExports = new Map<string, string[]>();
+  const exportNames = new Set<string>();
 
   for (const file of testApiFiles) {
-    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
     const source = readFileSync(file, "utf8");
-    for (const exportName of parseTestApiNamedExports(source)) {
-      if (countIdentifierReferences(workspaceCodeFiles, file, exportName) === 0) {
+    const namedExports = parseTestApiNamedExports(source);
+    testApiExports.set(file, namedExports);
+    for (const exportName of namedExports) {
+      exportNames.add(exportName);
+    }
+  }
+
+  if (exportNames.size === 0) {
+    return [];
+  }
+
+  const identifierPattern = new RegExp(
+    `\\b(${[...exportNames].map(escapeRegExp).join("|")})\\b`,
+    "g",
+  );
+  const referenceCounts = new Map<string, number>();
+  const selfReferenceCounts = new Map<string, Map<string, number>>();
+
+  for (const file of workspaceCodeFiles) {
+    const source = readFileSync(file, "utf8");
+    const selfCounts = testApiExports.has(file) ? new Map<string, number>() : undefined;
+    for (const match of source.matchAll(identifierPattern)) {
+      const exportName = match[1];
+      if (!exportName) {
+        continue;
+      }
+      referenceCounts.set(exportName, (referenceCounts.get(exportName) ?? 0) + 1);
+      if (selfCounts) {
+        selfCounts.set(exportName, (selfCounts.get(exportName) ?? 0) + 1);
+      }
+    }
+    if (selfCounts) {
+      selfReferenceCounts.set(file, selfCounts);
+    }
+  }
+
+  for (const [file, namedExports] of testApiExports) {
+    const repoRelativePath = relative(REPO_ROOT, file).replaceAll("\\", "/");
+    for (const exportName of namedExports) {
+      const referenceCount =
+        (referenceCounts.get(exportName) ?? 0) -
+        (selfReferenceCounts.get(file)?.get(exportName) ?? 0);
+      if (referenceCount === 0) {
         leaks.push({ file: repoRelativePath, exportName });
       }
     }
@@ -525,7 +554,7 @@ describe("plugin-sdk package contract guardrails", () => {
       .map(([entrypoint]) => entrypoint)
       .toSorted();
 
-    expect(duplicates).toEqual([]);
+    expect(duplicates).toStrictEqual([]);
   });
 
   it("keeps package.json exports aligned with built plugin-sdk entrypoints", () => {
@@ -616,7 +645,7 @@ describe("plugin-sdk package contract guardrails", () => {
       );
     }
 
-    expect(failures).toEqual([]);
+    expect(failures).toStrictEqual([]);
   });
 
   it("keeps Matrix dependencies local to the Matrix plugin", () => {
@@ -630,42 +659,43 @@ describe("plugin-sdk package contract guardrails", () => {
       "fake-indexeddb",
       "matrix-js-sdk",
     ]) {
-      expect(matrixRuntimeDeps.get(dep)).toBeDefined();
+      expect(matrixRuntimeDeps.get(dep)).toBeTypeOf("string");
+      expect(matrixRuntimeDeps.get(dep)).not.toBe("");
       expect(rootRuntimeDeps.has(dep)).toBe(false);
     }
     expect(rootRuntimeDeps.has("@openclaw/plugin-package-contract")).toBe(false);
   });
 
   it("keeps extension sources on public sdk or local package seams", () => {
-    expect(collectExtensionCoreImportLeaks()).toEqual([]);
+    expect(collectExtensionCoreImportLeaks()).toStrictEqual([]);
   });
 
   it("keeps extension production sources off repo test helpers", () => {
-    expect(collectExtensionTestHelperImportLeaks()).toEqual([]);
+    expect(collectExtensionTestHelperImportLeaks()).toStrictEqual([]);
   });
 
   it("keeps extension sources off deprecated plugin-sdk compatibility imports", () => {
-    expect(collectDeprecatedExtensionSdkImports()).toEqual([]);
+    expect(collectDeprecatedExtensionSdkImports()).toStrictEqual([]);
   });
 
   it("keeps real tests off deprecated plugin-sdk testing barrels", () => {
-    expect(collectDeprecatedTestBarrelImports()).toEqual([]);
+    expect(collectDeprecatedTestBarrelImports()).toStrictEqual([]);
   });
 
   it("keeps the package testing barrel as a single deprecated bridge", () => {
-    expect(collectDeprecatedPackageTestingBridgeDrift()).toEqual([]);
+    expect(collectDeprecatedPackageTestingBridgeDrift()).toStrictEqual([]);
   });
 
   it(
     "keeps extension test-api exports consumed",
     () => {
-      expect(collectUnusedExtensionTestApiExports()).toEqual([]);
+      expect(collectUnusedExtensionTestApiExports()).toStrictEqual([]);
     },
     PACKAGE_CONTRACT_SCAN_TIMEOUT_MS,
   );
 
   it("keeps reserved SDK compatibility subpaths inside their owning bundled plugins", () => {
-    expect(collectCrossOwnerReservedSdkImports()).toEqual([]);
+    expect(collectCrossOwnerReservedSdkImports()).toStrictEqual([]);
   });
 
   it("keeps reserved SDK compatibility subpaths actively used", () => {
@@ -674,10 +704,10 @@ describe("plugin-sdk package contract guardrails", () => {
       (entrypoint) => !usedReserved.has(entrypoint),
     );
 
-    expect(unusedReserved).toEqual([]);
+    expect(unusedReserved).toStrictEqual([]);
   });
 
   it("keeps generic core poll helpers free of plugin owner names", () => {
-    expect(collectGenericCoreOwnerNameLeaks()).toEqual([]);
+    expect(collectGenericCoreOwnerNameLeaks()).toStrictEqual([]);
   });
 });

@@ -29,10 +29,6 @@ vi.mock("./models-config.runtime.js", () => ({
   ensureOpenClawModelsJson: contextTestState.ensureOpenClawModelsJson,
 }));
 
-vi.mock("./agent-paths.js", () => ({
-  resolveOpenClawAgentDir: () => "/tmp/openclaw-agent",
-}));
-
 vi.mock("./pi-model-discovery-runtime.js", () => ({
   discoverAuthStorage: contextTestState.discoverAuthStorage,
   discoverModels: contextTestState.discoverModels,
@@ -301,7 +297,7 @@ describe("lookupContextTokens", () => {
 
     expect(contextTestState.discoverModels).toHaveBeenCalledWith(
       expect.anything(),
-      "/tmp/openclaw-agent",
+      expect.stringMatching(/\/\.openclaw\/agents\/main\/agent$/),
       { normalizeModels: false },
     );
     expect(lookupContextTokens("anthropic/claude-opus-4.7-20260219")).toBe(1_048_576);
@@ -360,6 +356,25 @@ describe("lookupContextTokens", () => {
       model: "anthropic/claude-sonnet-4-5",
     });
     expect(result).toBe(200_000);
+  });
+
+  it("resolveContextTokensForModel treats explicit config as authoritative for read-only misses", async () => {
+    const loadConfig = vi.fn(() => {
+      throw new Error("runtime config should not be loaded");
+    });
+    mockContextModuleDeps(loadConfig);
+    const resolveContextTokensForModel = await importResolveContextTokensForModel();
+
+    const result = resolveContextTokensForModel({
+      cfg: { agents: { defaults: {} } } as never,
+      provider: "openai",
+      model: "unknown-test-model",
+      fallbackContextTokens: 123_000,
+      allowAsyncLoad: false,
+    });
+
+    expect(result).toBe(123_000);
+    expect(loadConfig).not.toHaveBeenCalled();
   });
 
   it("resolveContextTokensForModel: config direct scan prevents OpenRouter qualified key collision for Google provider", async () => {

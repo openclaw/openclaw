@@ -5,6 +5,7 @@ import {
   isPrivateIpAddress,
   isSameSsrFPolicy,
   ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
 } from "./ssrf.js";
 
 const privateIpCases = [
@@ -94,6 +95,17 @@ function expectIpPrivacyCases(cases: string[], expected: boolean) {
   }
 }
 
+const httpBaseUrlPolicyBuilders = [
+  {
+    name: "ssrfPolicyFromHttpBaseUrlAllowedHostname",
+    build: ssrfPolicyFromHttpBaseUrlAllowedHostname,
+  },
+  {
+    name: "ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist",
+    build: ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
+  },
+];
+
 describe("ssrf ip classification", () => {
   it("classifies blocked ip literals as private", () => {
     expectIpPrivacyCases(
@@ -111,17 +123,34 @@ describe("ssrf ip classification", () => {
   });
 });
 
+describe("HTTP base URL SSRF policy builders", () => {
+  it.each(httpBaseUrlPolicyBuilders)(
+    "$name ignores empty, invalid, and non-HTTP URLs",
+    ({ build }) => {
+      expect(build("")).toBeUndefined();
+      expect(build("not-a-url")).toBeUndefined();
+      expect(build("ftp://api.example.com")).toBeUndefined();
+    },
+  );
+});
+
 describe("ssrfPolicyFromHttpBaseUrlAllowedHostname", () => {
   it("builds an allowed-hostname policy from HTTP base URLs", () => {
     expect(ssrfPolicyFromHttpBaseUrlAllowedHostname(" https://api.example.com/v1 ")).toEqual({
       allowedHostnames: ["api.example.com"],
     });
   });
+});
 
-  it("ignores empty, invalid, and non-HTTP URLs", () => {
-    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("")).toBeUndefined();
-    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("not-a-url")).toBeUndefined();
-    expect(ssrfPolicyFromHttpBaseUrlAllowedHostname("ftp://api.example.com")).toBeUndefined();
+describe("ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist", () => {
+  it("builds a host-scoped fake-IP policy from HTTP base URLs", () => {
+    expect(
+      ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(" https://api.example.com/v1 "),
+    ).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["api.example.com"],
+    });
   });
 });
 

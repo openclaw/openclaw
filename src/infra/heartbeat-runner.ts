@@ -16,6 +16,7 @@ import { appendCronStyleCurrentTimeLine } from "../agents/current-time.js";
 import { isNestedAgentLane } from "../agents/lanes.js";
 import { resolveModelRefFromString, type ModelRef } from "../agents/model-selection.js";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
+import { formatReasoningMessage } from "../agents/pi-embedded-utils.js";
 import { DEFAULT_HEARTBEAT_FILENAME } from "../agents/workspace.js";
 import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import {
@@ -37,6 +38,7 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
   ChannelHeartbeatDeps,
@@ -104,12 +106,7 @@ import {
   resolveNextHeartbeatDueMs,
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
-import {
-  isHeartbeatEnabledForAgent,
-  resolveHeartbeatIntervalMs,
-  resolveHeartbeatSummaryForAgent,
-  type HeartbeatSummary,
-} from "./heartbeat-summary.js";
+import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -128,7 +125,6 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
-import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -639,10 +635,26 @@ function resolveHeartbeatReasoningPayloads(
   replyResult: ReplyPayload | ReplyPayload[] | undefined,
 ): ReplyPayload[] {
   const payloads = Array.isArray(replyResult) ? replyResult : replyResult ? [replyResult] : [];
-  return payloads.filter((payload) => {
+  const reasoningPayloads: ReplyPayload[] = [];
+  for (const payload of payloads) {
     const text = typeof payload.text === "string" ? payload.text : "";
-    return text.trimStart().startsWith("Reasoning:");
-  });
+    const hasLegacyReasoningPrefix = text.trimStart().startsWith("Reasoning:");
+    if (payload.isReasoning !== true && !hasLegacyReasoningPrefix) {
+      continue;
+    }
+
+    const formattedText = hasLegacyReasoningPrefix ? text : formatReasoningMessage(text);
+    if (!formattedText.trim()) {
+      continue;
+    }
+
+    const deliverablePayload: ReplyPayload = { ...payload, text: formattedText };
+    delete deliverablePayload.isReasoning;
+    delete deliverablePayload.mediaUrl;
+    delete deliverablePayload.mediaUrls;
+    reasoningPayloads.push(deliverablePayload);
+  }
+  return reasoningPayloads;
 }
 
 async function restoreHeartbeatUpdatedAt(params: {
@@ -957,6 +969,7 @@ type HeartbeatPromptResolution = {
   hasRelayableExecCompletion: boolean;
   hasCronEvents: boolean;
   hasDueCommitments: boolean;
+  usesHeartbeatResponseTool: boolean;
 };
 
 function resolveDueHeartbeatTasks(
@@ -1047,7 +1060,7 @@ function resolveHeartbeatRunPrompt(params: {
   const hasCronEvents = cronEvents.length > 0;
   const commitmentPrompt = buildCommitmentHeartbeatPrompt({
     commitments: params.preflight.dueCommitments,
-    useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+    useHeartbeatResponseTool: false,
   });
   const hasDueCommitments = Boolean(commitmentPrompt);
 
@@ -1077,6 +1090,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasDueCommitments: false,
+        usesHeartbeatResponseTool: params.useHeartbeatResponseTool,
       };
     }
     if (commitmentPrompt) {
@@ -1086,6 +1100,7 @@ ${completionInstruction}`;
         hasRelayableExecCompletion: false,
         hasCronEvents: false,
         hasDueCommitments,
+        usesHeartbeatResponseTool: false,
       };
     }
     return {
@@ -1094,20 +1109,22 @@ ${completionInstruction}`;
       hasRelayableExecCompletion: false,
       hasCronEvents: false,
       hasDueCommitments: false,
+      usesHeartbeatResponseTool: false,
     };
   }
 
+  const baseUsesHeartbeatResponseTool = params.useHeartbeatResponseTool && !commitmentPrompt;
   const basePrompt = hasExecCompletion
     ? buildExecEventPrompt(execEvents, {
         deliverToUser: params.canRelayToUser,
-        useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+        useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
       })
     : hasCronEvents
       ? buildCronEventPrompt(cronEvents, {
           deliverToUser: params.canRelayToUser,
-          useHeartbeatResponseTool: params.useHeartbeatResponseTool,
+          useHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
         })
-      : params.useHeartbeatResponseTool
+      : baseUsesHeartbeatResponseTool
         ? resolveHeartbeatResponseToolPrompt(params.cfg, params.heartbeat)
         : resolveHeartbeatPrompt(params.cfg, params.heartbeat);
   const prompt = commitmentPrompt
@@ -1120,6 +1137,7 @@ ${completionInstruction}`;
     hasRelayableExecCompletion,
     hasCronEvents,
     hasDueCommitments,
+    usesHeartbeatResponseTool: baseUsesHeartbeatResponseTool,
   };
 }
 
@@ -1200,6 +1218,24 @@ export async function runHeartbeatOnce(opts: {
       durationMs: Date.now() - startedAt,
     });
     return { status: "skipped", reason: HEARTBEAT_SKIP_LANES_BUSY };
+  }
+
+  // Phase 2: Stronger heartbeat deferral while a final delivery replay is pending.
+  // Plain `updatedAt` changes are normal for heartbeat sessions and should not
+  // suppress heartbeat runs; only defer when final delivery recovery is active.
+  const { entry: recentSessionEntry } = resolveHeartbeatSession(
+    cfg,
+    agentId,
+    heartbeat,
+    opts.sessionKey,
+  );
+  const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  if (
+    recentSessionEntry?.pendingFinalDelivery === true &&
+    recentSessionEntry?.updatedAt &&
+    startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
+  ) {
+    return { status: "skipped", reason: HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT };
   }
 
   // Preflight centralizes trigger classification, event inspection, and HEARTBEAT.md gating.
@@ -1318,6 +1354,7 @@ export async function runHeartbeatOnce(opts: {
     hasRelayableExecCompletion,
     hasCronEvents,
     hasDueCommitments,
+    usesHeartbeatResponseTool,
   } = resolveHeartbeatRunPrompt({
     cfg,
     heartbeat,
@@ -1552,7 +1589,7 @@ export async function runHeartbeatOnce(opts: {
         return false;
       }
     }
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1562,6 +1599,9 @@ export async function runHeartbeatOnce(opts: {
       session: outboundSession,
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     return true;
   };
 
@@ -1577,6 +1617,10 @@ export async function runHeartbeatOnce(opts: {
       isHeartbeat: true,
       ...(heartbeatModelOverride ? { heartbeatModelOverride } : {}),
       suppressToolErrorWarnings,
+      ...(usesHeartbeatResponseTool ? { enableHeartbeatTool: true, forceHeartbeatTool: true } : {}),
+      ...(usesHeartbeatResponseTool
+        ? { sourceReplyDeliveryMode: "message_tool_only" as const }
+        : {}),
       ...(hasDueCommitments ? { disableTools: true, skillFilter: [] } : {}),
       // Heartbeat timeout is a per-run override so user turns keep the global default.
       timeoutOverrideSeconds,
@@ -1817,7 +1861,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1837,6 +1881,9 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     await markCommitmentsStatus({
       cfg,
       ids: dueCommitmentIds,
