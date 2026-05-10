@@ -222,7 +222,7 @@ describe("spawnSubagentDirect filename validation", () => {
     );
   });
 
-  it("removes materialized attachments when lineage patching fails", async () => {
+  it("keeps attachments out of the workspace filesystem when lineage patching fails", async () => {
     const calls: Array<{ method?: string; params?: Record<string, unknown> }> = [];
     sessionStore = {};
     upsertSessionEntryMock.mockImplementation((options: { entry?: Record<string, unknown> }) => {
@@ -251,10 +251,7 @@ describe("spawnSubagentDirect filename validation", () => {
     expect(result.status).toBe("error");
     expect(result.error).toContain("lineage patch failed");
     const attachmentsRoot = path.join(workspaceDirOverride, ".openclaw", "attachments");
-    const retainedDirs = fs.existsSync(attachmentsRoot)
-      ? fs.readdirSync(attachmentsRoot).filter((entry) => !entry.startsWith("."))
-      : [];
-    expect(retainedDirs).toHaveLength(0);
+    expect(fs.existsSync(attachmentsRoot)).toBe(false);
     const deleteCall = calls.find((entry) => entry.method === "sessions.delete");
     const deleteParams = deleteCall?.params as
       | {

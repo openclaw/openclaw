@@ -629,6 +629,10 @@ sessionId}` and session key context.
   metadata, idempotency keys, and archive bytes live in SQLite; the installer
   only receives a temporary materialized archive path while an install is
   running.
+- Subagent inline attachments no longer materialize under workspace
+  `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
+  inline runs seed those entries into the per-agent runtime scratch namespace,
+  and disk-backed tools overlay that SQLite scratch for attachment paths.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
   diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
   instead of `logs/*.jsonl` files.
@@ -969,6 +973,8 @@ Move these into agent databases:
   metadata is recorded in `transcript_snapshots`. Gateway checkpoint helpers
   now name these values as transcript snapshots rather than source files.
 - Agent VFS scratch/workspace namespaces. Done for runtime VFS writes.
+- Subagent attachment payloads. Done for runtime writes: they are SQLite VFS
+  seed entries and never durable workspace files.
 - Tool artifacts. Done for runtime writes.
 - Run artifacts. Done for worker runtime writes through the per-agent
   `run_artifacts` table.

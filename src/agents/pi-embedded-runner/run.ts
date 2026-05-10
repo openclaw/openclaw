@@ -88,6 +88,7 @@ import {
 import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
+import { createSqliteAgentRuntimeFilesystem } from "../runtime-filesystem.sqlite.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
 import { buildAgentRuntimePlan } from "../runtime-plan/build.js";
 import { ensureRuntimePluginsLoaded } from "../runtime-plugins.js";
@@ -1382,6 +1383,17 @@ export async function runEmbeddedPiAgent(
           } else {
             parentAbortSignal?.addEventListener("abort", relayParentAbort, { once: true });
           }
+          const agentFilesystem =
+            params.agentFilesystem ??
+            (params.initialVfsEntries?.length
+              ? createSqliteAgentRuntimeFilesystem({
+                  agentId: workspaceResolution.agentId,
+                  runId: params.runId,
+                  workspaceDir: resolvedWorkspace,
+                  filesystemMode: "disk",
+                  initialVfsEntries: params.initialVfsEntries,
+                })
+              : undefined);
           const rawAttempt = await runEmbeddedAttemptWithBackend({
             sessionId: activeSessionId,
             sessionKey: resolvedSessionKey,
@@ -1423,7 +1435,7 @@ export async function runEmbeddedPiAgent(
             imageOrder: params.imageOrder,
             clientTools: params.clientTools,
             disableTools: params.disableTools,
-            agentFilesystem: params.agentFilesystem,
+            agentFilesystem,
             provider,
             modelId,
             // Use the harness selected before model/auth setup for the actual

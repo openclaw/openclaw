@@ -751,6 +751,43 @@ export function createVirtualEditTool(params: VirtualToolParams) {
   return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
 }
 
+export function createWorkspaceScratchOverlayReadTool(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const base = createReadTool(params.root, {
+    operations: createWorkspaceScratchOverlayReadOperations(params),
+  }) as unknown as AnyAgentTool;
+  return createOpenClawReadTool(base, {
+    modelContextWindowTokens: params.modelContextWindowTokens,
+    imageSanitization: params.imageSanitization,
+  });
+}
+
+export function createWorkspaceScratchOverlayWriteTool(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const base = createWriteTool(params.root, {
+    operations: createWorkspaceScratchOverlayWriteOperations(params),
+  }) as unknown as AnyAgentTool;
+  return wrapToolParamValidation(base, REQUIRED_PARAM_GROUPS.write);
+}
+
+export function createWorkspaceScratchOverlayEditTool(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const base = createEditTool(params.root, {
+    operations: createWorkspaceScratchOverlayEditOperations(params),
+  }) as unknown as AnyAgentTool;
+  const withRecovery = wrapEditToolWithRecovery(base, {
+    root: params.root,
+    readFile: async (absolutePath: string) =>
+      readWorkspaceScratchOverlayFile(params, absolutePath).then((buffer) =>
+        buffer.toString("utf8"),
+      ),
+  });
+  return wrapToolParamValidation(withRecovery, REQUIRED_PARAM_GROUPS.edit);
+}
+
 export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
@@ -947,6 +984,35 @@ function resolveVirtualPath(root: string, absolutePath: string): string {
   return relative ? `/${relative.split(path.sep).join("/")}` : "/";
 }
 
+function isScratchAttachmentPath(vfsPath: string): boolean {
+  return vfsPath === "/.openclaw/attachments" || vfsPath.startsWith("/.openclaw/attachments/");
+}
+
+function shouldUseScratchForWorkspacePath(
+  params: VirtualToolParams,
+  absolutePath: string,
+): boolean {
+  let vfsPath: string;
+  try {
+    vfsPath = resolveVirtualPath(params.root, absolutePath);
+  } catch {
+    return false;
+  }
+  const stat = params.scratch.stat(vfsPath);
+  return stat?.kind === "file" || stat?.kind === "directory" || isScratchAttachmentPath(vfsPath);
+}
+
+async function readWorkspaceScratchOverlayFile(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+  absolutePath: string,
+): Promise<Buffer> {
+  if (shouldUseScratchForWorkspacePath(params, absolutePath)) {
+    return params.scratch.readFile(resolveVirtualPath(params.root, absolutePath));
+  }
+  const hostOps = createHostEditOperations(params.root, { workspaceOnly: params.workspaceOnly });
+  return Buffer.from(await hostOps.readFile(absolutePath));
+}
+
 function createVirtualReadOperations(params: VirtualToolParams) {
   return {
     readFile: async (absolutePath: string) =>
@@ -966,6 +1032,34 @@ function createVirtualReadOperations(params: VirtualToolParams) {
   } as const;
 }
 
+function createWorkspaceScratchOverlayReadOperations(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const hostOps = createHostEditOperations(params.root, { workspaceOnly: params.workspaceOnly });
+  return {
+    readFile: async (absolutePath: string) =>
+      shouldUseScratchForWorkspacePath(params, absolutePath)
+        ? params.scratch.readFile(resolveVirtualPath(params.root, absolutePath))
+        : hostOps.readFile(absolutePath),
+    access: async (absolutePath: string) => {
+      if (shouldUseScratchForWorkspacePath(params, absolutePath)) {
+        const vfsPath = resolveVirtualPath(params.root, absolutePath);
+        const stat = params.scratch.stat(vfsPath);
+        if (!stat || stat.kind !== "file") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        return;
+      }
+      await hostOps.access(absolutePath);
+    },
+    detectImageMimeType: async (absolutePath: string) => {
+      const buffer = await readWorkspaceScratchOverlayFile(params, absolutePath);
+      const mime = await detectMime({ buffer, filePath: absolutePath });
+      return mime && mime.startsWith("image/") ? mime : undefined;
+    },
+  } as const;
+}
+
 function createVirtualWriteOperations(params: VirtualToolParams) {
   return {
     mkdir: async (dir: string) => {
@@ -973,6 +1067,28 @@ function createVirtualWriteOperations(params: VirtualToolParams) {
     },
     writeFile: async (absolutePath: string, content: string) => {
       params.scratch.writeFile(resolveVirtualPath(params.root, absolutePath), content);
+    },
+  } as const;
+}
+
+function createWorkspaceScratchOverlayWriteOperations(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const hostOps = createHostWriteOperations(params.root, { workspaceOnly: params.workspaceOnly });
+  return {
+    mkdir: async (dir: string) => {
+      if (shouldUseScratchForWorkspacePath(params, dir)) {
+        params.scratch.mkdir(resolveVirtualPath(params.root, dir));
+        return;
+      }
+      await hostOps.mkdir(dir);
+    },
+    writeFile: async (absolutePath: string, content: string) => {
+      if (shouldUseScratchForWorkspacePath(params, absolutePath)) {
+        params.scratch.writeFile(resolveVirtualPath(params.root, absolutePath), content);
+        return;
+      }
+      await hostOps.writeFile(absolutePath, content);
     },
   } as const;
 }
@@ -990,6 +1106,33 @@ function createVirtualEditOperations(params: VirtualToolParams) {
       if (!stat || stat.kind !== "file") {
         throw createFsAccessError("ENOENT", absolutePath);
       }
+    },
+  } as const;
+}
+
+function createWorkspaceScratchOverlayEditOperations(
+  params: VirtualToolParams & { workspaceOnly?: boolean },
+) {
+  const hostOps = createHostEditOperations(params.root, { workspaceOnly: params.workspaceOnly });
+  return {
+    readFile: (absolutePath: string) => readWorkspaceScratchOverlayFile(params, absolutePath),
+    writeFile: async (absolutePath: string, content: string) => {
+      if (shouldUseScratchForWorkspacePath(params, absolutePath)) {
+        params.scratch.writeFile(resolveVirtualPath(params.root, absolutePath), content);
+        return;
+      }
+      await hostOps.writeFile(absolutePath, content);
+    },
+    access: async (absolutePath: string) => {
+      if (shouldUseScratchForWorkspacePath(params, absolutePath)) {
+        const vfsPath = resolveVirtualPath(params.root, absolutePath);
+        const stat = params.scratch.stat(vfsPath);
+        if (!stat || stat.kind !== "file") {
+          throw createFsAccessError("ENOENT", absolutePath);
+        }
+        return;
+      }
+      await hostOps.access(absolutePath);
     },
   } as const;
 }

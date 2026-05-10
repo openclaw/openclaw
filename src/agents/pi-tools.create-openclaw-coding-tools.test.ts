@@ -479,6 +479,55 @@ describe("createOpenClawCodingTools", () => {
     expect(scratch.readFile("/notes/a.txt").toString("utf8")).toBe("edited vfs");
   });
 
+  it("overlays SQLite scratch attachments on disk-backed workspaces without writing attachment files", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-tools-overlay-"));
+    const scratch = createMemoryVirtualFs();
+    scratch.writeFile("/.openclaw/attachments/seed/file.txt", "hello attachment");
+    await fs.writeFile(path.join(workspaceDir, "host.txt"), "hello host", "utf8");
+    try {
+      const tools = createOpenClawCodingTools({
+        workspaceDir,
+        agentFilesystem: { scratch, workspace: { root: workspaceDir } },
+        toolConstructionPlan: {
+          includeBaseCodingTools: true,
+          includeShellTools: true,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: false,
+        },
+      });
+
+      const readAttachmentResult = await tools
+        .find((tool) => tool.name === "read")
+        ?.execute("call-read-attachment", {
+          path: ".openclaw/attachments/seed/file.txt",
+        });
+      expect(JSON.stringify(readAttachmentResult)).toContain("hello attachment");
+
+      const readHostResult = await tools
+        .find((tool) => tool.name === "read")
+        ?.execute("call-read-host", {
+          path: "host.txt",
+        });
+      expect(JSON.stringify(readHostResult)).toContain("hello host");
+
+      await tools
+        .find((tool) => tool.name === "edit")
+        ?.execute("call-edit-attachment", {
+          path: ".openclaw/attachments/seed/file.txt",
+          edits: [{ oldText: "hello attachment", newText: "edited attachment" }],
+        });
+      expect(scratch.readFile("/.openclaw/attachments/seed/file.txt").toString("utf8")).toBe(
+        "edited attachment",
+      );
+      await expect(
+        fs.access(path.join(workspaceDir, ".openclaw", "attachments", "seed", "file.txt")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
   it("uses VFS-backed apply_patch when runtime filesystem has no workspace capability", async () => {
     const scratch = createMemoryVirtualFs();
     scratch.writeFile("/notes/a.txt", "hello vfs\n");

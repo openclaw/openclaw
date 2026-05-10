@@ -1,9 +1,6 @@
 import { parentPort, workerData } from "node:worker_threads";
 import type { MessagePort } from "node:worker_threads";
 import type { createSqliteAgentCacheStore as CreateSqliteAgentCacheStore } from "./cache/agent-cache-store.sqlite.js";
-import type { createSqliteRunArtifactStore as CreateSqliteRunArtifactStore } from "./filesystem/run-artifact-store.sqlite.js";
-import type { createSqliteToolArtifactStore as CreateSqliteToolArtifactStore } from "./filesystem/tool-artifact-store.sqlite.js";
-import type { createSqliteVirtualAgentFs as CreateSqliteVirtualAgentFs } from "./filesystem/virtual-agent-fs.sqlite.js";
 import type {
   AgentRuntimeControlMessage,
   AgentRuntimeBackend,
@@ -11,68 +8,18 @@ import type {
   AgentRunResult,
   PreparedAgentRun,
 } from "./runtime-backend.js";
+import { createSqliteAgentRuntimeFilesystem } from "./runtime-filesystem.sqlite.js";
 import type {
   AgentWorkerMessage,
   AgentWorkerParentMessage,
   AgentWorkerRequest,
 } from "./runtime-worker.js";
 
-type VirtualAgentFsModule = {
-  createSqliteVirtualAgentFs: typeof CreateSqliteVirtualAgentFs;
-};
-
-type ToolArtifactStoreModule = {
-  createSqliteToolArtifactStore: typeof CreateSqliteToolArtifactStore;
-};
-
-type RunArtifactStoreModule = {
-  createSqliteRunArtifactStore: typeof CreateSqliteRunArtifactStore;
-};
-
 type AgentCacheStoreModule = {
   createSqliteAgentCacheStore: typeof CreateSqliteAgentCacheStore;
 };
 
-let virtualAgentFsModulePromise: Promise<VirtualAgentFsModule> | null = null;
-let toolArtifactStoreModulePromise: Promise<ToolArtifactStoreModule> | null = null;
-let runArtifactStoreModulePromise: Promise<RunArtifactStoreModule> | null = null;
 let agentCacheStoreModulePromise: Promise<AgentCacheStoreModule> | null = null;
-
-async function loadVirtualAgentFsModule(): Promise<VirtualAgentFsModule> {
-  virtualAgentFsModulePromise ??= import("./filesystem/virtual-agent-fs.sqlite.js").catch(
-    async (error: unknown) => {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ERR_MODULE_NOT_FOUND") {
-        throw error;
-      }
-      return (await import("./filesystem/virtual-agent-fs.sqlite.ts")) as VirtualAgentFsModule;
-    },
-  ) as Promise<VirtualAgentFsModule>;
-  return virtualAgentFsModulePromise;
-}
-
-async function loadToolArtifactStoreModule(): Promise<ToolArtifactStoreModule> {
-  toolArtifactStoreModulePromise ??= import("./filesystem/tool-artifact-store.sqlite.js").catch(
-    async (error: unknown) => {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ERR_MODULE_NOT_FOUND") {
-        throw error;
-      }
-      return (await import("./filesystem/tool-artifact-store.sqlite.ts")) as ToolArtifactStoreModule;
-    },
-  ) as Promise<ToolArtifactStoreModule>;
-  return toolArtifactStoreModulePromise;
-}
-
-async function loadRunArtifactStoreModule(): Promise<RunArtifactStoreModule> {
-  runArtifactStoreModulePromise ??= import("./filesystem/run-artifact-store.sqlite.js").catch(
-    async (error: unknown) => {
-      if ((error as NodeJS.ErrnoException | undefined)?.code !== "ERR_MODULE_NOT_FOUND") {
-        throw error;
-      }
-      return (await import("./filesystem/run-artifact-store.sqlite.ts")) as RunArtifactStoreModule;
-    },
-  ) as Promise<RunArtifactStoreModule>;
-  return runArtifactStoreModulePromise;
-}
 
 async function loadAgentCacheStoreModule(): Promise<AgentCacheStoreModule> {
   agentCacheStoreModulePromise ??= import("./cache/agent-cache-store.sqlite.js").catch(
@@ -89,34 +36,7 @@ async function loadAgentCacheStoreModule(): Promise<AgentCacheStoreModule> {
 export async function createWorkerFilesystem(
   preparedRun: PreparedAgentRun,
 ): Promise<AgentRuntimeContext["filesystem"]> {
-  const { createSqliteVirtualAgentFs } = await loadVirtualAgentFsModule();
-  const { createSqliteToolArtifactStore } = await loadToolArtifactStoreModule();
-  const { createSqliteRunArtifactStore } = await loadRunArtifactStoreModule();
-  const scratch = createSqliteVirtualAgentFs({
-    agentId: preparedRun.agentId,
-    namespace: `run:${preparedRun.runId}`,
-  });
-  const artifacts = createSqliteToolArtifactStore({
-    agentId: preparedRun.agentId,
-    runId: preparedRun.runId,
-  });
-  const runArtifacts = createSqliteRunArtifactStore({
-    agentId: preparedRun.agentId,
-    runId: preparedRun.runId,
-  });
-  for (const entry of preparedRun.initialVfsEntries ?? []) {
-    scratch.writeFile(entry.path, Buffer.from(entry.contentBase64, "base64"), {
-      metadata: entry.metadata,
-    });
-  }
-  return {
-    scratch,
-    artifacts,
-    runArtifacts,
-    ...(preparedRun.filesystemMode === "vfs-only"
-      ? {}
-      : { workspace: { root: preparedRun.workspaceDir } }),
-  };
+  return createSqliteAgentRuntimeFilesystem(preparedRun);
 }
 
 function post(message: AgentWorkerMessage): void {
