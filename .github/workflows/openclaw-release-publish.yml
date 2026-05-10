@@ -126,7 +126,7 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: openclaw-npm-preflight-${{ inputs.tag }}
-          path: preflight-manifest
+          path: ${{ runner.temp }}/openclaw-npm-preflight-manifest
           repository: ${{ github.repository }}
           run-id: ${{ inputs.preflight_run_id }}
           github-token: ${{ github.token }}
@@ -151,10 +151,11 @@ jobs:
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
         run: |
           set -euo pipefail
-          manifest="preflight-manifest/preflight-manifest.json"
+          preflight_dir="${RUNNER_TEMP}/openclaw-npm-preflight-manifest"
+          manifest="${preflight_dir}/preflight-manifest.json"
           if [[ ! -f "$manifest" ]]; then
             echo "OpenClaw npm preflight manifest is missing." >&2
-            ls -la preflight-manifest >&2 || true
+            ls -la "$preflight_dir" >&2 || true
             exit 1
           fi
           release_tag="$(jq -r '.releaseTag // ""' "$manifest")"
@@ -174,11 +175,11 @@ jobs:
             echo "Preflight manifest npm dist-tag mismatch: expected $RELEASE_NPM_DIST_TAG, got $npm_dist_tag" >&2
             exit 1
           fi
-          if [[ -z "$tarball_name" || ! -f "preflight-manifest/$tarball_name" ]]; then
+          if [[ -z "$tarball_name" || ! -f "${preflight_dir}/${tarball_name}" ]]; then
             echo "Preflight manifest tarball is missing: $tarball_name" >&2
             exit 1
           fi
-          actual_tarball_sha256="$(sha256sum "preflight-manifest/$tarball_name" | awk '{print $1}')"
+          actual_tarball_sha256="$(sha256sum "${preflight_dir}/${tarball_name}" | awk '{print $1}')"
           if [[ "$actual_tarball_sha256" != "$tarball_sha256" ]]; then
             echo "Preflight manifest tarball digest mismatch." >&2
             exit 1
@@ -222,6 +223,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Checkout release SHA
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ needs.resolve_release_target.outputs.sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Dispatch publish workflows
         env:
           GH_TOKEN: ${{ github.token }}
@@ -336,8 +344,7 @@ jobs:
             changelog_file="${RUNNER_TEMP}/CHANGELOG.md"
             notes_file="${RUNNER_TEMP}/release-notes.md"
 
-            gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${TARGET_SHA}" \
-              --jq '.content' | base64 --decode > "${changelog_file}"
+            git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"
             awk -v version="${notes_version}" '
               $0 == "## " version { in_section = 1; next }
               /^## / && in_section { exit }

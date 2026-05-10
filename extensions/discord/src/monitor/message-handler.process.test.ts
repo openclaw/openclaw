@@ -1383,8 +1383,8 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("Exec"));
-    expect(draftStream.update).toHaveBeenCalledWith(expect.stringContaining("exec done"));
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["Pinching...\n🛠️ Exec\n• exec done"]);
     expectPreviewEditContent("done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
@@ -1770,7 +1770,8 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
     );
-    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Apply Patch"));
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.every((update) => !update.includes("Apply Patch"))).toBe(true);
   });
 
   it("shows reasoning text instead of a bare Reasoning progress line", async () => {
@@ -1803,7 +1804,8 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n🛠️ Exec\n• _Reading the event projector_",
     );
-    expect(draftStream.update).not.toHaveBeenCalledWith(expect.stringContaining("Reasoning"));
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.every((update) => !update.includes("Reasoning"))).toBe(true);
   });
 
   it("replaces reasoning snapshots instead of appending duplicates", async () => {

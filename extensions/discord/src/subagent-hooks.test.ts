@@ -202,22 +202,23 @@ describe("discord subagent hook handlers", () => {
   });
 
   it("binds thread routing on subagent_spawning", async () => {
-    const handlers = registerHandlersForTest();
+    const config = {
+      channels: {
+        discord: {
+          threadBindings: {
+            spawnSessions: true,
+          },
+        },
+      },
+    };
+    const handlers = registerHandlersForTest(config);
     const handler = getRequiredHookHandler(handlers, "subagent_spawning");
 
     const result = await handler(createSpawnEvent(), {});
 
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledTimes(1);
     expect(hookMocks.autoBindSpawnedDiscordSubagent).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        channels: expect.objectContaining({
-          discord: expect.objectContaining({
-            threadBindings: expect.objectContaining({
-              spawnSessions: true,
-            }),
-          }),
-        }),
-      }),
+      cfg: config,
       accountId: "work",
       channel: "discord",
       to: "channel:123",
@@ -246,24 +247,25 @@ describe("discord subagent hook handlers", () => {
   });
 
   it("honors defaultAccount policy when requester omits accountId", async () => {
-    await expectSubagentSpawningError({
-      config: {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            threadBindings: {
-              spawnSessions: true,
-            },
-            accounts: {
-              work: {
-                threadBindings: {
-                  spawnSessions: false,
-                },
+    const config = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          threadBindings: {
+            spawnSessions: true,
+          },
+          accounts: {
+            work: {
+              threadBindings: {
+                spawnSessions: false,
               },
             },
           },
         },
       },
+    };
+    await expectSubagentSpawningError({
+      config,
       event: createSpawnEvent({
         requester: {
           accountId: undefined,
@@ -274,11 +276,10 @@ describe("discord subagent hook handlers", () => {
       }),
       errorContains: "spawnSessions=true",
     });
-    expect(hookMocks.resolveDiscordAccount).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: undefined,
-      }),
-    );
+    expect(hookMocks.resolveDiscordAccount).toHaveBeenCalledWith({
+      cfg: config,
+      accountId: undefined,
+    });
   });
 
   it("returns error when global thread bindings are disabled", async () => {

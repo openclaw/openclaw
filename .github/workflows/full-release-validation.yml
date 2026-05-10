@@ -783,6 +783,7 @@ jobs:
           RELEASE_CHECKS_RESULT: ${{ needs.release_checks.result }}
           NPM_TELEGRAM_RESULT: ${{ needs.npm_telegram.result }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
         run: |
           set -euo pipefail
 
@@ -809,7 +810,7 @@ jobs:
             head_sha="$(jq -r '.headSha // ""' <<< "$run_json")"
             echo "${label}: ${status}/${conclusion} attempt ${attempt} head ${head_sha}: ${url}"
 
-            if [[ -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
+            if [[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]; then
               echo "::error::${label} child run used ${head_sha}, expected ${TARGET_SHA}. Dispatch Full Release Validation from a ref pinned to the target SHA, not a moving branch."
               return 1
             fi
