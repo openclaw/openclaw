@@ -67,6 +67,30 @@ function isPinnedToolChoice(toolChoice: unknown): boolean {
   return typeValue === "tool" || typeValue === "function";
 }
 
+/**
+ * Ensures assistant messages with tool_calls have reasoning_content when
+ * thinking is enabled. Moonshot's API requires this field on replayed
+ * assistant messages that contain tool calls, otherwise it returns:
+ * "thinking is enabled but reasoning_content is missing in assistant tool call message"
+ */
+function ensureMoonshotToolCallReasoningContent(payload: Record<string, unknown>): void {
+  if (!Array.isArray(payload.messages)) {
+    return;
+  }
+  for (const message of payload.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !Array.isArray(record.tool_calls)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
 export function resolveMoonshotThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: ThinkLevel;
@@ -124,6 +148,12 @@ export function createMoonshotThinkingWrapper(
         } else if ("keep" in thinkingObj) {
           delete thinkingObj.keep;
         }
+      }
+
+      // Moonshot requires reasoning_content on assistant messages with tool_calls
+      // when thinking is enabled. Inject empty string if missing to avoid 400 errors.
+      if (effectiveThinkingType === "enabled") {
+        ensureMoonshotToolCallReasoningContent(payloadObj);
       }
     });
   };
