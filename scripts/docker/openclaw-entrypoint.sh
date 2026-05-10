@@ -15,30 +15,41 @@
 # SSH'ing into the container. Idempotent: rerunning is a no-op.
 #
 # Env-driven config:
-#   OPENCLAW_PUBLIC_ORIGIN       gateway.controlUi.allowedOrigins
-#   OPENCLAW_DISABLE_DEVICE_AUTH gateway.controlUi.dangerouslyDisableDeviceAuth
-#   OPENCLAW_OLLAMA_MODEL        registers Ollama as an OpenAI-
-#                                compatible provider, sets it as the
-#                                default agent model. API key is
-#                                read from OPENAI_API_KEY at runtime
-#                                via Openclaw's env-ref shape.
+#   OPENCLAW_PUBLIC_ORIGIN          gateway.controlUi.allowedOrigins
+#   OPENCLAW_DISABLE_DEVICE_AUTH    gateway.controlUi.dangerouslyDisableDeviceAuth
+#   OPENCLAW_OLLAMA_MODEL           registers Ollama as an OpenAI-
+#                                   compatible provider, sets it as
+#                                   the default agent model. Key is
+#                                   read from OPENAI_API_KEY at
+#                                   runtime via Openclaw's env-ref
+#                                   shape.
+#   OPENCLAW_COMPACTION_RESERVE     agents.defaults.compaction
+#                                   .reserveTokensFloor — bytes the
+#                                   agent must keep free for compaction
+#                                   to survive a long session. Default
+#                                   20000 if unset (covers Kimi K2's
+#                                   recommended floor; raise if you
+#                                   still hit "context limit
+#                                   exceeded — reset our conversation").
 set -e
 
 STATE_DIR="${OPENCLAW_STATE_DIR:-/root/.openclaw}"
 mkdir -p "$STATE_DIR"
 
-if [ -n "$OPENCLAW_PUBLIC_ORIGIN" ] \
-  || [ "$OPENCLAW_DISABLE_DEVICE_AUTH" = "1" ] \
-  || [ -n "$OPENCLAW_OLLAMA_MODEL" ]; then
+# Patch is unconditional now: compaction reserve floor always applied
+# (default 20k) so a fresh deployment doesn't crashloop the very first
+# long chat. Other config blocks remain env-gated.
+if true; then
   CONFIG_PATH="$STATE_DIR/openclaw.json"
   # Merge (or create) gateway config idempotently. Uses python because
   # jq isn't installed in the upstream image.
   python3 - "$CONFIG_PATH" \
     "${OPENCLAW_PUBLIC_ORIGIN:-}" \
     "${OPENCLAW_DISABLE_DEVICE_AUTH:-0}" \
-    "${OPENCLAW_OLLAMA_MODEL:-}" <<'PY' || true
+    "${OPENCLAW_OLLAMA_MODEL:-}" \
+    "${OPENCLAW_COMPACTION_RESERVE:-20000}" <<'PY' || true
 import json, os, sys
-config_path, public_origin, disable_dev_auth, ollama_model = sys.argv[1:5]
+config_path, public_origin, disable_dev_auth, ollama_model, compaction_reserve = sys.argv[1:6]
 config = {}
 if os.path.exists(config_path):
     try:
@@ -56,6 +67,14 @@ if public_origin:
             origins.append(o)
 if disable_dev_auth == "1":
     ui["dangerouslyDisableDeviceAuth"] = True
+agents = config.setdefault("agents", {})
+defaults = agents.setdefault("defaults", {})
+try:
+    reserve_tokens = int(compaction_reserve)
+except ValueError:
+    reserve_tokens = 20000
+compaction = defaults.setdefault("compaction", {})
+compaction["reserveTokensFloor"] = reserve_tokens
 if ollama_model:
     models = config.setdefault("models", {})
     providers = models.setdefault("providers", {})
@@ -75,8 +94,6 @@ if ollama_model:
             }
         ],
     }
-    agents = config.setdefault("agents", {})
-    defaults = agents.setdefault("defaults", {})
     model_cfg = defaults.setdefault("model", {})
     model_cfg["primary"] = f"ollama/{ollama_model}"
 with open(config_path, "w") as f:
@@ -85,7 +102,8 @@ print(
     "openclaw.json patched: "
     f"origins={ui.get('allowedOrigins')} "
     f"disableDeviceAuth={ui.get('dangerouslyDisableDeviceAuth', False)} "
-    f"primaryModel={config.get('agents', {}).get('defaults', {}).get('model', {}).get('primary')}",
+    f"primaryModel={defaults.get('model', {}).get('primary')} "
+    f"compactionReserve={compaction['reserveTokensFloor']}",
     file=sys.stderr,
 )
 PY
