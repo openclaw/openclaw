@@ -44,7 +44,7 @@ The mutation helpers return `afterWrite` plus a typed `followUp` summary so call
 `api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated compatibility helpers under `runtime-config-load-write`. They warn once at runtime, and remain available for old external plugins during the migration window. Bundled plugins must not use them; the config boundary guards fail if plugin code calls them or imports those helpers from plugin SDK subpaths.
 
 For direct SDK imports, use the focused config subpaths instead of the broad
-`openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-types` for
+`openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for
 types, `plugin-config-runtime` for already-loaded config assertions and plugin
 entry lookup, `runtime-config-snapshot` for current process snapshots, and
 `config-mutation` for writes. Bundled plugin tests should mock these focused

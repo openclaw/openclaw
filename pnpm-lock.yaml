@@ -37,9 +37,9 @@ patchedDependencies:
   '@agentclientprotocol/claude-agent-acp@0.33.1':
     hash: 3995624bb834cc60fea1461c7ef33f1fcdd8fb58b8f43f2f1490bc689f6e1be2
     path: patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch
-  '@whiskeysockets/baileys@7.0.0-rc10':
+  baileys@7.0.0-rc10:
     hash: a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2
-    path: patches/@whiskeysockets__baileys@7.0.0-rc10.patch
+    path: patches/baileys@7.0.0-rc10.patch
 
 importers:
 
@@ -260,8 +260,8 @@ importers:
         specifier: ^8.18.1
         version: 8.18.1
       '@typescript/native-preview':
-        specifier: 7.0.0-dev.20260509.2
-        version: 7.0.0-dev.20260509.2
+        specifier: 7.0.0-dev.20260510.1
+        version: 7.0.0-dev.20260510.1
       '@vitest/coverage-v8':
         specifier: ^4.1.5
         version: 4.1.5(@vitest/browser@4.1.5)(vitest@4.1.5)
@@ -288,7 +288,7 @@ importers:
         version: 0.21.1(signal-polyfill@0.2.2)
       tsdown:
         specifier: 0.22.0
-        version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260509.2)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.2.37)
+        version: 0.22.0(@typescript/native-preview@7.0.0-dev.20260510.1)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.2.37)
       tsx:
         specifier: ^4.21.0
         version: 4.21.0
@@ -314,6 +314,9 @@ importers:
       acpx:
         specifier: 0.7.0
         version: 0.7.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -336,6 +339,9 @@ importers:
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.39
         version: 3.972.39
+      '@mariozechner/pi-ai':
+        specifier: 0.73.1
+        version: 0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       '@smithy/shared-ini-file-loader':
         specifier: 4.4.9
         version: 4.4.9
@@ -490,6 +496,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -518,6 +527,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -613,6 +625,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -694,6 +709,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -785,6 +803,9 @@ importers:
       google-auth-library:
         specifier: 10.6.2
         version: 10.6.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -830,6 +851,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/irc:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -856,6 +881,9 @@ importers:
       '@line/bot-sdk':
         specifier: ^11.0.0
         version: 11.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -925,6 +953,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -938,6 +969,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1002,6 +1036,9 @@ importers:
       yaml:
         specifier: ^2.8.4
         version: 2.8.4
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1101,6 +1138,10 @@ importers:
         version: link:../..
 
   extensions/nextcloud-talk:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1114,6 +1155,9 @@ importers:
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1202,6 +1246,9 @@ importers:
       openshell:
         specifier: 0.1.0
         version: 0.1.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1218,6 +1265,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1240,6 +1290,9 @@ importers:
       yaml:
         specifier: ^2.8.4
         version: 2.8.4
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/discord':
         specifier: workspace:*
@@ -1293,6 +1346,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1386,6 +1442,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/synology-chat:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1449,6 +1509,9 @@ importers:
       '@urbit/aura':
         specifier: ^3.0.0
         version: 3.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1490,6 +1553,9 @@ importers:
       '@twurple/chat':
         specifier: ^8.1.3
         version: 8.1.3(@twurple/auth@8.1.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1530,6 +1596,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1570,6 +1639,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/webhooks:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1577,7 +1650,7 @@ importers:
 
   extensions/whatsapp:
     dependencies:
-      '@whiskeysockets/baileys':
+      baileys:
         specifier: 7.0.0-rc10
         version: 7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)
       https-proxy-agent:
@@ -1629,6 +1702,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/zalo:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1645,6 +1722,9 @@ importers:
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -4645,50 +4725,50 @@ packages:
   '@types/yauzl@2.10.3':
     resolution: {integrity: sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q==}
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-oG9KahiCpx4q70Ood/rRJhYio4oIMHEHfX0g0LhfenlSIjIonitZWjUmUVG9N9q1ev9QWcM8pWpDrGGP0Osp3Q==}
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-YpG99bf/Va1aLGP8SUQy1ClUvi4c6uTFrEQ0B5KzZb9TsOwH1RIrc/2n8UO3IAuilvwEA0EU4q8fEO3otVP2Sw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [darwin]
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-xdEkp23Gu8I7PJCMmSMYtSLX76NKODWj74AoWFPi6MM59ICsjnTSqZf/HmXKSvuNZ5MGb4CMpP3c40dLjGB2PQ==}
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-NUwhwHpQn7aSX2GGBuY2bjec+hFnIz2DAna4ksVneexVE20h2U0MFzBvWrqH2C0PzPxVvGOMg4fGCvhTs93nlw==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [darwin]
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-rd+bMRtUAFBClOAKi9p2rOu6jPmnrjZVljoFyxHw+6bIRLerEQlxP+nIH1olC3HOZPyZ6/x75WtfzTHYeqffiQ==}
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-T7Zuy6h0sU+38w+N3A+YgW0XVqxIMjeHyu+945rJkiP9zk52Mwp663t1ndyeAE/N2zV+q0SWQmHNuFSXl99wJw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [linux]
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-ar5HN/V/4HLF4FZCoVVFj+ET1Soi758hb4WhhzYQfSUXQ/bpVGUGP86JAy8EhVMoeN6qxqWet93MkLSszJOIVg==}
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-UE+PIWWg7vvszSU0gS9rzgIIHCWexz3hMZDHpHRSLAleAvULCNI3EzwTRFOA4BHyQ8eReD1KZ8e76BuStEPspw==}
     engines: {node: '>=16.20.0'}
     cpu: [arm]
     os: [linux]
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-lB26mGzdolYIZiOdBII8roVJCxCUR8zkYszvvHyjB1IPs7d5fmOhT6OzI1zYPYujiSRJi4HVYM1iXTcIfp7KDg==}
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-gJu4q4YREvjR2Lx1jUaCd/bRbTuyKf2r3rJ4tReuHyAvNse23HdGI0a9w4Z3wUbvRznxYt640IIItWsr/f3LEQ==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [linux]
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-gH3UmtyxHiRNEP0LgQXCVlB5+ZN/U+/Z7jM/zULQtTOxIIFK3Y4b8gbGLvP7uW3u2cqYOg2hc2nuN8OdsCmOig==}
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-00DtjrtkdAHOU/soYr8ncrjUvIsple8nvb29ZUATnLraNnzUgv5AS3yMve/pG/N7rVLlKy2FrXlVyVW7WAx29w==}
     engines: {node: '>=16.20.0'}
     cpu: [arm64]
     os: [win32]
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-kZV0Vh64hp10saOghPlFZE1qahonqvRgU3iubt8pUY4XLe8IQIofwWCN5vzNNeULE4W4mRtAJbHuvP/muOFomw==}
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-27UeujQTEPFxhfkZL7aHnA1TlNol3nwDVFp5d6jFoP14yTXMe47kBnAJLEU2ta3REZE5PzLCs7HLV8H4VdxGgA==}
     engines: {node: '>=16.20.0'}
     cpu: [x64]
     os: [win32]
 
-  '@typescript/native-preview@7.0.0-dev.20260509.2':
-    resolution: {integrity: sha512-JAJpEX0yBaEle2zzbX5z9QAhmEfML1SyQafLwbKCdcOtnkGdk5xD8NKIVxq+nTwYjRwuV7kKnQ+fqU3gpWY0qQ==}
+  '@typescript/native-preview@7.0.0-dev.20260510.1':
+    resolution: {integrity: sha512-05U6/Im+vmqGrFAVrHSeuoXBCwShhbiA+93VpSwEBYP4LMWk2JW9q87MydamL5g6ISEjIVlwQ4Dx35CauPAwpA==}
     engines: {node: '>=16.20.0'}
     hasBin: true
 
@@ -4763,22 +4843,6 @@ packages:
 
   '@wasm-audio-decoders/opus-ml@0.0.2':
     resolution: {integrity: sha512-58rWEqDGg+CKCyEeKm2KoxxSwTWtHh/NLTW9ObR4K8CGF6VwuuGudEI1CtniS/oSRmL1nJq/eh8MKARiluw4DQ==}
-
-  '@whiskeysockets/baileys@7.0.0-rc10':
-    resolution: {integrity: sha512-tVHZRIE06HlQajHcLEsCa+gnH5z+dAXPjwHsGXDNY9/Y0iqbymQzHLvh4tMH/pi/ea/D617qCQhNkDT2B0tufg==}
-    engines: {node: '>=20.0.0'}
-    peerDependencies:
-      audio-decode: ^2.1.3
-      jimp: ^1.6.1
-      link-preview-js: ^3.0.0
-      sharp: '*'
-    peerDependenciesMeta:
-      audio-decode:
-        optional: true
-      jimp:
-        optional: true
-      link-preview-js:
-        optional: true
 
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
@@ -4998,11 +5062,27 @@ packages:
     resolution: {integrity: sha512-GAwkz0AihzY5bkwIY5QDR+LvsRQgB/B+1foMPvi0FZPMl5fjD7ICiznUiBdLYMH1QYe6vqu4gWYytZOccLouFw==}
     engines: {node: '>= 10.0.0'}
 
-  badgen@3.3.1:
-    resolution: {integrity: sha512-8y2Av4AP7G6jtwvRcPcEuPPigRouY6izfXy8qEp+4kMN4Va08VkCAbAvcFXwtHXsTSxbLHD4nglH5TmdKXaEkw==}
+  badgen@3.3.2:
+    resolution: {integrity: sha512-fbQwK9norfdzbdsoPwbLIAmgBXDGEme3jeIyqPAH7o6vp9lmuLHS7uXULvOiQ6XnMLkYNG4gDjILf74hgtTAug==}
 
   bail@2.0.2:
     resolution: {integrity: sha512-0xO6mYd7JB2YesxDKplafRpsiOzPt9V02ddPCLbY1xYGPOX24NTyN50qnUxgCPcSoYMhKpAuBTjQoRZCAkUDRw==}
+
+  baileys@7.0.0-rc10:
+    resolution: {integrity: sha512-B1ShVyha4iZP7aNyz4QsXFceExzkvLFgISQGaDGHQaYFxIdNqoen+xKmlo1iWEsaexvQORAvUK44VicRi1T94g==}
+    engines: {node: '>=20.0.0'}
+    peerDependencies:
+      audio-decode: ^2.1.3
+      jimp: ^1.6.1
+      link-preview-js: ^3.0.0
+      sharp: '*'
+    peerDependenciesMeta:
+      audio-decode:
+        optional: true
+      jimp:
+        optional: true
+      link-preview-js:
+        optional: true
 
   balanced-match@4.0.4:
     resolution: {integrity: sha512-BLrgEcRTwX2o6gGxGOCNyMvGSp35YofuYzw9h1IMTRmKqttAZZVU67bdb9Pr2vUHA8+j3i2tJfjO6C6+4myGTA==}
@@ -9776,7 +9856,7 @@ snapshots:
 
   '@jscpd/badge-reporter@4.1.0':
     dependencies:
-      badgen: 3.3.1
+      badgen: 3.3.2
       colors: 1.4.0
       fs-extra: 11.3.5
 
@@ -11638,36 +11718,36 @@ snapshots:
       '@types/node': 25.6.2
     optional: true
 
-  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-darwin-arm64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-darwin-x64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-arm64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-linux-arm@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-arm@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-linux-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-linux-x64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-win32-arm64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview-win32-x64@7.0.0-dev.20260509.2':
+  '@typescript/native-preview-win32-x64@7.0.0-dev.20260510.1':
     optional: true
 
-  '@typescript/native-preview@7.0.0-dev.20260509.2':
+  '@typescript/native-preview@7.0.0-dev.20260510.1':
     optionalDependencies:
-      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260509.2
-      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260509.2
+      '@typescript/native-preview-darwin-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-darwin-x64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-arm': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-linux-x64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-win32-arm64': 7.0.0-dev.20260510.1
+      '@typescript/native-preview-win32-x64': 7.0.0-dev.20260510.1
 
   '@typespec/ts-http-runtime@0.3.5':
     dependencies:
@@ -11789,28 +11869,6 @@ snapshots:
     dependencies:
       '@wasm-audio-decoders/common': 9.0.7
     optional: true
-
-  '@whiskeysockets/baileys@7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5)':
-    dependencies:
-      '@cacheable/node-cache': 1.7.6
-      '@hapi/boom': 9.1.4
-      async-mutex: 0.5.0
-      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
-      lru-cache: 11.3.6
-      music-metadata: 11.12.3
-      p-queue: 9.2.0
-      pino: 9.14.0
-      protobufjs: 7.5.5
-      sharp: 0.34.5
-      whatsapp-rust-bridge: 0.5.3
-      ws: 8.20.0
-    optionalDependencies:
-      audio-decode: 2.2.3
-      jimp: 1.6.1
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
     dependencies:
@@ -12018,9 +12076,31 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.0
 
-  badgen@3.3.1: {}
+  badgen@3.3.2: {}
 
   bail@2.0.2: {}
+
+  baileys@7.0.0-rc10(patch_hash=a9aea1790d2c65b1ae543c77faca4119bbfb91ee3b6ca6c38d1cad4f5702ada2)(audio-decode@2.2.3)(jimp@1.6.1)(sharp@0.34.5):
+    dependencies:
+      '@cacheable/node-cache': 1.7.6
+      '@hapi/boom': 9.1.4
+      async-mutex: 0.5.0
+      libsignal: '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67'
+      lru-cache: 11.3.6
+      music-metadata: 11.12.3
+      p-queue: 9.2.0
+      pino: 9.14.0
+      protobufjs: 7.5.5
+      sharp: 0.34.5
+      whatsapp-rust-bridge: 0.5.3
+      ws: 8.20.0
+    optionalDependencies:
+      audio-decode: 2.2.3
+      jimp: 1.6.1
+    transitivePeerDependencies:
+      - bufferutil
+      - supports-color
+      - utf-8-validate
 
   balanced-match@4.0.4: {}
 
@@ -14771,7 +14851,7 @@ snapshots:
       glob: 7.2.3
     optional: true
 
-  rolldown-plugin-dts@0.25.0(@typescript/native-preview@7.0.0-dev.20260509.2)(rolldown@1.0.0)(typescript@6.0.3):
+  rolldown-plugin-dts@0.25.0(@typescript/native-preview@7.0.0-dev.20260510.1)(rolldown@1.0.0)(typescript@6.0.3):
     dependencies:
       '@babel/generator': 8.0.0-rc.4
       '@babel/helper-validator-identifier': 8.0.0-rc.4
@@ -14783,7 +14863,7 @@ snapshots:
       obug: 2.1.1
       rolldown: 1.0.0
     optionalDependencies:
-      '@typescript/native-preview': 7.0.0-dev.20260509.2
+      '@typescript/native-preview': 7.0.0-dev.20260510.1
       typescript: 6.0.3
     transitivePeerDependencies:
       - oxc-resolver
@@ -15303,7 +15383,7 @@ snapshots:
 
   ts-algebra@2.0.0: {}
 
-  tsdown@0.22.0(@typescript/native-preview@7.0.0-dev.20260509.2)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.2.37):
+  tsdown@0.22.0(@typescript/native-preview@7.0.0-dev.20260510.1)(tsx@4.21.0)(typescript@6.0.3)(unrun@0.2.37):
     dependencies:
       ansis: 4.2.0
       cac: 7.0.0
@@ -15314,7 +15394,7 @@ snapshots:
       obug: 2.1.1
       picomatch: 4.0.4
       rolldown: 1.0.0
-      rolldown-plugin-dts: 0.25.0(@typescript/native-preview@7.0.0-dev.20260509.2)(rolldown@1.0.0)(typescript@6.0.3)
+      rolldown-plugin-dts: 0.25.0(@typescript/native-preview@7.0.0-dev.20260510.1)(rolldown@1.0.0)(typescript@6.0.3)
       semver: 7.8.0
       tinyexec: 1.1.2
       tinyglobby: 0.2.16

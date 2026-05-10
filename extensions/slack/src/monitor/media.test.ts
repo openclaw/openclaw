@@ -1,3 +1,4 @@
+import type { WebClient } from "@slack/web-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   fetchWithSlackAuth,
@@ -447,6 +448,119 @@ describe("resolveSlackMedia", () => {
 
     expect(result).toBeNull();
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("falls back to files.info when Slack omits private file URLs", async () => {
+    vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    const mockClient = {
+      files: {
+        info: vi.fn().mockResolvedValue({
+          file: {
+            url_private_download: "https://files.slack.com/fresh.jpg",
+          },
+        }),
+      },
+    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
+    mockFetch.mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "test.jpg" }],
+      client: mockClient,
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    const media = expectSlackMediaResult(result);
+    expect(media[0]?.path).toBe("/tmp/test.jpg");
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(mockFetch).toHaveBeenCalledWith("https://files.slack.com/fresh.jpg", expect.anything());
+  });
+
+  it("skips id-only files when files.info returns no private URL", async () => {
+    const mockClient = {
+      files: {
+        info: vi.fn().mockResolvedValue({ file: { id: "F123" } }),
+      },
+    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "test.jpg" }],
+      client: mockClient,
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("skips id-only files when files.info fails", async () => {
+    const mockClient = {
+      files: {
+        info: vi.fn().mockRejectedValue(new Error("files.info failed")),
+      },
+    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
+
+    const result = await resolveSlackMedia({
+      files: [{ id: "F123", name: "test.jpg" }],
+      client: mockClient,
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    expect(result).toBeNull();
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  it("retries stale event URLs once with fresh files.info metadata", async () => {
+    vi.spyOn(mediaRuntime, "saveMediaBuffer").mockResolvedValue(
+      createSavedMedia("/tmp/test.jpg", "image/jpeg"),
+    );
+    const mockClient = {
+      files: {
+        info: vi.fn().mockResolvedValue({
+          file: {
+            url_private_download: "https://files.slack.com/fresh.jpg",
+          },
+        }),
+      },
+    } as unknown as WebClient & { files: { info: ReturnType<typeof vi.fn> } };
+    mockFetch.mockResolvedValueOnce(new Response("expired", { status: 404 })).mockResolvedValueOnce(
+      new Response(Buffer.from("image data"), {
+        status: 200,
+        headers: { "content-type": "image/jpeg" },
+      }),
+    );
+
+    const result = await resolveSlackMedia({
+      files: [
+        {
+          id: "F123",
+          name: "test.jpg",
+          url_private_download: "https://files.slack.com/stale.jpg",
+        },
+      ],
+      client: mockClient,
+      token: "xoxb-test-token",
+      maxBytes: 1024 * 1024,
+    });
+
+    const media = expectSlackMediaResult(result);
+    expect(media[0]?.path).toBe("/tmp/test.jpg");
+    expect(mockClient.files.info).toHaveBeenCalledWith({ file: "F123" });
+    expect(mockFetch.mock.calls.map((call) => call[0])).toEqual([
+      "https://files.slack.com/stale.jpg",
+      "https://files.slack.com/fresh.jpg",
+    ]);
   });
 
   it("rejects HTML auth pages for non-HTML files", async () => {

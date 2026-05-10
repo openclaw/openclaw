@@ -12,6 +12,7 @@ import {
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
   createToolSearchTools,
+  projectToolSearchTargetTranscriptMessages,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_CODE_MODE_TOOL_NAME,
@@ -473,6 +474,7 @@ describe("Tool Search", () => {
         tool: expect.objectContaining({ name: "fake_lifecycle" }),
         toolName: "fake_lifecycle",
         toolCallId: "tool_search_code:call-lifecycle:fake_lifecycle:1",
+        parentToolCallId: "call-lifecycle",
         input: { value: "ok" },
         signal: expect.any(AbortSignal),
         onUpdate,
@@ -496,11 +498,71 @@ describe("Tool Search", () => {
         tool: expect.objectContaining({ name: "fake_lifecycle" }),
         toolName: "fake_lifecycle",
         toolCallId: "tool_search_code:call-lifecycle-structured:fake_lifecycle:1",
+        parentToolCallId: "call-lifecycle-structured",
         input: { value: "structured" },
         signal: abortController.signal,
         onUpdate,
       }),
     );
+  });
+
+  it("projects target tool calls after their Tool Search wrapper result", () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: "wrapper-call",
+            name: TOOL_CALL_RAW_TOOL_NAME,
+            arguments: { id: "fake_target", args: { value: "ok" } },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "wrapper-call",
+        toolName: TOOL_CALL_RAW_TOOL_NAME,
+        content: [{ type: "text", text: "wrapped" }],
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+      },
+    ];
+
+    const projected = projectToolSearchTargetTranscriptMessages(messages as never, [
+      {
+        parentToolCallId: "wrapper-call",
+        toolCallId: "tool_search_code:wrapper-call:fake_target:1",
+        toolName: "fake_target",
+        input: { value: "ok" },
+        result: jsonResult({ ok: true }),
+        timestamp: 123,
+      },
+    ]);
+
+    expect(projected).toHaveLength(5);
+    expect(projected[2]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "tool_search_code:wrapper-call:fake_target:1",
+          name: "fake_target",
+          arguments: { value: "ok" },
+          input: { value: "ok" },
+        },
+      ],
+    });
+    expect(projected[3]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "tool_search_code:wrapper-call:fake_target:1",
+      toolName: "fake_target",
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify({ ok: true }, null, 2) }],
+    });
+    expect(projected[4]).toBe(messages[2]);
   });
 
   it("does not execute fire-and-forget bridged calls after code returns", async () => {

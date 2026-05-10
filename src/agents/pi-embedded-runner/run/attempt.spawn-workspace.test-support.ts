@@ -755,7 +755,6 @@ vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
   return {
     ...actual,
-    collectAllowedToolNames: () => undefined,
   };
 });
 

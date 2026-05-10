@@ -166,6 +166,8 @@ export async function resolveReplyDirectives(params: {
   commandAuthorized: boolean;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
@@ -194,6 +196,8 @@ export async function resolveReplyDirectives(params: {
     commandAuthorized,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
     provider: initialProvider,
     model: initialModel,
     hasResolvedHeartbeatModelOverride,
@@ -526,10 +530,13 @@ export async function resolveReplyDirectives(params: {
         storePath,
         defaultProvider,
         defaultModel,
+        primaryProvider,
+        primaryModel,
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
         hasResolvedHeartbeatModelOverride,
+        isHeartbeat: opts?.isHeartbeat === true,
       });
   provider = modelState.provider;
   model = modelState.model;

@@ -3036,6 +3036,53 @@ describe("openai transport stream", () => {
     expect(params.messages?.[1]).toEqual({ role: "user", content: "What is 2 + 2?" });
   });
 
+  it("strips extra message keys for strict-key completions backends when opted in", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "mistral3",
+        name: "mistral3",
+        api: "openai-completions",
+        provider: "infomaniak",
+        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+        compat: {
+          strictMessageKeys: true,
+        } as Record<string, unknown>,
+      } satisfies Model<"openai-completions">,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_1",
+                name: "noop",
+                arguments: {},
+              },
+            ],
+            timestamp: Date.now(),
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            content: [{ type: "text", text: "tool result" }],
+            timestamp: Date.now(),
+          },
+        ],
+        tools: [],
+      } as never,
+      undefined,
+    ) as { messages?: Array<Record<string, unknown>> };
+
+    expect(params.messages?.[0]).toEqual({ role: "assistant", content: null });
+    expect(params.messages?.[1]).toEqual({ role: "tool", content: "tool result" });
+  });
+
   it("uses max_tokens for Chutes default-route completions providers without relying on baseUrl host sniffing", () => {
     const params = buildOpenAICompletionsParams(
       {

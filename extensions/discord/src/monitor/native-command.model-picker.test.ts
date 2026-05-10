@@ -5,14 +5,14 @@ import { ChannelType } from "discord-api-types/v10";
 import * as commandRegistryModule from "openclaw/plugin-sdk/command-auth";
 import type { ChatCommandDefinition, CommandArgsParsing } from "openclaw/plugin-sdk/command-auth";
 import type { ModelsProviderData } from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as globalsModule from "openclaw/plugin-sdk/runtime-env";
 import {
   loadSessionStore,
   resolveStorePath,
   saveSessionStore,
 } from "openclaw/plugin-sdk/session-store-runtime";
-import * as commandTextModule from "openclaw/plugin-sdk/text-runtime";
+import * as commandTextModule from "openclaw/plugin-sdk/text-utility-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { defineThrowingDiscordChannelGetter } from "../test-support/partial-channel.js";
 import { resolveDiscordChannelContext } from "./agent-components-helpers.js";

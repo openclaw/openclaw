@@ -180,6 +180,7 @@ import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
   createToolSearchCatalogRef,
+  projectToolSearchTargetTranscriptMessages,
   resolveToolSearchConfig,
   TOOL_CALL_RAW_TOOL_NAME,
   TOOL_DESCRIBE_RAW_TOOL_NAME,
@@ -187,6 +188,7 @@ import {
   TOOL_SEARCH_RAW_TOOL_NAME,
   type ToolSearchCatalogRef,
   type ToolSearchCatalogToolExecutor,
+  type ToolSearchTargetTranscriptProjection,
 } from "../../tool-search.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../transcript-policy.js";
 import { normalizeUsage, type NormalizedUsage } from "../../usage.js";
@@ -977,6 +979,7 @@ export async function runEmbeddedAttempt(
     const toolSearchCatalogRef: ToolSearchCatalogRef | undefined = toolSearchControlsEnabledForRun
       ? createToolSearchCatalogRef()
       : undefined;
+    const toolSearchTargetTranscriptProjections: ToolSearchTargetTranscriptProjection[] = [];
     const toolsRaw = !shouldConstructTools
       ? []
       : (() => {
@@ -2662,20 +2665,47 @@ export async function runEmbeddedAttempt(
         getCompactionCount,
         getLastCompactionTokensAfter,
       } = subscription;
-      toolSearchCatalogExecutor = async (toolParams) =>
-        await runToolLifecycle({
-          toolName: toolParams.toolName,
-          toolCallId: toolParams.toolCallId,
-          args: toolParams.input,
-          execute: async () =>
-            await toolParams.tool.execute(
-              toolParams.toolCallId,
-              toolParams.input,
-              toolParams.signal ?? runAbortController.signal,
-              toolParams.onUpdate,
-              undefined as never,
-            ),
-        });
+      toolSearchCatalogExecutor = async (toolParams) => {
+        try {
+          const result = await runToolLifecycle({
+            toolName: toolParams.toolName,
+            toolCallId: toolParams.toolCallId,
+            args: toolParams.input,
+            execute: async () =>
+              await toolParams.tool.execute(
+                toolParams.toolCallId,
+                toolParams.input,
+                toolParams.signal ?? runAbortController.signal,
+                toolParams.onUpdate,
+                undefined as never,
+              ),
+          });
+          toolSearchTargetTranscriptProjections.push({
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: toolParams.input,
+            result,
+            timestamp: Date.now(),
+          });
+          return result;
+        } catch (error) {
+          const message = formatErrorMessage(error);
+          toolSearchTargetTranscriptProjections.push({
+            parentToolCallId: toolParams.parentToolCallId,
+            toolCallId: toolParams.toolCallId,
+            toolName: toolParams.toolName,
+            input: toolParams.input,
+            result: {
+              content: [{ type: "text", text: message }],
+              details: { status: "error", error: message },
+            },
+            isError: true,
+            timestamp: Date.now(),
+          });
+          throw error;
+        }
+      };
 
       const queueHandle: EmbeddedPiQueueHandle & {
         kind: "embedded";
@@ -3230,11 +3260,17 @@ export async function runEmbeddedAttempt(
               messages: activeSession.messages,
               note: `images: prompt=${imageResult.images.length}`,
             });
+            const trajectoryProviderVisibleTools = toTrajectoryToolDefinitions(effectiveTools);
             trajectoryRecorder?.recordEvent("context.compiled", {
               systemPrompt: systemPromptForHook,
               prompt: promptForModel,
               messages: activeSession.messages,
-              tools: toTrajectoryToolDefinitions(effectiveTools),
+              tools: toTrajectoryToolDefinitions(
+                toolSearch.compacted ? uncompactedEffectiveTools : effectiveTools,
+              ),
+              ...(toolSearch.compacted
+                ? { providerVisibleTools: trajectoryProviderVisibleTools }
+                : {}),
               imagesCount: imageResult.images.length,
               streamStrategy,
               transport: effectiveAgentTransport,
@@ -3608,7 +3644,10 @@ export async function runEmbeddedAttempt(
             );
           }
         }
-        messagesSnapshot = snapshotSelection.messagesSnapshot;
+        messagesSnapshot = projectToolSearchTargetTranscriptMessages(
+          snapshotSelection.messagesSnapshot,
+          toolSearchTargetTranscriptProjections,
+        );
         sessionIdUsed = snapshotSelection.sessionIdUsed;
 
         lastAssistant = messagesSnapshot

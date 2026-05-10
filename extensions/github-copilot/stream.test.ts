@@ -1,5 +1,5 @@
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describe, expect, it, vi } from "vitest";
+import { buildCopilotDynamicHeaders } from "./stream.js";
 import {
   wrapCopilotAnthropicStream,
   wrapCopilotOpenAIResponsesStream,

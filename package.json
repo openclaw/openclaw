@@ -214,6 +214,10 @@
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
     },
+    "./plugin-sdk/config-contracts": {
+      "types": "./dist/plugin-sdk/config-contracts.d.ts",
+      "default": "./dist/plugin-sdk/config-contracts.js"
+    },
     "./plugin-sdk/config-types": {
       "types": "./dist/plugin-sdk/config-types.d.ts",
       "default": "./dist/plugin-sdk/config-types.js"
@@ -1262,6 +1266,10 @@
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
+    "./plugin-sdk/text-utility-runtime": {
+      "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-utility-runtime.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
@@ -1470,6 +1478,8 @@
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
     "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
+    "plugin-sdk:surface": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs",
+    "plugin-sdk:surface:check": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",
@@ -1506,6 +1516,7 @@
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
+    "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
@@ -1773,7 +1784,7 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "@typescript/native-preview": "7.0.0-dev.20260510.1",
     "@vitest/coverage-v8": "^4.1.5",
     "jscpd": "4.1.0",
     "jsdom": "^29.1.1",
@@ -1838,7 +1849,7 @@
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@tloncorp/api",
       "@tloncorp/tlon-skill",
-      "@whiskeysockets/baileys",
+      "baileys",
       "@whiskeysockets/libsignal-node",
       "authenticate-pam",
       "esbuild",
@@ -1864,7 +1875,7 @@
       }
     },
     "patchedDependencies": {
-      "@whiskeysockets/baileys@7.0.0-rc10": "patches/@whiskeysockets__baileys@7.0.0-rc10.patch",
+      "baileys@7.0.0-rc10": "patches/baileys@7.0.0-rc10.patch",
       "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
     }
   }

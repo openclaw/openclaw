@@ -52,7 +52,7 @@ import {
 import {
   localeLowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { asRecord } from "../dreaming-shared.js";
 import { resolveQmdCollectionPatternFlags, type QmdCollectionPatternFlag } from "./qmd-compat.js";
 

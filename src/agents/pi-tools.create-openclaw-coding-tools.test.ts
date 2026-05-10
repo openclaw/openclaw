@@ -4,10 +4,8 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  applyXaiModelCompat,
   findUnsupportedSchemaKeywords,
   GEMINI_UNSUPPORTED_SCHEMA_KEYWORDS,
-  XAI_UNSUPPORTED_SCHEMA_KEYWORDS,
 } from "../plugin-sdk/provider-tools.js";
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
@@ -25,6 +23,14 @@ const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
   "base64",
 );
+const XAI_UNSUPPORTED_SCHEMA_KEYWORDS = new Set([
+  "minLength",
+  "maxLength",
+  "minItems",
+  "maxItems",
+  "minContains",
+  "maxContains",
+]);
 
 function collectActionValues(schema: unknown, values: Set<string>): void {
   if (!schema || typeof schema !== "object") {
@@ -952,7 +958,12 @@ describe("createOpenClawCodingTools", () => {
   it("applies xai model compat for direct Grok tool cleanup", () => {
     const xaiTools = createOpenClawCodingTools({
       modelProvider: "xai",
-      modelCompat: applyXaiModelCompat({ compat: {} }).compat,
+      modelCompat: {
+        toolSchemaProfile: "xai",
+        unsupportedToolSchemaKeywords: Array.from(XAI_UNSUPPORTED_SCHEMA_KEYWORDS),
+        nativeWebSearchTool: true,
+        toolCallArgumentsEncoding: "html-entities",
+      },
       senderIsOwner: true,
     });
 

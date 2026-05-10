@@ -5,6 +5,11 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
@@ -22,6 +27,10 @@ const TURN_ID = "turn-1";
 const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 function assistantMessage(text: string, timestamp: number) {
   return {
@@ -82,10 +91,12 @@ async function createProjectorWithAssistantHooks() {
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
 });
 
 afterEach(async () => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
   resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
@@ -341,6 +352,55 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual(["OK from raw"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
+  it("attaches native Codex image-generation saved paths as reply media", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.toolMediaUrls).toEqual([savedPath]);
+  });
+
+  it("does not append native Codex image-generation media after explicit media delivery", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: null,
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      messagingToolSentMediaUrls: [savedPath],
+      toolMediaUrls: [],
+    });
+
+    expect(result.toolMediaUrls).toStrictEqual([]);
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
@@ -731,41 +791,48 @@ describe("CodexAppServerEventProjector", () => {
   it("synthesizes normalized tool progress for Codex-native tool items", async () => {
     const onAgentEvent = vi.fn();
     const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
 
-    await projector.handleNotification(
-      forCurrentTurn("item/started", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "inProgress",
-          commandActions: [],
-          aggregatedOutput: null,
-          exitCode: null,
-          durationMs: null,
-        },
-      }),
-    );
-    await projector.handleNotification(
-      forCurrentTurn("item/completed", {
-        item: {
-          type: "commandExecution",
-          id: "cmd-1",
-          command: "pnpm test extensions/codex",
-          cwd: "/workspace",
-          processId: null,
-          source: "agent",
-          status: "completed",
-          commandActions: [],
-          aggregatedOutput: "ok",
-          exitCode: 0,
-          durationMs: 42,
-        },
-      }),
-    );
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-1",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-1",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
 
     const itemStart = findAgentEvent(onAgentEvent, {
       stream: "item",
@@ -795,6 +862,41 @@ describe("CodexAppServerEventProjector", () => {
     const toolResultPayload = requireRecord(toolResult.result, "tool result payload");
     expect(toolResultPayload.exitCode).toBe(0);
     expect(toolResultPayload.durationMs).toBe(42);
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error"
+            | "tool.execution.blocked";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        durationMs: "durationMs" in event ? event.durationMs : undefined,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+        durationMs: undefined,
+      },
+      {
+        type: "tool.execution.completed",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+        durationMs: 42,
+      },
+    ]);
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
       "user",
@@ -809,6 +911,7 @@ describe("CodexAppServerEventProjector", () => {
       id: "cmd-1",
       name: "bash",
       arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      input: { command: "pnpm test extensions/codex", cwd: "/workspace" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
     expect(toolResultMessage.role).toBe("toolResult");
@@ -818,8 +921,90 @@ describe("CodexAppServerEventProjector", () => {
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
     expect(toolResultContentItem.type).toBe("toolResult");
+    expect(toolResultContentItem.id).toBe("cmd-1");
+    expect(toolResultContentItem.name).toBe("bash");
+    expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("orders declined native tool diagnostics after their start event", async () => {
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "declined",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: 1,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error"
+            | "tool.execution.blocked";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+      {
+        type: "tool.execution.blocked",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+    ]);
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
@@ -853,6 +1038,7 @@ describe("CodexAppServerEventProjector", () => {
       id: "call-browser-1",
       name: "browser",
       arguments: { action: "open", url: "http://127.0.0.1:3000" },
+      input: { action: "open", url: "http://127.0.0.1:3000" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
     expect(toolResultMessage.role).toBe("toolResult");
@@ -864,6 +1050,9 @@ describe("CodexAppServerEventProjector", () => {
       "tool result content item",
     );
     expect(toolResultContent.type).toBe("toolResult");
+    expect(toolResultContent.id).toBe("call-browser-1");
+    expect(toolResultContent.name).toBe("browser");
+    expect(toolResultContent.toolName).toBe("browser");
     expect(toolResultContent.toolCallId).toBe("call-browser-1");
     expect(toolResultContent.content).toBe("opened");
   });
@@ -977,7 +1166,7 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash: `run tests (in /workspace)`",
+      text: "🛠️ `run tests (workspace)`",
     });
   });
 
@@ -1009,7 +1198,7 @@ describe("CodexAppServerEventProjector", () => {
     );
 
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
+      text: "🛠️ `` run tests (workspace), `pnpm test extensions/codex` ``",
     });
   });
 

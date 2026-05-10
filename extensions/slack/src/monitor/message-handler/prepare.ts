@@ -23,11 +23,11 @@ import {
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
@@ -101,7 +101,7 @@ type SlackConversationContext = {
   isRoom: boolean;
   isRoomish: boolean;
   channelConfig: ReturnType<typeof resolveSlackChannelConfig> | null;
-  allowBots: boolean;
+  allowBotsMode: "off" | "all" | "mentions";
   isBotMessage: boolean;
 };
 
@@ -149,11 +149,13 @@ async function resolveSlackConversationContext(params: {
         allowNameMatching: ctx.allowNameMatching,
       })
     : null;
-  const allowBots =
+  const allowBotsSetting =
     channelConfig?.allowBots ??
     account.config?.allowBots ??
     cfg.channels?.slack?.allowBots ??
     false;
+  const allowBotsMode: "off" | "all" | "mentions" =
+    allowBotsSetting === "mentions" ? "mentions" : allowBotsSetting ? "all" : "off";
 
   return {
     channelInfo,
@@ -164,7 +166,7 @@ async function resolveSlackConversationContext(params: {
     isRoom,
     isRoomish,
     channelConfig,
-    allowBots,
+    allowBotsMode,
     isBotMessage: Boolean(message.bot_id),
   };
 }
@@ -176,14 +178,14 @@ async function authorizeSlackInboundMessage(params: {
   conversation: SlackConversationContext;
 }): Promise<SlackAuthorizationContext | null> {
   const { ctx, account, message, conversation } = params;
-  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
+  const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBotsMode } =
     conversation;
 
   if (isBotMessage) {
     if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
       return null;
     }
-    if (!allowBots) {
+    if (allowBotsMode === "off") {
       logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
       return null;
     }
@@ -273,7 +275,7 @@ export async function prepareSlackMessage(params: {
     isRoom,
     isRoomish,
     channelConfig,
-    allowBots,
+    allowBotsMode,
     isBotMessage,
   } = conversation;
   const authorization = await authorizeSlackInboundMessage({
@@ -463,6 +465,8 @@ export async function prepareSlackMessage(params: {
       ...(ctx.threadRequireExplicitMention ? { allowedImplicitMentionKinds: [] } : {}),
     },
   });
+  const effectiveWasMentioned = messageIngress.activationAccess.effectiveWasMentioned ?? false;
+  const shouldBypassMention = messageIngress.activationAccess.shouldBypassMention ?? false;
   const senderGate = messageIngress.senderAccess.gate;
   if (isRoom && senderGate?.allowed === false) {
     logVerbose(`Blocked unauthorized slack sender ${senderId} (not in channel users)`);
@@ -471,7 +475,7 @@ export async function prepareSlackMessage(params: {
   if (
     isRoom &&
     isBotMessage &&
-    allowBots &&
+    allowBotsMode !== "off" &&
     !(await authorizeSlackBotRoomMessage({
       ctx,
       channelId: message.channel,
@@ -482,6 +486,14 @@ export async function prepareSlackMessage(params: {
     }))
   ) {
     return null;
+  }
+
+  if (isBotMessage && allowBotsMode === "mentions") {
+    const botMentioned = isDirectMessage || effectiveWasMentioned || shouldBypassMention;
+    if (!botMentioned) {
+      logVerbose("slack: drop bot message (allowBots=mentions, missing mention)");
+      return null;
+    }
   }
 
   const threadContextAllowFromLower = isRoom
@@ -508,8 +520,6 @@ export async function prepareSlackMessage(params: {
     return null;
   }
 
-  const effectiveWasMentioned = messageIngress.activationAccess.effectiveWasMentioned ?? false;
-  const shouldBypassMention = messageIngress.activationAccess.shouldBypassMention ?? false;
   if (isRoom && shouldRequireMention && messageIngress.activationAccess.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
@@ -547,6 +557,7 @@ export async function prepareSlackMessage(params: {
     threadStarter,
     isBotMessage,
     botToken: ctx.botToken,
+    client: ctx.app.client,
     mediaMaxBytes: ctx.mediaMaxBytes,
     resolveUserName: ctx.resolveUserName,
   });
