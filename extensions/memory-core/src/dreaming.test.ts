@@ -1368,7 +1368,9 @@ describe("gateway startup reconciliation", () => {
         { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
       );
 
-      expectLogNotContains(logger.warn, "cron service unavailable");
+      expect(logger.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("cron service unavailable"),
+      );
     } finally {
       clearInternalHooks();
     }
@@ -1414,7 +1416,7 @@ describe("gateway startup reconciliation", () => {
         { trigger: "heartbeat", workspaceDir: ".", sessionKey: "agent:main:main:heartbeat" },
       );
 
-      expectLogContains(logger.warn, "cron service unavailable");
+      expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("cron service unavailable"));
     } finally {
       clearInternalHooks();
     }
