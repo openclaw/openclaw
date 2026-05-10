@@ -728,6 +728,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     llm: {
       complete: vi.fn(),
+      completeStructured: vi.fn(),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

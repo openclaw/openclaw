@@ -217,6 +217,7 @@ const PluginEntrySchema = z
         allowModelOverride: z.boolean().optional(),
         allowedModels: z.array(z.string()).optional(),
         allowAgentIdOverride: z.boolean().optional(),
+        allowProfileOverride: z.boolean().optional(),
       })
       .strict()
       .optional(),
