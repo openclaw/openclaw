@@ -48,9 +48,12 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   message: string;
   label?: string;
   /**
-   * When set, stamps the persisted assistant entry's `provider` field so
+   * When set, persists a separate `originAgent` field on the assistant entry so
    * downstream UIs (avatar/handle resolvers) can attribute the inject to a
-   * non-OpenClaw source (e.g. "hermes", "codex"). Default remains "openclaw".
+   * non-OpenClaw source (e.g. "hermes", "codex"). The sentinel `provider:
+   * "openclaw"` + `model: "gateway-injected"` pair is preserved unchanged so
+   * the replay-history filter still drops these rows from model replay.
+   * Whitespace-only or empty values are treated as unset.
    */
   originAgent?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
