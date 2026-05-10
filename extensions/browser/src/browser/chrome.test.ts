@@ -368,7 +368,7 @@ describe("browser chrome helpers", () => {
 
   it("finds Playwright-managed Linux Chromium", () => {
     const browserPath = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-ms-playwright-"));
-    const executablePath = path.join(browserPath, "chromium-1217", "chrome-linux", "chrome");
+    const executablePath = path.join(browserPath, "chromium-1217", "chrome-linux64", "chrome");
     vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", browserPath);
     fs.mkdirSync(path.dirname(executablePath), { recursive: true });
     const exists = mockExistsSync((pathValue) => pathValue === executablePath);

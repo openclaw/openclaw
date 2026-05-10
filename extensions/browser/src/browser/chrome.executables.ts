@@ -493,10 +493,12 @@ function findPlaywrightChromiumExecutableCandidatesLinux(): Array<BrowserExecuta
       if (!entry.startsWith("chromium-")) {
         continue;
       }
-      candidates.push({
-        kind: "chromium",
-        path: path.join(browserPath, entry, "chrome-linux", "chrome"),
-      });
+      for (const linuxDir of ["chrome-linux64", "chrome-linux"]) {
+        candidates.push({
+          kind: "chromium",
+          path: path.join(browserPath, entry, linuxDir, "chrome"),
+        });
+      }
     }
   }
   return candidates;
