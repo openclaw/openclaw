@@ -436,6 +436,112 @@ describe("resolveSubagentCompletionOrigin", () => {
       to: "channel:parent-main",
     });
   });
+
+  it("prefers requester binding when child and requester share the same channel and accountId", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        if (targetSessionKey === "agent:main:main") {
+          return [
+            {
+              bindingId: "telegram:bot-1:parent-main",
+              targetSessionKey,
+              targetKind: "session",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:789",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:789",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:789",
+    });
+  });
+
+  it("falls back to child binding when requester has no binding", async () => {
+    registerSessionBindingAdapter({
+      channel: "telegram",
+      accountId: "bot-1",
+      listBySession: (targetSessionKey: string) => {
+        if (targetSessionKey === "agent:main:telegram:default:direct:123") {
+          return [
+            {
+              bindingId: "telegram:bot-1:child-dm",
+              targetSessionKey,
+              targetKind: "subagent",
+              conversation: {
+                channel: "telegram",
+                accountId: "bot-1",
+                conversationId: "direct:123",
+              },
+              status: "active",
+              boundAt: 1,
+            },
+          ];
+        }
+        return [];
+      },
+      resolveByConversation: () => null,
+    });
+
+    const origin = await resolveSubagentCompletionOrigin({
+      childSessionKey: "agent:main:telegram:default:direct:123",
+      requesterSessionKey: "agent:main:main",
+      requesterOrigin: {
+        channel: "telegram",
+        accountId: "bot-1",
+        to: "telegram:direct:123",
+      },
+      spawnMode: "run",
+      expectsCompletionMessage: true,
+    });
+
+    expect(origin).toEqual({
+      channel: "telegram",
+      accountId: "bot-1",
+      to: "telegram:direct:123",
+    });
+  });
 });
 
 describe("deliverSubagentAnnouncement active requester steering", () => {
