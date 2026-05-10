@@ -31,4 +31,11 @@ export {
   type WebSocketLike,
   type WebSocketLikeFactory,
 } from "./ws-client.js";
+export {
+  checkServiceCall,
+  isEntityAllowed,
+  isServiceAllowed,
+  type ServiceCheckResult,
+  type ServiceDeniedReason,
+} from "./allowlist.js";
 export { registerHomeAssistantPlugin } from "./register.runtime.js";

@@ -7,13 +7,12 @@ dashboard view consumes this plugin via the OpenClaw gateway.
 Tracking plan: [`docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md`](../../docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md).
 Cross-plan dependency: [`docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md`](../../docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md).
 
-> **Status: WS client landed (Units 1 + 2).** This package now ships the
-> manifest, config schema, defaults, the long-lived HA WebSocket client
-> (auth handshake, state-changed subscription, heartbeat, exponential
-> reconnect), and the entity state store with allow-list filtering.
-> The allow-list / service deny-list gate (Unit 3) and the gateway bridge
-> (Unit 4) are not yet wired -- the WS client is unreferenced from
-> `register.runtime.ts` until Unit 4 plumbs it in.
+> **Status: gate landed (Units 1 + 2 + 3).** This package now ships the
+> manifest, config schema, defaults, the long-lived HA WebSocket client,
+> the entity state store, and the centralized allow-list / service
+> deny-list gate. The gateway bridge (Unit 4) is the next piece -- it
+> wires the WS client into `register.runtime.ts` and bridges state and
+> service-call dispatch onto the OpenClaw gateway WS.
 
 ## Configuration
 
@@ -67,12 +66,28 @@ is a credentials-store update, no code change.
 
 ## What lands in later units
 
-- **Unit 3:** `allowlist.ts` -- centralized service deny-list gate that every
-  service-call consumer (kiosk + future agent path) goes through.
 - **Unit 4:** `gateway-bridge.ts` + `src/gateway/protocol/ha-events.ts` --
   bridges HA state and service calls onto the OpenClaw gateway WS via new
   additive `ha:state` and `ha:service-call` topics, and starts the WS client
   on plugin register.
+
+## Allow-list / deny-list gate (`allowlist.ts`)
+
+- `isEntityAllowed(entityId, config)` -> boolean. Empty `allowList` denies
+  everything (fail-closed). Whitespace-trimmed but case-sensitive: HA emits
+  lowercase entity IDs, so mixed-case operator typos surface as a config
+  error rather than silent coercion.
+- `checkServiceCall({domain, service}, config)` -> structured allow/deny
+  result. Deny carries `{kind: "service-denied", domain, service, detail}`
+  for the bridge to echo back to the kiosk.
+- v1 policy is **deny-list-authoritative**: a service is allowed unless the
+  exact `<domain>.<service>` form is in `denyServiceList`. The HA-user-side
+  deny-list documented in the Butler plan is the actual safety net; this
+  gate is belt-and-braces.
+- **Future hardening (deferred):** add `HomeAssistantConfig.allowServiceList`.
+  When present + non-empty, the gate switches to deny-by-default. Deny-list
+  precedence is preserved (deny wins). Tests under "future hardening guard"
+  in `allowlist.test.ts` lock that contract.
 
 ## WS client overview (`ws-client.ts`)
 
