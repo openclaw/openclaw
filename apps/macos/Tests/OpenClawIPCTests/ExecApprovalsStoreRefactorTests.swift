@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 import Testing
 @testable import OpenClaw
 
@@ -17,16 +18,20 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `ensure file skips rewrite when unchanged`() async throws {
-        try await self.withTempStateDir { _ in
-            _ = ExecApprovalsStore.ensureFile()
-            let url = ExecApprovalsStore.fileURL()
-            let firstIdentity = try Self.fileIdentity(at: url)
+    func `ensure state stores approvals in sqlite without json sidecar`() async throws {
+        try await self.withTempStateDir { stateDir in
+            _ = ExecApprovalsStore.ensureState()
+            let firstSnapshot = ExecApprovalsStore.readSnapshot()
 
-            _ = ExecApprovalsStore.ensureFile()
-            let secondIdentity = try Self.fileIdentity(at: url)
+            _ = ExecApprovalsStore.ensureState()
+            let secondSnapshot = ExecApprovalsStore.readSnapshot()
 
-            #expect(firstIdentity == secondIdentity)
+            #expect(firstSnapshot.hash == secondSnapshot.hash)
+            #expect(firstSnapshot.path.contains("openclaw.sqlite#kv/exec.approvals/current"))
+            #expect(FileManager().fileExists(atPath: ExecApprovalsStore.databaseURL().path))
+            #expect(!FileManager().fileExists(atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
+            let storedRaw = try Self.readStoredApprovalsRaw()
+            #expect(storedRaw?.contains("\"version\" : 1") == true)
         }
     }
 
@@ -66,24 +71,39 @@ struct ExecApprovalsStoreRefactorTests {
     }
 
     @Test
-    func `ensure file hardens state directory permissions`() async throws {
+    func `ensure state hardens state directory permissions`() async throws {
         try await self.withTempStateDir { stateDir in
             try FileManager().createDirectory(at: stateDir, withIntermediateDirectories: true)
             try FileManager().setAttributes([.posixPermissions: 0o755], ofItemAtPath: stateDir.path)
 
-            _ = ExecApprovalsStore.ensureFile()
+            _ = ExecApprovalsStore.ensureState()
             let attrs = try FileManager().attributesOfItem(atPath: stateDir.path)
             let permissions = (attrs[.posixPermissions] as? NSNumber)?.intValue ?? -1
             #expect(permissions & 0o777 == 0o700)
         }
     }
 
-    private static func fileIdentity(at url: URL) throws -> Int {
-        let attributes = try FileManager().attributesOfItem(atPath: url.path)
-        guard let identifier = (attributes[.systemFileNumber] as? NSNumber)?.intValue else {
-            struct MissingIdentifierError: Error {}
-            throw MissingIdentifierError()
+    private static func readStoredApprovalsRaw() throws -> String? {
+        var db: OpaquePointer?
+        guard sqlite3_open_v2(ExecApprovalsStore.databaseURL().path, &db, SQLITE_OPEN_READONLY, nil) == SQLITE_OK
+        else {
+            defer { sqlite3_close(db) }
+            throw NSError(domain: "ExecApprovalsStoreRefactorTests", code: 1)
         }
-        return identifier
+        defer { sqlite3_close(db) }
+
+        let sql = "SELECT value_json FROM kv WHERE scope = 'exec.approvals' AND key = 'current'"
+        var statement: OpaquePointer?
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
+            defer { sqlite3_finalize(statement) }
+            throw NSError(domain: "ExecApprovalsStoreRefactorTests", code: 2)
+        }
+        defer { sqlite3_finalize(statement) }
+
+        guard sqlite3_step(statement) == SQLITE_ROW, let rawText = sqlite3_column_text(statement, 0) else {
+            return nil
+        }
+        let valueJSON = String(cString: UnsafeRawPointer(rawText).assumingMemoryBound(to: CChar.self))
+        return try JSONDecoder().decode(String.self, from: Data(valueJSON.utf8))
     }
 }

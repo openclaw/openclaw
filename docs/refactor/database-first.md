@@ -205,6 +205,9 @@ The branch already has a real shared SQLite base:
 - Exec approvals now live in shared SQLite KV (`exec.approvals/current`).
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
   longer create, rewrite, or report that file as its active store location.
+  The macOS companion reads and writes the same `state/openclaw.sqlite` KV row;
+  it keeps only the Unix prompt socket on disk because that is IPC, not durable
+  runtime state.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers.
