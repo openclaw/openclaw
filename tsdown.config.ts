@@ -56,4 +56,14 @@ export default defineConfig([
     fixedExtension: false,
     platform: "node",
   },
+  {
+    // AgentGlob Rain MCP server (V1.5). Spawned by openclaw gateway as an
+    // MCP child process. Wraps the dashboard's /api/runtime/rain/* HTTP
+    // endpoints as typed MCP tools.
+    entry: "src/mcp/rain/server.ts",
+    outDir: "dist/mcp/rain",
+    env,
+    fixedExtension: false,
+    platform: "node",
+  },
 ]);
