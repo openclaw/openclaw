@@ -135,9 +135,7 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
       });
       return resolvedDefaultThinkingLevel;
     };
-    const resolvedThinkLevel =
-      normalizeThinkLevel(targetSessionEntry?.thinkingLevel) ??
-      (await resolveDefaultThinkingLevel());
+    const resolvedThinkLevel = normalizeThinkLevel(targetSessionEntry?.thinkingLevel);
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
