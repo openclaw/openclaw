@@ -118,6 +118,7 @@ export function resolveLlmIdleTimeoutMs(params?: {
   runTimeoutMs?: number;
   modelRequestTimeoutMs?: number;
   model?: { baseUrl?: string; id?: string; provider?: string };
+  thinkingEnabled?: boolean;
 }): number {
   const clampTimeoutMs = (valueMs: number) => Math.min(Math.floor(valueMs), MAX_SAFE_TIMEOUT_MS);
   const clampImplicitTimeoutMs = (valueMs: number) =>
@@ -183,6 +184,14 @@ export function resolveLlmIdleTimeoutMs(params?: {
     isLocalProviderBaseUrl(baseUrl) &&
     !isOllamaCloudModel(params?.model)
   ) {
+    return 0;
+  }
+
+  // Cloud thinking models (e.g. Gemini 2.5 Flash with thinking=medium) can
+  // legitimately produce no stream chunks for well over 120s while the model
+  // reasons server-side before emitting any tokens. Applying the default
+  // network-silence watchdog to these runs causes false-positive timeouts.
+  if (params?.thinkingEnabled) {
     return 0;
   }
 

@@ -2383,6 +2383,7 @@ export async function runEmbeddedAttempt(
         runTimeoutMs: params.timeoutMs !== configuredRunTimeoutMs ? params.timeoutMs : undefined,
         modelRequestTimeoutMs: (params.model as { requestTimeoutMs?: number }).requestTimeoutMs,
         model: params.model as { baseUrl?: string },
+        thinkingEnabled: params.thinkLevel !== undefined && params.thinkLevel !== "off",
       });
       if (idleTimeoutMs > 0) {
         activeSession.agent.streamFn = streamWithIdleTimeout(
