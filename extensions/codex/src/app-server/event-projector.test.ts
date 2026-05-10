@@ -858,6 +858,7 @@ describe("CodexAppServerEventProjector", () => {
       id: "cmd-1",
       name: "bash",
       arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      input: { command: "pnpm test extensions/codex", cwd: "/workspace" },
     });
     const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
     expect(toolResultMessage.role).toBe("toolResult");
@@ -867,6 +868,9 @@ describe("CodexAppServerEventProjector", () => {
     const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
     const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
     expect(toolResultContentItem.type).toBe("toolResult");
+    expect(toolResultContentItem.id).toBe("cmd-1");
+    expect(toolResultContentItem.name).toBe("bash");
+    expect(toolResultContentItem.toolName).toBe("bash");
     expect(toolResultContentItem.toolCallId).toBe("cmd-1");
     expect(toolResultContentItem.content).toBe("ok");
   });
