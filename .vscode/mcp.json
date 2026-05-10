@@ -1,0 +1,16 @@
+{
+  "servers": {
+    "alpacore-local": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "${workspaceFolder}/scripts/alpacore-mcp-bridge.mjs"
+      ],
+      "env": {
+        "ALPACORE_URL": "http://127.0.0.1:5143",
+        "ALPACORE_TIMEOUT_MS": "240000",
+        "OLLAMA_URL": "http://127.0.0.1:11434"
+      }
+    }
+  }
+}
