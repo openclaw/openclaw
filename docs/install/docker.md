@@ -416,7 +416,8 @@ See [ClawDock](/install/clawdock) for the full helper guide.
        ```
     4. **Persist browser downloads**: set
        `PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright` and use
-       `OPENCLAW_HOME_VOLUME` or `OPENCLAW_EXTRA_MOUNTS`.
+       `OPENCLAW_HOME_VOLUME` or `OPENCLAW_EXTRA_MOUNTS`. OpenClaw auto-detects
+       the persisted Chromium on Linux.
 
   </Accordion>
 
