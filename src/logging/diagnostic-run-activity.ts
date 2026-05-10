@@ -307,6 +307,27 @@ export function markDiagnosticRunProgressForTest(params: {
   touchSessionActivity(activity, params.reason);
 }
 
+export function markDiagnosticToolStartedForTest(params: {
+  sessionId?: string;
+  sessionKey?: string;
+  runId?: string;
+  toolName: string;
+  toolCallId?: string;
+}): void {
+  const activity = resolveSessionActivity({ ...params, create: true });
+  if (!activity) {
+    return;
+  }
+  const now = Date.now();
+  activity.activeTools.set(toolKey(params), {
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    startedAt: now,
+    lastProgressAt: now,
+  });
+  touchSessionActivity(activity, `tool:${params.toolName}:started`, now);
+}
+
 export function resetDiagnosticRunActivityForTest(): void {
   activityByRef.clear();
   activityByRunId.clear();

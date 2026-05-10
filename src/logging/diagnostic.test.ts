@@ -13,6 +13,7 @@ import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
@@ -518,6 +519,48 @@ describe("stuck session diagnostics threshold", () => {
       { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
       ["ageMs", "stateGeneration"],
     );
+  });
+
+  it("does not abort embedded runs while a native tool call is active", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      vi.advanceTimersByTime(2 * 60_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
+      classification: "blocked_tool_call",
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "bash",
+      activeToolCallId: "cmd-1",
+    });
   });
 
   it("uses diagnostics.stuckSessionAbortMs for stalled active-work recovery", () => {

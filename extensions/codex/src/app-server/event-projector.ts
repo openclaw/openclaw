@@ -18,6 +18,7 @@ import {
   type MessagingToolSend,
   type ToolProgressDetailMode,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
@@ -116,6 +117,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
   private readonly nativeGeneratedMediaUrls = new Set<string>();
+  private readonly diagnosticToolStartedAtByItem = new Map<string, number>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -765,6 +767,7 @@ export class CodexAppServerEventProjector {
     const meta = itemMeta(item, this.toolProgressDetailMode());
     const args = params.phase === "start" ? itemToolArgs(item) : undefined;
     const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.emitDiagnosticToolExecutionEvent({ phase: params.phase, item, name, status });
     this.emitAgentEvent({
       stream: "tool",
       data: {
@@ -782,6 +785,58 @@ export class CodexAppServerEventProjector {
             }
           : {}),
       },
+    });
+  }
+
+  private emitDiagnosticToolExecutionEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem;
+    name: string;
+    status: ReturnType<typeof itemStatus>;
+  }): void {
+    const base = {
+      runId: this.params.runId,
+      sessionId: this.params.sessionId,
+      sessionKey: this.params.sessionKey,
+      toolName: params.name,
+      toolCallId: params.item.id,
+    };
+    if (params.phase === "start") {
+      this.diagnosticToolStartedAtByItem.set(params.item.id, Date.now());
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.started",
+        ...base,
+      });
+      return;
+    }
+
+    const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
+    this.diagnosticToolStartedAtByItem.delete(params.item.id);
+    const durationMs =
+      readNumber(params.item, "durationMs") ??
+      (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
+    if (params.status === "blocked") {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.blocked",
+        ...base,
+        reason: "codex_native_tool_blocked",
+        deniedReason: "codex_native_tool_blocked",
+      });
+      return;
+    }
+    if (params.status === "failed") {
+      emitTrustedDiagnosticEvent({
+        type: "tool.execution.error",
+        ...base,
+        durationMs,
+        errorCategory: "codex_native_tool_error",
+      });
+      return;
+    }
+    emitTrustedDiagnosticEvent({
+      type: "tool.execution.completed",
+      ...base,
+      durationMs,
     });
   }
 
