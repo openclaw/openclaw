@@ -70,6 +70,11 @@ type SyncLockSnapshot = {
   payload: Record<string, unknown> | null;
 };
 
+type ExternalCliSyncResult = {
+  store: AuthProfileStore;
+  cacheable: boolean;
+};
+
 const loadedAuthStoreCache = new Map<
   string,
   {
@@ -312,27 +317,27 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   options?: LoadAuthProfileStoreOptions;
-}): AuthProfileStore {
+}): ExternalCliSyncResult {
   if (
     params.options?.readOnly === true ||
     params.options?.syncExternalCli === false ||
     process.env.OPENCLAW_AUTH_STORE_READONLY === "1"
   ) {
-    return params.store;
+    return { store: params.store, cacheable: true };
   }
   const synced = syncPersistedExternalCliAuthProfiles(params.store, {
     agentDir: params.agentDir,
     ...resolveExternalCliOverlayOptions(params.options),
   });
   if (synced === params.store) {
-    return params.store;
+    return { store: params.store, cacheable: true };
   }
   const changedProfiles = Object.entries(synced.profiles).filter(([profileId, credential]) => {
     const previous = params.store.profiles[profileId];
     return !isDeepStrictEqual(previous, credential);
   });
   if (changedProfiles.length === 0) {
-    return synced;
+    return { store: synced, cacheable: true };
   }
 
   const authPath = resolveAuthStorePath(params.agentDir);
@@ -341,7 +346,7 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
     log.warn("skipped persisted external cli auth sync because auth store is locked", {
       authPath,
     });
-    return params.store;
+    return { store: params.store, cacheable: false };
   }
   try {
     const latestStore = loadPersistedAuthProfileStore(params.agentDir) ?? {
@@ -365,9 +370,9 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
       saveAuthProfileStore(latestStore, params.agentDir, {
         filterExternalAuthProfiles: false,
       });
-      return latestStore;
+      return { store: latestStore, cacheable: true };
     }
-    return latestStore;
+    return { store: latestStore, cacheable: true };
   } finally {
     release();
   }
@@ -512,20 +517,20 @@ function loadAuthProfileStoreForAgent(
   }
   const asStore = loadPersistedAuthProfileStore(agentDir);
   if (asStore) {
-    const store = maybeSyncPersistedExternalCliAuthProfiles({
+    const synced = maybeSyncPersistedExternalCliAuthProfiles({
       store: asStore,
       agentDir,
       options,
     });
-    if (!readOnly) {
+    if (!readOnly && synced.cacheable) {
       writeCachedAuthProfileStore({
         authPath,
         authMtimeMs: readAuthStoreMtimeMs(authPath),
         stateMtimeMs: readAuthStoreMtimeMs(statePath),
-        store,
+        store: synced.store,
       });
     }
-    return store;
+    return synced.store;
   }
 
   const legacy = loadLegacyAuthProfileStore(agentDir);
@@ -561,21 +566,21 @@ function loadAuthProfileStoreForAgent(
     }
   }
 
-  const syncedStore = maybeSyncPersistedExternalCliAuthProfiles({
+  const synced = maybeSyncPersistedExternalCliAuthProfiles({
     store,
     agentDir,
     options,
   });
 
-  if (!readOnly) {
+  if (!readOnly && synced.cacheable) {
     writeCachedAuthProfileStore({
       authPath,
       authMtimeMs: readAuthStoreMtimeMs(authPath),
       stateMtimeMs: readAuthStoreMtimeMs(statePath),
-      store: syncedStore,
+      store: synced.store,
     });
   }
-  return syncedStore;
+  return synced.store;
 }
 
 export function loadAuthProfileStoreForRuntime(

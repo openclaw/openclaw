@@ -6,6 +6,7 @@ import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION } from "./auth-profiles/con
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
 } from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
@@ -383,6 +384,57 @@ describe("auth profile store cache", () => {
       expect(fs.readFileSync(lockPath, "utf8")).toBe(lockRaw);
       expect(persisted.profiles[profileId]?.access).toBe("stale-local-access");
       expect(persisted.profiles[profileId]?.refresh).toBe("stale-local-refresh");
+    });
+  });
+
+  it("does not cache stale auth after external CLI sync lock contention", async () => {
+    await withAgentDirEnv("openclaw-auth-store-external-cli-locked-cache-", (agentDir) => {
+      const profileId = "anthropic:claude-cli";
+      const authPath = writeOAuthStore(agentDir, profileId, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      const lockPath = `${authPath}.lock`;
+      fs.writeFileSync(
+        lockPath,
+        `${JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }, null, 2)}\n`,
+        "utf8",
+      );
+      mocks.resolveExternalCliAuthProfiles
+        .mockImplementationOnce(() => {
+          writeOAuthStore(agentDir, profileId, {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "fresh-disk-access",
+            refresh: "fresh-disk-refresh",
+            expires: Date.now() + 120_000,
+          });
+          const bumpedMtime = new Date(Date.now() + 2_000);
+          fs.utimesSync(authPath, bumpedMtime, bumpedMtime);
+          return [
+            createPersistedOverlay(profileId, {
+              type: "oauth",
+              provider: "claude-cli",
+              access: "fresh-cli-access",
+              refresh: "fresh-cli-refresh",
+              expires: Date.now() + 60_000,
+            }),
+          ];
+        })
+        .mockReturnValue([]);
+
+      const first = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+      const second = ensureAuthProfileStoreWithoutExternalProfiles(agentDir);
+
+      expect((first.profiles[profileId] as OAuthCredential | undefined)?.access).toBe(
+        "stale-local-access",
+      );
+      expect((second.profiles[profileId] as OAuthCredential | undefined)?.access).toBe(
+        "fresh-disk-access",
+      );
     });
   });
 });
