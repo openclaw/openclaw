@@ -15,8 +15,13 @@ import {
 } from "./test-support/monitor-mocks-test-support.js";
 
 describe("Zalo reply-once lifecycle", () => {
+  type RecordInboundSessionInput = {
+    sessionKey: string;
+    ctx: Record<string, unknown>;
+  };
+
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(async () => undefined);
+  const recordInboundSessionMock = vi.fn(async (_input: RecordInboundSessionInput) => undefined);
   const resolveAgentRouteMock = vi.fn(() => ({
     agentId: "main",
     channel: "zalo",
@@ -93,7 +98,9 @@ describe("Zalo reply-once lifecycle", () => {
       );
 
       expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-      expect(recordInboundSessionMock).toHaveBeenCalledWith(
+      const recordInboundSessionCall = recordInboundSessionMock.mock.calls[0];
+      expect(recordInboundSessionCall).toBeDefined();
+      expect(recordInboundSessionCall?.[0]).toEqual(
         expect.objectContaining({
           sessionKey: "agent:main:zalo:direct:dm-chat-1",
           ctx: expect.objectContaining({
@@ -106,14 +113,16 @@ describe("Zalo reply-once lifecycle", () => {
         }),
       );
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        "zalo-token",
+      const sendMessageCall = sendMessageMock.mock.calls[0];
+      expect(sendMessageCall).toBeDefined();
+      expect(sendMessageCall?.[0]).toBe("zalo-token");
+      expect(sendMessageCall?.[1]).toEqual(
         expect.objectContaining({
           chat_id: "dm-chat-1",
           text: "zalo reply once",
         }),
-        undefined,
       );
+      expect(sendMessageCall?.[2]).toBeUndefined();
     } finally {
       await monitor.stop();
     }

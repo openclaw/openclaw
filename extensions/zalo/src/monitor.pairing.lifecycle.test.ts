@@ -87,14 +87,16 @@ describe("Zalo pairing lifecycle", () => {
         }),
       );
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        "zalo-token",
+      const sendMessageCall = sendMessageMock.mock.calls[0];
+      expect(sendMessageCall).toBeDefined();
+      expect(sendMessageCall?.[0]).toBe("zalo-token");
+      expect(sendMessageCall?.[1]).toEqual(
         expect.objectContaining({
           chat_id: "dm-pairing-1",
           text: expect.stringContaining("PAIRCODE"),
         }),
-        undefined,
       );
+      expect(sendMessageCall?.[2]).toBeUndefined();
     } finally {
       await monitor.stop();
     }
