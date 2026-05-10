@@ -47,10 +47,6 @@ export type CreateTelegramSendChatActionHandlerParams = {
   sendChatActionFn: SendChatActionFn;
   logger: TelegramSendChatActionLogger;
   maxConsecutive401?: number;
-  /**
-   * Best-effort per-chat/action coalescing window. Kept opt-in so tests and
-   * non-typing callers can preserve exact sendChatAction semantics.
-   */
   minIntervalMs?: number;
   now?: () => number;
 };
@@ -90,21 +86,13 @@ export function createTelegramSendChatActionHandler({
 }: CreateTelegramSendChatActionHandlerParams): TelegramSendChatActionHandler {
   let consecutive401Failures = 0;
   let suspended = false;
-  const pendingKeys = new Set<string>();
-  const lastAttemptAtByKey = new Map<string, number>();
+  const blockedUntilByKey = new Map<string, number>();
 
   const reset = () => {
     consecutive401Failures = 0;
     suspended = false;
-    pendingKeys.clear();
-    lastAttemptAtByKey.clear();
+    blockedUntilByKey.clear();
   };
-
-  const coalesceKey = (chatId: number | string, action: ChatAction) =>
-    // The Telegram API throttler keys group traffic by chat_id, not thread ID.
-    // Coalescing at the same level keeps topic typing cues from filling the
-    // shared outbound lane ahead of real replies.
-    `${String(chatId)}:${action}`;
 
   const sendChatAction = async (
     chatId: number | string,
@@ -115,19 +103,14 @@ export function createTelegramSendChatActionHandler({
       return;
     }
 
-    const shouldCoalesce = Number.isFinite(minIntervalMs) && minIntervalMs > 0;
-    const key = shouldCoalesce ? coalesceKey(chatId, action) : undefined;
+    const key = minIntervalMs > 0 ? `${String(chatId)}:${action}` : undefined;
+    const attemptedAt = key ? now() : 0;
     if (key) {
-      if (pendingKeys.has(key)) {
+      const blockedUntil = blockedUntilByKey.get(key);
+      if (blockedUntil !== undefined && attemptedAt < blockedUntil) {
         return;
       }
-      const currentTime = now();
-      const lastAttemptAt = lastAttemptAtByKey.get(key);
-      if (lastAttemptAt !== undefined && currentTime - lastAttemptAt < minIntervalMs) {
-        return;
-      }
-      pendingKeys.add(key);
-      lastAttemptAtByKey.set(key, currentTime);
+      blockedUntilByKey.set(key, Number.POSITIVE_INFINITY);
     }
 
     if (consecutive401Failures > 0) {
@@ -167,7 +150,7 @@ export function createTelegramSendChatActionHandler({
       throw error;
     } finally {
       if (key) {
-        pendingKeys.delete(key);
+        blockedUntilByKey.set(key, attemptedAt + minIntervalMs);
       }
     }
   };
