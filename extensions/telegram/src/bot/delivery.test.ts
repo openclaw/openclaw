@@ -102,6 +102,23 @@ function mockMediaLoad(fileName: string, contentType: string, data: string) {
   });
 }
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, argIndex: number) {
+  const call = mock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
 function createSendMessageHarness(messageId = 4) {
   const runtime = createRuntime();
   const sendMessage = vi.fn().mockResolvedValue({
@@ -257,21 +274,19 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      "Plugin bind approval required",
-      expect.objectContaining({
-        reply_markup: {
-          inline_keyboard: [
-            [
-              { text: "Allow once", callback_data: "pluginbind:req:o", style: "success" },
-              { text: "Always allow", callback_data: "pluginbind:req:a", style: "primary" },
-              { text: "Deny", callback_data: "pluginbind:req:d", style: "danger" },
-            ],
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toBe("Plugin bind approval required");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: "Allow once", callback_data: "pluginbind:req:o", style: "success" },
+            { text: "Always allow", callback_data: "pluginbind:req:a", style: "primary" },
+            { text: "Deny", callback_data: "pluginbind:req:d", style: "danger" },
           ],
-        },
-      }),
-    );
+        ],
+      },
+    });
   });
 
   it("uses interactive button labels as fallback text for button-only replies", async () => {
@@ -292,15 +307,13 @@ describe("deliverReplies", () => {
     });
 
     expect(runtime.error).not.toHaveBeenCalled();
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("Retry"),
-      expect.objectContaining({
-        reply_markup: {
-          inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
-        },
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Retry");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_markup: {
+        inline_keyboard: [[{ text: "Retry", callback_data: "cmd:retry" }]],
+      },
+    });
   });
 
   it("reports message_sent success=false when hooks blank out a text-only reply", async () => {
@@ -320,10 +333,14 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).not.toHaveBeenCalled();
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ success: false, content: "   " }),
-      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
-    );
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), {
+      success: false,
+      content: "   ",
+    });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 1), {
+      channelId: "telegram",
+      conversationId: "123",
+    });
   });
 
   it("passes accountId into message hooks", async () => {
@@ -342,22 +359,18 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
-      expect.any(Object),
-      expect.objectContaining({
-        channelId: "telegram",
-        accountId: "work",
-        conversationId: "123",
-      }),
-    );
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ success: true }),
-      expect.objectContaining({
-        channelId: "telegram",
-        accountId: "work",
-        conversationId: "123",
-      }),
-    );
+    expect(mockCallArg(messageHookRunner.runMessageSending, 0, 0)).toBeDefined();
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 1), {
+      channelId: "telegram",
+      accountId: "work",
+      conversationId: "123",
+    });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 0), { success: true });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSent, 0, 1), {
+      channelId: "telegram",
+      accountId: "work",
+      conversationId: "123",
+    });
   });
 
   it("sets disable_notification when silent is true", async () => {
@@ -375,13 +388,9 @@ describe("deliverReplies", () => {
       silent: true,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        disable_notification: true,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
   it("emits internal message:sent when session hook context is available", async () => {
@@ -398,23 +407,21 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(triggerInternalHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "message",
-        action: "sent",
-        sessionKey: "agent:test:telegram:123",
-        context: expect.objectContaining({
-          to: "123",
-          content: "hello",
-          success: true,
-          channelId: "telegram",
-          conversationId: "123",
-          messageId: "9",
-          isGroup: true,
-          groupId: "123",
-        }),
-      }),
-    );
+    const hookPayload = expectRecordFields(mockCallArg(triggerInternalHook, 0, 0), {
+      type: "message",
+      action: "sent",
+      sessionKey: "agent:test:telegram:123",
+    });
+    expectRecordFields(hookPayload.context, {
+      to: "123",
+      content: "hello",
+      success: true,
+      channelId: "telegram",
+      conversationId: "123",
+      messageId: "9",
+      isGroup: true,
+      groupId: "123",
+    });
   });
 
   it("does not emit internal message:sent without a session key", async () => {
@@ -497,21 +504,19 @@ describe("deliverReplies", () => {
       }),
     ).rejects.toThrow("network error");
 
-    expect(triggerInternalHook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "message",
-        action: "sent",
-        sessionKey: "agent:test:telegram:123",
-        context: expect.objectContaining({
-          to: "123",
-          content: "hello",
-          success: false,
-          error: "network error",
-          channelId: "telegram",
-          conversationId: "123",
-        }),
-      }),
-    );
+    const hookPayload = expectRecordFields(mockCallArg(triggerInternalHook, 0, 0), {
+      type: "message",
+      action: "sent",
+      sessionKey: "agent:test:telegram:123",
+    });
+    expectRecordFields(hookPayload.context, {
+      to: "123",
+      content: "hello",
+      success: false,
+      error: "network error",
+      channelId: "telegram",
+      conversationId: "123",
+    });
   });
 
   it("passes media metadata to message_sending hooks", async () => {
@@ -529,17 +534,21 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const sendingPayload = expectRecordFields(
+      mockCallArg(messageHookRunner.runMessageSending, 0, 0),
+      {
         to: "123",
         content: "caption",
-        metadata: expect.objectContaining({
-          channel: "telegram",
-          mediaUrls: ["https://example.com/photo.jpg"],
-        }),
-      }),
-      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+      },
     );
+    expectRecordFields(sendingPayload.metadata, {
+      channel: "telegram",
+      mediaUrls: ["https://example.com/photo.jpg"],
+    });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 1), {
+      channelId: "telegram",
+      conversationId: "123",
+    });
   });
 
   it("passes shared routing fields to message_sending hooks", async () => {
@@ -557,19 +566,23 @@ describe("deliverReplies", () => {
       thread: { id: 42, scope: "forum" },
     });
 
-    expect(messageHookRunner.runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({
+    const sendingPayload = expectRecordFields(
+      mockCallArg(messageHookRunner.runMessageSending, 0, 0),
+      {
         to: "123",
         content: "caption",
         replyToId: 500,
         threadId: 42,
-        metadata: expect.objectContaining({
-          channel: "telegram",
-          threadId: 42,
-        }),
-      }),
-      expect.objectContaining({ channelId: "telegram", conversationId: "123" }),
+      },
     );
+    expectRecordFields(sendingPayload.metadata, {
+      channel: "telegram",
+      threadId: 42,
+    });
+    expectRecordFields(mockCallArg(messageHookRunner.runMessageSending, 0, 1), {
+      channelId: "telegram",
+      conversationId: "123",
+    });
   });
 
   it("invokes onVoiceRecording before sending a voice note", async () => {
@@ -614,14 +627,12 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(sendPhoto).toHaveBeenCalledWith(
-      "123",
-      expect.anything(),
-      expect.objectContaining({
-        caption: "hi <b>boss</b>",
-        parse_mode: "HTML",
-      }),
-    );
+    expect(sendPhoto.mock.calls[0]?.[0]).toBe("123");
+    expect(sendPhoto.mock.calls[0]?.[1]).toBeDefined();
+    expectRecordFields(mockCallArg(sendPhoto, 0, 2), {
+      caption: "hi <b>boss</b>",
+      parse_mode: "HTML",
+    });
   });
 
   it("passes probed dimensions to video reply sends", async () => {
@@ -642,16 +653,14 @@ describe("deliverReplies", () => {
     });
 
     expect(probeVideoDimensions).toHaveBeenCalledWith(Buffer.from("video"));
-    expect(sendVideo).toHaveBeenCalledWith(
-      "123",
-      expect.anything(),
-      expect.objectContaining({
-        caption: "hi <b>boss</b>",
-        parse_mode: "HTML",
-        width: 720,
-        height: 1280,
-      }),
-    );
+    expect(sendVideo.mock.calls[0]?.[0]).toBe("123");
+    expect(sendVideo.mock.calls[0]?.[1]).toBeDefined();
+    expectRecordFields(mockCallArg(sendVideo, 0, 2), {
+      caption: "hi <b>boss</b>",
+      parse_mode: "HTML",
+      width: 720,
+      height: 1280,
+    });
   });
 
   it("does not probe GIF reply animations", async () => {
@@ -671,14 +680,11 @@ describe("deliverReplies", () => {
     });
 
     expect(probeVideoDimensions).not.toHaveBeenCalled();
-    expect(sendAnimation).toHaveBeenCalledWith(
-      "123",
-      expect.anything(),
-      expect.not.objectContaining({
-        width: expect.any(Number),
-        height: expect.any(Number),
-      }),
-    );
+    expect(sendAnimation.mock.calls[0]?.[0]).toBe("123");
+    expect(sendAnimation.mock.calls[0]?.[1]).toBeDefined();
+    const options = mockCallArg(sendAnimation, 0, 2) as Record<string, unknown>;
+    expect(typeof options.width).not.toBe("number");
+    expect(typeof options.height).not.toBe("number");
   });
 
   it("passes mediaLocalRoots to media loading", async () => {
@@ -719,13 +725,11 @@ describe("deliverReplies", () => {
       linkPreview: false,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        link_preview_options: { is_disabled: true },
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      link_preview_options: { is_disabled: true },
+    });
   });
 
   it("includes message_thread_id for DM topics", async () => {
@@ -738,13 +742,9 @@ describe("deliverReplies", () => {
       thread: { id: 42, scope: "dm" },
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        message_thread_id: 42,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
   });
 
   it("does not retry DM topic sends without the topic id when the topic is missing", async () => {
@@ -762,11 +762,7 @@ describe("deliverReplies", () => {
     ).rejects.toThrow("message thread not found");
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
-      expect.objectContaining({
-        message_thread_id: 42,
-      }),
-    );
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
