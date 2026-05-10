@@ -1044,6 +1044,17 @@ export function createModelVisibilityPolicyWithFallbacks(params: {
   const allowed = buildAllowedModelSetWithFallbacks(params);
   const allowsKey = (key: string): boolean =>
     allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
+  const exactConfiguredKeys = new Set<string>();
+  for (const raw of visibility.exactModelRefs) {
+    const key = resolveAllowlistModelKey({
+      cfg: params.cfg,
+      raw,
+      defaultProvider: params.defaultProvider,
+    });
+    if (key) {
+      exactConfiguredKeys.add(key);
+    }
+  }
   const policy: ModelVisibilityPolicy = {
     allowAny: allowed.allowAny,
     allowedCatalog: allowed.allowedCatalog,
@@ -1077,7 +1088,9 @@ export function createModelVisibilityPolicyWithFallbacks(params: {
           visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
         ),
         ...allowed.allowedCatalog.filter(
-          (entry) => !visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
+          (entry) =>
+            !visibility.providerWildcards.has(normalizeProviderId(entry.provider)) ||
+            exactConfiguredKeys.has(modelKey(entry.provider, entry.id)),
         ),
       ]);
     },

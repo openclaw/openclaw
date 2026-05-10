@@ -1044,6 +1044,36 @@ describe("model-selection", () => {
       ]);
     });
 
+    it("keeps exact same-provider entries visible beside wildcard catalog rows", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "vllm/*": {},
+              "vllm/manual": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [{ provider: "vllm", id: "qwen-local", name: "Qwen Local" }],
+        }),
+      ).toEqual([
+        { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        { provider: "vllm", id: "manual", name: "manual" },
+      ]);
+    });
+
     it("does not re-add a default outside mixed wildcard and exact filters", () => {
       const cfg: OpenClawConfig = {
         agents: {
