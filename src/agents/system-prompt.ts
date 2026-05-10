@@ -508,6 +508,9 @@ function buildMessagingSection(params: {
     messageToolOnly
       ? "- Reply in current session → private by default for this source channel; use `message(action=send)` for visible channel output."
       : "- Reply in current session → automatically routes to the source channel (Signal, Telegram, etc.)",
+    messageToolOnly
+      ? "- If directly addressed, asked for status, or completing requested work where a visible update is expected, call `message(action=send)` with the user-facing answer; do not put that answer only in normal final text."
+      : "",
     "- Cross-session messaging → use sessions_send(sessionKey, message)",
     subagentOrchestrationGuidance,
     completionEventGuidance,
