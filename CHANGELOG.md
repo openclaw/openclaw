@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Gateway/diagnostics: log the last-completed WebSocket handshake phase (`tcp_accepted` → `ws_upgrade_started` → `auth_token_received` → `auth_validated` → `session_attached` → `subscriptions_registered` → `ready`) on handshake-timeout and closed-before-connect failures so operators can tell network stalls from auth failures from session-attach issues. Successful sessions that reach `ready` do not emit the phase. Fixes #79603.
 - CLI: make parser, startup, config, guardrail, channel, agent, task, session, and MCP failures explain what happened and point to the next recovery command.
 - GitHub Copilot: refresh the model catalog from `${baseUrl}/models` so per-account entitlement and accurate context windows surface at runtime; static manifest catalog (now including `gpt-5.5`) remains the fallback when discovery is disabled or the API is unreachable.
 - Active Memory: support concrete `plugins.entries.active-memory.config.toolsAllow` recall tool names for custom memory plugins while keeping the built-in memory-core default on `memory_search`/`memory_get` and preserving `memory_recall` automatically for `plugins.slots.memory: "memory-lancedb"`.

@@ -137,6 +137,7 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
         return true;
       },
       setHandshakeState: vi.fn(),
+      advanceHandshakePhase: vi.fn(),
       setCloseCause: vi.fn(),
       setLastFrameMeta: vi.fn(),
       originCheckMetrics: { hostHeaderFallbackAccepted: 0 },

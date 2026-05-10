@@ -120,7 +120,7 @@ import {
   getHealthVersion,
   incrementPresenceVersion,
 } from "../health-state.js";
-import type { WsHandshakePhase } from "../ws-connection.js";
+import type { WsHandshakePhase } from "../ws-handshake-phase.js";
 import { resolveSharedGatewaySessionGeneration } from "../ws-shared-generation.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { resolveConnectAuthDecision, resolveConnectAuthState } from "./auth-context.js";

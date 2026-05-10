@@ -27,6 +27,7 @@ import type {
   GatewayWsMessageHandlerParams,
   WsOriginCheckMetrics,
 } from "./ws-connection/message-handler.js";
+import { WS_HANDSHAKE_PHASES, type WsHandshakePhase } from "./ws-handshake-phase.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
@@ -35,20 +36,6 @@ type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 const LOG_HEADER_MAX_LEN = 300;
 const LOG_HEADER_FORMAT_REGEX = /\p{Cf}/gu;
 const MAX_QUEUED_MESSAGE_HANDLER_FRAMES = 16;
-
-// Ordered handshake lifecycle for failure-only diagnostic phase logging.
-// Phases advance monotonically; the last completed phase is included in close
-// metadata when a connection ends before reaching `ready`.
-export const WS_HANDSHAKE_PHASES = [
-  "tcp_accepted",
-  "ws_upgrade_started",
-  "auth_token_received",
-  "auth_validated",
-  "session_attached",
-  "subscriptions_registered",
-  "ready",
-] as const;
-export type WsHandshakePhase = (typeof WS_HANDSHAKE_PHASES)[number];
 
 function replaceControlChars(value: string): string {
   let cleaned = "";
