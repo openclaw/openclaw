@@ -240,12 +240,12 @@ function optionalString(value: unknown): string {
   return typeof value === "string" ? value : "";
 }
 
-function requireFirstCallArg(mock: unknown, label: string): unknown {
-  const call = (mock as MockCallReader).mock.calls[0];
+function requireFirstCallArg<T = unknown>(mock: unknown, label: string): T {
+  const call = (mock as MockCallReader).mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label} to be called`);
   }
-  return call[0];
+  return call[0] as T;
 }
 
 function requireRequestParams(
