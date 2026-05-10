@@ -135,6 +135,7 @@ const MattermostAccountSchemaBase = z
     streaming: MattermostStreamingSchema.optional(),
     blockStreaming: z.boolean().optional(),
     blockStreamingCoalesce: BlockStreamingCoalesceSchema.optional(),
+    ackReaction: z.string().optional(),
     replyToMode: z.enum(["off", "first", "all", "batched"]).optional(),
     responsePrefix: z.string().optional(),
     actions: z

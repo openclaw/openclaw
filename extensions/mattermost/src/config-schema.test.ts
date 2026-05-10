@@ -29,6 +29,18 @@ describe("MattermostConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts ackReaction overrides at channel and account scope", () => {
+    const result = MattermostConfigSchema.safeParse({
+      ackReaction: "eyes",
+      accounts: {
+        main: {
+          ackReaction: "thumbsup",
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+
   it("accepts documented streaming modes and progress config", () => {
     const result = MattermostConfigSchema.safeParse({
       streaming: {

@@ -27,6 +27,11 @@ import {
   type ResolvedMattermostAccount,
 } from "./accounts.js";
 import {
+  cleanupMattermostAckReaction,
+  createMattermostAckReaction,
+  resolveMattermostAckReactionConfig,
+} from "./ack-reactions.js";
+import {
   createMattermostClient,
   fetchMattermostMe,
   normalizeMattermostBaseUrl,
@@ -1607,6 +1612,28 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         logVerboseMessage(
           `mattermost inbound: from=${ctxPayload.From} len=${bodyText.length} preview="${previewLine}"`,
         );
+        const mattermostConfig = cfg.channels?.mattermost;
+        const reactionsEnabled =
+          account.config.actions?.reactions ?? mattermostConfig?.actions?.reactions ?? true;
+        const { removeAckAfterReply } = resolveMattermostAckReactionConfig({
+          cfg,
+          agentId: route.agentId,
+          accountId: account.accountId,
+        });
+        const ackReaction = createMattermostAckReaction({
+          cfg,
+          agentId: route.agentId,
+          accountId: account.accountId,
+          channelId,
+          postId: post.id,
+          kind,
+          shouldRequireMention,
+          canDetectMention,
+          effectiveWasMentioned: mentionDecision.effectiveWasMentioned,
+          shouldBypassMention,
+          reactionsEnabled,
+          log: logVerboseMessage,
+        });
 
         const textLimit = core.channel.text.resolveTextChunkLimit(
           cfg,
@@ -1655,6 +1682,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             })
           : createDisabledMattermostDraftStream();
         let lastPartialText = "";
+        let anyReplyDelivered = false;
         const previewState: MattermostDraftPreviewState = {
           finalizedViaPreviewPost: false,
         };
@@ -1758,6 +1786,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                 },
               });
+              anyReplyDelivered = true;
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
@@ -1916,6 +1945,13 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
             },
           });
         } finally {
+          cleanupMattermostAckReaction({
+            ackReaction,
+            didSendReply: anyReplyDelivered,
+            removeAckAfterReply,
+            target: `${channelId}/${post.id ?? "unknown"}`,
+            log: logVerboseMessage,
+          });
           try {
             await draftStream.stop();
           } catch (err) {

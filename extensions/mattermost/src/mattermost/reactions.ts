@@ -21,6 +21,43 @@ type MutationPayload = { userId: string; postId: string; emojiName: string };
 
 const BOT_USER_CACHE_TTL_MS = 10 * 60_000;
 const botUserIdCache = new Map<string, { userId: string; expiresAt: number }>();
+// Mattermost reaction endpoints use emoji names, not raw unicode.
+const UNICODE_TO_MATTERMOST: Record<string, string> = {
+  "👀": "eyes",
+  "🤔": "thinking_face",
+  "🔥": "fire",
+  "👨‍💻": "male-technologist",
+  "👨💻": "male-technologist",
+  "👩‍💻": "female-technologist",
+  "⚡": "zap",
+  "🌐": "globe_with_meridians",
+  "✅": "white_check_mark",
+  "👍": "thumbsup",
+  "❌": "x",
+  "😱": "scream",
+  "🥱": "yawning_face",
+  "😨": "fearful",
+  "⏳": "hourglass_flowing_sand",
+  "⚠️": "warning",
+  "⚠": "warning",
+  "✍️": "writing_hand",
+  "✍": "writing_hand",
+  "🧠": "brain",
+  "🛠️": "hammer_and_wrench",
+  "🛠": "hammer_and_wrench",
+  "💻": "computer",
+};
+
+export function normalizeMattermostReactionEmojiName(emoji: string): string {
+  let trimmed = emoji.trim();
+  while (trimmed.startsWith(":")) {
+    trimmed = trimmed.slice(1);
+  }
+  while (trimmed.endsWith(":")) {
+    trimmed = trimmed.slice(0, -1);
+  }
+  return UNICODE_TO_MATTERMOST[trimmed] ?? trimmed;
+}
 
 async function resolveBotUserId(
   client: MattermostClient,
@@ -76,6 +113,10 @@ async function runMattermostReaction(
     mutation: ReactionMutation;
   },
 ): Promise<Result> {
+  const emojiName = normalizeMattermostReactionEmojiName(params.emojiName);
+  if (!emojiName) {
+    return { ok: false, error: "Mattermost reaction emoji missing." };
+  }
   const resolved = resolveMattermostAccount({ cfg: params.cfg, accountId: params.accountId });
   const baseUrl = resolved.baseUrl?.trim();
   const botToken = resolved.botToken?.trim();
@@ -100,7 +141,7 @@ async function runMattermostReaction(
     await options.mutation(client, {
       userId,
       postId: params.postId,
-      emojiName: params.emojiName,
+      emojiName,
     });
   } catch (err) {
     return { ok: false, error: `Mattermost ${options.action} reaction failed: ${String(err)}` };

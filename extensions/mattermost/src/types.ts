@@ -61,6 +61,8 @@ export type MattermostAccountConfig = {
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
+  /** Outbound ack reaction override for this channel/account. */
+  ackReaction?: string;
   /** Outbound response prefix override for this channel/account. */
   responsePrefix?: string;
   /**

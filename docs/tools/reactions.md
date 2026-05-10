@@ -41,6 +41,13 @@ tool with the `react` action. Reaction behavior varies by channel and transport.
 
   </Accordion>
 
+  <Accordion title="Mattermost">
+    - Requires non-empty `emoji`.
+    - `remove: true` removes that specific emoji reaction.
+    - Accepts emoji names such as `thumbsup` or colon-wrapped names such as `:+1:`.
+
+  </Accordion>
+
   <Accordion title="Telegram">
     - Empty `emoji` removes the bot's reactions.
     - `remove: true` also removes reactions but still requires a non-empty `emoji` for tool validation.

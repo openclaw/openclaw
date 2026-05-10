@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
   addMattermostReaction,
+  normalizeMattermostReactionEmojiName,
   removeMattermostReaction,
   resetMattermostReactionBotUserCacheForTests,
 } from "./reactions.js";
@@ -44,6 +45,29 @@ describe("mattermost reactions", () => {
 
     expect(result).toEqual({ ok: true });
     expect(fetchMock).toHaveBeenCalled();
+  });
+
+  it("normalizes unicode and colon-wrapped emoji names", () => {
+    expect(normalizeMattermostReactionEmojiName("👀")).toBe("eyes");
+    expect(normalizeMattermostReactionEmojiName(":+1:")).toBe("+1");
+    expect(normalizeMattermostReactionEmojiName(" thumbsup ")).toBe("thumbsup");
+  });
+
+  it("maps unicode emoji before calling the reaction API", async () => {
+    const fetchMock = createMattermostReactionFetchMock({
+      mode: "add",
+      postId: "POST1",
+      emojiName: "eyes",
+    });
+
+    const result = await addMattermostReaction({
+      cfg: createMattermostTestConfig(),
+      postId: "POST1",
+      emojiName: "👀",
+      fetchImpl: fetchMock,
+    });
+
+    expect(result).toEqual({ ok: true });
   });
 
   it("returns a Result error when add reaction API call fails", async () => {
