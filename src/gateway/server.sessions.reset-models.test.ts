@@ -266,9 +266,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
         execAsk: "on-miss",
         execNode: "mac-mini",
         displayName: "Ops Child",
-        cliSessionIds: {
-          "claude-cli": "cli-session-123",
-        },
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "cli-session-123",
@@ -276,7 +273,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
             extraSystemPromptHash: "prompt-hash",
           },
         },
-        claudeCliSessionId: "cli-session-123",
         deliveryContext: {
           channel: "discord",
           to: "discord:child",
@@ -334,8 +330,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
           mcpConfigHash?: string;
         }
       >;
-      cliSessionIds?: Record<string, string>;
-      claudeCliSessionId?: string;
       deliveryContext?: {
         channel?: string;
         to?: string;
@@ -388,10 +382,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       extraSystemPromptHash: "prompt-hash",
     },
   });
-  expect(reset.payload?.entry.cliSessionIds).toEqual({
-    "claude-cli": "cli-session-123",
-  });
-  expect(reset.payload?.entry.claudeCliSessionId).toBe("cli-session-123");
   expect(reset.payload?.entry.deliveryContext).toEqual({
     channel: "discord",
     to: "discord:child",
@@ -440,10 +430,6 @@ test("sessions.reset preserves spawned session ownership metadata", async () => 
       extraSystemPromptHash: "prompt-hash",
     },
   });
-  expect(stored?.cliSessionIds).toEqual({
-    "claude-cli": "cli-session-123",
-  });
-  expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   expect(stored?.deliveryContext).toEqual({
     channel: "discord",
     to: "discord:child",

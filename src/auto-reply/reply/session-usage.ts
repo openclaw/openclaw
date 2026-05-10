@@ -26,9 +26,7 @@ function applyCliSessionIdToSessionPatch(
     setCliSessionBinding(nextEntry, cliProvider, params.cliSessionBinding);
     return {
       ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
       cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
     };
   }
   if (params.cliSessionId && cliProvider) {
@@ -36,9 +34,7 @@ function applyCliSessionIdToSessionPatch(
     setCliSessionId(nextEntry, cliProvider, params.cliSessionId);
     return {
       ...patch,
-      cliSessionIds: nextEntry.cliSessionIds,
       cliSessionBindings: nextEntry.cliSessionBindings,
-      claudeCliSessionId: nextEntry.claudeCliSessionId,
     };
   }
   return patch;

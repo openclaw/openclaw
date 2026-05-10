@@ -317,15 +317,11 @@ describe("updateSessionEntryAfterAgentRun", () => {
       expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
-      expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-      expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
 
       const persisted = readMockSessionEntries(agentId);
       expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toEqual({
         sessionId: "cli-session-123",
       });
-      expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe("cli-session-123");
-      expect(persisted[sessionKey]?.claudeCliSessionId).toBe("cli-session-123");
     });
   });
 
@@ -1163,11 +1159,6 @@ describe("clearCliSessionEntry", () => {
             sessionId: "codex-session-1",
           },
         },
-        cliSessionIds: {
-          "claude-cli": "claude-session-1",
-          "codex-cli": "codex-session-1",
-        },
-        claudeCliSessionId: "claude-session-1",
       };
       const sessionStore: Record<string, SessionEntry> = { [sessionKey]: entry };
       await replaceMockSessionEntries(agentId, sessionStore);
@@ -1182,9 +1173,6 @@ describe("clearCliSessionEntry", () => {
       expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
-      expect(cleared?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(cleared?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
-      expect(cleared?.claudeCliSessionId).toBeUndefined();
       expect(sessionStore[sessionKey]).toEqual(cleared);
 
       const persisted = readMockSessionEntries(agentId)[sessionKey];
@@ -1192,9 +1180,6 @@ describe("clearCliSessionEntry", () => {
       expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
         sessionId: "codex-session-1",
       });
-      expect(persisted?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-      expect(persisted?.cliSessionIds?.["codex-cli"]).toBe("codex-session-1");
-      expect(persisted?.claudeCliSessionId).toBeUndefined();
     });
   });
 
@@ -1205,7 +1190,7 @@ describe("clearCliSessionEntry", () => {
         [existingKey]: {
           sessionId: "openclaw-session-1",
           updatedAt: 1,
-          claudeCliSessionId: "claude-session-1",
+          cliSessionBindings: { "claude-cli": { sessionId: "claude-session-1" } },
         },
       };
       await replaceMockSessionEntries(agentId, sessionStore);
@@ -1217,10 +1202,12 @@ describe("clearCliSessionEntry", () => {
       });
 
       expect(cleared).toBeUndefined();
-      expect(sessionStore[existingKey]?.claudeCliSessionId).toBe("claude-session-1");
-      expect(readMockSessionEntries(agentId)[existingKey]?.claudeCliSessionId).toBe(
+      expect(sessionStore[existingKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
         "claude-session-1",
       );
+      expect(
+        readMockSessionEntries(agentId)[existingKey]?.cliSessionBindings?.["claude-cli"]?.sessionId,
+      ).toBe("claude-session-1");
     });
   });
 });

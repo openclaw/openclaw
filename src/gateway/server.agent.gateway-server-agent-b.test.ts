@@ -234,9 +234,6 @@ describe("gateway server agent", () => {
           updatedAt: Date.now(),
           modelProvider: "claude-cli",
           model: "claude-opus-4-6",
-          cliSessionIds: {
-            "claude-cli": "cli-session-123",
-          },
           cliSessionBindings: {
             "claude-cli": {
               sessionId: "cli-session-123",
@@ -245,7 +242,6 @@ describe("gateway server agent", () => {
               mcpResumeHash: "mcp-resume-hash",
             },
           },
-          claudeCliSessionId: "cli-session-123",
         },
       },
     });
@@ -267,10 +263,6 @@ describe("gateway server agent", () => {
         mcpResumeHash: "mcp-resume-hash",
       },
     });
-    expect(stored?.cliSessionIds).toEqual({
-      "claude-cli": "cli-session-123",
-    });
-    expect(stored?.claudeCliSessionId).toBe("cli-session-123");
   });
 
   test("agent accepts built-in channel alias (imsg)", async () => {

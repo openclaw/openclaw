@@ -2217,14 +2217,12 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       authProfileOverride: "20251001",
       authProfileOverrideSource: "user",
       authProfileOverrideCompactionCount: 2,
-      cliSessionIds: { "claude-cli": "cli-session-123" },
       cliSessionBindings: {
         "claude-cli": {
           sessionId: "cli-session-123",
           authProfileId: "anthropic:default",
         },
       },
-      claudeCliSessionId: "cli-session-123",
     } as const;
     const cases = [
       {
@@ -2267,25 +2265,17 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession, testCase.name).toBe(true);
       expect(result.resetTriggered, testCase.name).toBe(true);
       expect(result.sessionId, testCase.name).not.toBe(existingSessionId);
-      expect(result.sessionEntry.providerOverride, testCase.name).toBe(overrides.providerOverride);
-      expect(result.sessionEntry.modelOverride, testCase.name).toBe(overrides.modelOverride);
-      expect(result.sessionEntry.authProfileOverride, testCase.name).toBe(
-        overrides.authProfileOverride,
-      );
-      expect(result.sessionEntry.authProfileOverrideSource, testCase.name).toBe(
-        overrides.authProfileOverrideSource,
-      );
-      expect(result.sessionEntry.authProfileOverrideCompactionCount, testCase.name).toBe(
-        overrides.authProfileOverrideCompactionCount,
-      );
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
+      expect(result.sessionEntry, testCase.name).toMatchObject({
+        providerOverride: overrides.providerOverride,
+        modelOverride: overrides.modelOverride,
+        authProfileOverride: overrides.authProfileOverride,
+        authProfileOverrideSource: overrides.authProfileOverrideSource,
+        authProfileOverrideCompactionCount: overrides.authProfileOverrideCompactionCount,
+      });
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
 
       const stored = readSessionRowsForFixtureTarget(sessionRowsTarget);
-      expect(stored[sessionKey].cliSessionIds).toBeUndefined();
       expect(stored[sessionKey].cliSessionBindings).toBeUndefined();
-      expect(stored[sessionKey].claudeCliSessionId).toBeUndefined();
     }
   });
 
@@ -2446,7 +2436,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       sessionKey,
       sessionId: existingSessionId,
       overrides: {
-        cliSessionIds: { "claude-cli": "cli-session-1" },
         cliSessionBindings: {
           "claude-cli": {
             sessionId: "cli-session-1",
@@ -2629,10 +2618,6 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
           cliSessionBindings: {
             "claude-cli": cliBinding,
           },
-          cliSessionIds: {
-            "claude-cli": cliBinding.sessionId,
-          },
-          claudeCliSessionId: cliBinding.sessionId,
         },
       });
       replaceSqliteSessionTranscriptEvents({
@@ -2965,7 +2950,6 @@ describe("persistSessionUsageUpdate", () => {
     const stored = readSessionRowsForFixtureTarget(sessionRowsTarget);
     expect(stored[sessionKey].totalTokens).toBe(32_000);
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
-    expect(stored[sessionKey].cliSessionIds?.["claude-cli"]).toBe("cli-session-1");
     expect(stored[sessionKey].cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "cli-session-1",
       authProfileId: "anthropic:default",

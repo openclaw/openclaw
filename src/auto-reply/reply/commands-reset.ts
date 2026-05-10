@@ -82,8 +82,6 @@ export async function maybeHandleResetCommand(
             clearAllCliSessions(next);
             return {
               cliSessionBindings: next.cliSessionBindings,
-              cliSessionIds: next.cliSessionIds,
-              claudeCliSessionId: next.claudeCliSessionId,
               updatedAt: now,
               lastInteractionAt: now,
             };

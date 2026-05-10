@@ -49,18 +49,7 @@ function resolveClaudeProjectsDir(homeDir?: string): string {
 export function resolveClaudeCliBindingSessionId(
   entry: SessionEntry | undefined,
 ): string | undefined {
-  const bindingSessionId = normalizeOptionalString(
-    entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId,
-  );
-  if (bindingSessionId) {
-    return bindingSessionId;
-  }
-  const legacyMapSessionId = normalizeOptionalString(entry?.cliSessionIds?.[CLAUDE_CLI_PROVIDER]);
-  if (legacyMapSessionId) {
-    return legacyMapSessionId;
-  }
-  const legacyClaudeSessionId = normalizeOptionalString(entry?.claudeCliSessionId);
-  return legacyClaudeSessionId || undefined;
+  return normalizeOptionalString(entry?.cliSessionBindings?.[CLAUDE_CLI_PROVIDER]?.sessionId);
 }
 
 function resolveFiniteNumber(value: unknown): number | undefined {

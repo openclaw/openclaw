@@ -870,18 +870,15 @@ describe("gateway agent handler", () => {
     });
   });
 
-  it("preserves cliSessionIds from existing session entry", async () => {
-    const existingCliSessionIds = { "claude-cli": "abc-123-def" };
-    const existingClaudeCliSessionId = "abc-123-def";
+  it("preserves CLI session bindings from existing session entry", async () => {
+    const existingCliSessionBindings = { "claude-cli": { sessionId: "abc-123-def" } };
 
     mockMainSessionEntry({
-      cliSessionIds: existingCliSessionIds,
-      claudeCliSessionId: existingClaudeCliSessionId,
+      cliSessionBindings: existingCliSessionBindings,
     });
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem");
-    expect(capturedEntry.cliSessionIds).toEqual(existingCliSessionIds);
-    expect(capturedEntry.claudeCliSessionId).toBe(existingClaudeCliSessionId);
+    expect(capturedEntry.cliSessionBindings).toEqual(existingCliSessionBindings);
   });
   it("reactivates completed subagent sessions and broadcasts send updates", async () => {
     const childSessionKey = "agent:main:subagent:followup";
@@ -2578,13 +2575,12 @@ describe("gateway agent handler", () => {
     expect(mocks.resolveVoiceWakeRouteByTrigger).not.toHaveBeenCalled();
   });
 
-  it("handles missing cliSessionIds gracefully", async () => {
+  it("handles missing CLI session bindings gracefully", async () => {
     mockMainSessionEntry({});
 
     const capturedEntry = await runMainAgentAndCaptureEntry("test-idem-2");
     // Should be undefined, not cause an error
-    expect(capturedEntry.cliSessionIds).toBeUndefined();
-    expect(capturedEntry.claudeCliSessionId).toBeUndefined();
+    expect(capturedEntry.cliSessionBindings).toBeUndefined();
   });
   it("leaves noncanonical main row cleanup to doctor when writing a canonical session entry", async () => {
     mocks.loadSessionEntry.mockReturnValue({

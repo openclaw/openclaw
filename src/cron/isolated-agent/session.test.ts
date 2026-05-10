@@ -223,9 +223,7 @@ describe("resolveCronSession", () => {
           modelProvider: "anthropic",
           agentHarnessId: "claude-cli",
           agentRuntimeOverride: "claude-cli",
-          cliSessionIds: { anthropic: "old-cli-session" },
-          cliSessionBindings: {},
-          claudeCliSessionId: "old-claude-session",
+          cliSessionBindings: { anthropic: { sessionId: "old-cli-session" } },
           liveModelSwitchPending: true,
           fallbackNoticeSelectedModel: "anthropic/claude-opus-4-6",
           fallbackNoticeActiveModel: "anthropic/claude-sonnet-4-6",
@@ -311,9 +309,7 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.modelProvider).toBeUndefined();
       expect(result.sessionEntry.agentHarnessId).toBeUndefined();
       expect(result.sessionEntry.agentRuntimeOverride).toBeUndefined();
-      expect(result.sessionEntry.cliSessionIds).toBeUndefined();
       expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
-      expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
       expect(result.sessionEntry.liveModelSwitchPending).toBeUndefined();
       expect(result.sessionEntry.fallbackNoticeSelectedModel).toBeUndefined();
       expect(result.sessionEntry.fallbackNoticeActiveModel).toBeUndefined();

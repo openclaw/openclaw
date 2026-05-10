@@ -354,7 +354,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           systemSent: false,
           skillsSnapshot: undefined,
           // A stored CLI session ID that should NOT be reused on fresh runs.
-          cliSessionIds: { "claude-cli": "prev-cli-session-abc" },
+          cliSessionBindings: { "claude-cli": { sessionId: "prev-cli-session-abc" } },
         },
         systemSent: false,
         isNewSession: true,
@@ -384,7 +384,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
           updatedAt: 0,
           systemSent: false,
           skillsSnapshot: undefined,
-          cliSessionIds: { "claude-cli": "existing-cli-session-def" },
+          cliSessionBindings: { "claude-cli": { sessionId: "existing-cli-session-def" } },
         },
         systemSent: false,
         isNewSession: false,

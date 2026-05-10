@@ -214,8 +214,12 @@ describe("CLI attempt execution", () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session-cli-123",
       updatedAt: Date.now(),
-      cliSessionIds: { "claude-cli": "stale-cli-session" },
-      claudeCliSessionId: "stale-legacy-session",
+      cliSessionBindings: {
+        "claude-cli": {
+          sessionId: "stale-cli-session",
+          authProfileId: "anthropic:claude-cli",
+        },
+      },
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeStore(sessionStore);
@@ -260,14 +264,12 @@ describe("CLI attempt execution", () => {
     });
 
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
-    expect(firstRunCliAgentArg().cliSessionId).toBe("stale-cli-session");
-    expect(firstRunCliAgentArg(1).cliSessionId).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    expect(runCliAgentMock.mock.calls[0]?.[0]?.cliSessionId).toBe("stale-cli-session");
+    expect(runCliAgentMock.mock.calls[1]?.[0]?.cliSessionId).toBeUndefined();
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
 
     const persisted = readStore();
-    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
+    expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
   });
 
   it("does not pass --resume when the stored Claude CLI transcript is missing", async () => {
@@ -283,8 +285,6 @@ describe("CLI attempt execution", () => {
           authProfileId: "anthropic:claude-cli",
         },
       },
-      cliSessionIds: { "claude-cli": "phantom-claude-session" },
-      claudeCliSessionId: "phantom-claude-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeStore(sessionStore);
@@ -302,13 +302,9 @@ describe("CLI attempt execution", () => {
     expect(firstRunCliAgentArg().cliSessionId).toBeUndefined();
     expect(firstRunCliAgentArg().cliSessionBinding).toBeUndefined();
     expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBeUndefined();
 
     const persisted = readStore();
     expect(persisted[sessionKey]?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(persisted[sessionKey]?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(persisted[sessionKey]?.claudeCliSessionId).toBeUndefined();
   });
 
   it("keeps Claude CLI resume when the stored transcript has assistant content", async () => {
@@ -338,8 +334,6 @@ describe("CLI attempt execution", () => {
           authProfileId: "anthropic:claude-cli",
         },
       },
-      cliSessionIds: { "claude-cli": cliSessionId },
-      claudeCliSessionId: cliSessionId,
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     await writeStore(sessionStore);
@@ -359,8 +353,9 @@ describe("CLI attempt execution", () => {
       sessionId: cliSessionId,
       authProfileId: "anthropic:claude-cli",
     });
-    expect(sessionStore[sessionKey]?.cliSessionIds?.["claude-cli"]).toBe(cliSessionId);
-    expect(sessionStore[sessionKey]?.claudeCliSessionId).toBe(cliSessionId);
+    expect(sessionStore[sessionKey]?.cliSessionBindings?.["claude-cli"]?.sessionId).toBe(
+      cliSessionId,
+    );
   });
 
   it("passes session-bound OpenAI Codex auth profile to codex-cli aliases", async () => {

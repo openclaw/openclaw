@@ -107,10 +107,6 @@ describe("runCliTurnCompactionLifecycle", () => {
       cliSessionBindings: {
         "claude-cli": { sessionId: "claude-session" },
       },
-      cliSessionIds: {
-        "claude-cli": "claude-session",
-      },
-      claudeCliSessionId: "claude-session",
     };
     const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
     upsertSessionEntry({ agentId: "main", sessionKey, entry: sessionEntry });
@@ -170,8 +166,6 @@ describe("runCliTurnCompactionLifecycle", () => {
     );
     expect(updatedEntry?.compactionCount).toBe(1);
     expect(updatedEntry?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
-    expect(updatedEntry?.cliSessionIds?.["claude-cli"]).toBeUndefined();
-    expect(updatedEntry?.claudeCliSessionId).toBeUndefined();
   });
 
   it("initializes built-in context engines before resolving CLI compaction engine", async () => {

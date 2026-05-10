@@ -35,9 +35,7 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   delete next.sessionId;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;
-  delete next.cliSessionIds;
   delete next.cliSessionBindings;
-  delete next.claudeCliSessionId;
   return next as SessionEntry;
 }
 
