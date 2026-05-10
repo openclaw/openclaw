@@ -17,6 +17,18 @@
 # Env-driven config:
 #   OPENCLAW_PUBLIC_ORIGIN          gateway.controlUi.allowedOrigins
 #   OPENCLAW_DISABLE_DEVICE_AUTH    gateway.controlUi.dangerouslyDisableDeviceAuth
+#   OPENCLAW_TRUSTED_PROXIES        gateway.trustedProxies — comma-separated
+#                                   list of IPs/CIDRs whose X-Forwarded-For
+#                                   headers we honor. Default
+#                                   100.64.0.0/10 (Tailscale CGNAT range,
+#                                   which is what Railway's edge proxy
+#                                   uses). Without this set, the gateway
+#                                   logs "Proxy headers detected from
+#                                   untrusted address" on every WS
+#                                   connection and refuses to treat the
+#                                   webchat client as local — webchat
+#                                   handshakes then close 1008 → browser
+#                                   sees code=1006 and chat is broken.
 #   OPENCLAW_OLLAMA_MODEL           comma-separated Ollama model ids.
 #                                   First entry becomes the default
 #                                   (agents.defaults.model.primary);
@@ -61,6 +73,34 @@
 #                                   "ollama" for stability across
 #                                   redeploys, but the actual HTTP
 #                                   target is whatever URL you set.
+#                                   This legacy path is kept for
+#                                   backwards compatibility; new
+#                                   deployments should use the
+#                                   first-class FEATHERLESS_API_KEY
+#                                   path below instead.
+#   FEATHERLESS_API_KEY             Featherless.ai API key. When set,
+#                                   registers a real models.providers
+#                                   .featherless block (separate from
+#                                   the ollama legacy alias) so the
+#                                   operator can route to featherless
+#                                   models by their canonical id
+#                                   (e.g. featherless/moonshotai/Kimi-K2-Instruct-0905)
+#                                   in the Control UI without losing
+#                                   ollama as a co-installed option.
+#                                   Models are also auto-allowlisted
+#                                   in agents.defaults.model.fallbacks
+#                                   so the main agent can route to
+#                                   them.
+#   FEATHERLESS_MODELS              Comma-separated featherless model
+#                                   ids to register. Default:
+#                                     moonshotai/Kimi-K2-Instruct-0905,
+#                                     deepseek-ai/DeepSeek-V3.1-Terminus,
+#                                     meta-llama/Meta-Llama-3.1-70B-Instruct,
+#                                     zai-org/GLM-4.7,
+#                                     Qwen/QwQ-32B
+#                                   Verify ids against your featherless
+#                                   plan at https://featherless.ai/models
+#                                   before changing.
 set -e
 
 STATE_DIR="${OPENCLAW_STATE_DIR:-/root/.openclaw}"
@@ -80,12 +120,16 @@ if true; then
     "${OPENCLAW_COMPACTION_RESERVE:-20000}" \
     "${OPENCLAW_OLLAMA_CONTEXT_WINDOW:-128000}" \
     "${OPENCLAW_OLLAMA_MAX_TOKENS:-8000}" \
-    "${OPENCLAW_PROVIDER_BASE_URL:-https://ollama.com/v1}" <<'PY' || true
+    "${OPENCLAW_PROVIDER_BASE_URL:-https://ollama.com/v1}" \
+    "${OPENCLAW_TRUSTED_PROXIES:-100.64.0.0/10}" \
+    "${FEATHERLESS_API_KEY:-}" \
+    "${FEATHERLESS_MODELS:-moonshotai/Kimi-K2-Instruct-0905,deepseek-ai/DeepSeek-V3.1-Terminus,meta-llama/Meta-Llama-3.1-70B-Instruct,zai-org/GLM-4.7,Qwen/QwQ-32B}" <<'PY' || true
 import json, os, sys
 (
     config_path, public_origin, disable_dev_auth, ollama_model,
     compaction_reserve, ollama_ctx, ollama_max, provider_base_url,
-) = sys.argv[1:9]
+    trusted_proxies, featherless_api_key, featherless_models,
+) = sys.argv[1:12]
 config = {}
 if os.path.exists(config_path):
     try:
@@ -103,6 +147,12 @@ if public_origin:
             origins.append(o)
 if disable_dev_auth == "1":
     ui["dangerouslyDisableDeviceAuth"] = True
+# trustedProxies: array of IP/CIDR strings whose X-Forwarded-For we trust.
+# Without this set, the gateway flags every WS connection from Railway's
+# edge proxy as untrusted and webchat handshakes close 1008.
+proxy_list = [p.strip() for p in trusted_proxies.split(",") if p.strip()]
+if proxy_list:
+    gw["trustedProxies"] = proxy_list
 agents = config.setdefault("agents", {})
 defaults = agents.setdefault("defaults", {})
 try:
@@ -147,6 +197,29 @@ if ollama_model:
     if model_ids:
         model_cfg = defaults.setdefault("model", {})
         model_cfg["primary"] = f"ollama/{model_ids[0]}"
+# Featherless.ai as a first-class provider (separate from the ollama
+# legacy alias). When FEATHERLESS_API_KEY is set, register the provider
+# block, materialize the configured model list, and auto-allowlist each
+# entry in agents.defaults so the main agent can actually route to them.
+if featherless_api_key:
+    feather_ids = [m.strip() for m in featherless_models.split(",") if m.strip()]
+    models = config.setdefault("models", {})
+    providers = models.setdefault("providers", {})
+    providers["featherless"] = {
+        "baseUrl": "https://api.featherless.ai/v1",
+        "apiKey": {"source": "env", "provider": "default", "id": "FEATHERLESS_API_KEY"},
+        "api": "openai-completions",
+        "models": [{"id": mid, "name": mid} for mid in feather_ids],
+    }
+    if feather_ids:
+        model_cfg = defaults.setdefault("model", {})
+        fallbacks = model_cfg.setdefault("fallbacks", [])
+        models_allowlist = defaults.setdefault("models", {})
+        for mid in feather_ids:
+            qualified = f"featherless/{mid}"
+            if qualified not in fallbacks:
+                fallbacks.append(qualified)
+            models_allowlist.setdefault(qualified, {})
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
 _provider_block = (
@@ -155,15 +228,21 @@ _provider_block = (
 _provider_models = _provider_block.get("models", [])
 _ctx = _provider_models[0].get("contextWindow") if _provider_models else None
 _max = _provider_models[0].get("maxTokens") if _provider_models else None
+_featherless_block = (
+    config.get("models", {}).get("providers", {}).get("featherless", {})
+)
+_featherless_count = len(_featherless_block.get("models", []))
 print(
     "openclaw.json patched: "
     f"origins={ui.get('allowedOrigins')} "
+    f"trustedProxies={gw.get('trustedProxies')} "
     f"disableDeviceAuth={ui.get('dangerouslyDisableDeviceAuth', False)} "
     f"providerBaseUrl={_provider_block.get('baseUrl')} "
     f"primaryModel={defaults.get('model', {}).get('primary')} "
     f"contextWindow={_ctx} "
     f"maxTokens={_max} "
-    f"compactionReserve={compaction['reserveTokensFloor']}",
+    f"compactionReserve={compaction['reserveTokensFloor']} "
+    f"featherlessModels={_featherless_count}",
     file=sys.stderr,
 )
 PY
