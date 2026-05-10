@@ -158,9 +158,6 @@ function resolveLocalPairingFallback(
   if (!details) {
     return null;
   }
-=======
-function canUseLocalPairingFallback(opts: DevicesRpcOpts): boolean {
->>>>>>> 5679ca217e (feat: AlpaCore MCP brú, pairing approve fallback og Control UI allowed-origins)
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     // Explicit --url might point at a remote/tunneled gateway; never silently
     // switch to local pairing files in that case.
