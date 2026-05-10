@@ -35,6 +35,7 @@ function resolveFastSessionKey(params: {
   ctx: MsgContext;
   sessionScope: SessionScope;
   mainKey?: string;
+  agentId: string;
 }): string {
   const { ctx } = params;
   const nativeCommandTarget =
@@ -42,7 +43,7 @@ function resolveFastSessionKey(params: {
   if (nativeCommandTarget) {
     return nativeCommandTarget;
   }
-  return resolveSessionKey(params.sessionScope, ctx, params.mainKey);
+  return resolveSessionKey(params.sessionScope, ctx, params.mainKey, params.agentId);
 }
 
 function markReplyConfigRuntimeMode(
@@ -210,6 +211,7 @@ export function initFastReplySessionState(params: {
     ctx,
     sessionScope,
     mainKey: cfg.session?.mainKey,
+    agentId,
   });
   const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
     listSessionEntries({ agentId }).map(({ sessionKey: key, entry }) => [key, entry]),

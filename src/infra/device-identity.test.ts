@@ -53,7 +53,7 @@ describe("device identity crypto helpers", () => {
         publicKeyPem: created.publicKeyPem,
         privateKeyPem: created.privateKeyPem,
         createdAtMs: Date.now(),
-      };
+      } as const;
       writeStoredDeviceIdentitySnapshot(identityPath, { ...stored, deviceId: "mismatched" });
 
       expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();

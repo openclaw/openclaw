@@ -20,6 +20,17 @@ function hasLegacySessionStore(value: unknown): boolean {
   return Boolean(session && Object.prototype.hasOwnProperty.call(session, "store"));
 }
 
+function hasLegacySessionIdleMinutes(value: unknown): boolean {
+  const session = getRecord(value);
+  return Boolean(session && Object.prototype.hasOwnProperty.call(session, "idleMinutes"));
+}
+
+function hasLegacySessionResetByTypeDm(value: unknown): boolean {
+  const session = getRecord(value);
+  const resetByType = getRecord(session?.resetByType);
+  return Boolean(resetByType && Object.prototype.hasOwnProperty.call(resetByType, "dm"));
+}
+
 function hasLegacyParentForkMaxTokens(value: unknown): boolean {
   const session = getRecord(value);
   return Boolean(session && Object.prototype.hasOwnProperty.call(session, "parentForkMaxTokens"));
@@ -53,6 +64,20 @@ const LEGACY_SESSION_STORE_RULE: LegacyConfigRule = {
   match: hasLegacySessionStore,
 };
 
+const LEGACY_SESSION_IDLE_MINUTES_RULE: LegacyConfigRule = {
+  path: ["session"],
+  message:
+    'session.idleMinutes moved to session.reset.idleMinutes; run "openclaw doctor --fix" to migrate it.',
+  match: hasLegacySessionIdleMinutes,
+};
+
+const LEGACY_SESSION_RESET_BY_TYPE_DM_RULE: LegacyConfigRule = {
+  path: ["session", "resetByType"],
+  message:
+    'session.resetByType.dm moved to session.resetByType.direct; run "openclaw doctor --fix" to migrate it.',
+  match: hasLegacySessionResetByTypeDm,
+};
+
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec[] = [
   defineLegacyConfigMigration({
     id: "session.store",
@@ -65,6 +90,52 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_SESSION: LegacyConfigMigrationSpec
       }
       delete session.store;
       changes.push("Removed ignored session.store; sessions live in per-agent SQLite databases.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.idleMinutes",
+    describe: "Move legacy session.idleMinutes into session.reset",
+    legacyRules: [LEGACY_SESSION_IDLE_MINUTES_RULE],
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      if (!session || !Object.prototype.hasOwnProperty.call(session, "idleMinutes")) {
+        return;
+      }
+      const idleMinutes = session.idleMinutes;
+      delete session.idleMinutes;
+      if (typeof idleMinutes !== "number" || !Number.isFinite(idleMinutes)) {
+        changes.push("Removed invalid session.idleMinutes.");
+        return;
+      }
+      let reset = getRecord(session.reset);
+      if (!reset) {
+        reset = { mode: "idle" };
+        session.reset = reset;
+      }
+      if (!Object.prototype.hasOwnProperty.call(reset, "idleMinutes")) {
+        reset.idleMinutes = Math.floor(idleMinutes);
+      }
+      changes.push("Moved session.idleMinutes to session.reset.idleMinutes.");
+    },
+  }),
+  defineLegacyConfigMigration({
+    id: "session.resetByType.dm",
+    describe: "Move legacy session.resetByType.dm into session.resetByType.direct",
+    legacyRules: [LEGACY_SESSION_RESET_BY_TYPE_DM_RULE],
+    apply: (raw, changes) => {
+      const session = getRecord(raw.session);
+      const resetByType = getRecord(session?.resetByType);
+      if (!resetByType || !Object.prototype.hasOwnProperty.call(resetByType, "dm")) {
+        return;
+      }
+      const dm = resetByType.dm;
+      delete resetByType.dm;
+      if (!Object.prototype.hasOwnProperty.call(resetByType, "direct") && getRecord(dm)) {
+        resetByType.direct = dm;
+        changes.push("Moved session.resetByType.dm to session.resetByType.direct.");
+        return;
+      }
+      changes.push("Removed legacy session.resetByType.dm.");
     },
   }),
   defineLegacyConfigMigration({

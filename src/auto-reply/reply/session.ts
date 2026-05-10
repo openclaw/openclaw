@@ -7,7 +7,6 @@ import { retireSessionMcpRuntime } from "../../agents/pi-bundle-mcp-tools.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { resolveGroupSessionKey } from "../../config/sessions/group.js";
 import { resolveSessionLifecycleTimestamps } from "../../config/sessions/lifecycle.js";
-import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
 import { deriveSessionMetaPatch } from "../../config/sessions/metadata.js";
 import { resolveResetPreservedSelection } from "../../config/sessions/reset-preserved-selection.js";
 import {
@@ -368,14 +367,7 @@ export async function initSessionState(params: {
     }
   }
 
-  // Canonicalize so the written key matches what all read paths produce.
-  // resolveSessionKey uses DEFAULT_AGENT_ID="main"; the configured default
-  // agent may differ, causing key mismatch and orphaned sessions (#29683).
-  sessionKey = canonicalizeMainSessionAlias({
-    cfg,
-    agentId,
-    sessionKey: resolveSessionKey(sessionScope, sessionCtxForState, mainKey),
-  });
+  sessionKey = resolveSessionKey(sessionScope, sessionCtxForState, mainKey, agentId);
   const entry = sessionStore[sessionKey];
   const now = Date.now();
   const isThread = resolveThreadFlag({

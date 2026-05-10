@@ -1119,7 +1119,7 @@ describe("startGatewayConfigReloader", () => {
         source: "npm",
         resolvedAt: "2026-04-22T00:00:00.000Z",
       },
-    };
+    } satisfies Record<string, PluginInstallRecord>;
     const nextPluginInstallRecords = {
       lossless: {
         source: "npm",

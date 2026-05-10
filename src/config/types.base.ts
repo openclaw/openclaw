@@ -150,8 +150,6 @@ export type SessionResetConfig = {
 };
 export type SessionResetByTypeConfig = {
   direct?: SessionResetConfig;
-  /** @deprecated Use `direct` instead. Kept for backward compatibility. */
-  dm?: SessionResetConfig;
   group?: SessionResetConfig;
   thread?: SessionResetConfig;
 };
@@ -192,7 +190,6 @@ export type SessionConfig = {
   /** Map platform-prefixed identities (e.g. "telegram:123") to canonical DM peers. */
   identityLinks?: Record<string, string[]>;
   resetTriggers?: string[];
-  idleMinutes?: number;
   reset?: SessionResetConfig;
   resetByType?: SessionResetByTypeConfig;
   /** Channel-specific reset overrides (e.g. { discord: { mode: "idle", idleMinutes: 10080 } }). */

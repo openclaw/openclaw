@@ -1160,15 +1160,18 @@ lives on the [First-run FAQ](/help/faq-first-run).
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Sessions can expire after `session.idleMinutes`, but this is **disabled by default** (default **0**).
-    Set it to a positive value to enable idle expiry. When enabled, the **next**
+    Sessions can expire after `session.reset.idleMinutes`, but this is **disabled by default**.
+    Set `session.reset.mode` to `idle` and `session.reset.idleMinutes` to a positive value to enable idle expiry. When enabled, the **next**
     message after the idle period starts a fresh session id for that chat key.
     This does not delete transcripts - it just starts a new session.
 
     ```json5
     {
       session: {
-        idleMinutes: 240,
+        reset: {
+          mode: "idle",
+          idleMinutes: 240,
+        },
       },
     }
     ```

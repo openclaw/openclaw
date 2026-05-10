@@ -19,11 +19,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
-import {
-  loadExecApprovals,
-  resolveExecApprovalsPath,
-  saveExecApprovals,
-} from "../infra/exec-approvals.js";
+import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
@@ -78,7 +74,6 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
     process.env.OPENCLAW_STATE_DIR = sharedStateDir;
-    fs.rmSync(resolveExecApprovalsPath(), { force: true });
     deleteOpenClawStateKvJson("exec.approvals", "current");
     clearRuntimeConfigSnapshot();
   });

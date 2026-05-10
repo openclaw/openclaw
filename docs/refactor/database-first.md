@@ -47,6 +47,9 @@ This migration has one canonical runtime shape:
   only to ban it.
 - Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
   and old session-path logic belong only to the doctor migration/import path.
+- Legacy session config aliases belong only to doctor migration. Runtime does
+  not interpret `session.idleMinutes`, `session.resetByType.dm`, or
+  cross-agent `agent:main:*` main-session aliases for another configured agent.
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
   TTS, memory hooks, subagents, plugin command routing, protocol boundaries, and
   hooks must pass `{agentId, sessionId}` through the runtime.
@@ -209,6 +212,10 @@ The branch already has a real shared SQLite base:
   exists, when the SQLite identity row is invalid, or when the SQLite identity
   store cannot be opened. Doctor imports and removes that file first, so runtime
   startup cannot silently rotate pairing identity before migration.
+- Session reset compatibility now lives in doctor config migration:
+  `session.idleMinutes` is moved into `session.reset.idleMinutes`,
+  `session.resetByType.dm` is moved into `session.resetByType.direct`, and the
+  runtime reset policy only reads canonical reset keys.
 - Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
   their SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.

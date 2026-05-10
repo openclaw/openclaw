@@ -49,7 +49,7 @@ describe("device identity state dir defaults", () => {
         publicKeyPem: original.publicKeyPem,
         privateKeyPem: original.privateKeyPem,
         createdAtMs: Date.now(),
-      };
+      } as const;
 
       writeStoredDeviceIdentitySnapshot(identityPath, { ...raw, deviceId: "stale-device-id" });
 

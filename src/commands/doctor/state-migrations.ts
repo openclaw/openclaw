@@ -1533,9 +1533,8 @@ function canonicalizeSessionKeyForAgent(params: {
 
   // When shared-store guard is active, do not remap keys that belong to a
   // different agent — they are legitimate records for that agent, not orphans.
-  // Without this check, canonicalizeMainSessionAlias (which now recognises
-  // legacy agent:main:* aliases) would rewrite them before the
-  // skipCrossAgentRemap guard below has a chance to block it.
+  // Legacy cross-agent main aliases are handled only by the explicit doctor
+  // remap below.
   if (params.skipCrossAgentRemap) {
     const parsed = parseAgentSessionKey(raw);
     if (parsed && normalizeAgentId(parsed.agentId) !== agentId) {

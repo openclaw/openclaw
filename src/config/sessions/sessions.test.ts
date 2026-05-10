@@ -48,20 +48,20 @@ describe("session path safety", () => {
 });
 
 describe("resolveSessionResetPolicy", () => {
-  describe("backward compatibility: resetByType.dm -> direct", () => {
-    it("does not use dm fallback for group/thread types", () => {
+  describe("canonical resetByType keys", () => {
+    it("does not use legacy dm fallback at runtime", () => {
       const sessionCfg = {
         resetByType: {
           dm: { mode: "idle" as const, idleMinutes: 45 },
         },
       } as unknown as SessionConfig;
 
-      const groupPolicy = resolveSessionResetPolicy({
+      const directPolicy = resolveSessionResetPolicy({
         sessionCfg,
-        resetType: "group",
+        resetType: "direct",
       });
 
-      expect(groupPolicy.mode).toBe("daily");
+      expect(directPolicy.mode).toBe("daily");
     });
   });
 
@@ -124,7 +124,7 @@ describe("resolveSessionResetPolicy", () => {
     expect(freshness.idleExpiresAt).toBe(5 * 60_000);
   });
 
-  it("falls back to sessionStartedAt, not updatedAt, for legacy idle freshness", () => {
+  it("falls back to sessionStartedAt, not updatedAt, for idle freshness", () => {
     const now = 60 * 60_000;
     const freshness = evaluateSessionFreshness({
       updatedAt: now,

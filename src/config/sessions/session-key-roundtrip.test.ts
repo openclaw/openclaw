@@ -1,13 +1,9 @@
 /**
  * Session key write/read round-trip tests.
  *
- * Validates that the write-path canonicalization fix (#29683) produces keys
- * that match what all read paths expect, preventing orphaned sessions.
- *
- * The critical mismatch: `resolveSessionKey` hardcodes DEFAULT_AGENT_ID="main",
- * producing keys like "agent:main:work". But the gateway's canonical read path
- * (`resolveMainSessionKey(cfg)`) uses the configured agent, producing
- * "agent:ops:work". Without canonicalization, writes and reads diverge.
+ * Validates that active write paths carry the real agent id into session-key
+ * resolution. Legacy cross-agent key repair belongs to doctor migration, not
+ * runtime alias bridging.
  */
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentSessionKey } from "../../cron/isolated-agent/session-key.js";
@@ -32,8 +28,13 @@ describe("session key write/read round-trip (#29683)", () => {
       const agentId = "ops";
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
 
-      // Write path: resolveSessionKey + canonicalize (as in initSessionState)
-      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey);
+      // Write path: resolveSessionKey receives the resolved agent id.
+      const rawWriteKey = resolveSessionKey(
+        "per-sender",
+        { From: "+1234567890" },
+        mainKey,
+        agentId,
+      );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
         agentId,
@@ -52,7 +53,12 @@ describe("session key write/read round-trip (#29683)", () => {
       const agentId = "ops";
       const mainKey = normalizeMainKey(cfg.session?.mainKey);
 
-      const rawWriteKey = resolveSessionKey("per-sender", { From: "+1234567890" }, mainKey);
+      const rawWriteKey = resolveSessionKey(
+        "per-sender",
+        { From: "+1234567890" },
+        mainKey,
+        agentId,
+      );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,
         agentId,
@@ -62,11 +68,19 @@ describe("session key write/read round-trip (#29683)", () => {
       // Gateway canonical key: resolveMainSessionKey uses configured agent
       const gatewayCanonicalKey = resolveMainSessionKey(cfg);
 
-      // CRITICAL: these must match for the session to survive gateway restarts.
-      // resolveMainSessionKey produces "agent:ops:work" while the uncanonicalized
-      // write path produces "agent:main:work". canonicalizeMainSessionAlias must
-      // bridge this gap.
       expect(writeKey).toBe(gatewayCanonicalKey);
+    });
+
+    it("does not bridge legacy agent:main aliases at runtime", () => {
+      const cfg = makeNonDefaultAgentCfg();
+
+      expect(
+        canonicalizeMainSessionAlias({
+          cfg,
+          agentId: "ops",
+          sessionKey: "agent:main:work",
+        }),
+      ).toBe("agent:main:work");
     });
   });
 
@@ -98,6 +112,7 @@ describe("session key write/read round-trip (#29683)", () => {
         "per-sender",
         { From: "group:discord:group:123456789" },
         mainKey,
+        agentId,
       );
       const writeKey = canonicalizeMainSessionAlias({
         cfg,

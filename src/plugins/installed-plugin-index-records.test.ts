@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
@@ -390,7 +391,7 @@ describe("plugin index install records store", () => {
           twitch: { source: "npm", spec: "twitch@1.0.0" },
         },
       },
-    };
+    } satisfies OpenClawConfig;
 
     expect(readPendingPluginInstallRecords(config)).toEqual({
       twitch: { source: "npm", spec: "twitch@1.0.0" },

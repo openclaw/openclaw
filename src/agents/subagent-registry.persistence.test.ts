@@ -126,7 +126,7 @@ describe("subagent registry persistence", () => {
     if (opts?.seedChildSessions !== false) {
       await seedChildSessionsForPersistedRuns(persisted);
     }
-    const runsRaw = ((persisted.runs ?? {}) as Record<string, unknown>) ?? {};
+    const runsRaw = (persisted.runs ?? {}) as Record<string, unknown>;
     saveSubagentRegistryToState(
       normalizeSubagentRunRecordsSnapshot({
         runsRaw,

@@ -1726,7 +1726,7 @@ describe("initSessionState reset policy", () => {
     expect(result.sessionId).not.toBe(existingSessionId);
   });
 
-  it("keeps legacy idleMinutes behavior without reset config", async () => {
+  it("does not honor legacy idleMinutes at runtime", async () => {
     vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
     const root = await makeCaseDir("openclaw-reset-legacy-");
     const sessionRowsTarget = createSessionRowsTargetFromStateDir(root);
@@ -1751,12 +1751,8 @@ describe("initSessionState reset policy", () => {
       commandAuthorized: true,
     });
 
-    expect(result.isNewSession).toBe(false);
-    expect(result.sessionId).toBe(existingSessionId);
-    expect(clearBootstrapSnapshotOnSessionRolloverSpy).toHaveBeenCalledWith({
-      sessionKey,
-      previousSessionId: undefined,
-    });
+    expect(result.isNewSession).toBe(true);
+    expect(result.sessionId).not.toBe(existingSessionId);
   });
 });
 

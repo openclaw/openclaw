@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
 import { runSecretsAudit } from "./audit.js";
 
@@ -35,7 +36,10 @@ async function writeJsonFile(filePath: string, value: unknown): Promise<void> {
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function writeAuthProfileStore(fixture: AuditFixture, profiles: Record<string, unknown>): void {
+function writeAuthProfileStore(
+  fixture: AuditFixture,
+  profiles: Record<string, AuthProfileCredential>,
+): void {
   savePersistedAuthProfileSecretsStore(
     {
       version: 1,
@@ -178,7 +182,7 @@ async function seedAuditFixture(fixture: AuditFixture): Promise<void> {
       models: [{ id: "gpt-5", name: "gpt-5" }],
     },
   };
-  const seededProfiles = new Map<string, Record<string, string>>([
+  const seededProfiles = new Map<string, AuthProfileCredential>([
     [
       "openai:default",
       {

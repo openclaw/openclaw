@@ -64,7 +64,7 @@ describe("legacy session maintenance migrate", () => {
     const res = migrateLegacyConfigForTest({
       session: {
         store: "sessions.json",
-        idleMinutes: 120,
+        resetTriggers: ["/new"],
         writeLock: {
           acquireTimeoutMs: 120_000,
         },
@@ -77,7 +77,7 @@ describe("legacy session maintenance migrate", () => {
     });
 
     expect(res.config?.session).toEqual({
-      idleMinutes: 120,
+      resetTriggers: ["/new"],
     });
     expect(res.changes).toContain(
       "Removed ignored session.store; sessions live in per-agent SQLite databases.",
@@ -88,6 +88,41 @@ describe("legacy session maintenance migrate", () => {
     expect(res.changes).toContain(
       "Removed ignored session.writeLock; SQLite serializes session writes.",
     );
+  });
+
+  it("moves legacy session.idleMinutes into session.reset", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        idleMinutes: 120,
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      reset: {
+        mode: "idle",
+        idleMinutes: 120,
+      },
+    });
+    expect(res.changes).toContain("Moved session.idleMinutes to session.reset.idleMinutes.");
+  });
+
+  it("moves legacy session.resetByType.dm into direct", () => {
+    const res = migrateLegacyConfigForTest({
+      session: {
+        resetByType: {
+          dm: { mode: "idle", idleMinutes: 45 },
+          group: { mode: "daily", atHour: 3 },
+        },
+      },
+    });
+
+    expect(res.config?.session).toEqual({
+      resetByType: {
+        direct: { mode: "idle", idleMinutes: 45 },
+        group: { mode: "daily", atHour: 3 },
+      },
+    });
+    expect(res.changes).toContain("Moved session.resetByType.dm to session.resetByType.direct.");
   });
 });
 

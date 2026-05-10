@@ -99,8 +99,11 @@ describe("auth profiles read-only external auth overlay", () => {
 
       const persisted = loadPersistedAuthProfileStore(agentDir);
       expect(persisted).toBeTruthy();
+      if (!persisted) {
+        throw new Error("expected persisted auth profile store");
+      }
       expect(persisted.profiles["minimax-portal:default"]).toBeUndefined();
-      const persistedOpenAiProfile = persisted?.profiles["openai:default"];
+      const persistedOpenAiProfile = persisted.profiles["openai:default"];
       expect(persistedOpenAiProfile?.type).toBe("api_key");
       if (persistedOpenAiProfile?.type !== "api_key") {
         throw new Error("expected persisted OpenAI API key profile");
