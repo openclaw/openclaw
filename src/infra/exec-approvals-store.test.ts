@@ -26,7 +26,7 @@ let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
-let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
+let resolveExecApprovalsStoreLocationForDisplay: ExecApprovalsModule["resolveExecApprovalsStoreLocationForDisplay"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
@@ -47,7 +47,7 @@ beforeAll(async () => {
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
-    resolveExecApprovalsPath,
+    resolveExecApprovalsStoreLocationForDisplay,
     resolveExecApprovalsSocketPath,
     saveExecApprovals,
   } = await import("./exec-approvals.js"));
@@ -119,12 +119,13 @@ function expectAllowlistEntryFields(
 }
 
 describe("exec approvals store helpers", () => {
-  it("expands home-prefixed default file and socket paths for compatibility labels", () => {
+  it("reports the SQLite store location and expands the socket path", () => {
     const dir = createHomeDir();
 
-    expect(path.normalize(resolveExecApprovalsPath())).toBe(
-      path.normalize(path.join(dir, ".openclaw", "exec-approvals.json")),
+    expect(resolveExecApprovalsStoreLocationForDisplay()).toContain(
+      path.join(process.env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite"),
     );
+    expect(resolveExecApprovalsStoreLocationForDisplay()).toContain("#kv/exec.approvals/current");
     expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
     );
@@ -168,7 +169,7 @@ describe("exec approvals store helpers", () => {
     expect(missing.exists).toBe(false);
     expect(missing.raw).toBeNull();
     expect(missing.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
-    expect(path.normalize(missing.path)).toBe(path.normalize(approvalsFilePath(dir)));
+    expect(missing.path).toBe(resolveExecApprovalsStoreLocationForDisplay());
 
     fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
     fs.writeFileSync(approvalsFilePath(dir), "{invalid", "utf8");

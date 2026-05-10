@@ -201,7 +201,7 @@ The branch already has a real shared SQLite base:
   no longer reads or rewrites the legacy workspace marker.
 - Exec approvals now live in shared SQLite KV (`exec.approvals/current`).
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
-  longer create or rewrite that file.
+  longer create, rewrite, or report that file as its active store location.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers.

@@ -2,15 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  loadExecApprovals,
-  resolveExecApprovalsPath,
-  type ExecApprovalsFile,
-} from "../../../infra/exec-approvals.js";
+import { loadExecApprovals, type ExecApprovalsFile } from "../../../infra/exec-approvals.js";
 import { resetPluginStateStoreForTests } from "../../../plugin-state/plugin-state-store.js";
 import {
   importLegacyExecApprovalsFileToSqlite,
   legacyExecApprovalsFileExists,
+  resolveLegacyExecApprovalsPath,
 } from "./exec-approvals.js";
 
 const tempDirs: string[] = [];
@@ -49,7 +46,7 @@ function createHomeDir(): string {
 }
 
 function writeApprovalsFile(homeDir: string, file: ExecApprovalsFile): string {
-  const approvalsPath = resolveExecApprovalsPath({
+  const approvalsPath = resolveLegacyExecApprovalsPath({
     ...process.env,
     OPENCLAW_HOME: homeDir,
   });

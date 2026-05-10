@@ -7,6 +7,7 @@ import {
   readStringValue,
 } from "../shared/string-coerce.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   deleteOpenClawStateKvJson,
   readOpenClawStateKvJson,
@@ -211,7 +212,6 @@ const DEFAULT_ASK: ExecAsk = "off";
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const DEFAULT_FILE = "~/.openclaw/exec-approvals.json";
 const EXEC_APPROVALS_KV_SCOPE = "exec.approvals";
 const EXEC_APPROVALS_KV_KEY = "current";
 
@@ -222,8 +222,10 @@ function hashExecApprovalsRaw(raw: string | null): string {
     .digest("hex");
 }
 
-export function resolveExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): string {
-  return expandHomePrefix(DEFAULT_FILE, { env });
+export function resolveExecApprovalsStoreLocationForDisplay(
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return `${resolveOpenClawStateSqlitePath(env)}#kv/${EXEC_APPROVALS_KV_SCOPE}/${EXEC_APPROVALS_KV_KEY}`;
 }
 
 export function resolveExecApprovalsSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -465,10 +467,9 @@ function parseExecApprovalsRaw(raw: string | null): ExecApprovalsFile {
 }
 
 export function readExecApprovalsSnapshot(): ExecApprovalsSnapshot {
-  const filePath = resolveExecApprovalsPath();
   const sqliteRaw = readExecApprovalsRawFromSqlite();
   return {
-    path: filePath,
+    path: resolveExecApprovalsStoreLocationForDisplay(),
     exists: sqliteRaw !== null,
     raw: sqliteRaw,
     file: parseExecApprovalsRaw(sqliteRaw),
@@ -655,7 +656,7 @@ export function resolveExecApprovals(
     file,
     agentId,
     overrides,
-    path: resolveExecApprovalsPath(),
+    path: resolveExecApprovalsStoreLocationForDisplay(),
     socketPath: expandHomePrefix(file.socket?.path ?? resolveExecApprovalsSocketPath()),
     token: file.socket?.token ?? "",
   });
@@ -731,7 +732,7 @@ export function resolveExecApprovalsFromFile(params: {
     ...(Array.isArray(agent.allowlist) ? agent.allowlist : []),
   ];
   return {
-    path: params.path ?? resolveExecApprovalsPath(),
+    path: params.path ?? resolveExecApprovalsStoreLocationForDisplay(),
     socketPath: expandHomePrefix(
       params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),

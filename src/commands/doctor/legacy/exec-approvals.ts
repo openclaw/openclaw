@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { resolveExecApprovalsPath } from "../../../infra/exec-approvals.js";
+import { expandHomePrefix } from "../../../infra/home-dir.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import {
   writeOpenClawStateKvJson,
@@ -8,6 +8,7 @@ import {
 
 const EXEC_APPROVALS_KV_SCOPE = "exec.approvals";
 const EXEC_APPROVALS_KV_KEY = "current";
+const LEGACY_EXEC_APPROVALS_FILE = "~/.openclaw/exec-approvals.json";
 
 function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
   return { env };
@@ -18,11 +19,15 @@ function readLegacyExecApprovalsRaw(env: NodeJS.ProcessEnv = process.env): {
   exists: boolean;
   path: string;
 } {
-  const filePath = resolveExecApprovalsPath(env);
+  const filePath = resolveLegacyExecApprovalsPath(env);
   if (!fs.existsSync(filePath)) {
     return { raw: null, exists: false, path: filePath };
   }
   return { raw: fs.readFileSync(filePath, "utf8"), exists: true, path: filePath };
+}
+
+export function resolveLegacyExecApprovalsPath(env: NodeJS.ProcessEnv = process.env): string {
+  return expandHomePrefix(LEGACY_EXEC_APPROVALS_FILE, { env });
 }
 
 export function legacyExecApprovalsFileExists(env: NodeJS.ProcessEnv = process.env): boolean {
