@@ -69,6 +69,8 @@ import type { PreparedSlackMessage } from "./types.js";
 
 const mentionRegexCache = new WeakMap<SlackMonitorContext, Map<string, RegExp[]>>();
 const SLACK_ANY_MENTION_RE = /<@[^>]+>|<!subteam\^[^>]+>/;
+const SLACK_USER_MENTION_RE = /<@([A-Z0-9]+)(?:\|[^>]+)?>/gi;
+const SLACK_SUBTEAM_MENTION_RE = /<!subteam\^([A-Z0-9]+)(?:\|[^>]+)?>/gi;
 const SLACK_SUBTEAM_MENTION_MARKER = "<!subteam^";
 
 function resolveCachedMentionRegexes(
@@ -112,6 +114,130 @@ type SlackAuthorizationContext = {
   senderId: string;
   allowFromLower: string[];
 };
+
+type SlackMentionMetadata = {
+  mentionedUserIds: string[];
+  mentionedSubteamIds: string[];
+  hasAnyMention: boolean;
+  hasSubteamMention: boolean;
+};
+
+type SlackExplicitMentionState = {
+  explicitlyMentionedBotUser: boolean;
+  explicitlyMentionedBotSubteam: boolean;
+  explicitlyMentioned: boolean;
+};
+
+type SlackMentionContextPayload = Pick<
+  FinalizedMsgContext,
+  | "WasMentioned"
+  | "ExplicitlyMentionedBot"
+  | "MentionedUserIds"
+  | "MentionedSubteamIds"
+  | "ImplicitMentionKinds"
+  | "MentionSource"
+>;
+
+function collectUniqueSlackMentionIds(text: string, regex: RegExp): string[] {
+  const ids: string[] = [];
+  regex.lastIndex = 0;
+  for (const match of text.matchAll(regex)) {
+    const id = normalizeOptionalString(match[1]);
+    if (id && !ids.includes(id)) {
+      ids.push(id);
+    }
+  }
+  return ids;
+}
+
+function collectSlackMentionMetadata(text: string): SlackMentionMetadata {
+  return {
+    mentionedUserIds: collectUniqueSlackMentionIds(text, SLACK_USER_MENTION_RE),
+    mentionedSubteamIds: collectUniqueSlackMentionIds(text, SLACK_SUBTEAM_MENTION_RE),
+    hasAnyMention: SLACK_ANY_MENTION_RE.test(text),
+    hasSubteamMention: text.includes(SLACK_SUBTEAM_MENTION_MARKER),
+  };
+}
+
+async function resolveSlackExplicitMentionState(params: {
+  ctx: SlackMonitorContext;
+  messageText: string;
+  mentionedUserIds: readonly string[];
+  hasSubteamMention: boolean;
+  source: "message" | "app_mention";
+}): Promise<SlackExplicitMentionState> {
+  const explicitlyMentionedBotUser = Boolean(
+    params.ctx.botUserId && params.mentionedUserIds.includes(params.ctx.botUserId),
+  );
+  const explicitlyMentionedBotSubteam =
+    Boolean(params.ctx.botUserId && params.hasSubteamMention) &&
+    (await isSlackSubteamMentionForBot({
+      client: params.ctx.app.client,
+      text: params.messageText,
+      botUserId: params.ctx.botUserId,
+      teamId: params.ctx.teamId,
+      log: logVerbose,
+    }));
+  return {
+    explicitlyMentionedBotUser,
+    explicitlyMentionedBotSubteam,
+    explicitlyMentioned:
+      explicitlyMentionedBotUser ||
+      explicitlyMentionedBotSubteam ||
+      params.source === "app_mention",
+  };
+}
+
+function resolveSlackMentionSource(params: {
+  explicitBotMention: boolean;
+  explicitSubteamMention: boolean;
+  matchedImplicitMentionKinds: readonly string[];
+  shouldBypassMention: boolean;
+  wasMentioned: boolean;
+}): NonNullable<FinalizedMsgContext["MentionSource"]> {
+  if (params.explicitBotMention) {
+    return "explicit_bot";
+  }
+  if (params.explicitSubteamMention) {
+    return "subteam";
+  }
+  if (params.shouldBypassMention) {
+    return "command_bypass";
+  }
+  if (params.wasMentioned) {
+    return "mention_pattern";
+  }
+  if (params.matchedImplicitMentionKinds.length > 0) {
+    return "implicit_thread";
+  }
+  return "none";
+}
+
+function buildSlackMentionContextPayload(params: {
+  isRoomish: boolean;
+  effectiveWasMentioned: boolean;
+  explicitlyMentioned: boolean;
+  mentionedUserIds: readonly string[];
+  mentionedSubteamIds: readonly string[];
+  matchedImplicitMentionKinds: readonly string[];
+  mentionSource: NonNullable<FinalizedMsgContext["MentionSource"]>;
+}): SlackMentionContextPayload {
+  if (!params.isRoomish) {
+    return {};
+  }
+  return {
+    WasMentioned: params.effectiveWasMentioned,
+    ExplicitlyMentionedBot: params.explicitlyMentioned,
+    MentionedUserIds: params.mentionedUserIds.length > 0 ? [...params.mentionedUserIds] : undefined,
+    MentionedSubteamIds:
+      params.mentionedSubteamIds.length > 0 ? [...params.mentionedSubteamIds] : undefined,
+    ImplicitMentionKinds:
+      params.matchedImplicitMentionKinds.length > 0
+        ? [...params.matchedImplicitMentionKinds]
+        : undefined,
+    MentionSource: params.mentionSource,
+  };
+}
 
 async function resolveSlackConversationContext(params: {
   ctx: SlackMonitorContext;
@@ -290,20 +416,16 @@ export async function prepareSlackMessage(params: {
   }
   const { senderId, allowFromLower } = authorization;
   const messageText = message.text ?? "";
-  const hasAnyMention = SLACK_ANY_MENTION_RE.test(messageText);
-  const hasSubteamMention = messageText.includes(SLACK_SUBTEAM_MENTION_MARKER);
-  const explicitlyMentioned = Boolean(
-    ctx.botUserId &&
-    (messageText.includes(`<@${ctx.botUserId}>`) ||
-      (hasSubteamMention &&
-        (await isSlackSubteamMentionForBot({
-          client: ctx.app.client,
-          text: messageText,
-          botUserId: ctx.botUserId,
-          teamId: ctx.teamId,
-          log: logVerbose,
-        })))),
-  );
+  const mentionMetadata = collectSlackMentionMetadata(messageText);
+  const { mentionedUserIds, mentionedSubteamIds, hasAnyMention } = mentionMetadata;
+  const { explicitlyMentionedBotUser, explicitlyMentionedBotSubteam, explicitlyMentioned } =
+    await resolveSlackExplicitMentionState({
+      ctx,
+      messageText,
+      mentionedUserIds,
+      hasSubteamMention: mentionMetadata.hasSubteamMention,
+      source: opts.source,
+    });
   // Channels with `requireMention: false` and a non-`off` reply mode produce
   // a Slack-side thread on every top-level bot reply (because `replyToMode`
   // creates one). Seed thread routing for the root turn too, so the inbound
@@ -543,6 +665,14 @@ export async function prepareSlackMessage(params: {
     },
   });
   const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+  const matchedImplicitMentionKinds = mentionDecision.matchedImplicitMentionKinds;
+  const mentionSource = resolveSlackMentionSource({
+    explicitBotMention: explicitlyMentionedBotUser || opts.source === "app_mention",
+    explicitSubteamMention: explicitlyMentionedBotSubteam,
+    matchedImplicitMentionKinds,
+    shouldBypassMention: mentionDecision.shouldBypassMention,
+    wasMentioned,
+  });
   if (isRoom && shouldRequireMention && mentionDecision.shouldSkip) {
     ctx.logger.info({ channel: message.channel, reason: "no-mention" }, "skipping channel message");
     const pendingText = (message.text ?? "").trim();
@@ -810,7 +940,15 @@ export async function prepareSlackMessage(params: {
       isThreadReply && threadTs && !threadSessionPreviousTimestamp ? true : undefined,
     ThreadLabel: threadLabel,
     Timestamp: message.ts ? Math.round(Number(message.ts) * 1000) : undefined,
-    WasMentioned: isRoomish ? effectiveWasMentioned : undefined,
+    ...buildSlackMentionContextPayload({
+      isRoomish,
+      effectiveWasMentioned,
+      explicitlyMentioned,
+      mentionedUserIds,
+      mentionedSubteamIds,
+      matchedImplicitMentionKinds,
+      mentionSource,
+    }),
     MediaPath: firstMedia?.path,
     MediaType: firstMedia?.contentType,
     MediaUrl: firstMedia?.path,

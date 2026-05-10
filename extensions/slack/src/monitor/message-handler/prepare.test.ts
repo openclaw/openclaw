@@ -1473,6 +1473,85 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(new Set([root.ctxPayload.SessionKey, followUp.ctxPayload.SessionKey]).size).toBe(1);
   });
 
+  it("preserves explicit Slack mention targets when an implicit thread wake mentions someone else", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "<@UOTHER> can you check this?",
+        ts: "1777244714.000100",
+        thread_ts: "1777244692.409919",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared!.ctxPayload.ExplicitlyMentionedBot).toBe(false);
+    expect(prepared!.ctxPayload.MentionedUserIds).toEqual(["UOTHER"]);
+    expect(prepared!.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+    expect(prepared!.ctxPayload.MentionSource).toBe("implicit_thread");
+  });
+
+  it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const slackCtx = createInboundSlackCtx({
+      cfg: {
+        session: { store: storePath },
+        channels: {
+          slack: {
+            enabled: true,
+            replyToMode: "all",
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      defaultRequireMention: true,
+      replyToMode: "all",
+    });
+    slackCtx.allowFrom = ["U_BEK"];
+    slackCtx.resolveChannelName = async () => ({ name: "proj-openclaw", type: "channel" });
+    slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+    const prepared = await prepareSlackMessage({
+      ctx: slackCtx,
+      account: createSlackAccount({ replyToMode: "all" }),
+      message: {
+        type: "message",
+        channel: "C0AHZFCAS1K",
+        channel_type: "channel",
+        user: "U_BEK",
+        text: "/new please inspect this thread",
+        ts: "1777244714.000100",
+        thread_ts: "1777244692.409919",
+        parent_user_id: "B1",
+      } as SlackMessageEvent,
+      opts: { source: "message" },
+    });
+
+    expect(prepared).toBeTruthy();
+    expect(prepared!.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared!.ctxPayload.ImplicitMentionKinds).toEqual(["reply_to_bot"]);
+    expect(prepared!.ctxPayload.MentionSource).toBe("command_bypass");
+  });
+
   it("treats Slack user-group mentions as explicit mentions when the bot is a member", async () => {
     const usergroupsUsersList = vi.fn().mockResolvedValue({
       ok: true,
@@ -1516,6 +1595,9 @@ describe("slack prepareSlackMessage inbound contract", () => {
     });
     assertPrepared(prepared);
     expect(prepared.ctxPayload.WasMentioned).toBe(true);
+    expect(prepared.ctxPayload.ExplicitlyMentionedBot).toBe(true);
+    expect(prepared.ctxPayload.MentionedSubteamIds).toEqual(["S0AGENTS"]);
+    expect(prepared.ctxPayload.MentionSource).toBe("subteam");
   });
 
   it("drops Slack user-group mentions when the bot is not a member", async () => {
