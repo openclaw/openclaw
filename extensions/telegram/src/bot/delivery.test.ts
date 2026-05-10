@@ -57,6 +57,7 @@ vi.mock("openclaw/plugin-sdk/plugin-runtime", async (importOriginal) => {
 
 vi.resetModules();
 const { deliverReplies } = await import("./delivery.js");
+const { clearTelegramRuntimeCommsGuardMemoryForTests } = await import("../runtime-comms-guard.js");
 
 vi.mock("grammy", () => ({
   API_CONSTANTS: {
@@ -175,6 +176,7 @@ function createVoiceFailureHarness(params: {
 
 describe("deliverReplies", () => {
   beforeEach(() => {
+    clearTelegramRuntimeCommsGuardMemoryForTests();
     loadWebMedia.mockClear();
     probeVideoDimensions.mockReset();
     probeVideoDimensions.mockResolvedValue(undefined);
@@ -183,6 +185,59 @@ describe("deliverReplies", () => {
     messageHookRunner.hasHooks.mockReturnValue(false);
     messageHookRunner.runMessageSending.mockReset();
     messageHookRunner.runMessageSent.mockReset();
+  });
+
+  it("suppresses visible runtime guard text on automatic Telegram replies", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4101, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      bot,
+      runtime,
+      replies: [
+        {
+          text: "MODEL-GATE\ntask_type: small code/report edit\nproceed_status: PROCEED",
+        },
+      ],
+    });
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("delivers requested markdown files immediately without leaking guard text", async () => {
+    const runtime = createRuntime();
+    const sendDocument = vi.fn().mockResolvedValue({ message_id: 4102, chat: { id: "123" } });
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 4103, chat: { id: "123" } });
+    const bot = createBot({ sendDocument, sendMessage });
+    mockMediaLoad("telegram-response-guide.md", "text/markdown", "# Telegram guide\n");
+
+    await deliverWith({
+      bot,
+      runtime,
+      replies: [
+        {
+          text: "MODEL-GATE\ntask_type: small code/report edit\nproceed_status: PROCEED",
+          mediaUrls: ["/tmp/telegram-response-guide.md"],
+        },
+        {
+          text: "Готово: файл доставлен.",
+        },
+      ],
+    });
+
+    expect(sendDocument).toHaveBeenCalledTimes(1);
+    expect(sendDocument).toHaveBeenCalledWith(
+      "123",
+      expect.anything(),
+      expect.not.objectContaining({ caption: expect.stringContaining("MODEL-GATE") }),
+    );
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage).toHaveBeenCalledWith(
+      "123",
+      expect.stringContaining("Готово: файл доставлен."),
+      expect.anything(),
+    );
   });
 
   it("skips audioAsVoice-only payloads without logging an error", async () => {

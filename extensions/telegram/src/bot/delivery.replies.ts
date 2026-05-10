@@ -37,6 +37,10 @@ import {
   wrapFileReferencesInHtml,
 } from "../format.js";
 import { resolveTelegramInteractiveTextFallback } from "../interactive-fallback.js";
+import {
+  shouldSendTelegramRuntimeCommsMedia,
+  shouldSendTelegramRuntimeCommsText,
+} from "../runtime-comms-guard.js";
 import { buildInlineKeyboard } from "../send.js";
 import { resolveTelegramVoiceSend } from "../voice.js";
 import {
@@ -749,13 +753,12 @@ export async function deliverReplies(params: {
   }
   for (const originalReply of normalizedReplies) {
     let reply = originalReply;
-    const mediaList = reply?.mediaUrls?.length
+    let mediaList = reply?.mediaUrls?.length
       ? reply.mediaUrls
       : reply?.mediaUrl
         ? [reply.mediaUrl]
         : [];
-    const hasMedia = mediaList.length > 0;
-    const resolvedReplyText =
+    let resolvedReplyText =
       resolveTelegramInteractiveTextFallback({
         text: reply?.text,
         interactive: reply?.interactive,
@@ -765,6 +768,35 @@ export async function deliverReplies(params: {
     if (reply && resolvedReplyText !== (reply.text ?? "")) {
       reply = { ...reply, text: resolvedReplyText };
     }
+
+    const guardContext = {
+      to: params.chatId,
+      accountId: params.accountId,
+      threadId: params.thread?.id,
+    };
+    if (
+      resolvedReplyText &&
+      !(await shouldSendTelegramRuntimeCommsText({
+        context: guardContext,
+        text: resolvedReplyText,
+      }))
+    ) {
+      resolvedReplyText = "";
+      reply = { ...reply, text: "" };
+    }
+    if (mediaList.length > 0) {
+      const allowedMediaList: string[] = [];
+      for (const mediaUrl of mediaList) {
+        if (await shouldSendTelegramRuntimeCommsMedia({ context: guardContext, mediaUrl })) {
+          allowedMediaList.push(mediaUrl);
+        }
+      }
+      mediaList = allowedMediaList;
+      if (mediaList.length === 0 && reply) {
+        reply = { ...reply, mediaUrl: undefined, mediaUrls: undefined };
+      }
+    }
+    const hasMedia = mediaList.length > 0;
     if (!resolvedReplyText && !hasMedia) {
       if (reply?.audioAsVoice) {
         logVerbose("telegram reply has audioAsVoice without media/text; skipping");
