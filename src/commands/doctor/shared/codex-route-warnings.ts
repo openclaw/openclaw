@@ -404,6 +404,144 @@ function rewriteModelsMap(params: {
   }
 }
 
+function modelConfigContainsRef(value: unknown, modelRef: string): boolean {
+  if (typeof value === "string") {
+    return value.trim() === modelRef;
+  }
+  const record = asMutableRecord(value);
+  if (!record) {
+    return false;
+  }
+  if (typeof record.primary === "string" && record.primary.trim() === modelRef) {
+    return true;
+  }
+  return (
+    Array.isArray(record.fallbacks) &&
+    record.fallbacks.some((entry) => typeof entry === "string" && entry.trim() === modelRef)
+  );
+}
+
+function agentExplicitlyReferencesCanonicalModel(agent: unknown, modelRef: string): boolean {
+  const record = asMutableRecord(agent);
+  if (!record) {
+    return false;
+  }
+  for (const key of AGENT_MODEL_CONFIG_KEYS) {
+    if (modelConfigContainsRef(record[key], modelRef)) {
+      return true;
+    }
+  }
+  if (modelConfigContainsRef(asMutableRecord(record.heartbeat)?.model, modelRef)) {
+    return true;
+  }
+  if (modelConfigContainsRef(asMutableRecord(record.subagents)?.model, modelRef)) {
+    return true;
+  }
+  const compaction = asMutableRecord(record.compaction);
+  return (
+    modelConfigContainsRef(compaction?.model, modelRef) ||
+    modelConfigContainsRef(asMutableRecord(compaction?.memoryFlush)?.model, modelRef) ||
+    asMutableRecord(record.models)?.[modelRef] !== undefined
+  );
+}
+
+function parseModelRef(modelRef: string): { provider: string; modelId: string } | undefined {
+  const slash = modelRef.indexOf("/");
+  if (slash <= 0 || slash >= modelRef.length - 1) {
+    return undefined;
+  }
+  return {
+    provider: modelRef.slice(0, slash),
+    modelId: modelRef.slice(slash + 1),
+  };
+}
+
+function resolveCurrentRuntimeIdForCanonicalModel(params: {
+  cfg: OpenClawConfig;
+  modelRef: string;
+  agentId: string;
+}): string {
+  const parsed = parseModelRef(params.modelRef);
+  if (!parsed) {
+    return "auto";
+  }
+  const configured = normalizeString(
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
+      agentId: params.agentId,
+    }).policy?.id,
+  );
+  if (configured) {
+    return configured;
+  }
+  return openAIProviderUsesCodexRuntimeByDefault({
+    provider: parsed.provider,
+    config: params.cfg,
+  })
+    ? "codex"
+    : "auto";
+}
+
+function setModelRuntimePolicy(params: {
+  agent: MutableRecord;
+  agentPath: string;
+  modelRef: string;
+  runtimeId: string;
+  changes: string[];
+  reason: string;
+}): void {
+  const models = asMutableRecord(params.agent.models) ?? {};
+  if (params.agent.models !== models) {
+    params.agent.models = models;
+  }
+  const entry = asMutableRecord(models[params.modelRef]) ?? {};
+  if (models[params.modelRef] !== entry) {
+    models[params.modelRef] = entry;
+  }
+  const priorRuntime = asMutableRecord(entry.agentRuntime);
+  if (normalizeString(priorRuntime?.id) === params.runtimeId) {
+    return;
+  }
+  entry.agentRuntime = {
+    ...priorRuntime,
+    id: params.runtimeId,
+  };
+  params.changes.push(
+    `Set ${params.agentPath}.models.${params.modelRef}.agentRuntime.id to "${params.runtimeId}" ${params.reason}.`,
+  );
+}
+
+function shieldExplicitListedAgentRefsFromDefaultPolicy(params: {
+  cfg: OpenClawConfig;
+  modelRef: string;
+  changes: string[];
+}): void {
+  for (const [index, agent] of (params.cfg.agents?.list ?? []).entries()) {
+    if (!agentExplicitlyReferencesCanonicalModel(agent, params.modelRef)) {
+      continue;
+    }
+    const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    const runtimeId = resolveCurrentRuntimeIdForCanonicalModel({
+      cfg: params.cfg,
+      modelRef: params.modelRef,
+      agentId: id,
+    });
+    if (runtimeId === "codex") {
+      continue;
+    }
+    setModelRuntimePolicy({
+      agent: agent as MutableRecord,
+      agentPath: `agents.list.${id}`,
+      modelRef: params.modelRef,
+      runtimeId,
+      changes: params.changes,
+      reason: "so default Codex route repair does not change explicit agent routing",
+    });
+  }
+}
+
 function rewriteAgentModelRefs(params: {
   cfg: OpenClawConfig;
   hits: CodexRouteHit[];
@@ -421,9 +559,11 @@ function rewriteAgentModelRefs(params: {
   const preserveCodexRuntimePolicyForNewHits = (fromIndex: number) => {
     for (const hit of params.hits.slice(fromIndex)) {
       ensureCodexRuntimePolicy({
+        cfg: params.cfg,
         agent,
         agentPath: params.path,
         modelRef: hit.canonicalModel,
+        isDefaults: params.path === "agents.defaults",
         changes: params.runtimePolicyChanges,
       });
     }
@@ -495,11 +635,20 @@ function rewriteAgentModelRefs(params: {
 }
 
 function ensureCodexRuntimePolicy(params: {
+  cfg: OpenClawConfig;
   agent: MutableRecord;
   agentPath: string;
   modelRef: string;
+  isDefaults?: boolean;
   changes: string[];
 }): void {
+  if (params.isDefaults) {
+    shieldExplicitListedAgentRefsFromDefaultPolicy({
+      cfg: params.cfg,
+      modelRef: params.modelRef,
+      changes: params.changes,
+    });
+  }
   const models = asMutableRecord(params.agent.models) ?? {};
   if (params.agent.models !== models) {
     params.agent.models = models;
@@ -513,13 +662,14 @@ function ensureCodexRuntimePolicy(params: {
   if (runtimeId && runtimeId !== "auto" && runtimeId !== "default") {
     return;
   }
-  entry.agentRuntime = {
-    ...priorRuntime,
-    id: "codex",
-  };
-  params.changes.push(
-    `Set ${params.agentPath}.models.${params.modelRef}.agentRuntime.id to "codex" so repaired OpenAI refs keep Codex auth routing.`,
-  );
+  setModelRuntimePolicy({
+    agent: params.agent,
+    agentPath: params.agentPath,
+    modelRef: params.modelRef,
+    runtimeId: "codex",
+    changes: params.changes,
+    reason: "so repaired OpenAI refs keep Codex auth routing",
+  });
 }
 
 function canonicalOpenAIModelUsesCodexRuntime(params: {
@@ -531,20 +681,22 @@ function canonicalOpenAIModelUsesCodexRuntime(params: {
   if (slash <= 0 || slash >= params.modelRef.length - 1) {
     return false;
   }
-  const provider = params.modelRef.slice(0, slash);
-  const modelId = params.modelRef.slice(slash + 1);
+  const parsed = parseModelRef(params.modelRef);
+  if (!parsed) {
+    return false;
+  }
   const configured = normalizeString(
     resolveModelRuntimePolicy({
       config: params.cfg,
-      provider,
-      modelId,
+      provider: parsed.provider,
+      modelId: parsed.modelId,
       agentId: params.agentId,
     }).policy?.id,
   );
   if (configured && configured !== "auto" && configured !== "default") {
     return configured === "codex";
   }
-  return openAIProviderUsesCodexRuntimeByDefault({ provider, config: params.cfg });
+  return openAIProviderUsesCodexRuntimeByDefault({ provider: parsed.provider, config: params.cfg });
 }
 
 function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
