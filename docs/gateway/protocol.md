@@ -468,7 +468,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
 
   <Accordion title="Automation, skills, and tools">
     - Automation: `wake` schedules an immediate or next-heartbeat wake text injection; `cron.list`, `cron.status`, `cron.add`, `cron.update`, `cron.remove`, `cron.run`, `cron.runs` manage scheduled work.
-    - Skills and tools: `commands.list`, `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
+    - Skills and tools: `skills.*`, `tools.catalog`, `tools.effective`, `tools.invoke`.
 
   </Accordion>
 </AccordionGroup>
@@ -530,18 +530,6 @@ terminal summary, and sanitized error text.
 
 ### Operator helper methods
 
-- Operators may call `commands.list` (`operator.read`) to fetch the runtime
-  command inventory for an agent.
-  - `agentId` is optional; omit it to read the default agent workspace.
-  - `scope` controls which surface the primary `name` targets:
-    - `text` returns the primary text command token without the leading `/`
-    - `native` and the default `both` path return provider-aware native names
-      when available
-  - `textAliases` carries exact slash aliases such as `/model` and `/m`.
-  - `nativeName` carries the provider-aware native command name when one exists.
-  - `provider` is optional and only affects native naming plus native plugin
-    command availability.
-  - `includeArgs=false` omits serialized argument metadata from the response.
 - Operators may call `tools.catalog` (`operator.read`) to fetch the runtime tool catalog for an
   agent. The response includes grouped tools and provenance metadata:
   - `source`: `core` or `plugin`
