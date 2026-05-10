@@ -866,6 +866,94 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps Discord media final delivery even when text duplicates an explicit send", async () => {
+    setActivePluginRegistry(discordRegistry);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "discord", messageId: "normal" }]);
+    const explicitMessageSends = {
+      entries: [
+        {
+          channel: "discord",
+          to: "1503167027337236501",
+          text: "Here is the rendered chart.",
+        },
+      ],
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {
+        agents: {
+          list: [{ id: "tester", workspace: "/tmp/agent-workspace" }],
+        },
+      } as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "discord",
+        replyTo: "1503167027337236501",
+        runContext: { explicitMessageSends },
+      } as AgentCommandOpts,
+      outboundSession: { agentId: "tester" } as never,
+      sessionEntry: undefined,
+      payloads: [{ text: "Here is the rendered chart.", mediaUrls: ["./chart.png"] }],
+      result: createResult(),
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      resultCount: 1,
+    });
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Discord final delivery when duplicate message.send used a different thread", async () => {
+    setActivePluginRegistry(discordRegistry);
+    deliverOutboundPayloadsMock.mockResolvedValue([{ channel: "discord", messageId: "normal" }]);
+    const explicitMessageSends = {
+      entries: [
+        {
+          channel: "discord",
+          to: "1503167027337236501",
+          threadId: "thread-a",
+          text: "Final synthesis",
+        },
+      ],
+    };
+
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "discord",
+        replyTo: "1503167027337236501",
+        threadId: "thread-b",
+        runContext: { explicitMessageSends },
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "Final synthesis" }],
+      result: createResult(),
+    });
+
+    expect(delivered.deliverySucceeded).toBe(true);
+    expectDeliveryStatusFields(delivered, {
+      requested: true,
+      attempted: true,
+      status: "sent",
+      succeeded: true,
+      resultCount: 1,
+    });
+    expect(deliverOutboundPayloadsMock).toHaveBeenCalledTimes(1);
+  });
+
   it("emits JSON deliveryStatus before strict delivery failures rethrow", async () => {
     deliverOutboundPayloadsMock.mockRejectedValueOnce(new Error("Slack API timeout"));
     const runtime = {
