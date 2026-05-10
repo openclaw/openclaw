@@ -717,7 +717,7 @@ export function normalizeVoiceCallConfig(config: VoiceCallConfigInput): VoiceCal
 }
 
 export function resolveVoiceCallSessionKey(params: {
-  config: Pick<VoiceCallConfig, "sessionScope">;
+  config: Pick<VoiceCallConfig, "sessionScope" | "agentId">;
   callId: string;
   phone?: string;
   explicitSessionKey?: string;
@@ -726,11 +726,14 @@ export function resolveVoiceCallSessionKey(params: {
   if (explicit) {
     return explicit;
   }
+  const agentId = params.config.agentId ?? "main";
   if (params.config.sessionScope === "per-call") {
-    return `voice:call:${params.callId}`;
+    return `agent:${agentId}:voice:call:${params.callId}`;
   }
   const normalizedPhone = params.phone?.replace(/\D/g, "");
-  return normalizedPhone ? `voice:${normalizedPhone}` : `voice:${params.callId}`;
+  return normalizedPhone
+    ? `agent:${agentId}:voice:${normalizedPhone}`
+    : `agent:${agentId}:voice:${params.callId}`;
 }
 
 /**
