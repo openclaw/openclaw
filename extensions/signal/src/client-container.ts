@@ -442,7 +442,8 @@ function parseContainerSendTimestamp(raw: unknown): number | undefined {
   if (raw == null) {
     return undefined;
   }
-  const timestamp = typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : NaN;
+  const timestamp =
+    typeof raw === "number" ? raw : typeof raw === "string" ? Number(raw) : Number.NaN;
   if (!Number.isFinite(timestamp)) {
     throw new Error("Signal REST send returned invalid timestamp");
   }
