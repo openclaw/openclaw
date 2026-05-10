@@ -472,9 +472,77 @@ export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGloba
   };
 }
 
+// Per-Node ephemeral install prefixes — directories that get wiped when the
+// version manager bumps the underlying node binary. Installing into one of
+// these traps the caller in a self-perpetuating cycle: every subsequent
+// `openclaw update` re-resolves the same per-version npm next to the current
+// install and reinstalls into the same dir, which then disappears at the next
+// node version bump (so openclaw vanishes from PATH).
+//
+// We refuse to use the per-version npm in these cases. The caller falls back
+// to the npm on PATH, which on properly-configured systems lives at a
+// version-agnostic prefix (e.g. /opt/homebrew, ~/.npm-global).
+//
+// Patterns matched (prefix is the dir holding bin/ and lib/, not the package
+// root, e.g. /opt/homebrew/Cellar/node/X.Y.Z):
+//   Homebrew:        .../Cellar/node/<X>           or .../Cellar/node@<N>/<X>
+//   nvm:             .../.nvm/versions/node/v<X>
+//   asdf (classic):  .../.asdf/installs/nodejs/<X>
+//   volta:           .../.volta/tools/image/node/<X>
+//   fnm:             .../.fnm/node-versions/v<X>/installation
+//   n:               .../n/versions/node/<X>
+function isEphemeralPerNodeInstallPrefix(prefix: string): boolean {
+  // Normalize separators so a single regex set works on every platform.
+  const p = prefix.replaceAll("\\", "/");
+  if (/\/Cellar\/node(?:@\d+)?\/[^/]+\/?$/u.test(p)) {
+    return true;
+  }
+  if (/\/\.nvm\/versions\/node\/v[^/]+\/?$/u.test(p)) {
+    return true;
+  }
+  if (/\/\.asdf\/installs\/nodejs\/[^/]+\/?$/u.test(p)) {
+    return true;
+  }
+  if (/\/\.volta\/tools\/image\/node\/[^/]+\/?$/u.test(p)) {
+    return true;
+  }
+  if (/\/\.fnm\/node-versions\/v[^/]+\/installation\/?$/u.test(p)) {
+    return true;
+  }
+  if (/\/n\/versions\/node\/[^/]+\/?$/u.test(p)) {
+    return true;
+  }
+  return false;
+}
+
+// Locates the npm binary sitting next to a global-install package root, if
+// one exists. Used for ownership detection: even when the prefix is
+// ephemeral (cellar/nvm/asdf/volta/fnm/n), the npm there still owns the
+// install and we should report manager = npm. Distinct from
+// resolvePreferredNpmCommand, which additionally refuses ephemeral prefixes
+// so the reinstall argv falls back to the PATH npm.
+function detectOwningNpmCommand(pkgRoot?: string | null): string | null {
+  const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
+  if (!prefix) {
+    return null;
+  }
+  const candidate =
+    process.platform === "win32" ? path.join(prefix, "npm.cmd") : path.join(prefix, "bin", "npm");
+  return fsSync.existsSync(candidate) ? candidate : null;
+}
+
 function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
   const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
   if (!prefix) {
+    return null;
+  }
+  // Skip the per-version npm sitting next to a cellar/nvm/asdf/volta/fnm/n
+  // install. Using it here would reinstall openclaw into a directory that is
+  // about to be deleted by the next `brew upgrade node` / `nvm install` /
+  // similar version bump, leaving the operator with a broken `openclaw`
+  // command. The caller falls back to the PATH npm, which targets a
+  // version-agnostic prefix that survives version bumps.
+  if (isEphemeralPerNodeInstallPrefix(prefix)) {
     return null;
   }
   const candidate =
@@ -734,7 +802,13 @@ export async function detectGlobalInstallManagerForRoot(
     }
   }
 
-  if (resolvePreferredNpmCommand(pkgRoot)) {
+  // Ownership detection must not refuse ephemeral per-Node prefixes: an
+  // openclaw install sitting inside a cellar/nvm/asdf/volta/fnm/n directory
+  // is still owned by the npm next to it. resolvePreferredNpmCommand
+  // intentionally returns null for those prefixes (so the reinstall argv
+  // falls back to PATH npm), but detectOwningNpmCommand reports the truth
+  // about who owns the current install.
+  if (detectOwningNpmCommand(pkgRoot)) {
     return "npm";
   }
 

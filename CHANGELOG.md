@@ -1971,6 +1971,7 @@ Docs: https://docs.openclaw.ai
 
 - Browser/chrome-mcp: read Chrome DevTools MCP screenshot output from the extension-suffixed path, fixing ENOENT on screenshot capture. Fixes #77222. (#74685) Thanks @barbarhan.
 
+- Update/CLI: a routine `brew upgrade` (or any node version-manager bump to a new Node major) was silently wiping the openclaw install along with the old Node directory, leaving operators staring at `openclaw: command not found` until they manually reinstalled — `openclaw update` was perpetuating the install inside the same per-version directory the version manager was about to delete. Fix relocates future reinstalls to a version-agnostic global prefix that survives Node version bumps; covers Homebrew Cellar, nvm, asdf, volta, fnm, and n. Thanks @YaanFPV.
 - macOS/launchd: set generated Gateway LaunchAgent plists to `ProcessType=Interactive` so the gateway keeps timely execution during idle periods. Fixes #58061; refs #62294 and closed duplicate #66992. (#62308) Thanks @bryanpearson and @zssggle-rgb.
 - Plugins/install: honor the beta update channel for onboarding and doctor-managed plugin installs by requesting floating npm and ClawHub specs with `@beta` while keeping persistent install records on the catalog default. Thanks @vincentkoc.
 - WhatsApp/onboarding: canonicalize setup and pairing allowlist entries to WhatsApp's digit-only phone ids while still accepting E.164, JID, and `whatsapp:` inputs, so personal-phone allowlists match WhatsApp Web sender ids after setup. Thanks @vincentkoc.
