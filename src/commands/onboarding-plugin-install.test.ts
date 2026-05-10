@@ -119,6 +119,7 @@ type NpmPackInstallCall = {
 type NpmSpecInstallCall = {
   expectedIntegrity?: string;
   expectedPluginId?: string;
+  mode?: string;
   spec?: string;
   timeoutMs?: number;
   trustedSourceLinkedOfficialInstall?: boolean;
@@ -445,6 +446,7 @@ describe("ensureOnboardingPluginInstalled", () => {
       NpmSpecInstallCall,
     ];
     expect(npmCall.spec).toBe("@wecom/wecom-openclaw-plugin@1.2.3");
+    expect(npmCall.mode).toBe("update");
     expect(npmCall.expectedPluginId).toBe("demo-plugin");
     expect(npmCall.expectedIntegrity).toBe("sha512-wecom");
     expect(npmCall.trustedSourceLinkedOfficialInstall).toBe(true);
