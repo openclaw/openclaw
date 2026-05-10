@@ -273,6 +273,7 @@ describe("node.invoke APNs wake path", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    delete process.env.OPENCLAW_NODE_WAKE_NUDGE_BUDGET;
   });
 
   it("keeps the existing not-connected response when wake path is unavailable", async () => {
@@ -316,6 +317,30 @@ describe("node.invoke APNs wake path", () => {
     });
     expect(mocks.resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(2);
     expect(mocks.sendApnsBackgroundWake).not.toHaveBeenCalled();
+  });
+
+  it("treats a zero nudge budget as infinite", async () => {
+    process.env.OPENCLAW_NODE_WAKE_NUDGE_BUDGET = "0";
+    mockDirectWakeConfig("ios-node-infinite-nudge");
+    mocks.sendApnsAlert.mockResolvedValue({
+      ok: true,
+      status: 200,
+      tokenSuffix: "1234abcd",
+      topic: "ai.openclaw.ios",
+      environment: "sandbox",
+      transport: "direct",
+    });
+
+    await expect(maybeSendNodeWakeNudge("ios-node-infinite-nudge")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    clearNodeWakeState("ios-node-infinite-nudge");
+    await expect(maybeSendNodeWakeNudge("ios-node-infinite-nudge")).resolves.toMatchObject({
+      sent: true,
+      throttled: false,
+    });
+    expect(mocks.sendApnsAlert).toHaveBeenCalledTimes(2);
   });
 
   it("clears wake and nudge throttle state when a node disconnects", async () => {

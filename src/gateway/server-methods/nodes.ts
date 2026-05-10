@@ -61,6 +61,8 @@ export const NODE_WAKE_RECONNECT_RETRY_WAIT_MS = 12_000;
 export const NODE_WAKE_RECONNECT_POLL_MS = 150;
 const NODE_WAKE_THROTTLE_MS = 15_000;
 const NODE_WAKE_NUDGE_THROTTLE_MS = 10 * 60_000;
+const NODE_WAKE_NUDGE_DEFAULT_BUDGET = 1;
+const NODE_WAKE_NUDGE_BUDGET_ENV = "OPENCLAW_NODE_WAKE_NUDGE_BUDGET";
 const NODE_PENDING_ACTION_TTL_MS = 10 * 60_000;
 const NODE_PENDING_ACTION_MAX_PER_NODE = 64;
 
@@ -84,7 +86,14 @@ type NodeWakeAttempt = {
 type NodeWakeNudgeAttempt = {
   sent: boolean;
   throttled: boolean;
-  reason: "throttled" | "no-registration" | "no-auth" | "send-error" | "apns-not-ok" | "sent";
+  reason:
+    | "throttled"
+    | "budget-exhausted"
+    | "no-registration"
+    | "no-auth"
+    | "send-error"
+    | "apns-not-ok"
+    | "sent";
   durationMs: number;
   apnsStatus?: number;
   apnsReason?: string;
@@ -100,6 +109,44 @@ type PendingNodeAction = {
 };
 
 const pendingNodeActionsById = new Map<string, PendingNodeAction[]>();
+
+function resolveNodeWakeNudgeBudgetLimit(): number | null {
+  const raw = process.env[NODE_WAKE_NUDGE_BUDGET_ENV]?.trim();
+  if (!raw) {
+    return NODE_WAKE_NUDGE_DEFAULT_BUDGET;
+  }
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed)) {
+    return NODE_WAKE_NUDGE_DEFAULT_BUDGET;
+  }
+  const normalized = Math.max(0, Math.floor(parsed));
+  return normalized === 0 ? null : normalized;
+}
+
+function buildNodeWakeNudgeBudget(nodeId: string, now = Date.now()) {
+  const limit = resolveNodeWakeNudgeBudgetLimit();
+  const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
+  const nextNudgeAtMs = lastNudgeAtMs > 0 ? lastNudgeAtMs + NODE_WAKE_NUDGE_THROTTLE_MS : undefined;
+  const cooldownRemainingMs = nextNudgeAtMs ? Math.max(0, nextNudgeAtMs - now) : 0;
+  return {
+    mode: limit === null ? ("infinite" as const) : ("budgeted" as const),
+    limit,
+    remaining: limit === null ? null : cooldownRemainingMs > 0 ? 0 : limit,
+    throttleMs: NODE_WAKE_NUDGE_THROTTLE_MS,
+    ...(lastNudgeAtMs > 0 ? { lastNudgeAtMs } : {}),
+    ...(nextNudgeAtMs && cooldownRemainingMs > 0 ? { nextNudgeAtMs } : {}),
+    cooldownRemainingMs,
+  };
+}
+
+function attachWakeNudgeBudgetToNode<T extends { nodeId: string }>(
+  node: T,
+): T & { wakeNudgeBudget: ReturnType<typeof buildNodeWakeNudgeBudget> } {
+  return {
+    ...node,
+    wakeNudgeBudget: buildNodeWakeNudgeBudget(node.nodeId),
+  };
+}
 
 function normalizeBrowserProxyPath(value: string): string {
   const trimmed = value.trim();
@@ -424,9 +471,9 @@ export async function maybeSendNodeWakeNudge(nodeId: string): Promise<NodeWakeNu
     durationMs: Math.max(0, Date.now() - startedAtMs),
   });
 
-  const lastNudgeAtMs = nodeWakeNudgeById.get(nodeId) ?? 0;
-  if (lastNudgeAtMs > 0 && Date.now() - lastNudgeAtMs < NODE_WAKE_NUDGE_THROTTLE_MS) {
-    return withDuration({ sent: false, throttled: true, reason: "throttled" });
+  const budget = buildNodeWakeNudgeBudget(nodeId);
+  if (budget.mode === "budgeted" && budget.remaining === 0) {
+    return withDuration({ sent: false, throttled: true, reason: "budget-exhausted" });
   }
 
   const registration = await loadApnsRegistration(nodeId);
@@ -713,7 +760,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         pairedNodes: nodePairing.paired,
         connectedNodes: context.nodeRegistry.listConnected(),
       });
-      const nodes = listKnownNodes(catalog);
+      const nodes = listKnownNodes(catalog).map((node) => attachWakeNudgeBudgetToNode(node));
       respond(true, { ts: Date.now(), nodes }, undefined);
     });
   },
@@ -747,7 +794,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
         respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown nodeId"));
         return;
       }
-      respond(true, { ts: Date.now(), ...node }, undefined);
+      respond(true, { ts: Date.now(), ...attachWakeNudgeBudgetToNode(node) }, undefined);
     });
   },
   "node.canvas.capability.refresh": async ({ params, respond, client }) => {

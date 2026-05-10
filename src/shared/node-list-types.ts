@@ -18,6 +18,17 @@ export type NodeListNode = {
   connected?: boolean;
   connectedAtMs?: number;
   approvedAtMs?: number;
+  wakeNudgeBudget?: NodeWakeNudgeBudget;
+};
+
+export type NodeWakeNudgeBudget = {
+  mode: "budgeted" | "infinite";
+  limit: number | null;
+  remaining: number | null;
+  throttleMs: number;
+  lastNudgeAtMs?: number;
+  nextNudgeAtMs?: number;
+  cooldownRemainingMs: number;
 };
 
 export type PendingRequest = {
