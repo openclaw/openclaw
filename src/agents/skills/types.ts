@@ -16,6 +16,13 @@ export type SkillInstallSpec = {
   targetDir?: string;
 };
 
+export type SkillSetupHook = {
+  /** Bundle-relative path to the setup script, e.g. "scripts/install.sh". */
+  script: string;
+  /** Maximum time in milliseconds to wait for the script. Defaults to 60000. */
+  timeoutMs?: number;
+};
+
 export type OpenClawSkillMetadata = {
   always?: boolean;
   skillKey?: string;
@@ -30,6 +37,7 @@ export type OpenClawSkillMetadata = {
     config?: string[];
   };
   install?: SkillInstallSpec[];
+  setup?: SkillSetupHook;
 };
 
 export type SkillInvocationPolicy = {
