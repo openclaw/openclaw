@@ -18,6 +18,8 @@ import { extractAssistantText, sanitizeTextContent } from "./tools/session-messa
 import { isAnnounceSkip } from "./tools/sessions-send-tokens.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
+export const UNSAFE_SUBAGENT_OUTPUT_FALLBACK =
+  "The subagent finished, but its captured output was internal/tool-only rather than a clean final answer. Resume the subagent and ask it for a concise user-facing final summary before delivering it.";
 
 type SubagentAnnounceOutputDeps = {
   callGateway: typeof callGateway;
@@ -48,6 +50,7 @@ type SubagentOutputSnapshot = {
   latestRawText?: string;
   assistantFragments: string[];
   toolCallCount: number;
+  blockedUnsafeOutput?: boolean;
   waitingForContinuation?: boolean;
 };
 
@@ -200,6 +203,87 @@ function countAssistantToolCalls(content: unknown): number {
   return count;
 }
 
+function assistantStopReasonIndicatesToolUse(value: unknown): boolean {
+  if (typeof value !== "string") {
+    return false;
+  }
+  const normalized = value.toLowerCase().replace(/[\s_-]+/g, "");
+  return normalized === "tooluse" || normalized === "functioncall" || normalized === "toolcall";
+}
+
+function isTerminalAssistantOutput(message: unknown, toolCallCount: number): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if (toolCallCount > 0) {
+    return false;
+  }
+  return !assistantStopReasonIndicatesToolUse((message as { stopReason?: unknown }).stopReason);
+}
+
+function stripFencedCodeBlocks(text: string): string {
+  return text.replace(/```[\s\S]*?```/g, "\n");
+}
+
+function countMeaningfulLines(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+function isLikelyRawSourceOrToolDump(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (/\[Internal task completion event\]|<internal_runtime_context|Child result:/i.test(trimmed)) {
+    return true;
+  }
+
+  const withoutFencedCode = stripFencedCodeBlocks(trimmed);
+  const lines = countMeaningfulLines(withoutFencedCode);
+  if (lines.length === 0) {
+    return false;
+  }
+
+  const codeLikeLines = lines.filter(
+    (line) =>
+      /^(import|export|const|let|var|function|class|interface|type|enum)\b/.test(line) ||
+      /^\s*[}\])];?,?$/.test(line) ||
+      /^(if|for|while|switch|try|catch)\s*\(/.test(line) ||
+      /^[-+ ]?\s*(import|export|const|let|var|function|class|interface|type)\b/.test(line),
+  ).length;
+  const grepLikeLines = lines.filter((line) =>
+    /^(?:\.?\/?[\w@./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|go|rs|java|kt|swift|css|scss|html|yml|yaml):\d+(?::\d+)?:)/.test(
+      line,
+    ),
+  ).length;
+  const proseLines = lines.filter(
+    (line) =>
+      /[a-zA-Z]{3,}/.test(line) &&
+      !/^(import|export|const|let|var|function|class|interface|type|enum)\b/.test(line) &&
+      !/^(?:\.?\/?[\w@./-]+\.(?:ts|tsx|js|jsx|mjs|cjs|json|md|py|go|rs|java|kt|swift|css|scss|html|yml|yaml):\d+(?::\d+)?:)/.test(
+        line,
+      ),
+  ).length;
+
+  if (grepLikeLines >= 3 && grepLikeLines / lines.length >= 0.5) {
+    return true;
+  }
+  if (lines.length >= 4 && codeLikeLines / lines.length >= 0.65 && proseLines <= 1) {
+    return true;
+  }
+  if (lines.length >= 8 && codeLikeLines >= 5 && proseLines <= 2) {
+    return true;
+  }
+  return false;
+}
+
+function safeSubagentOutputOrFallback(text: string): string {
+  return isLikelyRawSourceOrToolDump(text) ? UNSAFE_SUBAGENT_OUTPUT_FALLBACK : text;
+}
+
 function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutputSnapshot {
   const snapshot: SubagentOutputSnapshot = {
     assistantFragments: [],
@@ -212,7 +296,10 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     }
     const role = (message as { role?: unknown }).role;
     if (role === "assistant") {
-      snapshot.toolCallCount += countAssistantToolCalls((message as { content?: unknown }).content);
+      const assistantToolCallCount = countAssistantToolCalls(
+        (message as { content?: unknown }).content,
+      );
+      snapshot.toolCallCount += assistantToolCallCount;
       if (assistantCallsSessionsYield(message)) {
         snapshot.latestAssistantText = undefined;
         snapshot.latestRawText = undefined;
@@ -236,8 +323,16 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
         continue;
       }
       snapshot.latestSilentText = undefined;
-      snapshot.latestAssistantText = text;
       snapshot.assistantFragments.push(text);
+      if (!isTerminalAssistantOutput(message, assistantToolCallCount)) {
+        snapshot.blockedUnsafeOutput = true;
+        snapshot.waitingForContinuation = false;
+        previousAssistantCalledYield = false;
+        continue;
+      }
+      const safeText = safeSubagentOutputOrFallback(text);
+      snapshot.latestAssistantText = safeText;
+      snapshot.blockedUnsafeOutput = safeText === UNSAFE_SUBAGENT_OUTPUT_FALLBACK;
       snapshot.waitingForContinuation = false;
       previousAssistantCalledYield = false;
       continue;
@@ -254,6 +349,7 @@ function summarizeSubagentOutputHistory(messages: Array<unknown>): SubagentOutpu
     const text = extractSubagentOutputText(message).trim();
     if (text) {
       snapshot.latestRawText = text;
+      snapshot.blockedUnsafeOutput = true;
       snapshot.waitingForContinuation = false;
     }
     previousAssistantCalledYield = false;
@@ -270,6 +366,9 @@ function formatSubagentPartialProgress(
   }
   const timedOut = outcome?.status === "timeout";
   if (snapshot.assistantFragments.length === 0 && (!timedOut || snapshot.toolCallCount === 0)) {
+    return undefined;
+  }
+  if (!timedOut) {
     return undefined;
   }
   const parts: string[] = [];
@@ -296,6 +395,9 @@ function selectSubagentOutputText(
   }
   if (snapshot.latestAssistantText) {
     return snapshot.latestAssistantText;
+  }
+  if (snapshot.blockedUnsafeOutput) {
+    return UNSAFE_SUBAGENT_OUTPUT_FALLBACK;
   }
   const partialProgress = formatSubagentPartialProgress(snapshot, outcome);
   if (partialProgress) {
@@ -325,7 +427,7 @@ export async function readSubagentOutput(
     sessionKey,
     limit: 100,
   });
-  return latestAssistant?.trim() ? latestAssistant : undefined;
+  return latestAssistant?.trim() ? safeSubagentOutputOrFallback(latestAssistant) : undefined;
 }
 
 export async function readLatestSubagentOutputWithRetry(params: {
@@ -418,10 +520,13 @@ function describeSubagentOutcome(outcome?: SubagentRunOutcome): string {
 }
 
 function formatChildResultData(resultText?: string | null): string {
+  const safeResultText = resultText?.trim()
+    ? safeSubagentOutputOrFallback(resultText.trim())
+    : resultText;
   return (
     wrapPromptDataBlock({
       label: "Child result",
-      text: resultText?.trim() || "(no output)",
+      text: safeResultText?.trim() || "(no output)",
     }) || "Child result: (no output)"
   );
 }

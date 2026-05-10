@@ -3,6 +3,7 @@ import {
   __testing,
   buildChildCompletionFindings,
   readSubagentOutput,
+  UNSAFE_SUBAGENT_OUTPUT_FALLBACK,
 } from "./subagent-announce-output.js";
 
 type CallGateway = typeof import("../gateway/call.js").callGateway;
@@ -86,7 +87,7 @@ describe("readSubagentOutput", () => {
     );
   });
 
-  it("keeps normal tool-use assistant output when the tool is not sessions_yield", async () => {
+  it("uses a safe fallback for tool-use assistant output without a final answer", async () => {
     installOutputDeps({
       messages: [
         {
@@ -101,8 +102,111 @@ describe("readSubagentOutput", () => {
     });
 
     await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
-      "Mapped the code path.",
+      UNSAFE_SUBAGENT_OUTPUT_FALLBACK,
     );
+  });
+
+  it("does not auto-announce raw tool result output when no final answer exists", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "toolUse",
+          content: [{ type: "toolCall", id: "call-read", name: "read", arguments: {} }],
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-read",
+          toolName: "read",
+          content: [{ type: "text", text: "import { x } from './x';\nexport const y = 1;" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      UNSAFE_SUBAGENT_OUTPUT_FALLBACK,
+    );
+  });
+
+  it("does not auto-announce raw unfenced source dumps verbatim", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [
+            {
+              type: "text",
+              text: [
+                "import { readFile } from 'node:fs/promises';",
+                "export type Result = { ok: boolean };",
+                "const value = await readFile('/tmp/a.ts', 'utf8');",
+                "function parse() {",
+                "  return value.trim();",
+                "}",
+              ].join("\n"),
+            },
+          ],
+        },
+      ],
+    });
+
+    const result = await readSubagentOutput("agent:main:subagent:child");
+    expect(result).toBe(UNSAFE_SUBAGENT_OUTPUT_FALLBACK);
+    expect(result).not.toContain("readFile");
+  });
+
+  it("allows clean final summaries", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "Fixed the announce path and added regression tests." }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(
+      "Fixed the announce path and added regression tests.",
+    );
+  });
+
+  it("preserves explicit final user-facing fenced code snippets", async () => {
+    const finalText = [
+      "Use this helper in the final docs:",
+      "",
+      "```ts",
+      "export function ok() {",
+      "  return true;",
+      "}",
+      "```",
+    ].join("\n");
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: finalText }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe(finalText);
+  });
+
+  it("keeps NO_REPLY silent", async () => {
+    installOutputDeps({
+      messages: [
+        {
+          role: "assistant",
+          stopReason: "stop",
+          content: [{ type: "text", text: "NO_REPLY" }],
+        },
+      ],
+    });
+
+    await expect(readSubagentOutput("agent:main:subagent:child")).resolves.toBe("NO_REPLY");
   });
 });
 
@@ -134,6 +238,25 @@ describe("buildChildCompletionFindings", () => {
 
     expect(findings).toContain("status: error: boom");
     expect(findings).toContain("ANNOUNCE_SKIP");
+  });
+
+  it("sanitizes unsafe child completion findings before descendant wake", () => {
+    const findings = buildChildCompletionFindings([
+      {
+        childSessionKey: "agent:main:subagent:raw-source",
+        task: "raw source task",
+        createdAt: 1,
+        frozenResultText: [
+          "src/agents/a.ts:1:import { x } from './x';",
+          "src/agents/a.ts:2:export const a = 1;",
+          "src/agents/b.ts:1:import { y } from './y';",
+        ].join("\n"),
+        outcome: { status: "ok" },
+      },
+    ]);
+
+    expect(findings).toContain(UNSAFE_SUBAGENT_OUTPUT_FALLBACK);
+    expect(findings).not.toContain("src/agents/a.ts:1:import");
   });
 
   it("numbers findings contiguously after skipped silent completions", () => {
