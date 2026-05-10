@@ -12,7 +12,6 @@ type AuditFixture = {
   stateDir: string;
   configPath: string;
   legacyAuthProfilePath: string;
-  authJsonPath: string;
   agentDir: string;
   modelCatalogSource: string;
   envPath: string;
@@ -129,10 +128,6 @@ function expectFindingCode(report: Awaited<ReturnType<typeof runSecretsAudit>>, 
   expect(hasFinding(report, (entry) => entry.code === code)).toBe(true);
 }
 
-function expectFindingFile(report: Awaited<ReturnType<typeof runSecretsAudit>>, filePath: string) {
-  expect(hasFinding(report, (entry) => entry.file === filePath)).toBe(true);
-}
-
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
     await fs.stat(filePath);
@@ -148,7 +143,6 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const configPath = path.join(stateDir, "openclaw.json");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
   const legacyAuthProfilePath = path.join(agentDir, "auth-profiles.json");
-  const authJsonPath = path.join(stateDir, "agents", "main", "agent", "auth.json");
   const modelCatalogSource = `stored model catalog: ${agentDir}`;
   const envPath = path.join(stateDir, ".env");
 
@@ -160,7 +154,6 @@ async function createAuditFixture(): Promise<AuditFixture> {
     stateDir,
     configPath,
     legacyAuthProfilePath,
-    authJsonPath,
     agentDir,
     modelCatalogSource,
     envPath,
@@ -274,30 +267,6 @@ describe("secrets audit", () => {
     expect(report.summary.shadowedRefCount).toBeGreaterThan(0);
     expectFindingCode(report, "REF_SHADOWED");
     expectFindingCode(report, "PLAINTEXT_FOUND");
-  });
-
-  it("does not mutate legacy auth.json during audit", async () => {
-    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
-    await writeJsonFile(fixture.authJsonPath, {
-      openai: {
-        type: "api_key",
-        key: "sk-legacy-auth-json",
-      },
-    });
-
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingCode(report, "LEGACY_RESIDUE");
-    const authJsonStat = await fs.stat(fixture.authJsonPath);
-    expect(authJsonStat.isFile()).toBe(true);
-    await expectPathMissing(fixture.legacyAuthProfilePath);
-  });
-
-  it("reports malformed sidecar JSON as findings instead of crashing", async () => {
-    await fs.writeFile(fixture.authJsonPath, "{invalid-json", "utf8");
-
-    const report = await runSecretsAudit({ env: fixture.env });
-    expectFindingFile(report, fixture.authJsonPath);
-    expectFindingCode(report, "REF_UNRESOLVED");
   });
 
   it("skips exec ref resolution during audit unless explicitly allowed", async () => {

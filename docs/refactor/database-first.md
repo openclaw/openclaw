@@ -192,6 +192,8 @@ The branch already has a real shared SQLite base:
 - Secret target metadata now talks about stores instead of pretending every
   credential target is a config file. `openclaw.json` remains the config store;
   auth-profile targets use the SQLite auth profile store.
+- Secret audit no longer scans retired per-agent `auth.json` files. Doctor owns
+  warning about, importing, and removing that legacy file.
 - Legacy auth profile path helpers now live in doctor legacy code. Core auth
   profile path helpers expose SQLite KV store identity and display locations,
   not `auth-profiles.json` or `auth-state.json` runtime paths.

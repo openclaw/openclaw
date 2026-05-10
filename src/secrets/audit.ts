@@ -35,9 +35,7 @@ import { isNonEmptyString, isRecord } from "./shared.js";
 import {
   listAgentModelCatalogDirs,
   listAuthProfileStoreAgentDirs,
-  listLegacyAuthJsonPaths,
   parseEnvAssignmentValue,
-  readJsonObjectIfExists,
 } from "./storage-scan.js";
 import { discoverConfigSecretTargets } from "./target-registry.js";
 
@@ -320,42 +318,6 @@ function collectAuthStoreSecrets(params: {
         profileId: entry.profileId,
       });
       trackAuthProviderState(params.collector, entry.provider, "oauth");
-    }
-  }
-}
-
-function collectAuthJsonResidue(params: { stateDir: string; collector: AuditCollector }): void {
-  for (const authJsonPath of listLegacyAuthJsonPaths(params.stateDir)) {
-    params.collector.filesScanned.add(authJsonPath);
-    const parsedResult = readJsonObjectIfExists(authJsonPath);
-    if (parsedResult.error) {
-      addFinding(params.collector, {
-        code: "REF_UNRESOLVED",
-        severity: "error",
-        file: authJsonPath,
-        jsonPath: "<root>",
-        message: `Invalid JSON in legacy auth.json: ${parsedResult.error}`,
-      });
-      continue;
-    }
-    const parsed = parsedResult.value;
-    if (!parsed) {
-      continue;
-    }
-    for (const [providerId, value] of Object.entries(parsed)) {
-      if (!isRecord(value)) {
-        continue;
-      }
-      if (value.type === "api_key" && isNonEmptyString(value.key)) {
-        addFinding(params.collector, {
-          code: "LEGACY_RESIDUE",
-          severity: "warn",
-          file: authJsonPath,
-          jsonPath: providerId,
-          message: "Legacy auth.json contains static api_key credentials.",
-          provider: providerId,
-        });
-      }
     }
   }
 }
@@ -721,11 +683,6 @@ export async function runSecretsAudit(
     envPath,
     collector,
   });
-  collectAuthJsonResidue({
-    stateDir,
-    collector,
-  });
-
   const summary = summarizeFindings(collector.findings);
   const status: SecretsAuditStatus =
     summary.unresolvedRefCount > 0
