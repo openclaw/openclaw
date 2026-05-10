@@ -1197,9 +1197,6 @@
                   "plugins/dependency-resolution",
                   "plugins/install-overrides",
                   "plugins/codex-harness",
-                  "plugins/codex-harness-reference",
-                  "plugins/codex-harness-runtime",
-                  "plugins/codex-native-plugins",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
                   "plugins/webhooks",
@@ -1708,6 +1705,14 @@
                   "concepts/openclaw-sdk",
                   "reference/openclaw-sdk-api-design",
                   "reference/device-models"
+                ]
+              },
+              {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime",
+                  "plugins/codex-native-plugins"
                 ]
               },
               {
