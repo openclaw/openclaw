@@ -6,6 +6,7 @@ import { prepareOomScoreAdjustedSpawn } from "openclaw/plugin-sdk/process-runtim
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { ensurePortAvailable } from "../infra/ports.js";
+import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CONFIG_DIR } from "../utils.js";
 import { hasChromeProxyControlArg, omitChromeProxyEnv } from "./browser-proxy-mode.js";
@@ -441,14 +442,15 @@ export async function launchOpenClawChrome(
       userDataDir,
       ...launchOptions,
     });
-    const env = {
+    const env: NodeJS.ProcessEnv = {
       ...omitChromeProxyEnv(process.env),
       // Reduce accidental sharing with the user's env.
       HOME: os.homedir(),
     };
     if (process.platform === "linux") {
-      env.XDG_CONFIG_HOME ??= path.join(os.tmpdir(), ".chromium");
-      env.XDG_CACHE_HOME ??= path.join(os.tmpdir(), ".chromium");
+      const chromiumStateDir = path.join(resolvePreferredOpenClawTmpDir(), ".chromium");
+      env.XDG_CONFIG_HOME ??= chromiumStateDir;
+      env.XDG_CACHE_HOME ??= chromiumStateDir;
     }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
