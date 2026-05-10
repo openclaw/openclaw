@@ -122,6 +122,8 @@ type CreateFeishuReplyDispatcherParams = {
   replyInThread?: boolean;
   /** True when inbound message is already inside a thread/topic context */
   threadReply?: boolean;
+  /** Allow normal group thread replies to fall back visibly when the target disappeared. */
+  allowTopLevelThreadReplyFallback?: boolean;
   rootId?: string;
   accountId?: string;
   identity?: OutboundIdentity;
@@ -147,6 +149,8 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const allowTopLevelThreadReplyFallback =
+    effectiveReplyInThread === true && params.allowTopLevelThreadReplyFallback === true;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -465,6 +469,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
+                allowTopLevelThreadReplyFallback,
                 accountId,
               });
             },
@@ -491,6 +496,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
+                    allowTopLevelThreadReplyFallback,
                     accountId,
                   });
                 },
@@ -605,6 +611,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelThreadReplyFallback,
                   accountId,
                   header: cardHeader,
                   note: cardNote,
@@ -623,6 +630,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
+                  allowTopLevelThreadReplyFallback,
                   accountId,
                 });
               },

@@ -1331,6 +1331,7 @@ export async function handleFeishuMessage(params: {
           (ctx.suppressReplyTarget ? undefined : ctx.messageId))
         : (ctx.replyTargetMessageId ?? (ctx.suppressReplyTarget ? undefined : ctx.messageId));
     const threadReply = isGroup ? (groupSession?.threadReply ?? false) : false;
+    const allowTopLevelThreadReplyFallback = configReplyInThread && !isTopicSession && !threadReply;
 
     if (broadcastAgents) {
       // Cross-account dedup: in multi-account setups, Feishu delivers the same
@@ -1405,6 +1406,7 @@ export async function handleFeishuMessage(params: {
             replyToMessageId: replyTargetMessageId,
             skipReplyToInMessages: !isGroup,
             replyInThread,
+            allowTopLevelThreadReplyFallback,
             rootId: ctx.rootId,
             threadReply,
             accountId: account.accountId,
@@ -1571,6 +1573,7 @@ export async function handleFeishuMessage(params: {
         replyToMessageId: replyTargetMessageId,
         skipReplyToInMessages: !isGroup,
         replyInThread,
+        allowTopLevelThreadReplyFallback,
         rootId: ctx.rootId,
         threadReply,
         accountId: account.accountId,
