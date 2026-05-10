@@ -108,6 +108,16 @@ function makeLeaseStore() {
   };
 }
 
+function readFirstEnsureSessionInput(ensure: {
+  mock: { calls: Array<Array<unknown>> };
+}): Parameters<AcpRuntime["ensureSession"]>[0] {
+  const input = ensure.mock.calls[0]?.[0];
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Expected ensureSession to be called with an input object");
+  }
+  return input as Parameters<AcpRuntime["ensureSession"]>[0];
+}
+
 describe("AcpxRuntime fresh reset wrapper", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
@@ -174,11 +184,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.4",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.4",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4",
+    });
   });
 
   it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
@@ -204,13 +215,14 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "codex",
-      }),
-    );
-    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("model");
-    expect(ensure.mock.calls[0]?.[0]).not.toHaveProperty("thinking");
+    const ensureInput = readFirstEnsureSessionInput(ensure);
+    expect(ensureInput).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+    expect(ensureInput).not.toHaveProperty("model");
+    expect(ensureInput).not.toHaveProperty("thinking");
   });
 
   it("does not normalize model startup for non-Codex ACP agents", async () => {
@@ -237,12 +249,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.5",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agent: "main",
-        model: "openai-codex/gpt-5.5",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:main:acp:test",
+      agent: "main",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
   });
 
   it("injects Codex ACP startup config into the scoped registry", () => {
@@ -283,11 +295,12 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       model: "openai-codex/gpt-5.5",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.5",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.5",
+    });
   });
 
   it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
@@ -315,11 +328,13 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       thinking: "x-high",
     });
 
-    expect(ensure).toHaveBeenCalledWith(
-      expect.objectContaining({
-        model: "gpt-5.4/xhigh",
-      }),
-    );
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4/xhigh",
+      thinking: "x-high",
+    });
   });
 
   it("normalizes Codex ACP model config controls to adapter ids", async () => {
@@ -929,9 +944,10 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       { pid: 941, signal: "SIGTERM" },
       { pid: 940, signal: "SIGTERM" },
     ]);
-    expect(leaseStore.store.markState).not.toHaveBeenCalledWith("lease-old", expect.any(String));
-    expect(leaseStore.store.markState).toHaveBeenCalledWith("lease-current", "closing");
-    expect(leaseStore.store.markState).toHaveBeenLastCalledWith("lease-current", "closed");
+    expect(leaseStore.store.markState.mock.calls).toEqual([
+      ["lease-current", "closing"],
+      ["lease-current", "closed"],
+    ]);
   });
 
   it("does not clean up a stale close pid reused by another wrapper root", async () => {

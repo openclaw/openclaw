@@ -64,9 +64,12 @@ describe("exa web search provider", () => {
     expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
-      expect.objectContaining({ error: "invalid_base_url" }),
-    );
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+      docs: "https://docs.openclaw.ai/tools/exa-search",
+      error: "invalid_base_url",
+      message:
+        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    });
   });
 
   it("partitions Exa cache keys by resolved endpoint", () => {

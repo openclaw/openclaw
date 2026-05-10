@@ -10,6 +10,10 @@ import {
 } from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
 import {
+  ensureModelProviderLocalService,
+  type ProviderLocalServiceLease,
+} from "./provider-local-service.js";
+import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
   mergeModelProviderRequestOverrides,
@@ -266,9 +270,13 @@ function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
   refreshTimeout?: () => void,
+  localServiceLease?: ProviderLocalServiceLease,
 ): Response {
+  const finalizeLocalServiceLease = () => {
+    localServiceLease?.release();
+  };
   if (!response.body) {
-    void release();
+    void release().finally(finalizeLocalServiceLease);
     return response;
   }
   const source = response.body;
@@ -279,7 +287,11 @@ function buildManagedResponse(
       return;
     }
     released = true;
-    await release().catch(() => undefined);
+    try {
+      await release().catch(() => undefined);
+    } finally {
+      finalizeLocalServiceLease();
+    }
   };
   const wrappedBody = new ReadableStream<Uint8Array>({
     start() {
@@ -401,6 +413,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
+    let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
       request?.url ??
@@ -444,11 +457,22 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(policy ? { policy } : {}),
     };
-    const result = await fetchWithSsrFGuard(
-      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
-        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-        : guardedFetchOptions,
-    );
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    try {
+      localServiceLease = await ensureModelProviderLocalService(
+        model,
+        (requestInit ?? init)?.headers,
+        (requestInit ?? init)?.signal,
+      );
+      result = await fetchWithSsrFGuard(
+        !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+          : guardedFetchOptions,
+      );
+    } catch (error) {
+      localServiceLease?.release();
+      throw error;
+    }
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
@@ -459,7 +483,12 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
-    response = buildManagedResponse(response, result.release, result.refreshTimeout);
+    response = buildManagedResponse(
+      response,
+      result.release,
+      result.refreshTimeout,
+      localServiceLease,
+    );
     return sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

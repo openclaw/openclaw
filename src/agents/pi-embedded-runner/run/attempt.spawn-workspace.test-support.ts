@@ -95,6 +95,8 @@ export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
+    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
+      await toolParams.execute(),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
@@ -753,7 +755,6 @@ vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
   return {
     ...actual,
-    collectAllowedToolNames: () => undefined,
   };
 });
 

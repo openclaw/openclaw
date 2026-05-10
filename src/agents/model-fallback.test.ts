@@ -9,6 +9,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -542,6 +543,22 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
+    const cfg = makeCfg();
+    const timeoutError = new CommandLaneTaskTimeoutError("cron-nested", 330_000);
+    const run = vi.fn().mockRejectedValue(timeoutError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(timeoutError);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {

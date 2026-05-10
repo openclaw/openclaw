@@ -259,6 +259,39 @@ describe("agentCliCommand", () => {
     });
   });
 
+  it("promotes gateway deliveryStatus to the top-level JSON response", async () => {
+    await withTempStore(async () => {
+      const deliveryStatus = {
+        requested: true,
+        attempted: true,
+        status: "sent",
+        succeeded: true,
+        resultCount: 1,
+      };
+      const response = {
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { stub: true },
+          deliveryStatus,
+        },
+      };
+      callGateway.mockResolvedValue(response);
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true, deliver: true }, jsonRuntime);
+
+      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
+        {
+          ...response,
+          deliveryStatus,
+        },
+        2,
+      );
+      expect(jsonRuntime.log).not.toHaveBeenCalled();
+    });
+  });
+
   it("falls back to embedded agent when gateway fails", async () => {
     await withTempStore(async () => {
       callGateway.mockRejectedValue(createGatewayClosedError());

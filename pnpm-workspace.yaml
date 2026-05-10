@@ -39,7 +39,7 @@ onlyBuiltDependencies:
   - "@matrix-org/matrix-sdk-crypto-nodejs"
   - "@napi-rs/canvas"
   - "@tloncorp/api"
-  - "@whiskeysockets/baileys"
+  - "baileys"
   - "@whiskeysockets/libsignal-node"
   - authenticate-pam
   - esbuild

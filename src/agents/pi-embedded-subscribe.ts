@@ -28,6 +28,10 @@ import {
   consumePendingToolMediaIntoReply,
   readPendingToolMediaReply,
 } from "./pi-embedded-subscribe.handlers.messages.js";
+import {
+  handleToolExecutionEnd,
+  handleToolExecutionStart,
+} from "./pi-embedded-subscribe.handlers.tools.js";
 import type {
   EmbeddedPiSubscribeContext,
   EmbeddedPiSubscribeState,
@@ -1024,6 +1028,44 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
   return {
     assistantTexts,
     toolMetas,
+    runToolLifecycle: async <T>(toolParams: {
+      toolName: string;
+      toolCallId: string;
+      args: unknown;
+      execute: () => Promise<T>;
+    }): Promise<T> => {
+      await handleToolExecutionStart(ctx, {
+        type: "tool_execution_start",
+        toolName: toolParams.toolName,
+        toolCallId: toolParams.toolCallId,
+        args: toolParams.args,
+      } as never);
+      try {
+        const result = await toolParams.execute();
+        await handleToolExecutionEnd(ctx, {
+          type: "tool_execution_end",
+          toolName: toolParams.toolName,
+          toolCallId: toolParams.toolCallId,
+          isError: false,
+          result,
+        } as never);
+        return result;
+      } catch (error) {
+        await handleToolExecutionEnd(ctx, {
+          type: "tool_execution_end",
+          toolName: toolParams.toolName,
+          toolCallId: toolParams.toolCallId,
+          isError: true,
+          result: {
+            details: {
+              status: "error",
+              error: error instanceof Error ? error.message : String(error),
+            },
+          },
+        } as never);
+        throw error;
+      }
+    },
     unsubscribe,
     setTerminalLifecycleMeta: (meta: {
       replayInvalid?: boolean;
