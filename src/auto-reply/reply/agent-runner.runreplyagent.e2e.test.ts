@@ -1684,7 +1684,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
     }
   });
 
-  it("does not persist fallback state for an equivalent CLI runtime alias", async () => {
+  it("clears fallback notice state for an equivalent CLI runtime alias", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
