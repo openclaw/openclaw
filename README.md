@@ -8,6 +8,12 @@ For how we build, install, and switch the running **core** version (single-gatew
 
 - [`docs/polytropos/CORE-RELEASES.md`](docs/polytropos/CORE-RELEASES.md)
 
+Additional procedures:
+
+- Update procedure: [`docs/polytropos/planning/UPDATE-PROCEDURE.md`](docs/polytropos/planning/UPDATE-PROCEDURE.md)
+- First release checklist: [`docs/polytropos/planning/FIRST-RELEASE-CHECKLIST.md`](docs/polytropos/planning/FIRST-RELEASE-CHECKLIST.md)
+- Cutover (systemd ExecStart): [`docs/polytropos/planning/MIGRATION-CUTOVER.md`](docs/polytropos/planning/MIGRATION-CUTOVER.md)
+
 What follows is the upstream OpenClaw README.
 
 # 🦞 OpenClaw — Personal AI Assistant
