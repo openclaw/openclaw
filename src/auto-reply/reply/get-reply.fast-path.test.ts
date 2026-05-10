@@ -18,11 +18,36 @@ import {
 import { loadGetReplyModuleForTest } from "./get-reply.test-loader.js";
 import "./get-reply.test-runtime-mocks.js";
 
+type LoadModelCatalogFn = typeof import("../../agents/model-catalog.js").loadModelCatalog;
+type ModelAliasIndex = import("../../agents/model-selection.js").ModelAliasIndex;
+
+function emptyAliasIndex(): ModelAliasIndex {
+  return { byAlias: new Map(), byKey: new Map() };
+}
+
 const mocks = vi.hoisted(() => ({
   ensureAgentWorkspace: vi.fn(),
   initSessionState: vi.fn(),
+  loadModelCatalog: vi.fn<LoadModelCatalogFn>(async () => [
+    {
+      provider: "openai",
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      reasoning: true,
+    },
+  ]),
   resolveReplyDirectives: vi.fn(),
 }));
+
+vi.mock("../../agents/model-catalog.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/model-catalog.js")>(
+    "../../agents/model-catalog.js",
+  );
+  return {
+    ...actual,
+    loadModelCatalog: mocks.loadModelCatalog,
+  };
+});
 
 vi.mock("../../agents/workspace.js", () => ({
   DEFAULT_AGENT_WORKSPACE_DIR: "/tmp/openclaw-workspace",
@@ -31,11 +56,14 @@ vi.mock("../../agents/workspace.js", () => ({
 registerGetReplyRuntimeOverrides(mocks);
 
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
+let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveDefaultModel: resolveDefaultModelMock } =
+    await import("./directive-handling.defaults.js"));
   ({ getRuntimeConfig: loadConfigMock } = await import("../../config/config.js"));
   ({ runPreparedReply: runPreparedReplyMock } = await import("./get-reply-run.js"));
 }
@@ -49,7 +77,22 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     mocks.ensureAgentWorkspace.mockReset();
     mocks.initSessionState.mockReset();
+    mocks.loadModelCatalog.mockReset();
+    mocks.loadModelCatalog.mockResolvedValue([
+      {
+        provider: "openai",
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        reasoning: true,
+      },
+    ]);
     mocks.resolveReplyDirectives.mockReset();
+    vi.mocked(resolveDefaultModelMock).mockReset();
+    vi.mocked(resolveDefaultModelMock).mockReturnValue({
+      defaultProvider: "openai",
+      defaultModel: "gpt-4o-mini",
+      aliasIndex: emptyAliasIndex(),
+    });
     vi.mocked(loadConfigMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(loadConfigMock).mockReturnValue({});
@@ -220,6 +263,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       },
       session: { store: path.join(home, "sessions.json") },
     } as OpenClawConfig);
+    vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      aliasIndex: emptyAliasIndex(),
+    });
 
     const reply = await getReplyFromConfig(
       buildGetReplyCtx({
@@ -240,6 +288,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       throw new Error("expected status reply text");
     }
     expect(reply.text.includes("OpenClaw")).toBe(true);
+    expect(reply.text.includes("Think: medium")).toBe(true);
+    expect(mocks.loadModelCatalog).toHaveBeenCalledWith({ config: cfg });
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
