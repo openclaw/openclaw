@@ -214,6 +214,21 @@ export const CreateResponseBodySchema = z
       })
       .optional(),
     truncation: z.enum(["auto", "disabled"]).optional(),
+    text: z
+      .object({
+        format: z.discriminatedUnion("type", [
+          z.object({ type: z.literal("text") }),
+          z.object({
+            type: z.literal("json_schema"),
+            json_schema: z
+              .object({ name: z.string(), description: z.string().optional() })
+              .strict(),
+          }),
+          z.object({ type: z.literal("json_object") }),
+        ]),
+        verbosity: z.enum(["auto", "verbose"]).optional(),
+      })
+      .optional(),
   })
   .strict();
 
