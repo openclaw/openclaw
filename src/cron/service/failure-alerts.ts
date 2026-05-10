@@ -2,6 +2,7 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { formatCronAlertEventTime } from "../alert-time.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -111,6 +112,7 @@ function emitFailureAlert(
     accountId?: string;
     status: "error" | "skipped";
     provider?: string;
+    occurredAtMs?: number;
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
@@ -123,8 +125,13 @@ function emitFailureAlert(
   // with notification previews and provider-specific message limits.
   const statusVerb = params.status === "skipped" ? "skipped" : "failed";
   const detailLabel = params.status === "skipped" ? "Skip reason" : "Last error";
+  const eventTime =
+    params.mode === "webhook"
+      ? undefined
+      : formatCronAlertEventTime({ job: params.job, eventTimeMs: params.occurredAtMs });
   const text = [
     `Cron job "${safeJobName}" ${statusVerb} ${params.consecutiveErrors} times`,
+    ...(eventTime ? [`Last event: ${eventTime}`] : []),
     ...(errorReason ? [`Cause: ${errorReason}`] : []),
     `${detailLabel}: ${truncatedError}`,
   ].join("\n");
@@ -134,6 +141,7 @@ function emitFailureAlert(
       .sendCronFailureAlert({
         job: params.job,
         text,
+        runAtMs: params.occurredAtMs,
         channel: params.channel,
         to: params.to,
         mode: params.mode,
@@ -199,6 +207,7 @@ export function maybeEmitFailureAlert(
       accountId: params.alertConfig.accountId,
       status: params.status,
       provider: params.provider,
+      occurredAtMs: params.occurredAtMs,
     });
   }
   params.job.state.lastFailureAlertAtMs = now;
