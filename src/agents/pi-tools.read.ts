@@ -23,6 +23,7 @@ import {
   wrapToolParamValidation,
 } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { verifyHostFile, verifyWrittenStat } from "./pi-tools.write-verification.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import { sanitizeToolResultImages } from "./tool-images.js";
@@ -881,13 +882,25 @@ function createSandboxReadOperations(params: SandboxToolParams) {
   } as const;
 }
 
+async function writeAndVerifySandboxFile(
+  params: SandboxToolParams,
+  absolutePath: string,
+  content: string,
+): Promise<void> {
+  await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+  // Post-write verification: confirm the bridge actually persisted the file.
+  // Throws WriteVerificationError so wrapEditToolWithRecovery cannot mask the failure.
+  const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
+  verifyWrittenStat({ absolutePath, content, stat });
+}
+
 function createSandboxWriteOperations(params: SandboxToolParams) {
   return {
     mkdir: async (dir: string) => {
       await params.bridge.mkdirp({ filePath: dir, cwd: params.root });
     },
     writeFile: async (absolutePath: string, content: string) => {
-      await params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content });
+      await writeAndVerifySandboxFile(params, absolutePath, content);
     },
   } as const;
 }
@@ -896,8 +909,9 @@ function createSandboxEditOperations(params: SandboxToolParams) {
   return {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
-    writeFile: (absolutePath: string, content: string) =>
-      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+    writeFile: async (absolutePath: string, content: string) => {
+      await writeAndVerifySandboxFile(params, absolutePath, content);
+    },
     access: async (absolutePath: string) => {
       const stat = await params.bridge.stat({ filePath: absolutePath, cwd: params.root });
       if (!stat) {
@@ -916,6 +930,9 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = path.resolve(expandTildeToOsHome(absolutePath));
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+  // Post-write verification: confirm the file landed with the expected size.
+  // Throws WriteVerificationError so wrapEditToolWithRecovery cannot mask the failure.
+  await verifyHostFile(resolved, content);
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
@@ -944,6 +961,9 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
     writeFile: async (absolutePath: string, content: string) => {
       const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
+      // Post-write verification: even with the safe-write helper, confirm bytes landed.
+      const resolved = path.resolve(root, relative);
+      await verifyHostFile(resolved, content);
     },
   } as const;
 }
@@ -977,6 +997,9 @@ function createHostEditOperations(root: string, options?: { workspaceOnly?: bool
     writeFile: async (absolutePath: string, content: string) => {
       const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
       await (await rootPromise).write(relative, content, { mkdir: true });
+      // Post-write verification: even with the safe-write helper, confirm bytes landed.
+      const resolved = path.resolve(root, relative);
+      await verifyHostFile(resolved, content);
     },
     access: async (absolutePath: string) => {
       let relative: string;

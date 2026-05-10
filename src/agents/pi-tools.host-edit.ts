@@ -3,6 +3,7 @@ import type { AgentToolResult, AgentToolUpdateCallback } from "@earendil-works/p
 import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { getToolParamsRecord } from "./pi-tools.params.js";
 import type { AnyAgentTool } from "./pi-tools.types.js";
+import { isWriteVerificationError } from "./pi-tools.write-verification.js";
 
 type EditToolRecoveryOptions = {
   root: string;
@@ -175,6 +176,13 @@ export function wrapEditToolWithRecovery(
       try {
         return await base.execute(toolCallId, params, signal, onUpdate);
       } catch (err) {
+        // Post-write verifier failures are non-recoverable: a stat/size mismatch means
+        // the underlying write did not land cleanly, even if a follow-up readback
+        // happens to look like the edit applied. Surface the original error so we
+        // never report success for a half-written file.
+        if (isWriteVerificationError(err)) {
+          throw err;
+        }
         if (!absolutePath) {
           throw err;
         }
