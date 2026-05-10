@@ -271,6 +271,77 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
+  it("does not reject wildcard-only policy before an explicit model directive is resolved", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: true,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+    expect(state.allowedModelKeys.has("vllm/*")).toBe(true);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a stored dynamic provider wildcard model when the catalog has no rows yet", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      providerOverride: "vllm",
+      modelOverride: "new-local-model",
+      modelOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    expect(state.provider).toBe("vllm");
+    expect(state.model).toBe("new-local-model");
+    expect(sessionStore.main.modelOverride).toBe("new-local-model");
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
   it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
     authProfileStoreMock.store = {
       version: 1,

@@ -188,21 +188,6 @@ export async function createModelSelectionState(params: {
     logStage("configured-catalog-ready", `entries=${configuredModelCatalog.length}`);
   }
 
-  const allowedInitialSelection = resolveAllowedModelSelection({
-    provider,
-    model,
-    allowAny: allowAnyModel,
-    allowedKeys: allowedModelKeys,
-    allowedCatalog: allowedModelCatalog,
-  });
-  if (!allowedInitialSelection) {
-    throw new Error(
-      `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
-    );
-  }
-  provider = allowedInitialSelection.provider;
-  model = allowedInitialSelection.model;
-
   if (sessionEntry && sessionStore && sessionKey && directStoredOverride) {
     const normalizedOverride = normalizeModelRef(
       directStoredOverride.provider,
@@ -253,6 +238,23 @@ export async function createModelSelectionState(params: {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
     }
+  }
+
+  if (!params.hasModelDirective) {
+    const allowedInitialSelection = resolveAllowedModelSelection({
+      provider,
+      model,
+      allowAny: allowAnyModel,
+      allowedKeys: allowedModelKeys,
+      allowedCatalog: allowedModelCatalog,
+    });
+    if (!allowedInitialSelection) {
+      throw new Error(
+        `Configured default model "${modelKey(provider, model)}" is not allowed by agents.defaults.models, and no allowed model is available.`,
+      );
+    }
+    provider = allowedInitialSelection.provider;
+    model = allowedInitialSelection.model;
   }
 
   if (sessionEntry && sessionStore && sessionKey && sessionEntry.authProfileOverride) {
