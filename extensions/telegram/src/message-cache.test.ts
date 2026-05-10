@@ -244,6 +244,19 @@ describe("telegram message cache", () => {
       msg: {
         chat: { id: 7, type: "supergroup", title: "Ops" },
         message_thread_id: 200,
+        message_id: 40,
+        date: 1736380740,
+        text: "earlier different topic",
+        from: { id: 98, is_bot: false, first_name: "Earlier Other" },
+      } as Message,
+    });
+    cache.record({
+      accountId: "default",
+      chatId: 7,
+      threadId: 200,
+      msg: {
+        chat: { id: 7, type: "supergroup", title: "Ops" },
+        message_thread_id: 200,
         message_id: 142,
         date: 1736380743,
         text: "different topic",
@@ -262,6 +275,16 @@ describe("telegram message cache", () => {
         })
         .map((entry) => entry.messageId),
     ).toEqual(["42", "43"]);
+    expect(
+      cache
+        .recentBefore({
+          accountId: "default",
+          chatId: 7,
+          messageId: "44",
+          limit: 4,
+        })
+        .map((entry) => entry.messageId),
+    ).toEqual(["40", "41", "42", "43"]);
   });
 
   it("returns nearby messages around a stale reply target", () => {

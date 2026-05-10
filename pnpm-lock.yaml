@@ -106,8 +106,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c
-        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c
+        specifier: github:openclaw/fs-safe#d3f37bc700e8fd31473afee48eb96f9e6377ffad
+        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/d3f37bc700e8fd31473afee48eb96f9e6377ffad
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
@@ -3356,9 +3356,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':
-    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c}
-    version: 0.2.0
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/d3f37bc700e8fd31473afee48eb96f9e6377ffad':
+    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/d3f37bc700e8fd31473afee48eb96f9e6377ffad}
+    version: 0.2.1
     engines: {node: '>=20.11'}
 
   '@opentelemetry/api-logs@0.217.0':
@@ -10385,7 +10385,7 @@ snapshots:
   '@openai/codex@0.130.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/d3f37bc700e8fd31473afee48eb96f9e6377ffad':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15
