@@ -27,8 +27,14 @@ export type ResolvedWhatsAppInboundPolicy = {
   isSelfChat: boolean;
   providerMissingFallbackApplied: boolean;
   isSamePhone: (value?: string | null) => boolean;
+  isDmSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
+  isGroupSenderAllowed: (allowEntries: string[], sender?: string | null) => boolean;
+  isConfiguredGroupAdmin: (conversationId: string, senderE164?: string | null) => boolean;
   resolveConversationGroupPolicy: (conversationId: string) => ChannelGroupPolicy;
-  resolveConversationRequireMention: (conversationId: string) => boolean;
+  resolveConversationRequireMention: (
+    conversationId: string,
+    senderE164?: string | null,
+  ) => boolean;
 };
 
 function normalizeWhatsAppIngressPhone(value: string): string | null {
@@ -58,6 +64,54 @@ function maybeSamePhoneDmAllowFrom(params: {
     return [];
   }
   return [params.dmSenderId];
+}
+
+function isGroupAdmin(
+  groups: ResolvedWhatsAppAccount["groups"],
+  groupId: string,
+  senderE164?: string | null,
+): boolean {
+  if (!senderE164 || !groups) {
+    return false;
+  }
+  const normalizedAdmin = resolveGroupAdminE164(groups, groupId);
+  if (!normalizedAdmin) {
+    return false;
+  }
+  const normalizedSender = normalizeE164(senderE164);
+  return normalizedAdmin === normalizedSender;
+}
+
+function resolveGroupAdminE164(
+  groups: ResolvedWhatsAppAccount["groups"],
+  groupId: string,
+): string | undefined {
+  if (!groups) {
+    return undefined;
+  }
+  const exactAdmin = normalizeE164(groups[groupId]?.admin ?? "");
+  if (/^\+\d{1,15}$/.test(exactAdmin)) {
+    return exactAdmin;
+  }
+
+  const wildcardAdmin = normalizeE164(groups["*"]?.admin ?? "");
+  return /^\+\d{1,15}$/.test(wildcardAdmin) ? wildcardAdmin : undefined;
+}
+
+function isNormalizedSenderAllowed(allowEntries: string[], sender?: string | null): boolean {
+  if (allowEntries.includes("*")) {
+    return true;
+  }
+  const normalizedSender = normalizeE164(sender ?? "");
+  if (!normalizedSender) {
+    return false;
+  }
+  const normalizedEntrySet = new Set(
+    allowEntries
+      .map((entry) => normalizeE164(entry))
+      .filter((entry): entry is string => Boolean(entry)),
+  );
+  return normalizedEntrySet.has(normalizedSender);
 }
 
 function buildResolvedWhatsAppGroupConfig(params: {
@@ -105,6 +159,8 @@ export function resolveWhatsAppInboundPolicy(params: {
     groupPolicy,
     groups: account.groups,
   });
+  const isConfiguredGroupAdmin = (conversationId: string, senderE164?: string | null) =>
+    isGroupAdmin(account.groups, resolveGroupConversationId(conversationId), senderE164);
   const isSamePhone = (value?: string | null) =>
     typeof value === "string" && typeof params.selfE164 === "string" && value === params.selfE164;
   return {
@@ -117,6 +173,10 @@ export function resolveWhatsAppInboundPolicy(params: {
     isSelfChat: account.selfChatMode ?? isSelfChatMode(params.selfE164, configuredAllowFrom),
     providerMissingFallbackApplied,
     isSamePhone,
+    isDmSenderAllowed: (allowEntries, sender) =>
+      isSamePhone(sender) || isNormalizedSenderAllowed(allowEntries, sender),
+    isGroupSenderAllowed: (allowEntries, sender) => isNormalizedSenderAllowed(allowEntries, sender),
+    isConfiguredGroupAdmin,
     resolveConversationGroupPolicy: (conversationId) =>
       resolveChannelGroupPolicy({
         cfg: resolvedGroupCfg,
@@ -124,12 +184,17 @@ export function resolveWhatsAppInboundPolicy(params: {
         groupId: resolveGroupConversationId(conversationId),
         hasGroupAllowFrom: groupAllowFrom.length > 0,
       }),
-    resolveConversationRequireMention: (conversationId) =>
-      resolveChannelGroupRequireMention({
+    resolveConversationRequireMention: (conversationId, senderE164) => {
+      // Admins don't need to be mentioned
+      if (isConfiguredGroupAdmin(conversationId, senderE164)) {
+        return false;
+      }
+      return resolveChannelGroupRequireMention({
         cfg: resolvedGroupCfg,
         channel: "whatsapp",
         groupId: resolveGroupConversationId(conversationId),
-      }),
+      });
+    },
   };
 }
 
@@ -201,6 +266,14 @@ export async function resolveWhatsAppCommandAuthorized(params: {
   if (!normalizeE164(isGroup ? groupSender : dmSender)) {
     return false;
   }
+  const groupId = resolveGroupConversationId(params.msg.from ?? "");
+  const groupAdmin = isGroup ? resolveGroupAdminE164(policy.account.groups, groupId) : undefined;
+  const senderIsConfiguredAdmin =
+    isGroup && groupAdmin ? policy.isConfiguredGroupAdmin(groupId, groupSender) : false;
+  const ownerCommandAllowFrom = policy.dmAllowFrom.filter((entry) => entry !== "*");
+  const senderIsConfiguredOwner = isGroup
+    ? policy.isDmSenderAllowed(ownerCommandAllowFrom, groupSender)
+    : false;
 
   const access = await resolveWhatsAppIngressAccess({
     cfg: params.cfg,
@@ -211,5 +284,17 @@ export async function resolveWhatsAppCommandAuthorized(params: {
     dmSenderId: dmSender,
     includeCommand: true,
   });
+
+  if (isGroup && groupAdmin && policy.groupPolicy === "disabled") {
+    return false;
+  }
+  if (senderIsConfiguredAdmin && policy.groupPolicy !== "disabled") {
+    return true;
+  }
+  // Admin-scoped groups still need owner operational commands to keep working.
+  if (isGroup && groupAdmin && !senderIsConfiguredOwner) {
+    return false;
+  }
+
   return access.commandAccess.authorized;
 }

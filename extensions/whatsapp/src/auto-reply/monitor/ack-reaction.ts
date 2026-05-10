@@ -42,6 +42,7 @@ export async function maybeSendAckReaction(params: {
   const directEnabled = ackConfig?.direct ?? true;
   const groupMode = ackConfig?.group ?? "mentions";
   const conversationIdForCheck = params.msg.conversationId ?? params.msg.from;
+  const sender = getSenderIdentity(params.msg);
 
   const activation =
     params.msg.chatType === "group"
@@ -51,6 +52,7 @@ export async function maybeSendAckReaction(params: {
           agentId: params.agentId,
           sessionKey: params.sessionKey,
           conversationId: conversationIdForCheck,
+          senderE164: sender.e164 ?? null,
         })
       : null;
   const shouldSendReaction = () =>
@@ -72,7 +74,6 @@ export async function maybeSendAckReaction(params: {
     { chatId: params.msg.chatId, messageId: params.msg.id, emoji },
     "sending ack reaction",
   );
-  const sender = getSenderIdentity(params.msg);
   const reactionOptions = {
     verbose: params.verbose,
     fromMe: false,
