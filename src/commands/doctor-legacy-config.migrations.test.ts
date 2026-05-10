@@ -623,6 +623,24 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
+  it("migrates anthropic-cli primary refs to canonical anthropic refs with claude-cli runtime", () => {
+    const res = normalizeCompatibilityConfigValues({
+      agents: {
+        defaults: {
+          model: {
+            primary: "anthropic-cli/claude-opus-4-7",
+            fallbacks: ["anthropic-cli/claude-sonnet-4-6"],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(res.config.agents?.defaults?.model).toEqual({
+      primary: "anthropic/claude-opus-4-7",
+      fallbacks: ["anthropic/claude-sonnet-4-6"],
+    });
+  });
+
   it("migrates legacy Codex CLI primary refs to OpenAI refs plus model runtime", () => {
     const res = normalizeCompatibilityConfigValues({
       agents: {

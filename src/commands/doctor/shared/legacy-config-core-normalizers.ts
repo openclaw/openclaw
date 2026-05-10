@@ -247,7 +247,10 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
     const migrated = migrateLegacyRuntimeModelRef(raw);
     // claude-cli/* is the canonical provider prefix users explicitly configure
     // (analogous to openai-codex/*); do not rewrite it to anthropic/*.
-    if (!migrated || migrated.legacyProvider === "claude-cli") {
+    // Guard against the raw prefix (not migrated.legacyProvider) because
+    // anthropic-cli/* also normalizes to legacyProvider "claude-cli" and
+    // should still be migrated to anthropic/*.
+    if (!migrated || raw.trimStart().startsWith("claude-cli/")) {
       return { value: raw, changed: false, selectedRefs: [] };
     }
     return {
@@ -263,8 +266,12 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 
   const migratedPrimary =
     typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
-  // claude-cli/* is the canonical provider prefix; skip rewrite.
-  if (!migratedPrimary || migratedPrimary.legacyProvider === "claude-cli") {
+  // Guard against the raw prefix — anthropic-cli/* shares legacyProvider "claude-cli"
+  // but should still migrate to anthropic/*; only raw claude-cli/* is preserved.
+  if (
+    !migratedPrimary ||
+    (typeof raw.primary === "string" && raw.primary.trimStart().startsWith("claude-cli/"))
+  ) {
     return { value: raw, changed: false, selectedRefs: [] };
   }
 

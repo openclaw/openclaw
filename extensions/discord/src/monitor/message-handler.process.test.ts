@@ -1836,9 +1836,8 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith(
       "Clawing...\n🛠️ Exec\n• _Checking files and tests_",
     );
-    expect(draftStream.update).not.toHaveBeenCalledWith(
-      expect.stringContaining("_Checking files_Reasoning:"),
-    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.some((update) => update.includes("_Checking files_Reasoning:"))).toBe(false);
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {
