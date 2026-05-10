@@ -453,18 +453,25 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
     );
   });
 
-  it("parses dynamic tool profile controls", () => {
+  it("parses dynamic tool controls", () => {
+    expect(
+      readCodexPluginConfig({
+        codexDynamicToolsLoading: "direct",
+        codexDynamicToolsExclude: ["custom_tool"],
+      }),
+    ).toEqual({
+      codexDynamicToolsLoading: "direct",
+      codexDynamicToolsExclude: ["custom_tool"],
+    });
+  });
+
+  it("rejects the retired dynamic tool profile key", () => {
     expect(
       readCodexPluginConfig({
         codexDynamicToolsProfile: "openclaw-compat",
         codexDynamicToolsLoading: "direct",
-        codexDynamicToolsExclude: ["custom_tool"],
       }),
-    ).toMatchObject({
-      codexDynamicToolsProfile: "openclaw-compat",
-      codexDynamicToolsLoading: "direct",
-      codexDynamicToolsExclude: ["custom_tool"],
-    });
+    ).toEqual({});
   });
 
   it("parses native Codex plugin policy without treating wildcard as supported config", () => {

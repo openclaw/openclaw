@@ -73,10 +73,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import {
-  applyCodexDynamicToolProfile,
-  normalizeCodexDynamicToolName,
-} from "./dynamic-tool-profile.js";
+import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -1907,8 +1904,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
-  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
+  const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -2369,7 +2366,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
-  applyCodexDynamicToolProfile,
+  filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
