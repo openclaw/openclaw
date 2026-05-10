@@ -582,7 +582,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
   });
 
-  it("surfaces no-payload deliveryStatus without changing the legacy success boolean", async () => {
+  it("marks no-payload deliveryStatus as terminal delivery success", async () => {
     const delivered = await deliverAgentCommandResult({
       cfg: {} as OpenClawConfig,
       deps: {} as CliDeps,
@@ -599,7 +599,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
       result: createResult(),
     });
 
-    expect(delivered.deliverySucceeded).toBeUndefined();
+    expect(delivered.deliverySucceeded).toBe(true);
     expect(delivered.deliveryStatus).toMatchObject({
       requested: true,
       attempted: false,
@@ -628,7 +628,7 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     });
 
     expect(delivered.payloads).toEqual([]);
-    expect(delivered.deliverySucceeded).toBeUndefined();
+    expect(delivered.deliverySucceeded).toBe(true);
     expect(delivered.deliveryStatus).toMatchObject({
       requested: true,
       attempted: false,

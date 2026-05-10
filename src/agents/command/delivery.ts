@@ -506,10 +506,12 @@ export async function deliverAgentCommandResult(params: {
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   if (deliveryPayloads.length === 0) {
     deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
+    const deliverySucceeded = deliveryStatus?.succeeded === true ? true : undefined;
     emitJsonEnvelope(deliveryStatus);
     return {
       payloads: normalizedPayloads,
       meta: resultMeta,
+      ...(deliverySucceeded !== undefined ? { deliverySucceeded } : {}),
       ...(deliveryStatus ? { deliveryStatus } : {}),
     };
   }
