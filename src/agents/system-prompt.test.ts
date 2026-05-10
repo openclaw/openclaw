@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { typedCases } from "../test-utils/typed-cases.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import { buildSubagentSystemPrompt } from "./subagent-system-prompt.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "./system-prompt-cache-boundary.js";
 import {
@@ -747,12 +748,32 @@ describe("buildAgentSystemPrompt", () => {
       workspaceDir: "/tmp/openclaw",
       toolNames: ["message"],
     });
+    const channelOptions = listDeliverableMessageChannels().join("|");
 
     expect(prompt).toContain("message: Send messages and channel actions");
     expect(prompt).toContain("### message tool");
     expect(prompt).toContain("Use `message` for proactive sends + channel actions");
     expect(prompt).toContain("For `action=send`, include `target` and `message`.");
+    expect(prompt).toContain(
+      `No current/default source channel: include \`channel\` for proactive sends; valid ids: ${channelOptions}.`,
+    );
     expect(prompt).toContain(`respond with ONLY: ${SILENT_REPLY_TOKEN}`);
+  });
+
+  it("keeps channel choice guidance lean when message sends have a source channel", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      runtimeInfo: {
+        channel: "telegram",
+      },
+    });
+
+    expect(prompt).toContain(
+      "Pass `channel` only when sending outside the current/default source channel.",
+    );
+    expect(prompt).not.toContain("No current/default source channel");
+    expect(prompt).not.toContain("valid ids:");
   });
 
   it("gates sub-agent orchestration guidance on available tools", () => {

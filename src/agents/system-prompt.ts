@@ -13,6 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
+import { listDeliverableMessageChannels } from "../utils/message-channel.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
 import type { BootstrapMode } from "./bootstrap-mode.js";
 import {
@@ -461,6 +462,7 @@ function buildMessagingSection(params: {
   availableTools: Set<string>;
   inlineButtonsEnabled: boolean;
   runtimeChannel?: string;
+  messageChannelOptions?: string;
   messageToolHints?: string[];
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }) {
@@ -499,7 +501,9 @@ function buildMessagingSection(params: {
           messageToolOnly
             ? "- For `action=send`, include `message`. The target defaults to the current source channel; include `target` only when sending somewhere else."
             : "- For `action=send`, include `target` and `message`.",
-          "- Pass `channel` only when sending outside the current/default source channel.",
+          params.messageChannelOptions
+            ? `- No current/default source channel: include \`channel\` for proactive sends; valid ids: ${params.messageChannelOptions}.`
+            : "- Pass `channel` only when sending outside the current/default source channel.",
           messageToolOnly
             ? "- If you use `message` (`action=send`) to deliver visible output, do not repeat that visible content in your final answer; final answers are private in this mode."
             : `- If you use \`message\` (\`action=send\`) to deliver your user-visible reply, respond with ONLY: ${SILENT_REPLY_TOKEN} (avoid duplicate replies).`,
@@ -517,6 +521,17 @@ function buildMessagingSection(params: {
       : "",
     "",
   ];
+}
+
+function buildMessageChannelOptions(runtimeChannel?: string): string | undefined {
+  const deliverableChannels: readonly string[] = listDeliverableMessageChannels();
+  if (deliverableChannels.length <= 1) {
+    return undefined;
+  }
+  if (runtimeChannel && deliverableChannels.includes(runtimeChannel)) {
+    return undefined;
+  }
+  return deliverableChannels.join("|");
 }
 
 function buildVoiceSection(params: { isMinimal: boolean; ttsHint?: string }) {
@@ -842,6 +857,9 @@ export function buildAgentSystemPrompt(params: {
   const isMinimal = promptMode === "minimal" || promptMode === "none";
   const subagentDelegationMode = normalizeSubagentDelegationMode(params.subagentDelegationMode);
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
+  const messageChannelOptions = availableTools.has("message")
+    ? buildMessageChannelOptions(runtimeChannel)
+    : undefined;
   const silentReplyPromptMode = sourceMessageToolOnly
     ? "none"
     : (params.silentReplyPromptMode ?? "generic");
@@ -1206,6 +1224,7 @@ export function buildAgentSystemPrompt(params: {
       availableTools,
       inlineButtonsEnabled,
       runtimeChannel,
+      messageChannelOptions,
       messageToolHints: params.messageToolHints,
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     }),
