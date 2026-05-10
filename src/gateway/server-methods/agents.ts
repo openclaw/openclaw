@@ -132,15 +132,32 @@ type FileMeta = {
 
 type WorkspaceRoot = Awaited<ReturnType<typeof root>>;
 
-function isRegularWorkspaceFileStat(stat: {
-  isFile: boolean | (() => boolean);
-  isSymbolicLink: boolean | (() => boolean);
-  nlink: number;
-}): boolean {
-  const isFile = typeof stat.isFile === "function" ? stat.isFile() : stat.isFile;
-  const isSymbolicLink =
-    typeof stat.isSymbolicLink === "function" ? stat.isSymbolicLink() : stat.isSymbolicLink;
-  return isFile && !isSymbolicLink && stat.nlink <= 1;
+type WorkspaceFileStat = {
+  isFile?: boolean | (() => boolean);
+  isSymbolicLink?: boolean | (() => boolean);
+  mtimeMs?: number;
+  nlink?: number;
+  size?: number;
+};
+
+function readWorkspaceStatPredicate(
+  stat: WorkspaceFileStat,
+  key: "isFile" | "isSymbolicLink",
+): boolean {
+  const value = stat[key];
+  if (typeof value === "function") {
+    return value.call(stat);
+  }
+  return value === true;
+}
+
+function isRegularWorkspaceFileStat(stat: WorkspaceFileStat): boolean {
+  const nlink = typeof stat.nlink === "number" ? stat.nlink : 1;
+  return (
+    readWorkspaceStatPredicate(stat, "isFile") &&
+    !readWorkspaceStatPredicate(stat, "isSymbolicLink") &&
+    nlink <= 1
+  );
 }
 
 async function statWorkspaceFileSafely(
@@ -156,8 +173,8 @@ async function statWorkspaceFileSafely(
       return null;
     }
     return {
-      size: stat.size,
-      updatedAtMs: Math.floor(stat.mtimeMs),
+      size: typeof stat.size === "number" ? stat.size : 0,
+      updatedAtMs: typeof stat.mtimeMs === "number" ? Math.floor(stat.mtimeMs) : 0,
     };
   } catch {
     if (!workspaceRoot) {

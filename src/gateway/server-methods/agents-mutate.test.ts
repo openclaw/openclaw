@@ -1180,6 +1180,39 @@ describe("agents.files.list", () => {
     });
     expect(rootStat).toHaveBeenCalled();
   });
+
+  it("reports method-based stat files as present in list responses", async () => {
+    const rootStat = vi.fn(async ({ relativePath }: Record<string, unknown>) => {
+      if (relativePath === "AGENTS.md") {
+        return makeFileStat({ size: 23, mtimeMs: 8910 });
+      }
+      throw createEnoentError();
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (
+      result as {
+        files: Array<{
+          name: string;
+          missing: boolean;
+          size?: number;
+          updatedAtMs?: number;
+        }>;
+      }
+    ).files;
+    expect(files).toContainEqual(
+      expect.objectContaining({
+        name: "AGENTS.md",
+        missing: false,
+        size: 23,
+        updatedAtMs: 8910,
+      }),
+    );
+  });
 });
 
 describe("agents.files.get/set symlink safety", () => {
