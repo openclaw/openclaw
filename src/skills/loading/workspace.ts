@@ -85,12 +85,13 @@ function compactSkillPaths<T extends Skill>(skills: T[]): T[] {
   }
   const preservedRoots = resolvePreservedPromptSkillPathRoots();
   const tildeRoots = resolvePromptTildeRoots();
-  return skills.map((s) => ({
-    ...s,
-    filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
-      ? s.filePath
-      : compactHomePath(s.filePath, homes),
-  }));
+  return skills.map((s) =>
+    Object.assign({}, s, {
+      filePath: shouldPreservePromptSkillPath(s.filePath, preservedRoots, tildeRoots)
+        ? s.filePath
+        : compactHomePath(s.filePath, homes),
+    }),
+  );
 }
 
 function resolvePreservedPromptSkillPathRoots(): string[] {
@@ -1660,13 +1661,12 @@ function resolveWorkspaceSkillPromptState(
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
   const promptSkills = compactSkillPaths(
-    promptEntries.map((entry) => ({
-      ...entry.skill,
-      skillKey: resolveSkillKey(entry.skill, entry),
-    })),
-  ).toSorted((a, b) =>
-    a.name.localeCompare(b.name, "en"),
-  );
+    promptEntries.map((entry) =>
+      Object.assign({}, entry.skill, {
+        skillKey: resolveSkillKey(entry.skill, entry),
+      }),
+    ),
+  ).toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
   const limit = applySkillsPromptLimits({
     skills: promptSkills,
