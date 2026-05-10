@@ -1011,6 +1011,110 @@ describe("runMessageAction plugin dispatch", () => {
     });
   });
 
+  describe("threaded plugin actions", () => {
+    const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
+      jsonResult({
+        ok: true,
+        params,
+      }),
+    );
+
+    const threadedPlugin: ChannelPlugin = {
+      id: "forumchat",
+      meta: {
+        id: "forumchat",
+        label: "Forum Chat",
+        selectionLabel: "Forum Chat",
+        docsPath: "/channels/forumchat",
+        blurb: "Forum chat threaded action dispatch test plugin.",
+      },
+      capabilities: { chatTypes: ["channel"] },
+      config: createAlwaysConfiguredPluginConfig(),
+      messaging: {
+        targetResolver: {
+          looksLikeId: () => true,
+        },
+      },
+      threading: {
+        resolveAutoThreadId: ({ toolContext, to }) => {
+          if (toolContext?.currentChannelId !== to) {
+            return undefined;
+          }
+          return toolContext.currentThreadTs;
+        },
+      },
+      actions: {
+        describeMessageTool: () => ({ actions: ["sticker"] }),
+        supportsAction: ({ action }) => action === "sticker",
+        handleAction,
+      },
+    };
+
+    beforeEach(() => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "forumchat",
+            source: "test",
+            plugin: threadedPlugin,
+          },
+        ]),
+      );
+      handleAction.mockClear();
+    });
+
+    afterEach(() => {
+      setActivePluginRegistry(createTestRegistry([]));
+      vi.clearAllMocks();
+      vi.unstubAllEnvs();
+    });
+
+    it("applies auto threadId before dispatching targeted plugin actions", async () => {
+      const result = await runMessageAction({
+        cfg: {
+          channels: {
+            forumchat: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        action: "sticker",
+        params: {
+          channel: "forumchat",
+          target: "forum:123",
+          stickerName: "wave",
+        },
+        toolContext: {
+          currentChannelProvider: "forumchat",
+          currentChannelId: "forum:123",
+          currentThreadTs: "42",
+        },
+        dryRun: false,
+      });
+
+      expect(handleAction).toHaveBeenCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({
+            to: "forum:123",
+            threadId: "42",
+          }),
+        }),
+      );
+      expect(result).toMatchObject({
+        kind: "action",
+        channel: "forumchat",
+        action: "sticker",
+        payload: {
+          ok: true,
+          params: expect.objectContaining({
+            to: "forum:123",
+            threadId: "42",
+          }),
+        },
+      });
+    });
+  });
+
   describe("presentation-only send behavior", () => {
     const handleAction = vi.fn(async ({ params }: { params: Record<string, unknown> }) =>
       jsonResult({
