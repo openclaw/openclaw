@@ -151,7 +151,7 @@ function buildExecApprovalFeishuCard(params: {
         a: FEISHU_APPROVAL_CONFIRM_ACTION,
         q: value,
         c: params.sessionKey
-          ? { s: params.sessionKey, e: Date.now() + 300_000, t: "p2p" as const }
+          ? { s: params.sessionKey, e: Date.now() + 300_000 }
           : { e: Date.now() + 300_000 },
       });
       actionButtons.push({
@@ -190,11 +190,11 @@ export const feishuOutbound: ChannelOutboundAdapter = {
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
-  sendPayload: async ({ cfg, to, payload, accountId, replyToId }) => {
+  sendPayload: async ({ cfg, to, payload, accountId, replyToId, threadId }) => {
     const text = payload.text ?? "";
     const interactive = payload.interactive;
     const execData = resolveExecApprovalChannelData(payload.channelData);
-    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId: undefined });
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId });
     if (interactive && execData && typeof interactive === "object") {
       const card = buildExecApprovalFeishuCard({
         text,
