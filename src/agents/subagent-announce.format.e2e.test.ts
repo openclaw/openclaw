@@ -634,7 +634,7 @@ describe("subagent announce formatting", () => {
 
       const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
       const msg = call?.params?.message as string;
-      expect(msg).toContain(testCase.toolOutput);
+      expect(msg).toContain("(no output)");
     },
   );
 
@@ -2022,7 +2022,7 @@ describe("subagent announce formatting", () => {
     expect(agentSpy).toHaveBeenCalledTimes(1);
     const call = agentSpy.mock.calls[0]?.[0] as { params?: { message?: string } };
     const msg = call?.params?.message as string;
-    expect(msg).toContain("tool output only");
+    expect(msg).toContain("(no output)");
   });
 
   it("ignores user text when deriving fallback completion output", async () => {
