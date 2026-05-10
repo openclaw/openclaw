@@ -252,7 +252,7 @@ async function readRecordIfPresent(
 async function writeRecord(rootDir: string, record: SkillUploadRecord): Promise<void> {
   await writeJsonAtomic(resolveMetadataPath(rootDir, record.uploadId), record, {
     mode: 0o600,
-    ensureDirMode: 0o700,
+    dirMode: 0o700,
     trailingNewline: true,
   });
 }
@@ -456,7 +456,7 @@ export function createSkillUploadStore(options?: {
           };
           await writeJsonAtomic(resolveIdempotencyPath(rootDir, keyHash), idem, {
             mode: 0o600,
-            ensureDirMode: 0o700,
+            dirMode: 0o700,
             trailingNewline: true,
           });
         }
