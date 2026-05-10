@@ -23,7 +23,7 @@ type CrabboxInspect = {
 };
 
 type Options = {
-  command: "finish" | "probe" | "run" | "screenshot" | "send" | "start" | "status";
+  command: "finish" | "probe" | "publish" | "run" | "screenshot" | "send" | "start" | "status";
   crabboxBin: string;
   desktopChatTitle: string;
   dryRun: boolean;
@@ -36,6 +36,10 @@ type Options = {
   mockPort: number;
   outputDir: string;
   provider: string;
+  publishFullArtifacts: boolean;
+  publishPr?: number;
+  publishRepo: string;
+  publishSummary?: string;
   recordSeconds: number;
   remoteCommand: string[];
   sessionFile?: string;
@@ -120,14 +124,19 @@ function usageText() {
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts screenshot --session <session.json>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts status --session <session.json>",
     "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts finish --session <session.json>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts publish --session <session.json> --pr <number>",
     "",
     "Useful options:",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
     "  --id <cbx_id>                 Reuse an existing Crabbox desktop lease.",
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --output-dir <path>           Artifact directory under the repo.",
+    "  --pr <number>                 Pull request number for publish.",
     "  --record-seconds <seconds>    Desktop video duration. Default: 35.",
+    "  --repo <owner/name>           GitHub repo for publish. Default: openclaw/openclaw.",
     "  --session <path>              Session file from start. Default: <output-dir>/session.json.",
+    "  --summary <text>              Artifact publish summary.",
+    "  --full-artifacts              Publish all session artifacts. Default publishes only the motion GIF.",
     "  --tdlib-sha256 <hex>         Expected SHA-256 for --tdlib-url. Defaults to <url>.sha256.",
     "  --tdlib-url <url>             Linux tdlib archive containing libtdjson.so.",
     "  --dry-run                     Validate local inputs and print the plan.",
@@ -163,7 +172,16 @@ function parsePositiveInteger(value: string, label: string) {
 
 function parseArgs(argv: string[]): Options {
   argv = argv[0] === "--" ? argv.slice(1) : argv;
-  const commands = new Set(["finish", "probe", "run", "screenshot", "send", "start", "status"]);
+  const commands = new Set([
+    "finish",
+    "probe",
+    "publish",
+    "run",
+    "screenshot",
+    "send",
+    "start",
+    "status",
+  ]);
   const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
   const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
@@ -179,6 +197,8 @@ function parseArgs(argv: string[]): Options {
     mockPort: 19_882,
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
+    publishFullArtifacts: false,
+    publishRepo: "openclaw/openclaw",
     recordSeconds: 35,
     remoteCommand: [],
     target: "linux",
@@ -231,10 +251,18 @@ function parseArgs(argv: string[]): Options {
       opts.outputDir = readValue();
     } else if (arg === "--provider") {
       opts.provider = readValue();
+    } else if (arg === "--pr") {
+      opts.publishPr = parsePositiveInteger(readValue(), "--pr");
+    } else if (arg === "--repo") {
+      opts.publishRepo = readValue();
     } else if (arg === "--record-seconds") {
       opts.recordSeconds = parsePositiveInteger(readValue(), "--record-seconds");
     } else if (arg === "--session") {
       opts.sessionFile = readValue();
+    } else if (arg === "--summary") {
+      opts.publishSummary = readValue();
+    } else if (arg === "--full-artifacts") {
+      opts.publishFullArtifacts = true;
     } else if (arg === "--sut-username") {
       opts.sutUsername = readValue().replace(/^@/u, "");
     } else if (arg === "--target") {
@@ -261,8 +289,14 @@ function parseArgs(argv: string[]): Options {
   if (command === "run" && opts.remoteCommand.length === 0) {
     throw new Error("run requires a remote command after --.");
   }
-  if (["finish", "run", "screenshot", "send", "status"].includes(command) && !opts.sessionFile) {
+  if (
+    ["finish", "publish", "run", "screenshot", "send", "status"].includes(command) &&
+    !opts.sessionFile
+  ) {
     throw new Error(`${command} requires --session.`);
+  }
+  if (command === "publish" && !opts.publishPr) {
+    throw new Error("publish requires --pr.");
   }
   return opts;
 }
@@ -1550,6 +1584,55 @@ async function finishSession(root: string, opts: Options, outputDir: string) {
   }
 }
 
+async function publishSessionArtifacts(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const motionGifPath = path.join(session.outputDir, "telegram-user-crabbox-session-motion.gif");
+  const publishDir = opts.publishFullArtifacts
+    ? session.outputDir
+    : path.join(session.outputDir, "publish-gif-only");
+  if (!opts.publishFullArtifacts) {
+    if (!fs.existsSync(motionGifPath)) {
+      throw new Error(
+        `Missing motion GIF. Run finish first: ${path.relative(root, motionGifPath)}`,
+      );
+    }
+    fs.rmSync(publishDir, { force: true, recursive: true });
+    fs.mkdirSync(publishDir, { recursive: true });
+    fs.copyFileSync(
+      motionGifPath,
+      path.join(publishDir, "telegram-user-crabbox-session-motion.gif"),
+    );
+  }
+  await runCommand({
+    command: opts.crabboxBin,
+    args: [
+      "artifacts",
+      "publish",
+      "--pr",
+      String(opts.publishPr),
+      "--repo",
+      opts.publishRepo,
+      "--dir",
+      publishDir,
+      "--summary",
+      opts.publishSummary ??
+        (opts.publishFullArtifacts
+          ? "Telegram real-user Crabbox session artifacts"
+          : "Telegram real-user Crabbox session motion GIF"),
+      "--template",
+      "openclaw",
+      ...(opts.dryRun ? ["--dry-run"] : []),
+    ],
+    cwd: root,
+    stdio: "inherit",
+  });
+  return {
+    artifactMode: opts.publishFullArtifacts ? "full" : "gif-only",
+    publishDir: path.relative(root, publishDir),
+    status: "pass",
+  };
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const root = repoRoot();
@@ -1579,6 +1662,10 @@ async function main() {
   }
   if (opts.command === "finish") {
     await finishSession(root, opts, outputDir);
+    return;
+  }
+  if (opts.command === "publish") {
+    console.log(JSON.stringify(await publishSessionArtifacts(root, opts, outputDir), null, 2));
     return;
   }
 

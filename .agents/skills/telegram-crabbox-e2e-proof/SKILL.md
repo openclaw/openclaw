@@ -105,24 +105,20 @@ with that session file before retrying.
 
 ## Attach Proof
 
-Attach only the useful visual artifact to the PR unless logs are needed:
+Attach only the useful visual artifact to the PR unless logs are needed. The
+runner is GIF-only by default:
 
 ```bash
-rm -rf .artifacts/qa-e2e/telegram-user-crabbox/pr-gif-only
-mkdir -p .artifacts/qa-e2e/telegram-user-crabbox/pr-gif-only
-cp .artifacts/qa-e2e/telegram-user-crabbox/pr-review/telegram-user-crabbox-session-motion.gif \
-  .artifacts/qa-e2e/telegram-user-crabbox/pr-gif-only/telegram-user-crabbox-session-motion.gif
-crabbox artifacts publish \
+pnpm qa:telegram-user:crabbox -- publish \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
   --pr <pr-number> \
-  --repo openclaw/openclaw \
-  --dir .artifacts/qa-e2e/telegram-user-crabbox/pr-gif-only \
-  --summary 'Telegram real-user Crabbox session motion GIF' \
-  --template openclaw
+  --summary 'Telegram real-user Crabbox session motion GIF'
 ```
 
-Use full artifact publishing only when the PR needs logs or JSON output. Never
-publish credential payloads, local env files, TDLib databases, Telegram Desktop
-profiles, or raw session archives.
+This copies only `telegram-user-crabbox-session-motion.gif` into a temporary
+publish bundle and comments that GIF. Use `--full-artifacts` only when the PR
+needs logs or JSON output. Never publish credential payloads, local env files,
+TDLib databases, Telegram Desktop profiles, or raw session archives.
 
 ## Quick Smoke
 

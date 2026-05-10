@@ -589,7 +589,9 @@ driver and Telegram Desktop witness, starts desktop recording, and leaves the
 Crabbox alive for arbitrary agent-driven repro steps. Agents can use `send`,
 `run`, `screenshot`, and `status` until they are satisfied, then `finish`
 collects the screenshot, video, motion-trimmed video/GIF, TDLib probe outputs,
-and logs before releasing the credential. The default `probe` command remains a
+and logs before releasing the credential. `publish --session <file> --pr
+<number>` comments only the motion GIF by default; `--full-artifacts` is the
+explicit opt-in for logs and JSON output. The default `probe` command remains a
 one-command shorthand for quick `/status` smoke checks.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
