@@ -23,6 +23,7 @@ type CrabboxInspect = {
 };
 
 type Options = {
+  command: "finish" | "probe" | "run" | "screenshot" | "send" | "start" | "status";
   crabboxBin: string;
   desktopChatTitle: string;
   dryRun: boolean;
@@ -36,6 +37,8 @@ type Options = {
   outputDir: string;
   provider: string;
   recordSeconds: number;
+  remoteCommand: string[];
+  sessionFile?: string;
   sutUsername?: string;
   target: string;
   tdlibSha256?: string;
@@ -64,6 +67,43 @@ type LocalSut = {
   gatewayLog: string;
 };
 
+type SessionFile = {
+  command: "telegram-user-crabbox-session";
+  createdAt: string;
+  crabbox: {
+    createdLease: boolean;
+    id: string;
+    inspect: CrabboxInspect;
+    provider: string;
+    target: string;
+  };
+  credential: {
+    groupId: string;
+    leaseFile: string;
+    sutUsername: string;
+    testerUserId: string;
+    testerUsername: string;
+  };
+  localRoot: string;
+  localSut: {
+    gatewayLog: string;
+    gatewayPid: number;
+    mockLog: string;
+    mockPid: number;
+    requestLog: string;
+    stateDir: string;
+    tempRoot: string;
+    workspace: string;
+  };
+  outputDir: string;
+  recorder: {
+    log: string;
+    pidFile: string;
+    remoteVideo: string;
+  };
+  remoteRoot: string;
+};
+
 const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
 const DEFAULT_USER_DRIVER = `${DEFAULT_SKILL_DIR}/scripts/user-driver.py`;
@@ -73,7 +113,13 @@ const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 function usageText() {
   return [
     "Usage:",
-    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts [--text /status] [--expect OpenClaw]",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts [probe] [--text /status] [--expect OpenClaw]",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts start [--tdlib-url <url>]",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts send --session <session.json> --text <text>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts run --session <session.json> -- <remote command>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts screenshot --session <session.json>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts status --session <session.json>",
+    "  node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts finish --session <session.json>",
     "",
     "Useful options:",
     "  --desktop-chat-title <name>   Telegram Desktop chat to select before recording.",
@@ -81,6 +127,7 @@ function usageText() {
     "  --keep-box                    Leave the Crabbox lease running for VNC debugging.",
     "  --output-dir <path>           Artifact directory under the repo.",
     "  --record-seconds <seconds>    Desktop video duration. Default: 35.",
+    "  --session <path>              Session file from start. Default: <output-dir>/session.json.",
     "  --tdlib-sha256 <hex>         Expected SHA-256 for --tdlib-url. Defaults to <url>.sha256.",
     "  --tdlib-url <url>             Linux tdlib archive containing libtdjson.so.",
     "  --dry-run                     Validate local inputs and print the plan.",
@@ -116,8 +163,11 @@ function parsePositiveInteger(value: string, label: string) {
 
 function parseArgs(argv: string[]): Options {
   argv = argv[0] === "--" ? argv.slice(1) : argv;
+  const commands = new Set(["finish", "probe", "run", "screenshot", "send", "start", "status"]);
+  const command = commands.has(argv[0] ?? "") ? (argv.shift() as Options["command"]) : "probe";
   const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
   const opts: Options = {
+    command,
     crabboxBin: trimToValue(process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_BIN) ?? "crabbox",
     desktopChatTitle:
       trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DESKTOP_CHAT_TITLE) ?? "OpenClaw Testing",
@@ -130,12 +180,18 @@ function parseArgs(argv: string[]): Options {
     outputDir: path.join(DEFAULT_OUTPUT_ROOT, stamp),
     provider: process.env.OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER?.trim() || "aws",
     recordSeconds: 35,
+    remoteCommand: [],
     target: "linux",
     text: "/status",
     timeoutMs: 90_000,
     ttl: "120m",
     userDriverScript: DEFAULT_USER_DRIVER,
   };
+  const commandSeparator = argv.indexOf("--");
+  if (command === "run" && commandSeparator >= 0) {
+    opts.remoteCommand = argv.slice(commandSeparator + 1);
+    argv = argv.slice(0, commandSeparator);
+  }
   let expectWasPassed = false;
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
@@ -177,6 +233,8 @@ function parseArgs(argv: string[]): Options {
       opts.provider = readValue();
     } else if (arg === "--record-seconds") {
       opts.recordSeconds = parsePositiveInteger(readValue(), "--record-seconds");
+    } else if (arg === "--session") {
+      opts.sessionFile = readValue();
     } else if (arg === "--sut-username") {
       opts.sutUsername = readValue().replace(/^@/u, "");
     } else if (arg === "--target") {
@@ -199,6 +257,12 @@ function parseArgs(argv: string[]): Options {
     } else {
       throw new Error(`Unknown argument: ${arg}`);
     }
+  }
+  if (command === "run" && opts.remoteCommand.length === 0) {
+    throw new Error("run requires a remote command after --.");
+  }
+  if (["finish", "run", "screenshot", "send", "status"].includes(command) && !opts.sessionFile) {
+    throw new Error(`${command} requires --session.`);
   }
   return opts;
 }
@@ -248,6 +312,10 @@ function requireString(source: JsonObject, key: string) {
 function optionalString(source: JsonObject, key: string) {
   const value = source[key];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function shellQuote(value: string) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
 function runCommand(params: {
@@ -375,6 +443,53 @@ function killTree(child: ChildProcess | undefined) {
   } catch {
     child.kill("SIGTERM");
   }
+}
+
+function killPidTree(pid: number | undefined) {
+  if (!pid) {
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    try {
+      process.kill(pid, "SIGTERM");
+    } catch {
+      return;
+    }
+  }
+}
+
+function spawnDaemon(params: {
+  args: string[];
+  command: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  const log = fs.openSync(params.logPath, "a");
+  const child = spawn(params.command, params.args, {
+    cwd: params.cwd,
+    detached: true,
+    env: params.env,
+    stdio: ["ignore", log, log],
+  });
+  child.unref();
+  fs.closeSync(log);
+  return child.pid;
+}
+
+async function waitForLog(logPath: string, pattern: RegExp, label: string, timeoutMs: number) {
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+    if (pattern.test(text)) {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  const text = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf8") : "";
+  throw new Error(`${label} did not become ready within ${timeoutMs}ms\n${text.slice(-4000)}`);
 }
 
 async function telegram(token: string, method: string, body: JsonObject = {}) {
@@ -568,6 +683,65 @@ async function startLocalSut(params: {
   };
 }
 
+async function startLocalSutDaemon(params: {
+  gatewayPort: number;
+  groupId: string;
+  mockPort: number;
+  outputDir: string;
+  sutToken: string;
+  testerId: string;
+  repoRoot: string;
+}) {
+  const drained = await drainSutUpdates(params.sutToken);
+  const config = writeSutConfig(params);
+  const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
+  const mockLog = path.join(params.outputDir, "mock-openai.log");
+  const gatewayLog = path.join(params.outputDir, "gateway.log");
+  const mockPid = spawnDaemon({
+    command: "node",
+    args: ["scripts/e2e/mock-openai-server.mjs"],
+    cwd: params.repoRoot,
+    env: {
+      ...process.env,
+      MOCK_PORT: String(params.mockPort),
+      MOCK_REQUEST_LOG: requestLog,
+      SUCCESS_MARKER: "OPENCLAW_E2E_OK",
+    },
+    logPath: mockLog,
+  });
+  if (!mockPid) {
+    throw new Error("mock-openai did not start.");
+  }
+  await waitForLog(mockLog, /mock-openai listening/u, "mock-openai", 10_000);
+
+  const gatewayPid = spawnDaemon({
+    command: "pnpm",
+    args: ["openclaw", "gateway", "--port", String(params.gatewayPort)],
+    cwd: params.repoRoot,
+    env: {
+      ...process.env,
+      OPENAI_API_KEY: "sk-openclaw-e2e-mock",
+      OPENCLAW_CONFIG_PATH: config.configPath,
+      OPENCLAW_STATE_DIR: config.stateDir,
+      TELEGRAM_BOT_TOKEN: params.sutToken,
+    },
+    logPath: gatewayLog,
+  });
+  if (!gatewayPid) {
+    throw new Error("gateway did not start.");
+  }
+  await waitForLog(gatewayLog, /\[gateway\] ready/u, "gateway", 60_000);
+  return {
+    ...config,
+    drained,
+    gatewayLog,
+    gatewayPid,
+    mockLog,
+    mockPid,
+    requestLog,
+  };
+}
+
 function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
@@ -694,7 +868,7 @@ tdlib_url=${tdlibUrl}
 mkdir -p "$root"
 tar -xzf "$root/state.tgz" -C "$root"
 sudo apt-get update -y
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y curl git cmake g++ make zlib1g-dev libssl-dev python3 ffmpeg scrot xz-utils tar wmctrl xdotool x11-utils libopengl0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 libxcb-xfixes0 libxcb-xinerama0 libxkbcommon-x11-0 >/tmp/openclaw-telegram-apt.log
 if ! command -v python3 >/dev/null 2>&1; then
   echo "python3 is required" >&2
   exit 127
@@ -773,6 +947,7 @@ sleep 1
 
 function renderRemoteProbe(params: {
   expect: string[];
+  outputPath?: string;
   sutUsername: string;
   text: string;
   timeoutMs: number;
@@ -784,7 +959,7 @@ function renderRemoteProbe(params: {
     "--timeout-ms",
     String(params.timeoutMs),
     "--output",
-    `${REMOTE_ROOT}/probe.json`,
+    params.outputPath ?? `${REMOTE_ROOT}/probe.json`,
     "--json",
   ];
   for (const expected of params.expect) {
@@ -913,10 +1088,22 @@ function summarizeProbe(probePath: string) {
   const probe = readJsonFile(probePath);
   const reply = probe.reply;
   const sent = probe.sent;
+  const messageId = (value: unknown) => {
+    if (!value || typeof value !== "object") {
+      return undefined;
+    }
+    if ("messageId" in value) {
+      return value.messageId;
+    }
+    if ("id" in value) {
+      return value.id;
+    }
+    return undefined;
+  };
   return {
     ok: probe.ok === true,
-    replyMessageId: reply && typeof reply === "object" && "id" in reply ? reply.id : undefined,
-    sentMessageId: sent && typeof sent === "object" && "id" in sent ? sent.id : undefined,
+    replyMessageId: messageId(reply),
+    sentMessageId: messageId(sent),
   };
 }
 
@@ -953,12 +1140,447 @@ function writeReport(params: {
   return reportPath;
 }
 
+function sessionPath(root: string, opts: Options, outputDir: string) {
+  return opts.sessionFile
+    ? resolveRepoPath(root, opts.sessionFile)
+    : path.join(outputDir, "session.json");
+}
+
+function writeSession(pathname: string, session: SessionFile) {
+  fs.mkdirSync(path.dirname(pathname), { recursive: true });
+  fs.writeFileSync(pathname, `${JSON.stringify(session, null, 2)}\n`, { mode: 0o600 });
+  fs.chmodSync(pathname, 0o600);
+}
+
+function readSession(root: string, opts: Options, outputDir: string) {
+  const pathname = sessionPath(root, opts, outputDir);
+  if (!fs.existsSync(pathname)) {
+    throw new Error(`Missing session file: ${path.relative(root, pathname)}`);
+  }
+  const session = readJsonFile(pathname) as SessionFile;
+  if (session.command !== "telegram-user-crabbox-session") {
+    throw new Error(`Invalid Telegram Crabbox session file: ${path.relative(root, pathname)}`);
+  }
+  return {
+    path: pathname,
+    session,
+  };
+}
+
+async function writeRemoteSessionScripts(params: {
+  inspect: CrabboxInspect;
+  localRoot: string;
+  opts: Options;
+  root: string;
+  stateArchive: string;
+  sutUsername: string;
+}) {
+  const setupScript = path.join(params.localRoot, "remote-setup.sh");
+  const launchScript = path.join(params.localRoot, "launch-desktop.sh");
+  const selectChatScript = path.join(params.localRoot, "select-desktop-chat.sh");
+  await writeExecutable(
+    setupScript,
+    renderRemoteSetup({ tdlibSha256: params.opts.tdlibSha256, tdlibUrl: params.opts.tdlibUrl }),
+  );
+  await writeExecutable(launchScript, renderLaunchDesktop());
+  await writeExecutable(
+    selectChatScript,
+    renderSelectDesktopChat({ chatTitle: params.opts.desktopChatTitle }),
+  );
+
+  await sshRun(params.root, params.inspect, `rm -rf ${REMOTE_ROOT} && mkdir -p ${REMOTE_ROOT}`);
+  await scpToRemote(params.root, params.inspect, params.stateArchive, `${REMOTE_ROOT}/state.tgz`);
+  await scpToRemote(params.root, params.inspect, setupScript, `${REMOTE_ROOT}/remote-setup.sh`);
+  await scpToRemote(params.root, params.inspect, launchScript, `${REMOTE_ROOT}/launch-desktop.sh`);
+  await scpToRemote(
+    params.root,
+    params.inspect,
+    selectChatScript,
+    `${REMOTE_ROOT}/select-desktop-chat.sh`,
+  );
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/remote-setup.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/launch-desktop.sh`);
+  await sshRun(params.root, params.inspect, `bash ${REMOTE_ROOT}/select-desktop-chat.sh`);
+  await sshRun(
+    params.root,
+    params.inspect,
+    `cat >${REMOTE_ROOT}/env.sh <<'EOF'
+export TELEGRAM_USER_DRIVER_STATE_DIR=${REMOTE_ROOT}/user-driver
+export TELEGRAM_USER_DRIVER_SUT_USERNAME=${params.sutUsername}
+EOF
+`,
+  );
+}
+
+async function startRemoteRecording(root: string, inspect: CrabboxInspect) {
+  const command = `set -euo pipefail
+export DISPLAY="\${DISPLAY:-:99}"
+root=${REMOTE_ROOT}
+video="$root/session.mp4"
+log="$root/ffmpeg.log"
+pid_file="$root/ffmpeg.pid"
+rm -f "$video" "$log" "$pid_file"
+size="$(xdpyinfo | awk '/dimensions:/ {print $2; exit}')"
+nohup ffmpeg -y -hide_banner -loglevel warning -f x11grab -framerate 15 -video_size "$size" -i "$DISPLAY" -pix_fmt yuv420p "$video" >"$log" 2>&1 &
+echo $! >"$pid_file"`;
+  await sshRun(root, inspect, command);
+  return {
+    log: `${REMOTE_ROOT}/ffmpeg.log`,
+    pidFile: `${REMOTE_ROOT}/ffmpeg.pid`,
+    remoteVideo: `${REMOTE_ROOT}/session.mp4`,
+  };
+}
+
+async function stopRemoteRecording(root: string, inspect: CrabboxInspect, session: SessionFile) {
+  await sshRun(
+    root,
+    inspect,
+    `set -euo pipefail
+pid_file=${JSON.stringify(session.recorder.pidFile)}
+if [ -s "$pid_file" ]; then
+  pid="$(cat "$pid_file")"
+  kill -INT "$pid" >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do
+    kill -0 "$pid" >/dev/null 2>&1 || exit 0
+    sleep 0.5
+  done
+  kill -TERM "$pid" >/dev/null 2>&1 || true
+fi`,
+  );
+}
+
+async function startSession(root: string, opts: Options, outputDir: string) {
+  const localRoot = path.join(outputDir, ".session");
+  fs.rmSync(localRoot, { force: true, recursive: true });
+  fs.mkdirSync(localRoot, { mode: 0o700, recursive: true });
+
+  const convexEnvFile = expandHome(opts.envFile ?? DEFAULT_CONVEX_ENV_FILE);
+  const hasConvexEnv =
+    trimToValue(process.env.OPENCLAW_QA_CONVEX_SITE_URL) &&
+    trimToValue(process.env.OPENCLAW_QA_CONVEX_SECRET_CI);
+  if (!hasConvexEnv && !fs.existsSync(convexEnvFile)) {
+    throw new Error(`Missing Convex env file: ${opts.envFile ?? DEFAULT_CONVEX_ENV_FILE}`);
+  }
+  await runCommand({ command: opts.crabboxBin, args: ["--version"], cwd: root });
+  if (opts.dryRun) {
+    return {
+      command: "telegram-user-crabbox-session",
+      outputDir,
+      provider: opts.provider,
+      target: opts.target,
+      tdlibSha256: opts.tdlibSha256,
+      tdlibUrl: opts.tdlibUrl,
+    };
+  }
+
+  const credential = await leaseCredential({ localRoot, opts, root });
+  const sut = opts.sutUsername
+    ? { id: "", username: opts.sutUsername }
+    : await sutIdentity(credential.sutToken);
+  const stateArchive = await prepareRemoteState({ localRoot, opts, root });
+  let leaseId = opts.leaseId;
+  let createdLease = false;
+  if (!leaseId) {
+    leaseId = await warmupCrabbox(opts, root);
+    createdLease = true;
+  }
+  const inspect = await inspectCrabbox(opts, root, leaseId);
+  let localSut: Awaited<ReturnType<typeof startLocalSutDaemon>> | undefined;
+  try {
+    await writeRemoteSessionScripts({
+      inspect,
+      localRoot,
+      opts,
+      root,
+      stateArchive,
+      sutUsername: sut.username,
+    });
+    localSut = await startLocalSutDaemon({
+      gatewayPort: opts.gatewayPort,
+      groupId: credential.groupId,
+      mockPort: opts.mockPort,
+      outputDir,
+      repoRoot: root,
+      sutToken: credential.sutToken,
+      testerId: credential.testerUserId,
+    });
+    const recorder = await startRemoteRecording(root, inspect);
+    const session: SessionFile = {
+      command: "telegram-user-crabbox-session",
+      createdAt: new Date().toISOString(),
+      crabbox: {
+        createdLease,
+        id: leaseId,
+        inspect,
+        provider: opts.provider,
+        target: opts.target,
+      },
+      credential: {
+        groupId: credential.groupId,
+        leaseFile: credential.leaseFile,
+        sutUsername: sut.username,
+        testerUserId: credential.testerUserId,
+        testerUsername: credential.testerUsername,
+      },
+      localRoot,
+      localSut,
+      outputDir,
+      recorder,
+      remoteRoot: REMOTE_ROOT,
+    };
+    const pathname = sessionPath(root, opts, outputDir);
+    writeSession(pathname, session);
+    return {
+      session: path.relative(root, pathname),
+      status: "pass",
+      telegram: {
+        groupId: credential.groupId,
+        sutUsername: sut.username,
+        testerUserId: credential.testerUserId,
+        testerUsername: credential.testerUsername,
+      },
+      webvnc: `${opts.crabboxBin} webvnc --provider ${opts.provider} --target ${opts.target} --id ${leaseId} --open`,
+      commands: {
+        send: `pnpm qa:telegram-user:crabbox -- send --session ${path.relative(root, pathname)} --text '/status'`,
+        run: `pnpm qa:telegram-user:crabbox -- run --session ${path.relative(root, pathname)} -- bash -lc 'source ${REMOTE_ROOT}/env.sh && python3 ${REMOTE_ROOT}/user-driver.py transcript --limit 20 --json'`,
+        finish: `pnpm qa:telegram-user:crabbox -- finish --session ${path.relative(root, pathname)}`,
+      },
+    };
+  } catch (error) {
+    killPidTree(localSut?.gatewayPid);
+    killPidTree(localSut?.mockPid);
+    await releaseCredential(root, opts, credential.leaseFile).catch(() => {});
+    if (leaseId && createdLease) {
+      await stopCrabbox(root, opts, leaseId).catch(() => {});
+    }
+    throw error;
+  }
+}
+
+async function sendSessionProbe(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const stamp = new Date().toISOString().replace(/[:.]/gu, "-");
+  const targetText = buildTargetText(opts.text, session.credential.sutUsername);
+  const remoteProbe = `${REMOTE_ROOT}/probe-${stamp}.json`;
+  const probeScript = path.join(session.localRoot, `remote-probe-${stamp}.sh`);
+  await writeExecutable(
+    probeScript,
+    renderRemoteProbe({
+      expect: opts.expect,
+      outputPath: remoteProbe,
+      sutUsername: session.credential.sutUsername,
+      text: targetText,
+      timeoutMs: opts.timeoutMs,
+    }),
+  );
+  await scpToRemote(root, session.crabbox.inspect, probeScript, `${REMOTE_ROOT}/remote-probe.sh`);
+  await sshRun(root, session.crabbox.inspect, `bash ${REMOTE_ROOT}/remote-probe.sh`);
+  const localProbe = path.join(session.outputDir, `probe-${stamp}.json`);
+  await scpFromRemote(root, session.crabbox.inspect, remoteProbe, localProbe);
+  return {
+    probe: path.relative(root, localProbe),
+    status: "pass",
+    summary: summarizeProbe(localProbe),
+    text: targetText,
+  };
+}
+
+async function runSessionCommand(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const command = opts.remoteCommand.map(shellQuote).join(" ");
+  const result = await sshRun(root, session.crabbox.inspect, command);
+  const logPath = path.join(
+    session.outputDir,
+    `remote-command-${new Date().toISOString().replace(/[:.]/gu, "-")}.log`,
+  );
+  fs.writeFileSync(logPath, `${result.stdout}${result.stderr}`);
+  return { command: opts.remoteCommand, log: path.relative(root, logPath), status: "pass" };
+}
+
+async function screenshotSession(root: string, opts: Options, outputDir: string) {
+  const { session } = readSession(root, opts, outputDir);
+  const screenshotPath = path.join(
+    session.outputDir,
+    `telegram-user-crabbox-${new Date().toISOString().replace(/[:.]/gu, "-")}.png`,
+  );
+  await runCommand({
+    command: opts.crabboxBin,
+    args: [
+      "screenshot",
+      "--provider",
+      session.crabbox.provider,
+      "--target",
+      session.crabbox.target,
+      "--id",
+      session.crabbox.id,
+      "--output",
+      screenshotPath,
+    ],
+    cwd: root,
+    stdio: "inherit",
+  });
+  return { screenshot: path.relative(root, screenshotPath), status: "pass" };
+}
+
+async function statusSession(root: string, opts: Options, outputDir: string) {
+  const { path: pathname, session } = readSession(root, opts, outputDir);
+  const inspect = await inspectCrabbox(opts, root, session.crabbox.id);
+  return {
+    crabbox: {
+      id: session.crabbox.id,
+      slug: inspect.slug,
+      state: inspect.state,
+    },
+    session: path.relative(root, pathname),
+    status: "pass",
+    webvnc: `${opts.crabboxBin} webvnc --provider ${session.crabbox.provider} --target ${session.crabbox.target} --id ${session.crabbox.id} --open`,
+  };
+}
+
+async function finishSession(root: string, opts: Options, outputDir: string) {
+  const { path: pathname, session } = readSession(root, opts, outputDir);
+  const summary: JsonObject = {
+    artifacts: {},
+    finishedAt: new Date().toISOString(),
+    session: path.relative(root, pathname),
+    startedAt: session.createdAt,
+    status: "fail",
+  };
+  const videoPath = path.join(session.outputDir, "telegram-user-crabbox-session.mp4");
+  const motionVideoPath = path.join(session.outputDir, "telegram-user-crabbox-session-motion.mp4");
+  const motionGifPath = path.join(session.outputDir, "telegram-user-crabbox-session-motion.gif");
+  const screenshotPath = path.join(session.outputDir, "telegram-user-crabbox-session.png");
+  const desktopLogPath = path.join(session.outputDir, "telegram-desktop.log");
+  const statusPath = path.join(session.outputDir, "status.json");
+  const ffmpegLogPath = path.join(session.outputDir, "ffmpeg.log");
+  try {
+    await stopRemoteRecording(root, session.crabbox.inspect, session);
+    await scpFromRemote(root, session.crabbox.inspect, session.recorder.remoteVideo, videoPath);
+    await scpFromRemote(
+      root,
+      session.crabbox.inspect,
+      `${REMOTE_ROOT}/telegram-desktop.log`,
+      desktopLogPath,
+    ).catch(() => {});
+    await scpFromRemote(
+      root,
+      session.crabbox.inspect,
+      `${REMOTE_ROOT}/status.json`,
+      statusPath,
+    ).catch(() => {});
+    await scpFromRemote(root, session.crabbox.inspect, session.recorder.log, ffmpegLogPath).catch(
+      () => {},
+    );
+    const preview = await runCommand({
+      command: opts.crabboxBin,
+      args: [
+        "media",
+        "preview",
+        "--input",
+        videoPath,
+        "--output",
+        motionGifPath,
+        "--trimmed-video-output",
+        motionVideoPath,
+        "--json",
+      ],
+      cwd: root,
+      stdio: "inherit",
+    });
+    summary.mediaPreview = JSON.parse(preview.stdout) as JsonObject;
+    await runCommand({
+      command: opts.crabboxBin,
+      args: [
+        "screenshot",
+        "--provider",
+        session.crabbox.provider,
+        "--target",
+        session.crabbox.target,
+        "--id",
+        session.crabbox.id,
+        "--output",
+        screenshotPath,
+      ],
+      cwd: root,
+      stdio: "inherit",
+    });
+    summary.artifacts = {
+      desktopLog: path.relative(root, desktopLogPath),
+      ffmpegLog: path.relative(root, ffmpegLogPath),
+      previewGif: path.relative(root, motionGifPath),
+      screenshot: path.relative(root, screenshotPath),
+      status: path.relative(root, statusPath),
+      trimmedVideo: path.relative(root, motionVideoPath),
+      video: path.relative(root, videoPath),
+    };
+    summary.status = "pass";
+  } finally {
+    killPidTree(session.localSut.gatewayPid);
+    killPidTree(session.localSut.mockPid);
+    await releaseCredential(root, opts, session.credential.leaseFile).catch((error: unknown) => {
+      summary.credentialReleaseError = error instanceof Error ? error.message : String(error);
+    });
+    if (session.crabbox.createdLease && !opts.keepBox) {
+      await stopCrabbox(root, opts, session.crabbox.id).catch((error: unknown) => {
+        summary.crabboxStopError = error instanceof Error ? error.message : String(error);
+      });
+    }
+    if (opts.keepBox) {
+      summary.keepBox = true;
+      summary.webvnc = `${opts.crabboxBin} webvnc --provider ${session.crabbox.provider} --target ${session.crabbox.target} --id ${session.crabbox.id} --open`;
+    }
+    fs.rmSync(session.localRoot, { force: true, recursive: true });
+    const summaryPath = path.join(session.outputDir, "telegram-user-crabbox-session-summary.json");
+    fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+    const reportPath = writeReport({
+      motionGifPath,
+      motionVideoPath,
+      outputDir: session.outputDir,
+      screenshotPath,
+      status: summary.status === "pass" ? "pass" : "fail",
+      summaryPath,
+      videoPath,
+    });
+    summary.report = path.relative(root, reportPath);
+    fs.writeFileSync(summaryPath, `${JSON.stringify(summary, null, 2)}\n`);
+    console.log(JSON.stringify({ reportPath, status: summary.status, summaryPath }, null, 2));
+  }
+  if (summary.status !== "pass") {
+    process.exitCode = 1;
+  }
+}
+
 async function main() {
   const opts = parseArgs(process.argv.slice(2));
   const root = repoRoot();
   const outputDir = resolveRepoPath(root, opts.outputDir);
   fs.mkdirSync(outputDir, { recursive: true });
   opts.outputDir = outputDir;
+
+  if (opts.command === "start") {
+    console.log(JSON.stringify(await startSession(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "send") {
+    console.log(JSON.stringify(await sendSessionProbe(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "run") {
+    console.log(JSON.stringify(await runSessionCommand(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "screenshot") {
+    console.log(JSON.stringify(await screenshotSession(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "status") {
+    console.log(JSON.stringify(await statusSession(root, opts, outputDir), null, 2));
+    return;
+  }
+  if (opts.command === "finish") {
+    await finishSession(root, opts, outputDir);
+    return;
+  }
 
   const localRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-telegram-crabbox-"));
   const summary: JsonObject = {

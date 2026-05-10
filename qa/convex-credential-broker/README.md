@@ -161,6 +161,10 @@ credential for both the TDLib CLI driver and the Telegram Desktop visual witness
 - non-empty `desktopTdataArchiveBase64`
 - `desktopTdataArchiveSha256` as a SHA-256 hex string
 
+Long-running agent sessions should acquire this lease once, keep it for the
+whole Crabbox review/repro session, then release it from the same session file.
+Do not run parallel `telegram-user` jobs against the burner account.
+
 For `kind: "discord"`, broker `admin/add` validates that payload includes:
 
 - `guildId` as a Discord snowflake string

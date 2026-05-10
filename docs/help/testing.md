@@ -452,19 +452,42 @@ node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file "
 
 Use the restored Desktop profile with `Telegram -workdir "$tmp/desktop"` when a visual recording is needed. In local operator environments, `scripts/e2e/telegram-user-credential.ts` reads `~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env` by default if process env vars are absent.
 
+Agent-driven Crabbox session:
+
+```bash
+pnpm qa:telegram-user:crabbox -- start \
+  --tdlib-url http://artifacts.openclaw.ai/tdlib-v1.8.0-linux-x64.tgz \
+  --output-dir .artifacts/qa-e2e/telegram-user-crabbox/pr-review
+pnpm qa:telegram-user:crabbox -- send \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json \
+  --text /status
+pnpm qa:telegram-user:crabbox -- finish \
+  --session .artifacts/qa-e2e/telegram-user-crabbox/pr-review/session.json
+```
+
+`start` leases the `telegram-user` credential, restores the same account into
+TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock SUT
+gateway from the current checkout, opens the visible Telegram chat, starts
+desktop recording, and writes a private `session.json`. While the session is
+alive, an agent can keep testing until satisfied:
+
+- `send --session <file> --text <message>` sends through the real TDLib user and waits for the SUT reply.
+- `run --session <file> -- <remote command>` runs an arbitrary command on the Crabbox and saves its output, for example `bash -lc 'source /tmp/openclaw-telegram-user-crabbox/env.sh && python3 /tmp/openclaw-telegram-user-crabbox/user-driver.py transcript --limit 20 --json'`.
+- `screenshot --session <file>` captures the current visible desktop.
+- `status --session <file>` prints the lease and WebVNC command.
+- `finish --session <file>` stops the recorder, captures screenshot/video/motion-trim artifacts, releases the Convex credential, stops local SUT processes, and stops the Crabbox lease unless `--keep-box` is passed.
+
 One-command Crabbox proof:
 
 ```bash
 pnpm qa:telegram-user:crabbox -- --text /status
 ```
 
-That command leases the `telegram-user` credential, restores the same account
-into TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock
-SUT gateway from the current checkout, sends the command as the real QA user,
-records the visible Telegram Desktop session, trims the recording to the motion
-window, writes artifacts under `.artifacts/qa-e2e/telegram-user-crabbox/`, then
-releases the credential and stops the box. Use `--id <cbx_...>` to reuse a warm
-desktop lease, `--keep-box` to keep VNC open after failure,
+The default `probe` command is shorthand for one start/send/finish cycle. Use
+it for a quick `/status` smoke. Use the session commands for PR review,
+bug-reproduction work, or any case where the agent needs minutes of arbitrary
+experimentation before deciding the proof is complete. Use `--id <cbx_...>` to
+reuse a warm desktop lease, `--keep-box` to keep VNC open after finish,
 `--desktop-chat-title <name>` to pick the visible chat, and `--tdlib-url <tgz>`
 when using a prebaked Linux `libtdjson.so` archive instead of building TDLib on
 a fresh box. The runner verifies `--tdlib-url` with `--tdlib-sha256 <hex>` or,
