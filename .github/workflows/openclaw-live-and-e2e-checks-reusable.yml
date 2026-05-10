@@ -287,8 +287,8 @@ permissions:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.32.1"
+  NODE_VERSION: "24.15.0"
+  PNPM_VERSION: "10.33.0"
 
 jobs:
   validate_selected_ref:
@@ -455,7 +455,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 40
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -492,7 +492,7 @@ jobs:
           set -euo pipefail
           for attempt in 1 2 3; do
             echo "live-cache attempt ${attempt}/3"
-            if pnpm test:live:cache; then
+            if timeout --foreground --kill-after=30s 12m pnpm test:live:cache; then
               exit 0
             fi
             if [[ "$attempt" == "3" ]]; then

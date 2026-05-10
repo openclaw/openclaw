@@ -152,7 +152,7 @@ describe("Kilo Gateway provider config", () => {
         const result = resolveEnvApiKey("kilocode");
         expect(result).toMatchObject({
           apiKey: "test-kilo-key",
-          source: expect.stringContaining("KILOCODE_API_KEY"),
+          source: "env: KILOCODE_API_KEY",
         });
       } finally {
         vi.unstubAllEnvs();

@@ -27,10 +27,12 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
 
 type Workflow = {
+  env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
 };
 
@@ -156,6 +158,8 @@ describe("package acceptance workflow", () => {
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
     expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
+    expect(workflow).toContain("release_package_spec:");
+    expect(workflow).toContain('args+=(-f release_package_spec="$RELEASE_PACKAGE_SPEC")');
     expect(workflow).toContain("package_acceptance_package_spec:");
     expect(workflow).toContain(
       'args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")',
@@ -171,10 +175,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
-      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
     );
   });
 
@@ -569,17 +573,17 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
-      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
     );
     expect(workflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
     );
     expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.prepare_release_package.outputs.package_sha256 || '' }}",
+      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
@@ -721,7 +725,7 @@ describe("package artifact reuse", () => {
       CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
       GH_TOKEN: "${{ github.token }}",
       PACKAGE_ARTIFACT_NAME: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec }}",
+      PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PREPARE_PACKAGE_RESULT: "${{ needs.prepare_release_package.result }}",
       PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
       SCENARIO: "${{ inputs.npm_telegram_scenario }}",
@@ -759,10 +763,10 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(workflow, [
       "Published-package Telegram E2E:",
       "Package Telegram E2E: parent \\`release-package-under-test\\` artifact",
-      "Package Telegram E2E: skipped unless \\`release_profile=full\\` or \\`npm_telegram_package_spec\\` is provided",
+      "Package Telegram E2E: skipped unless \\`release_profile=full\\`, \\`release_package_spec\\`, or \\`npm_telegram_package_spec\\` is provided",
     ]);
     expect(releaseDocs).toContain(
-      "Focused `npm-telegram` reruns require `npm_telegram_package_spec`",
+      "Focused `npm-telegram` reruns require `release_package_spec` or",
     );
     expectTextToIncludeAll(fullReleaseDocs, [
       "pre-publish candidate",
@@ -770,7 +774,7 @@ describe("package artifact reuse", () => {
       "QA release-check lanes are advisory",
       "silently skip that",
       "Telegram package lane",
-      "| `npm-telegram`      | Published-package Telegram E2E; requires `npm_telegram_package_spec`. |",
+      "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
     ]);
   });
 
@@ -870,5 +874,44 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("Unreleased prerelease fallback");
     expect(workflow).not.toContain("gh api --repo");
     expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("keeps release workflow setup and timeout budgets bounded", () => {
+    const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
+    const releaseChecks = readWorkflow(RELEASE_CHECKS_WORKFLOW);
+    const crossOs = readWorkflow(".github/workflows/openclaw-cross-os-release-checks-reusable.yml");
+    const liveE2e = readWorkflow(LIVE_E2E_WORKFLOW);
+    const releaseWorkflowPaths = [
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      RELEASE_CHECKS_WORKFLOW,
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      LIVE_E2E_WORKFLOW,
+      NPM_TELEGRAM_WORKFLOW,
+      ".github/workflows/openclaw-release-publish.yml",
+      ".github/workflows/openclaw-npm-release.yml",
+      ".github/workflows/macos-release.yml",
+      ".github/workflows/plugin-clawhub-release.yml",
+      PACKAGE_ACCEPTANCE_WORKFLOW,
+      ".github/workflows/plugin-npm-release.yml",
+    ];
+
+    for (const workflowPath of releaseWorkflowPaths) {
+      const workflow = readWorkflow(workflowPath);
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
+      if (workflow.env?.PNPM_VERSION !== undefined) {
+        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("10.33.0");
+      }
+    }
+
+    expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile == 'full' && 240 || 60 }}",
+    );
+    expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
+    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(40);
+    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
+      "timeout --foreground --kill-after=30s 12m pnpm test:live:cache",
+    );
   });
 });

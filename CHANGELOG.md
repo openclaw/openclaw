@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: default test and source installs to the pure-JS `opusscript` decoder by ignoring optional native `@discordjs/opus` builds, avoiding slow native addon compiles outside dedicated voice-performance lanes.
 - Discord/voice: add an opt-in native `@discordjs/opus` install script and decoder preference for live voice-performance lanes without charging unrelated Docker/tests for native addon builds.
 - Gateway/skills: add an opt-in private skill archive upload install path gated by `skills.install.allowUploadedArchives`, so trusted Gateway clients can stage and install zip-backed skills only when operators explicitly enable the code-install surface. (#74430) Thanks @samzong.
+- Codex app-server: enable Codex native code-mode-only for harness threads so deferred OpenClaw dynamic tools run through Codex's own searchable code execution surface instead of a PI-style wrapper.
 - Dependencies: refresh workspace pins and patch targets, including ACPX `@agentclientprotocol/claude-agent-acp` `0.33.1`, Codex ACP `0.14.0`, Baileys `7.0.0-rc10`, Google GenAI `2.0.1`, OpenAI `6.37.0`, AWS SDK `3.1045.0`, Kysely `0.29.0`, Tlon skill `0.3.6`, Aimock `1.19.5`, and tsdown `0.22.0`.
 - Agents/compaction: preserve scoped background exec/process session references across embedded compaction and after-turn runtime contexts without exposing sessions from unrelated scopes. Fixes #79284. (#79307) Thanks @TurboTheTurtle.
 - Agents/process: tell agents to inspect background sessions with `process log` before sending interactive input and to use `waitingForInput`/`stdinWritable` hints from `log`/`poll`.
@@ -36,6 +37,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Gateway: avoid synchronous restart-sentinel state probes during post-attach startup, preventing slow Windows or redirected state directories from blocking channel turns. Fixes #79264. Thanks @liyi58.
+- Agents/auth: update successful model auth profile status with one locked store write, reducing post-model reply latency from duplicate `auth-profiles.json` saves. Thanks @mcaxtr.
 - Agents/image: honor explicit `image` tool model overrides even when `agents.defaults.imageModel` is unset, restoring one-off vision calls for configured multimodal providers. Fixes #79341. Thanks @haumanto.
 - Codex app-server: preserve prompt-local current-turn context through context-engine prompt projection, so replied-to Telegram messages stay visible to the Codex model input.
 - Telegram: pass agent-scoped media roots through gateway message actions so workspace-local media from the active agent is not rejected as cross-agent access. Thanks @frankekn.
@@ -130,6 +132,7 @@ Docs: https://docs.openclaw.ai
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside emitted Google provider model config, so regenerated models.json rows test `google/gemini-3.1-pro-preview`.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids for explicit OpenAI-compatible Google and Gemini CLI provider configs, so emitted config targets `google/gemini-3.1-pro-preview`.
 - Google/Gemini: normalize retired Gemini 3 Pro Preview ids preserved from existing merged models.json providers so config emission keeps targeting `google/gemini-3.1-pro-preview`.
+- Google/Gemini: normalize retired Gemini 3 Pro Preview ids inside provider auth config patches so setup-emitted provider catalogs test `google/gemini-3.1-pro-preview`.
 - GitHub Copilot: mint short-lived Copilot API tokens with the same `vscode-chat` integration identity used by runtime requests, and refresh legacy cached tokens missing that identity so image-capable Copilot models no longer inherit the `copilot-language-server` scope. Fixes #79946, #80074. Thanks @TurboTheTurtle.
 - Plugins/doctor: drop stale managed npm install records when `openclaw doctor --fix` removes npm packages that shadow bundled plugins, so the rebuilt registry no longer resurrects the removed package metadata.
 - Discord/voice: reuse or suppress late realtime consult tool calls without stealing newer speaker context or speaking forced fallback answers twice.
