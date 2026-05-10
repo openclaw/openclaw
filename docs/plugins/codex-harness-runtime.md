@@ -22,6 +22,14 @@ OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
 Codex owns the canonical native thread, native model loop, native tool
 continuation, and native compaction.
 
+## Thread bindings and model changes
+
+When an OpenClaw session is attached to an existing Codex thread, the next turn
+sends the currently selected OpenAI model, approval policy, sandbox, and service
+tier to app-server again. Switching from `openai/gpt-5.5` to
+`openai/gpt-5.2` keeps the thread binding but asks Codex to continue with the
+newly selected model.
+
 ## Visible replies and heartbeats
 
 When a source chat turn runs through the Codex harness, visible replies default

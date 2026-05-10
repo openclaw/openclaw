@@ -27,7 +27,7 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 - The target Codex app-server must be able to see the expected marketplace,
   plugin, and app inventory.
 
-`codexPlugins` has no effect on Pi runs, normal OpenAI provider runs, ACP
+`codexPlugins` has no effect on PI runs, normal OpenAI provider runs, ACP
 conversation bindings, or other harnesses because those paths do not create
 Codex app-server threads with native `apps` config.
 
@@ -131,9 +131,11 @@ enabled.
 
 OpenClaw sets app-level `destructive_enabled` from the effective global or
 per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. Plugin apps are
-emitted with `open_world_enabled: false`. OpenClaw does not maintain per-plugin
-destructive tool-name deny lists.
+destructive tool metadata from its native app tool annotations. The `_default`
+app config is disabled with `open_world_enabled: false`. Enabled plugin apps
+are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
+plugin open-world policy knob and does not maintain per-plugin destructive
+tool-name deny lists.
 
 Tool approval mode is prompted by default for plugin apps because OpenClaw does
 not have an interactive app-elicitation UI in this same-thread path.

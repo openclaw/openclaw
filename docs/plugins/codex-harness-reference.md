@@ -101,6 +101,7 @@ Supported `appServer` fields:
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start, resume, and turn.                                                                                                                            |
 | `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start and resume.                                                                                                                                      |
 | `approvalsReviewer`           | `"user"` or an allowed guardian reviewer               | Use `"auto_review"` to let Codex review native approval prompts when allowed.                                                                                                                   |
+| `defaultWorkspaceDir`         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                        |
 | `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`. |
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
@@ -235,10 +236,18 @@ tool payload.
 ## Timeouts
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: each Codex `item/tool/call` request must receive
-an OpenClaw response within 30 seconds. On timeout, OpenClaw aborts the tool
-signal where supported and returns a failed dynamic-tool response to Codex so
-the turn can continue instead of leaving the session in `processing`.
+`appServer.requestTimeoutMs`. Each Codex `item/tool/call` request uses the first
+available timeout in this order:
+
+- A positive per-call `timeoutMs` argument.
+- For `image_generate`, `agents.defaults.imageGenerationModel.timeoutMs`.
+- For the media-understanding `image` tool, `tools.media.image.timeoutSeconds`
+  converted to milliseconds, or the 60 second media default.
+- The 30 second dynamic-tool default.
+
+Dynamic tool budgets are capped at 600000 ms. On timeout, OpenClaw aborts the
+tool signal where supported and returns a failed dynamic-tool response to Codex
+so the turn can continue instead of leaving the session in `processing`.
 
 After OpenClaw responds to a Codex turn-scoped app-server request, the harness
 also expects Codex to finish the native turn with `turn/completed`. If the

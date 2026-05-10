@@ -127,6 +127,16 @@ Keep provider refs and runtime policy separate:
 - ACP/acpx is a separate external harness path. Use it only when the user asks
   for ACP/acpx or an external harness adapter.
 
+Common command routing:
+
+| User intent                     | Use                                     |
+| ------------------------------- | --------------------------------------- |
+| Attach the current chat         | `/codex bind [--cwd <path>]`            |
+| Resume an existing Codex thread | `/codex resume <thread-id>`             |
+| List or filter Codex threads    | `/codex threads [filter]`               |
+| Send Codex feedback only        | `/codex diagnostics [note]`             |
+| Start an ACP/acpx task          | ACP/acpx session commands, not `/codex` |
+
 | Use case                                             | Configure                                                        | Verify                                  | Notes                              |
 | ---------------------------------------------------- | ---------------------------------------------------------------- | --------------------------------------- | ---------------------------------- |
 | ChatGPT/Codex subscription with native Codex runtime | `openai/gpt-*` plus enabled `codex` plugin                       | `/status` shows `Runtime: OpenAI Codex` | Recommended path                   |
@@ -348,7 +358,7 @@ does not translate Codex plugins into synthetic `codex_plugin_*` OpenClaw
 dynamic tools.
 
 `codexPlugins` affects only sessions that select the native Codex harness. It
-has no effect on Pi runs, normal OpenAI provider runs, ACP conversation
+has no effect on PI runs, normal OpenAI provider runs, ACP conversation
 bindings, or other harnesses.
 
 Minimal migrated config:
