@@ -99,7 +99,8 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(api.registerProvider).toHaveBeenCalledWith(expect.objectContaining({ id: "codex" }));
+    expect(api.registerProvider).toHaveBeenCalledTimes(1);
+    expect(api.registerProvider.mock.calls[0]?.[0].id).toBe("codex");
   });
 
   it("only claims the codex provider by default", () => {

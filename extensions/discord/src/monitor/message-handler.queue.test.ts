@@ -29,6 +29,22 @@ vi.mock("./typing.js", () => ({
 }));
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
+
+function statusPatches(setStatus: { mock: { calls: Array<[Record<string, unknown>]> } }) {
+  return setStatus.mock.calls.map(([patch]) => patch);
+}
+
+function expectStatusPatch(
+  setStatus: { mock: { calls: Array<[Record<string, unknown>]> } },
+  expected: Record<string, unknown>,
+) {
+  expect(
+    statusPatches(setStatus).some((patch) =>
+      Object.entries(expected).every(([key, value]) => patch[key] === value),
+    ),
+  ).toBe(true);
+}
+
 function createDeferred<T = void>() {
   let resolve: (value: T | PromiseLike<T>) => void = () => {};
   const promise = new Promise<T>((innerResolve) => {
@@ -167,12 +183,10 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
 
-    expect(earlyTypingMocks.createDiscordRestClient).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        token: "test-token",
-      }),
-    );
+    expect(earlyTypingMocks.createDiscordRestClient).toHaveBeenCalledTimes(1);
+    const [restClientParams] = earlyTypingMocks.createDiscordRestClient.mock.calls[0] ?? [];
+    expect((restClientParams as { accountId?: unknown } | undefined)?.accountId).toBe("default");
+    expect((restClientParams as { token?: unknown } | undefined)?.token).toBe("test-token");
     expect(earlyTypingMocks.sendTyping).toHaveBeenCalledWith({
       rest: { kind: "discord-rest" },
       channelId: "dm-1",
@@ -274,12 +288,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
     const setStatus = vi.fn();
     createDiscordMessageHandler(createDiscordHandlerParams({ setStatus }));
 
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeRuns: 0,
-        busy: false,
-      }),
-    );
+    expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
 
   it("returns immediately and tracks busy status while queued runs execute", async () => {
@@ -302,12 +311,7 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        activeRuns: 1,
-        busy: true,
-      }),
-    );
+    expectStatusPatch(setStatus, { activeRuns: 1, busy: true });
 
     await expect(handler(createMessageData("m-2") as never, {} as never)).resolves.toBeUndefined();
 
@@ -325,12 +329,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await secondRun.promise;
 
     await flushQueueWork();
-    expect(setStatus).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        activeRuns: 0,
-        busy: false,
-      }),
-    );
+    const lastStatusPatch = statusPatches(setStatus).at(-1);
+    expect(lastStatusPatch?.activeRuns).toBe(0);
+    expect(lastStatusPatch?.busy).toBe(false);
   });
 
   it("drops duplicate inbound message deliveries before they reach preflight", async () => {
@@ -363,8 +364,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(params.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("discord message run failed: DiscordRetryableInboundError: retry me"),
+    expect(params.runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(params.runtime.error.mock.calls[0]?.[0])).toContain(
+      "discord message run failed: DiscordRetryableInboundError: retry me",
     );
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
@@ -390,8 +392,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
-    expect(params.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("discord message run failed: Error: post-send failure"),
+    expect(params.runtime.error).toHaveBeenCalledTimes(1);
+    expect(String(params.runtime.error.mock.calls[0]?.[0])).toContain(
+      "discord message run failed: Error: post-send failure",
     );
 
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
@@ -441,7 +444,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
       expect(capturedAbortSignals).toEqual([undefined]);
-      expect(params.runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("timed out"));
+      expect(
+        params.runtime.error.mock.calls.some(([message]) => String(message).includes("timed out")),
+      ).toBe(false);
 
       firstRun.resolve();
       await firstRun.promise;
@@ -654,6 +659,6 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(2);
-    expect(setStatus).toHaveBeenCalledWith(expect.objectContaining({ activeRuns: 0, busy: false }));
+    expectStatusPatch(setStatus, { activeRuns: 0, busy: false });
   });
 });

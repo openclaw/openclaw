@@ -248,16 +248,19 @@ describe("Feishu reply fallback for withdrawn/deleted targets", () => {
 
     expect(replyMock).toHaveBeenCalledWith({
       path: { message_id: "om_parent" },
-      data: expect.objectContaining({
+      data: {
+        content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
+        msg_type: "post",
         reply_in_thread: true,
-      }),
+      },
     });
     expect(createMock).toHaveBeenCalledWith({
       params: { receive_id_type: "chat_id" },
-      data: expect.objectContaining({
+      data: {
+        content: '{"zh_cn":{"content":[[{"tag":"md","text":"hello"}]]}}',
         receive_id: "oc_group_1",
         msg_type: "post",
-      }),
+      },
     });
   });
 

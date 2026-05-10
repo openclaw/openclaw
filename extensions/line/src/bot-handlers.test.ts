@@ -1031,7 +1031,7 @@ describe("handleLineWebhookEvents", () => {
     expect(buildLineMessageContextMock).toHaveBeenCalledTimes(1);
     expect(processMessage).toHaveBeenCalledTimes(1);
     expect(context.runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("line: event handler failed: Error: transient failure"),
+      "line: event handler failed: Error: transient failure",
     );
   });
 
