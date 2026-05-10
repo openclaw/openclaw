@@ -106,6 +106,9 @@ describe("registerPolicyDoctorChecks", () => {
       "policy/policy-hash-mismatch",
       "policy/attestation-hash-mismatch",
       "policy/channels-denied-provider",
+      "policy/tools-missing-risk-level",
+      "policy/tools-missing-sensitivity-token",
+      "policy/tools-unknown-sensitivity-token",
     ]);
     expect(duplicateChecks).toEqual([]);
   });
@@ -520,5 +523,61 @@ describe("registerPolicyDoctorChecks", () => {
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
+  });
+
+  it("reports governed tools missing risk and sensitivity metadata", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { settings: { requireRisk: true, requireSensitivity: true } } }),
+      "utf-8",
+    );
+    await fs.writeFile(join(workspaceDir, "TOOLS.md"), "## Tools\n\n### deploy\n", "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-missing-risk-level",
+        severity: "error",
+        path: "TOOLS.md",
+        ocPath: "oc://TOOLS.md/tools/deploy",
+      }),
+      expect.objectContaining({
+        checkId: "policy/tools-missing-sensitivity-token",
+        severity: "error",
+        path: "TOOLS.md",
+        ocPath: "oc://TOOLS.md/tools/deploy",
+      }),
+    ]);
+  });
+
+  it("reports unknown governed tool sensitivity metadata", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ tools: { settings: { requireSensitivity: true } } }),
+      "utf-8",
+    );
+    await fs.writeFile(
+      join(workspaceDir, "TOOLS.md"),
+      "## Tools\n\n### deploy risk:critical sensitivity:secret\n",
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/tools-unknown-sensitivity-token",
+        severity: "error",
+        path: "TOOLS.md",
+        ocPath: "oc://TOOLS.md/tools/deploy",
+      }),
+    ]);
   });
 });

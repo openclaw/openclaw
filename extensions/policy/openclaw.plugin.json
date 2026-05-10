@@ -20,6 +20,14 @@
         "type": "boolean",
         "description": "Enable policy doctor checks even before policy.jsonc exists."
       },
+      "requireRisk": {
+        "type": "boolean",
+        "description": "Require governed tool declarations in TOOLS.md to include risk metadata."
+      },
+      "requireSensitivity": {
+        "type": "boolean",
+        "description": "Require governed tool declarations in TOOLS.md to include sensitivity metadata."
+      },
       "workspaceRepairs": {
         "type": "boolean",
         "description": "Allow doctor --fix to repair policy-managed workspace settings."
