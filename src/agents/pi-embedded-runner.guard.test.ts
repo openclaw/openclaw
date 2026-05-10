@@ -37,6 +37,39 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it("keeps real toolResult pending across delivery-mirror assistant messages", () => {
+    const sm = guardSessionManager(SessionManager.inMemory());
+    const appendMessage = sm.appendMessage.bind(sm) as unknown as (message: AgentMessage) => void;
+
+    appendMessage(assistantToolCall("call_1"));
+    appendMessage({
+      role: "assistant",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      content: [{ type: "text", text: "display copy" }],
+    } as AgentMessage);
+    appendMessage({
+      role: "toolResult",
+      toolCallId: "call_1",
+      toolName: "n",
+      content: [{ type: "text", text: "real output" }],
+      isError: false,
+    } as AgentMessage);
+
+    const messages = sm
+      .getEntries()
+      .filter((e) => e.type === "message")
+      .map((e) => (e as { message: AgentMessage }).message);
+
+    expect(messages.map((m) => m.role)).toEqual(["assistant", "assistant", "toolResult"]);
+    expect((messages[1] as { model?: string }).model).toBe("delivery-mirror");
+    expect((messages[2] as { isError?: boolean }).isError).toBe(false);
+    expect((messages[2] as { content?: Array<{ text?: string }> }).content?.[0]?.text).toBe(
+      "real output",
+    );
+    expect(JSON.stringify(messages)).not.toContain("missing tool result");
+  });
+
   it("uses Codex-style aborted synthetic results for interrupted Responses tool calls", () => {
     const sm = guardSessionManager(SessionManager.inMemory(), {
       allowSyntheticToolResults: true,
