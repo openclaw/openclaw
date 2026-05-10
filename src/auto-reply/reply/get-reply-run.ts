@@ -4,6 +4,7 @@ import { resolveSessionAuthProfileOverride } from "../../agents/auth-profiles/se
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
+import { normalizeProviderId } from "../../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../../agents/openai-codex-routing.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/pi-embedded-runner/sandbox-info.js";
 import type { EmbeddedFullAccessBlockedReason } from "../../agents/pi-embedded-runner/types.js";
@@ -379,6 +380,7 @@ export async function runPreparedReply(
     perMessageQueueOptions,
     typing,
     opts,
+    defaultProvider,
     defaultModel,
     timeoutMs,
     isNewSession,
@@ -875,12 +877,16 @@ export async function runPreparedReply(
           harnessRuntime: agentHarnessPolicy.runtime,
         })
       : [provider];
-  // When an image model override is active, skip auth profile resolution to
-  // avoid (a) clearing the stored session auth profile and (b) forwarding
-  // the original provider's auth profile to a different provider's run.
-  // The image override is temporary for this turn only.
+  // When an image model override switched providers (e.g., anthropic -> openai),
+  // skip auth profile resolution to avoid forwarding the original provider's
+  // auth profile to a different provider's run. When the override stayed on the
+  // same provider (e.g., openai/gpt-4o -> openai/gpt-4o-mini), preserve the
+  // stored session auth profile so the user-selected credentials are used.
   let authProfileId: string | undefined;
-  if (hasAppliedImageModelOverride) {
+  if (
+    hasAppliedImageModelOverride &&
+    normalizeProviderId(provider) !== normalizeProviderId(defaultProvider)
+  ) {
     authProfileId = undefined;
   } else if (useFastReplyRuntime) {
     authProfileId = preparedSessionState.sessionEntry?.authProfileOverride;
@@ -947,7 +953,10 @@ export async function runPreparedReply(
         piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        if (hasAppliedImageModelOverride) {
+        if (
+          hasAppliedImageModelOverride &&
+          normalizeProviderId(provider) !== normalizeProviderId(defaultProvider)
+        ) {
           authProfileId = undefined;
         } else if (useFastReplyRuntime) {
           authProfileId = preparedSessionState.sessionEntry?.authProfileOverride;
