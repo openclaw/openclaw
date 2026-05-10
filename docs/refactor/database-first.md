@@ -634,6 +634,9 @@ sessionId}` and session key context.
   inline runs seed those entries into the per-agent runtime scratch namespace,
   and disk-backed tools overlay that SQLite scratch for attachment paths. The
   old subagent-run attachment-dir registry columns and cleanup hooks are gone.
+- CLI image hydration no longer maintains stable `openclaw-cli-images` cache
+  files. External CLI backends still receive file paths, but those paths are
+  per-run temp materializations with cleanup.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
   diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
   instead of `logs/*.jsonl` files.
