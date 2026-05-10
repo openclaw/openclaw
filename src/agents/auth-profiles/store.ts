@@ -289,29 +289,33 @@ function buildLocalAuthProfileStoreForSave(params: {
 
 export async function updateAuthProfileStoreWithLock(params: {
   agentDir?: string;
+  env?: NodeJS.ProcessEnv;
   updater: (store: AuthProfileStore) => boolean;
 }): Promise<AuthProfileStore | null> {
   try {
     let savedStore: AuthProfileStore | null = null;
-    runOpenClawStateWriteTransaction((database) => {
-      // SQLite serializes these updates; always reload inside the write
-      // transaction so usage/cooldown/auth refresh updates cannot overwrite
-      // fresher state from another process.
-      const persisted = loadPersistedAuthProfileStoreEntryFromDatabase(database, params.agentDir);
-      const store =
-        persisted?.store ??
-        ({
-          version: AUTH_STORE_VERSION,
-          profiles: {},
-        } satisfies AuthProfileStore);
-      const shouldSave = params.updater(store);
-      savedStore = store;
-      if (shouldSave) {
-        saveAuthProfileStoreInTransaction(database, store, params.agentDir);
-      }
-    });
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        // SQLite serializes these updates; always reload inside the write
+        // transaction so usage/cooldown/auth refresh updates cannot overwrite
+        // fresher state from another process.
+        const persisted = loadPersistedAuthProfileStoreEntryFromDatabase(database, params.agentDir);
+        const store =
+          persisted?.store ??
+          ({
+            version: AUTH_STORE_VERSION,
+            profiles: {},
+          } satisfies AuthProfileStore);
+        const shouldSave = params.updater(store);
+        savedStore = store;
+        if (shouldSave) {
+          saveAuthProfileStoreInTransaction(database, store, params.agentDir);
+        }
+      },
+      { env: params.env },
+    );
     if (savedStore) {
-      refreshAuthProfileStoreCache(savedStore, params.agentDir);
+      refreshAuthProfileStoreCache(savedStore, params.agentDir, { env: params.env });
     }
     return savedStore;
   } catch {

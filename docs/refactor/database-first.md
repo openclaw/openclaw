@@ -640,6 +640,9 @@ sessionId}` and session key context.
   canonical credential store is SQLite; `auth-profiles.json`, per-agent
   `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs
   that are removed after import.
+- Hermes secret migration plans and applies imported API-key profiles directly
+  into the SQLite auth-profile store. It no longer writes or verifies
+  `auth-profiles.json` as an intermediate target.
 - PI model discovery now passes canonical credentials into in-memory
   `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
   per-agent `auth.json` during discovery.
