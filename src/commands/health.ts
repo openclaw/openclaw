@@ -70,6 +70,36 @@ const debugHealth = (...args: unknown[]) => {
   }
 };
 
+const redactIMessageProbeErrorMessage = (message: string): string => {
+  const trimmed = message.trim();
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.replaceAll(
+    /\/Users\/[^/\s]+\/Library\/Messages\/chat\.db/g,
+    "~/Library/Messages/chat.db",
+  );
+};
+
+const buildNonSensitiveProbeFailure = (
+  channelId: string,
+  probe: unknown,
+): Record<string, unknown> | undefined => {
+  const record = asNullableRecord(probe);
+  if (channelId !== "imessage" || !record || record.ok !== false) {
+    return undefined;
+  }
+  if (typeof record.error !== "string") {
+    return undefined;
+  }
+
+  const error = redactIMessageProbeErrorMessage(record.error);
+  if (!error.includes("~/Library/Messages/chat.db")) {
+    return undefined;
+  }
+  return { ok: false, error };
+};
+
 const formatDurationParts = (ms: number): string => {
   if (!Number.isFinite(ms)) {
     return "unknown";
@@ -453,13 +483,15 @@ export async function getHealthSnapshot(params?: {
       const runtimeSnapshot =
         params?.runtimeSnapshot?.channelAccounts[plugin.id]?.[accountId] ??
         (accountId === defaultAccountId ? params?.runtimeSnapshot?.channels[plugin.id] : undefined);
+      const nonSensitiveProbeFailure = buildNonSensitiveProbeFailure(plugin.id, probe);
+      const snapshotProbe = includeSensitive ? probe : nonSensitiveProbeFailure;
       const snapshot: ChannelAccountSnapshot = await buildChannelAccountSnapshotFromAccount({
         plugin,
         cfg,
         accountId,
         account: snapshotAccount,
         runtime: runtimeSnapshot,
-        probe: includeSensitive ? probe : undefined,
+        probe: snapshotProbe,
         enabledFallback: enabled,
         configuredFallback: configured,
       });
@@ -499,7 +531,13 @@ export async function getHealthSnapshot(params?: {
         record.probe = probe;
       }
       if (!includeSensitive) {
-        delete record.probe;
+        const summaryProbeFailure = buildNonSensitiveProbeFailure(plugin.id, record.probe);
+        const safeProbeFailure = summaryProbeFailure ?? nonSensitiveProbeFailure;
+        if (safeProbeFailure) {
+          record.probe = safeProbeFailure;
+        } else {
+          delete record.probe;
+        }
       }
       if (record.lastProbeAt === undefined && lastProbeAt) {
         record.lastProbeAt = lastProbeAt;
