@@ -7,6 +7,9 @@ describe("parseOcDocument", () => {
 
     expect(parsed.kind).toBe("md");
     expect(parsed.ast.kind).toBe("md");
+    if (parsed.ast.kind !== "md") {
+      throw new Error("expected markdown AST");
+    }
     expect(parsed.ast.blocks[0]?.slug).toBe("tools");
   });
 
