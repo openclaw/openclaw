@@ -1261,8 +1261,11 @@ export async function dispatchReplyFromConfig(
     });
     const suppressDefaultToolProgressMessages =
       params.replyOptions?.suppressDefaultToolProgressMessages === true;
-    const shouldSuppressDefaultToolProgressMessages = () =>
-      suppressDefaultToolProgressMessages && !shouldEmitVerboseProgress();
+    // When the channel explicitly opts out of tool progress (e.g. Telegram with
+    // streaming.preview.toolProgress=false), honor it unconditionally — session
+    // verbose mode is a debugging aid for the session owner and must not override
+    // an explicit channel-level suppression flag.
+    const shouldSuppressDefaultToolProgressMessages = () => suppressDefaultToolProgressMessages;
     const onToolResultFromReplyOptions = params.replyOptions?.onToolResult;
     const onPlanUpdateFromReplyOptions = params.replyOptions?.onPlanUpdate;
     const onApprovalEventFromReplyOptions = params.replyOptions?.onApprovalEvent;
