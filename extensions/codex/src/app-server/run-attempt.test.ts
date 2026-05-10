@@ -7,6 +7,7 @@ import {
   embeddedAgentLog,
   nativeHookRelayTesting,
   onAgentEvent,
+  queueAgentHarnessMessage,
   resetAgentEventsForTest,
   type AgentEventPayload,
   type EmbeddedRunAttemptParams,
@@ -17,12 +18,11 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { queueEmbeddedPiMessageWithOutcome } from "../../../../src/agents/pi-embedded-runner/runs.js";
 
 function queueActiveRunMessageForTest(
-  ...args: Parameters<typeof queueEmbeddedPiMessageWithOutcome>
+  ...args: Parameters<typeof queueAgentHarnessMessage>
 ): boolean {
-  return queueEmbeddedPiMessageWithOutcome(...args).queued;
+  return queueAgentHarnessMessage(...args);
 }
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
