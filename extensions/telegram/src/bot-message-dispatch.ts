@@ -110,6 +110,51 @@ const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-d
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
 
+function appendWithOverlap(previous: string, fragment: string): string {
+  const maxOverlap = Math.min(previous.length, fragment.length);
+  for (let overlap = maxOverlap; overlap > 0; overlap -= 1) {
+    if (previous.endsWith(fragment.slice(0, overlap))) {
+      return `${previous}${fragment.slice(overlap)}`;
+    }
+  }
+  return `${previous}${fragment}`;
+}
+
+function looksLikeDraftDeltaFragment(previous: string, text: string): boolean {
+  if (!previous || !text) {
+    return false;
+  }
+  if (text.startsWith(previous) || previous.startsWith(text)) {
+    return false;
+  }
+  if (/^\s/.test(text)) {
+    return true;
+  }
+  if (previous.length < DRAFT_MIN_INITIAL_CHARS) {
+    return true;
+  }
+  if (/\s$/.test(previous) && text.length <= DRAFT_MIN_INITIAL_CHARS) {
+    return true;
+  }
+  return text.length <= Math.max(16, Math.floor(previous.length / 2));
+}
+
+function resolveDraftPartialText(previous: string, text: string): string | undefined {
+  if (!previous) {
+    return text;
+  }
+  if (text === previous) {
+    return undefined;
+  }
+  if (text.startsWith(previous)) {
+    return text;
+  }
+  if (previous.startsWith(text) && text.length < previous.length) {
+    return undefined;
+  }
+  return looksLikeDraftDeltaFragment(previous, text) ? appendWithOverlap(previous, text) : text;
+}
+
 async function resolveStickerVisionSupport(cfg: OpenClawConfig, agentId: string) {
   try {
     const catalog = await loadModelCatalog({ config: cfg });
@@ -717,7 +762,8 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
-    if (text === lane.lastPartialText) {
+    const nextText = resolveDraftPartialText(lane.lastPartialText, text);
+    if (!nextText) {
       return;
     }
     if (lane === answerLane) {
@@ -729,15 +775,8 @@ export const dispatchTelegramMessage = async ({
     }
     lane.hasStreamedMessage = true;
     lane.finalized = false;
-    if (
-      lane.lastPartialText &&
-      lane.lastPartialText.startsWith(text) &&
-      text.length < lane.lastPartialText.length
-    ) {
-      return;
-    }
-    lane.lastPartialText = text;
-    laneStream.update(text);
+    lane.lastPartialText = nextText;
+    laneStream.update(nextText);
   };
   const ingestDraftLaneSegments = async (text: string | undefined, isReasoning?: boolean) => {
     const split = splitTextIntoLaneSegments(text, isReasoning);
