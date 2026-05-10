@@ -320,7 +320,7 @@ describe("discord component interactions", () => {
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
     const dispatchParams = dispatchReplyMock.mock.calls[0]?.[0] as DispatchParams | undefined;
     expect(typeof dispatchParams?.dispatcherOptions.responsePrefixContextProvider).toBe("function");
-    expect(typeof dispatchParams?.replyOptions.onModelSelected).toBe("function");
+    expect(typeof dispatchParams?.replyOptions?.onModelSelected).toBe("function");
     expect(resolveDiscordComponentEntry({ id: "btn_1" })).toBeNull();
   });
 

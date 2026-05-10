@@ -29,15 +29,25 @@ vi.mock("./typing.js", () => ({
 }));
 
 type SetStatusFn = (patch: Record<string, unknown>) => void;
+type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
 
-function statusPatches(setStatus: { mock: { calls: Array<[Record<string, unknown>]> } }) {
-  return setStatus.mock.calls.map(([patch]) => patch);
+function mockCall(source: MockCallSource, label: string, callIndex = 0): Array<unknown> {
+  const call = source.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected ${label} call ${callIndex}`);
+  }
+  return call;
 }
 
-function expectStatusPatch(
-  setStatus: { mock: { calls: Array<[Record<string, unknown>]> } },
-  expected: Record<string, unknown>,
-) {
+function mockCalls(source: MockCallSource): Array<Array<unknown>> {
+  return source.mock.calls;
+}
+
+function statusPatches(setStatus: MockCallSource) {
+  return setStatus.mock.calls.map(([patch]) => patch as Record<string, unknown>);
+}
+
+function expectStatusPatch(setStatus: MockCallSource, expected: Record<string, unknown>) {
   expect(
     statusPatches(setStatus).some((patch) =>
       Object.entries(expected).every(([key, value]) => patch[key] === value),
@@ -184,7 +194,10 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await flushQueueWork();
 
     expect(earlyTypingMocks.createDiscordRestClient).toHaveBeenCalledTimes(1);
-    const [restClientParams] = earlyTypingMocks.createDiscordRestClient.mock.calls[0] ?? [];
+    const [restClientParams] = mockCall(
+      earlyTypingMocks.createDiscordRestClient,
+      "createDiscordRestClient",
+    );
     expect((restClientParams as { accountId?: unknown } | undefined)?.accountId).toBe("default");
     expect((restClientParams as { token?: unknown } | undefined)?.token).toBe("test-token");
     expect(earlyTypingMocks.sendTyping).toHaveBeenCalledWith({
@@ -364,8 +377,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    const runtimeError = params.runtime.error as unknown as MockCallSource;
     expect(params.runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(params.runtime.error.mock.calls[0]?.[0])).toContain(
+    expect(String(mockCall(runtimeError, "runtime.error")[0])).toContain(
       "discord message run failed: DiscordRetryableInboundError: retry me",
     );
 
@@ -392,8 +406,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
     await expect(handler(duplicate as never, {} as never)).resolves.toBeUndefined();
     await flushQueueWork();
     expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
+    const runtimeError = params.runtime.error as unknown as MockCallSource;
     expect(params.runtime.error).toHaveBeenCalledTimes(1);
-    expect(String(params.runtime.error.mock.calls[0]?.[0])).toContain(
+    expect(String(mockCall(runtimeError, "runtime.error")[0])).toContain(
       "discord message run failed: Error: post-send failure",
     );
 
@@ -444,8 +459,9 @@ describe("createDiscordMessageHandler queue behavior", () => {
 
       expect(processDiscordMessageMock).toHaveBeenCalledTimes(1);
       expect(capturedAbortSignals).toEqual([undefined]);
+      const runtimeError = params.runtime.error as unknown as MockCallSource;
       expect(
-        params.runtime.error.mock.calls.some(([message]) => String(message).includes("timed out")),
+        mockCalls(runtimeError).some(([message]) => String(message).includes("timed out")),
       ).toBe(false);
 
       firstRun.resolve();
