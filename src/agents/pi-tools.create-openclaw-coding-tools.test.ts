@@ -18,7 +18,11 @@ import { expectReadWriteEditTools } from "./test-helpers/pi-tools-fs-helpers.js"
 import { createPiToolsSandboxContext } from "./test-helpers/pi-tools-sandbox-context.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 import { buildEmptyExplicitToolAllowlistError } from "./tool-allowlist-guard.js";
-import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY, normalizeToolName } from "./tool-policy.js";
+import {
+  DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
+  IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY,
+  normalizeToolName,
+} from "./tool-policy.js";
 
 const tinyPngBuffer = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO2f7z8AAAAASUVORK5CYII=",
@@ -465,6 +469,7 @@ describe("createOpenClawCodingTools", () => {
     expect(createOpenClawToolsMock).toHaveBeenCalledTimes(1);
     expect(latestCreateOpenClawToolsOptions().pluginToolAllowlist).toStrictEqual([
       "lobster",
+      IMPLICIT_CORE_TOOLS_ALLOWLIST_ENTRY,
       DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
     ]);
   });
