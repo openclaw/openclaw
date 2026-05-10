@@ -1503,7 +1503,7 @@ export async function runEmbeddedPiAgent(
                 finalPromptText: attempt.finalPromptText,
                 replayInvalid: resolveReplayInvalidForAttempt(),
                 livenessState: "blocked",
-                error: { kind: "context_overflow", message: errorText },
+                error: { kind: "irreducible_overflow", message: errorText },
               },
             };
           }
