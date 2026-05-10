@@ -14,6 +14,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Exec approvals: keep `exec.approval.list` on the lightweight policy-summary path so listing pending approvals no longer loads the rich tree-sitter command explainer. (#76943) Thanks @rubencu.
 - Agents: surface concise default-visible warnings when `exec`/`bash` tool calls fail after the assistant claims success, while keeping raw stderr hidden unless verbose details are enabled. Fixes #60497. (#80003) Thanks @jbetala7.
 - CLI/agent: let `openclaw agent --model` use the backend/admin Gateway scope without cached device-token scopes silently downscoping the request. (#78837) Thanks @VACInc.
 - Ollama: keep DeepSeek V4 cloud models thinking-capable even when Ollama Cloud `/api/show` omits the `thinking` capability, so `/think high` no longer rejects `ollama/deepseek-v4-*:cloud`.
