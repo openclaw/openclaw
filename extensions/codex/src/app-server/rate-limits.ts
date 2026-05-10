@@ -29,10 +29,25 @@ export function formatCodexUsageLimitErrorMessage(params: {
   if (nextReset) {
     parts.push(`Next reset ${formatResetTime(nextReset.resetsAtMs, nowMs)}.`);
   } else {
-    parts.push("Codex did not return a reset time for this limit.");
+    const codexRetryHint = extractCodexRetryHint(message);
+    if (codexRetryHint) {
+      parts.push(`Codex says to try again ${codexRetryHint}.`);
+    } else {
+      parts.push("Codex did not return a reset time for this limit.");
+    }
   }
   parts.push("Run /codex account for current usage details.");
   return parts.join(" ");
+}
+
+export function shouldRefreshCodexRateLimitsForUsageLimitMessage(
+  message: string | null | undefined,
+): boolean {
+  const text = normalizeText(message);
+  return Boolean(
+    text?.includes("You've reached your Codex subscription usage limit.") &&
+    !text.includes("Next reset "),
+  );
 }
 
 export function summarizeCodexRateLimits(
@@ -90,7 +105,8 @@ function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string
     const window = readRateLimitWindow(snapshot, key);
     return window ? [formatRateLimitWindow(key, window, nowMs)] : [];
   });
-  const reachedType = readString(snapshot, "rateLimitReachedType");
+  const reachedType =
+    readString(snapshot, "rateLimitReachedType") ?? readString(snapshot, "rate_limit_reached_type");
   const suffix = reachedType ? ` (${formatReachedType(reachedType)})` : "";
   return `${label}: ${windows.join(", ") || "available"}${suffix}`;
 }
@@ -126,7 +142,14 @@ function collectRateLimitSnapshots(
       collectRateLimitSnapshots(byLimitId[key], snapshots, seen);
     }
   }
+  const snakeByLimitId = value.rate_limits_by_limit_id;
+  if (isJsonObject(snakeByLimitId)) {
+    for (const key of sortedRateLimitKeys(Object.keys(snakeByLimitId))) {
+      collectRateLimitSnapshots(snakeByLimitId[key], snapshots, seen);
+    }
+  }
   collectRateLimitSnapshots(value.rateLimits, snapshots, seen);
+  collectRateLimitSnapshots(value.rate_limits, snapshots, seen);
   collectRateLimitSnapshots(value.data, snapshots, seen);
   collectRateLimitSnapshots(value.items, snapshots, seen);
 }
@@ -149,8 +172,8 @@ function addRateLimitSnapshot(
   seen: Set<string>,
 ): void {
   const signature = [
-    readNullableString(snapshot, "limitId") ?? "",
-    readNullableString(snapshot, "limitName") ?? "",
+    readNullableString(snapshot, "limitId") ?? readNullableString(snapshot, "limit_id") ?? "",
+    readNullableString(snapshot, "limitName") ?? readNullableString(snapshot, "limit_name") ?? "",
     formatWindowSignature(snapshot.primary),
     formatWindowSignature(snapshot.secondary),
   ].join("|");
@@ -166,8 +189,11 @@ function isRateLimitSnapshot(value: JsonObject): boolean {
     isJsonObject(value.primary) ||
     isJsonObject(value.secondary) ||
     value.rateLimitReachedType !== undefined ||
+    value.rate_limit_reached_type !== undefined ||
     value.limitId !== undefined ||
-    value.limitName !== undefined
+    value.limit_id !== undefined ||
+    value.limitName !== undefined ||
+    value.limit_name !== undefined
   );
 }
 
@@ -179,17 +205,17 @@ function readRateLimitWindow(
   if (!isJsonObject(window)) {
     return undefined;
   }
-  const resetsAt = readNumber(window, "resetsAt");
+  const resetsAt = readNumber(window, "resetsAt") ?? readNumber(window, "resets_at");
   return {
     ...(typeof resetsAt === "number" && Number.isFinite(resetsAt) && resetsAt > 0
       ? { resetsAtMs: resetsAt * 1000 }
       : { resetsAtMs: 0 }),
-    ...readOptionalNumberField(window, "usedPercent"),
+    ...readOptionalNumberField(window, "usedPercent", "used_percent"),
   };
 }
 
-function readOptionalNumberField(record: JsonObject, key: string): { usedPercent?: number } {
-  const value = readNumber(record, key);
+function readOptionalNumberField(record: JsonObject, ...keys: string[]): { usedPercent?: number } {
+  const value = keys.map((key) => readNumber(record, key)).find((entry) => entry !== undefined);
   return value === undefined ? {} : { usedPercent: value };
 }
 
@@ -203,7 +229,10 @@ function formatRateLimitWindow(key: LimitWindowKey, window: RateLimitReset, nowM
 
 function formatLimitLabel(snapshot: JsonObject): string {
   const label =
-    readNullableString(snapshot, "limitName") ?? readNullableString(snapshot, "limitId");
+    readNullableString(snapshot, "limitName") ??
+    readNullableString(snapshot, "limit_name") ??
+    readNullableString(snapshot, "limitId") ??
+    readNullableString(snapshot, "limit_id");
   if (!label || label === CODEX_LIMIT_ID) {
     return "Codex";
   }
@@ -239,7 +268,23 @@ function formatWindowSignature(value: JsonValue | undefined): string {
   if (!isJsonObject(value)) {
     return "";
   }
-  return `${readNumber(value, "usedPercent") ?? ""}:${readNumber(value, "resetsAt") ?? ""}`;
+  return `${readNumber(value, "usedPercent") ?? readNumber(value, "used_percent") ?? ""}:${
+    readNumber(value, "resetsAt") ?? readNumber(value, "resets_at") ?? ""
+  }`;
+}
+
+function extractCodexRetryHint(message: string | undefined): string | undefined {
+  if (!message) {
+    return undefined;
+  }
+  const tryAgainAt = /\btry again\s+(at\s+[^.!?\n]+)(?:[.!?]|$)/iu.exec(message);
+  if (tryAgainAt?.[1]) {
+    return tryAgainAt[1].trim();
+  }
+  const tryAgainRelative = /\btry again\s+((?:tomorrow|in\s+[^.!?\n]+)[^.!?\n]*)(?:[.!?]|$)/iu.exec(
+    message,
+  );
+  return tryAgainRelative?.[1]?.trim();
 }
 
 function readString(record: JsonObject, key: string): string | undefined {
