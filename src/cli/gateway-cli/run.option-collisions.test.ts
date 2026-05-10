@@ -196,20 +196,20 @@ describe("gateway run option collisions", () => {
     await sharedProgram.parseAsync(argv, { from: "user" });
   }
 
-  function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): T {
+  function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
     expect(call).toBeDefined();
-    return call?.[argIndex] as T;
+    return call?.[argIndex];
   }
 
   function gatewayStartOptions(index = 0) {
     expect(startGatewayServer.mock.calls[index]?.[0]).toBe(18789);
-    return callArg<{
+    return callArg(startGatewayServer, index, 1) as {
       auth?: { mode?: string; token?: string; password?: string };
       bind?: string;
       startupConfigSnapshotRead?: { snapshot?: Record<string, unknown> };
       startupStartedAt?: number;
-    }>(startGatewayServer, index, 1);
+    };
   }
 
   function expectAuthOverrideMode(mode: string) {
@@ -230,9 +230,9 @@ describe("gateway run option collisions", () => {
 
     expect(forceFreePortAndWait.mock.calls[0]?.[0]).toBe(18789);
     expect(waitForPortBindable.mock.calls[0]?.[0]).toBe(18789);
-    expect(callArg<{ intervalMs?: number; timeoutMs?: number }>(waitForPortBindable, 0, 1)).toEqual(
-      { intervalMs: 150, timeoutMs: 3000 },
-    );
+    expect(
+      callArg(waitForPortBindable, 0, 1) as { intervalMs?: number; timeoutMs?: number },
+    ).toEqual({ intervalMs: 150, timeoutMs: 3000 });
     expect(setGatewayWsLogStyle).toHaveBeenCalledWith("full");
     expect(gatewayStartOptions().auth?.token).toBe("tok_run");
   });
