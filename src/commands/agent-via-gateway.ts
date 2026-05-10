@@ -32,6 +32,7 @@ type GatewayAgentResponse = {
   status?: string;
   summary?: string;
   result?: AgentGatewayResult;
+  deliveryStatus?: unknown;
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
@@ -128,6 +129,17 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
+function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentResponse {
+  const deliveryStatus = response.result?.deliveryStatus;
+  if (deliveryStatus === undefined) {
+    return response;
+  }
+  return {
+    ...response,
+    deliveryStatus,
+  };
+}
+
 async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
@@ -210,7 +222,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, response);
+    writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
     return response;
   }
 

@@ -65,7 +65,7 @@ openclaw agent --agent ops --message "Run locally" --local
 
 ## JSON delivery status
 
-When `--json --deliver` is used, the response may include `deliveryStatus` so scripts can distinguish delivered, suppressed, partial, and failed sends:
+When `--json --deliver` is used, the CLI JSON response may include top-level `deliveryStatus` so scripts can distinguish delivered, suppressed, partial, and failed sends:
 
 ```json
 {
@@ -82,6 +82,8 @@ When `--json --deliver` is used, the response may include `deliveryStatus` so sc
 ```
 
 `deliveryStatus.status` is one of `sent`, `suppressed`, `partial_failed`, or `failed`. `suppressed` means delivery was intentionally not sent, for example a message-sending hook cancelled it or there was no visible result; it is still a terminal no-retry outcome. `partial_failed` means at least one payload was sent before a later payload failed. `failed` means no durable send completed or delivery preflight failed.
+
+Gateway-backed CLI responses also preserve the raw Gateway result shape, where the same object is available at `result.deliveryStatus`.
 
 Common fields:
 
