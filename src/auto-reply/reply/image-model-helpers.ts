@@ -296,34 +296,45 @@ export async function resolveModelSupportsVision(
     loadModelCatalog: loadCatalog,
   } = params;
 
-  // Always validate against the catalog first — a model being in imageModel
-  // config does not guarantee it actually supports vision input.
   try {
     const { findModelInCatalog, loadModelCatalog, modelSupportsVision } =
       await import("../../agents/model-catalog.js");
     const catalog = await (loadCatalog ?? loadModelCatalog)({ config: cfg });
     const catalogEntry = findModelInCatalog(catalog, provider, model);
-    if (modelSupportsVision(catalogEntry)) {
-      return true;
+
+    // If the catalog has an entry for this model, trust its vision capability flag.
+    if (catalogEntry !== undefined) {
+      return modelSupportsVision(catalogEntry);
     }
+
+    // Catalog does not contain this model. Fall back to imageModel config
+    // as a lenient signal — the user may have configured a custom or
+    // provider-specific model that the catalog does not yet cover.
+    if (imageModelConfig) {
+      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+      const { keys: imageModelKeys } = collectImageModelKeys({
+        imageModelConfig,
+        aliasIndex,
+        defaultProvider,
+      });
+      if (isImageModel(provider, model, imageModelKeys)) {
+        return true;
+      }
+    }
+    return false;
   } catch {
-    // Catalog lookup failed; fall through to imageModel config as a lenient
-    // signal for environments where the catalog is unavailable.
-  }
-
-  // Catalog did not confirm vision support; check imageModel config as a
-  // configuration-level signal that the user intends this model for images.
-  if (imageModelConfig) {
-    const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
-    const { keys: imageModelKeys } = collectImageModelKeys({
-      imageModelConfig,
-      aliasIndex,
-      defaultProvider,
-    });
-    if (isImageModel(provider, model, imageModelKeys)) {
-      return true;
+    // Catalog lookup failed entirely. Fall back to imageModel config.
+    if (imageModelConfig) {
+      const aliasIndex = buildModelAliasIndex({ cfg, defaultProvider });
+      const { keys: imageModelKeys } = collectImageModelKeys({
+        imageModelConfig,
+        aliasIndex,
+        defaultProvider,
+      });
+      if (isImageModel(provider, model, imageModelKeys)) {
+        return true;
+      }
     }
+    return false;
   }
-
-  return false;
 }
