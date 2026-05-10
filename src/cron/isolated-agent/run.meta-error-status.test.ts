@@ -65,4 +65,23 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.error).not.toContain("CommandLaneTaskTimeoutError");
     expect(result.error).not.toContain("cron-nested");
   });
+
+  it("keeps cron timeout result when executor rejects after the cron abort signal fires", async () => {
+    const abortController = new AbortController();
+    abortController.abort("cron: job execution timed out (last phase: model_call_started)");
+    runWithModelFallbackMock.mockRejectedValueOnce(
+      new Error(
+        'All models failed (2): openai-codex/gpt-5.5: Command lane "cron-nested" task timed out after 330000ms (timeout)',
+      ),
+    );
+
+    const result = await runCronIsolatedAgentTurn(
+      makeIsolatedAgentTurnParams({ abortSignal: abortController.signal }),
+    );
+
+    expect(result.status).toBe("error");
+    expect(result.error).toBe("cron: job execution timed out (last phase: model_call_started)");
+    expect(result.error).not.toContain("All models failed");
+    expect(result.error).not.toContain("cron-nested");
+  });
 });
