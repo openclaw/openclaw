@@ -2,6 +2,10 @@ import { formatCliCommand } from "./command-format.js";
 
 const DEFAULT_GATEWAY_PORT_EXAMPLE = 18789;
 
+function formatInlineCliCommand(command: string): string {
+  return `\`${formatCliCommand(command)}\``;
+}
+
 export function formatPortRangeHint(example = DEFAULT_GATEWAY_PORT_EXAMPLE): string {
   return `Use a port number from 1 to 65535, for example ${example}.`;
 }
@@ -27,7 +31,7 @@ export function formatUnknownChannelMessage(params: {
 }): string {
   const purpose = params.purpose ? ` for ${params.purpose}` : "";
   const listCommand = params.listCommand ?? "openclaw channels list --all";
-  return `Unknown channel "${params.channel}"${purpose}. Run ${formatCliCommand(
+  return `Unknown channel "${params.channel}"${purpose}. Run ${formatInlineCliCommand(
     listCommand,
   )} to see configured and installable channels.`;
 }
@@ -39,7 +43,7 @@ export function formatUnsupportedChannelActionMessage(params: {
 }): string {
   const inspectCommand =
     params.inspectCommand ?? `openclaw channels capabilities --channel ${params.channel}`;
-  return `Channel "${params.channel}" does not support ${params.action}. Run ${formatCliCommand(
+  return `Channel "${params.channel}" does not support ${params.action}. Run ${formatInlineCliCommand(
     inspectCommand,
   )} to inspect supported actions.`;
 }
@@ -51,7 +55,7 @@ export function formatLookupMiss(params: {
   valueLabel?: string;
 }): string {
   const valueLabel = params.valueLabel ?? params.noun.toLowerCase();
-  return `${params.noun} not found: ${params.value}. Run ${formatCliCommand(
+  return `${params.noun} not found: ${params.value}. Run ${formatInlineCliCommand(
     params.listCommand,
   )} to see recent ${valueLabel}s.`;
 }
@@ -63,9 +67,9 @@ export function formatMissingPluginMessage(params: {
 }): string {
   const listCommand = params.listCommand ?? "openclaw plugins list";
   const searchHint = params.includeSearch
-    ? `, or ${formatCliCommand("openclaw plugins search " + params.id)} to look for installable plugins`
+    ? `, or ${formatInlineCliCommand("openclaw plugins search " + params.id)} to look for installable plugins`
     : "";
-  return `Plugin not found: ${params.id}. Run ${formatCliCommand(
+  return `Plugin not found: ${params.id}. Run ${formatInlineCliCommand(
     listCommand,
   )} to see installed plugins${searchHint}.`;
 }
