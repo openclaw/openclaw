@@ -203,18 +203,12 @@ export function createProcessTool(
     };
   };
 
-  const buildInputWaitHint = (
-    runtime: RunningSessionRuntime | undefined,
-    options?: { attachContext?: boolean },
-  ) => {
+  const buildInputWaitHint = (runtime: RunningSessionRuntime | undefined) => {
     if (!runtime?.waitingForInput) {
       return "";
     }
     const idle = formatDurationCompact(runtime.idleMs) ?? `${runtime.idleMs}ms`;
-    const inputHint = options?.attachContext
-      ? "Use process write, send-keys, submit, or paste to provide input."
-      : "Use process attach, then process write, send-keys, submit, or paste to provide input.";
-    return `\n\nNo new output for ${idle}; this session may be waiting for input. ${inputHint}`;
+    return `\n\nNo new output for ${idle}; this session may be waiting for input. Use process write, send-keys, submit, or paste to provide input.`;
   };
 
   const cancelManagedSession = (sessionId: string) => {
@@ -245,7 +239,6 @@ export function createProcessTool(
       const params = args as {
         action:
           | "list"
-          | "attach"
           | "poll"
           | "log"
           | "write"
@@ -391,82 +384,6 @@ export function createProcessTool(
       });
 
       switch (params.action) {
-        case "attach": {
-          if (scopedSession) {
-            if (!scopedSession.backgrounded) {
-              return failText(`Session ${params.sessionId} is not backgrounded.`);
-            }
-            const window = resolveLogSliceWindow(params.offset, params.limit);
-            const { slice, totalLines, totalChars } = sliceLogLines(
-              scopedSession.aggregated,
-              window.effectiveOffset,
-              window.effectiveLimit,
-            );
-            const runtime = describeRunningSession(scopedSession);
-            const attachDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
-            const inputWaitHint = buildInputWaitHint(runtime, { attachContext: true });
-            const inputControlHint =
-              runtime.stdinWritable && !runtime.waitingForInput
-                ? "\n\nUse process write, send-keys, submit, or paste to provide input."
-                : "";
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    (slice || "(no output yet)") +
-                    attachDefaultTailNote +
-                    inputWaitHint +
-                    inputControlHint,
-                },
-              ],
-              details: {
-                status: "running",
-                sessionId: params.sessionId,
-                total: totalLines,
-                totalLines,
-                totalChars,
-                truncated: scopedSession.truncated,
-                name: deriveSessionName(scopedSession.command),
-                ...runningSessionInputDetails(runtime),
-              },
-            };
-          }
-          if (scopedFinished) {
-            const window = resolveLogSliceWindow(params.offset, params.limit);
-            const { slice, totalLines, totalChars } = sliceLogLines(
-              scopedFinished.aggregated,
-              window.effectiveOffset,
-              window.effectiveLimit,
-            );
-            const status = scopedFinished.status === "completed" ? "completed" : "failed";
-            const attachDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
-            return {
-              content: [
-                {
-                  type: "text",
-                  text:
-                    (slice || "(no output recorded)") +
-                    attachDefaultTailNote +
-                    "\n\nSession already exited.",
-                },
-              ],
-              details: {
-                status,
-                sessionId: params.sessionId,
-                total: totalLines,
-                totalLines,
-                totalChars,
-                truncated: scopedFinished.truncated,
-                exitCode: scopedFinished.exitCode ?? undefined,
-                exitSignal: scopedFinished.exitSignal ?? undefined,
-                name: deriveSessionName(scopedFinished.command),
-              },
-            };
-          }
-          return failText(`No session found for ${params.sessionId}`);
-        }
-
         case "poll": {
           if (!scopedSession) {
             if (scopedFinished) {
@@ -583,7 +500,13 @@ export function createProcessTool(
             const runtime = describeRunningSession(scopedSession);
             const logDefaultTailNote = defaultTailNote(totalLines, window.usingDefaultTail);
             return {
-              content: [{ type: "text", text: (slice || "(no output yet)") + logDefaultTailNote }],
+              content: [
+                {
+                  type: "text",
+                  text:
+                    (slice || "(no output yet)") + logDefaultTailNote + buildInputWaitHint(runtime),
+                },
+              ],
               details: {
                 status: scopedSession.exited ? "completed" : "running",
                 sessionId: params.sessionId,

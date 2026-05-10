@@ -61,9 +61,8 @@ Config (preferred):
 Actions:
 
 - `list`: running + finished sessions
-- `attach`: read the aggregated output and show input recovery hints
 - `poll`: drain new output for a session (also reports exit status)
-- `log`: read the aggregated output (supports `offset` + `limit`)
+- `log`: read the aggregated output and show input recovery hints (supports `offset` + `limit`)
 - `write`: send stdin (`data`, optional `eof`)
 - `send-keys`: send explicit key tokens or bytes to a PTY-backed session
 - `submit`: send Enter / carriage return to a PTY-backed session
@@ -76,16 +75,16 @@ Notes:
 
 - Only backgrounded sessions are listed/persisted in memory.
 - Sessions are lost on process restart (no disk persistence).
-- Session logs are only saved to chat history if you run `process attach/poll/log` and the tool result is recorded.
+- Session logs are only saved to chat history if you run `process poll/log` and the tool result is recorded.
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - Use `poll` / `log` for status, logs, quiet-success confirmation, or
   completion confirmation when automatic completion wake is unavailable.
-- Use `attach` before recovering an interactive CLI so the current transcript,
+- Use `log` before recovering an interactive CLI so the current transcript,
   stdin state, and input-wait hint are visible together.
 - Use `write` / `send-keys` / `submit` / `paste` / `kill` when you need input
   or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
-- `process list`, `attach`, `poll`, and `log` report `waitingForInput` only
+- `process list`, `poll`, and `log` report `waitingForInput` only
   when the session still has writable stdin and has been idle longer than the
   input-wait threshold.
 - `process log` uses line-based `offset`/`limit`.
@@ -106,10 +105,10 @@ Run a long task and poll later:
 { "tool": "process", "action": "poll", "sessionId": "<id>" }
 ```
 
-Attach to an interactive session before sending input:
+Inspect an interactive session before sending input:
 
 ```json
-{ "tool": "process", "action": "attach", "sessionId": "<id>" }
+{ "tool": "process", "action": "log", "sessionId": "<id>" }
 ```
 
 Start immediately in background:
