@@ -59,49 +59,6 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 
-function migrateLegacySessionEntries(entries: TranscriptEntry[]): void {
-  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-  const version = header?.version ?? 1;
-  if (version < 2) {
-    let previousId: string | null = null;
-    let index = 0;
-    for (const entry of entries) {
-      if (entry.type === "session") {
-        entry.version = 2;
-        continue;
-      }
-      const mutable = entry as unknown as Record<string, unknown>;
-      if (typeof mutable.id !== "string") {
-        mutable.id = `legacy-${index++}`;
-      }
-      mutable.parentId = previousId;
-      const entryId = mutable.id;
-      previousId = typeof entryId === "string" ? entryId : null;
-      if (entry.type === "compaction" && typeof mutable.firstKeptEntryIndex === "number") {
-        const target = entries[mutable.firstKeptEntryIndex];
-        if (target && target.type !== "session") {
-          mutable.firstKeptEntryId = (target as unknown as Record<string, unknown>).id;
-        }
-        delete mutable.firstKeptEntryIndex;
-      }
-    }
-  }
-  if (version < 3) {
-    for (const entry of entries) {
-      if (entry.type === "session") {
-        entry.version = 3;
-        continue;
-      }
-      if (entry.type === "message") {
-        const message = (entry as { message?: { role?: string } }).message;
-        if (message?.role === "hookMessage") {
-          message.role = "custom";
-        }
-      }
-    }
-  }
-}
-
 function readSessionBranch(params: { agentId?: string; sessionId: string; sessionKey?: string }): {
   header: SessionHeader | null;
   leafId: string | null;
@@ -122,7 +79,6 @@ function readSessionBranch(params: { agentId?: string; sessionId: string; sessio
       `Transcript is not in SQLite for agent ${scope.agentId} session ${params.sessionId}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
     );
   }
-  migrateLegacySessionEntries(transcriptEntries);
   const header =
     transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = transcriptEntries.filter(
@@ -794,6 +750,7 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
   }
   const rawEvents = sortTrajectoryEvents([...runtimeEvents, ...transcriptEvents]);
   const events = rawEvents.map((event) => redactEventForExport(event, redaction));
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   const manifest: TrajectoryBundleManifest = {
     traceSchema: "openclaw-trajectory",
     schemaVersion: 1,
@@ -806,11 +763,21 @@ export async function exportTrajectoryBundle(params: BuildTrajectoryBundleParams
     eventCount: events.length,
     runtimeEventCount: runtimeEvents.length,
     transcriptEventCount: transcriptEvents.length,
-    sourceFiles: {
-      session: `agent-db:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:transcript_events:${params.sessionId}`,
+    sourceDatabases: {
+      session: {
+        role: "agent",
+        agentId,
+        table: "transcript_events",
+        sessionId: params.sessionId,
+      },
       runtime:
         sqliteRuntimeEvents.length > 0
-          ? `agent-db:${params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey)}:trajectory_runtime_events:${params.sessionId}`
+          ? {
+              role: "agent",
+              agentId,
+              table: "trajectory_runtime_events",
+              sessionId: params.sessionId,
+            }
           : undefined,
     },
   };

@@ -173,7 +173,7 @@ export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   stateDir: string;
-  sessionPathOpts: { agentId?: string };
+  sessionScopeOpts: { agentId?: string };
   prompter: DoctorPrompterLike;
   warnings: string[];
   changes: string[];
@@ -184,8 +184,8 @@ export async function repairHeartbeatPoisonedMainSession(params: {
     return;
   }
   const transcriptScope =
-    params.sessionPathOpts.agentId && mainEntry.sessionId
-      ? { agentId: params.sessionPathOpts.agentId, sessionId: mainEntry.sessionId }
+    params.sessionScopeOpts.agentId && mainEntry.sessionId
+      ? { agentId: params.sessionScopeOpts.agentId, sessionId: mainEntry.sessionId }
       : undefined;
   const resolveCandidate = (entry: SessionEntry | undefined) =>
     resolveHeartbeatMainSessionRepairCandidate({

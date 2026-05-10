@@ -51,8 +51,8 @@ describe("memory source state", () => {
         }),
       },
       source: "sessions",
-      path: "sessions/main/thread",
-      existingHashes: new Map([["sessions/main/thread", "hash-from-snapshot"]]),
+      path: "transcript:main:thread",
+      existingHashes: new Map([["transcript:main:thread", "hash-from-snapshot"]]),
     });
 
     expect(hash).toBe("hash-from-snapshot");
@@ -72,7 +72,7 @@ describe("memory source state", () => {
         }),
       },
       source: "sessions",
-      path: "sessions/main/thread",
+      path: "transcript:main:thread",
       existingHashes: null,
     });
 
@@ -80,7 +80,7 @@ describe("memory source state", () => {
     expect(calls).toEqual([
       {
         sql: MEMORY_SOURCE_FILE_HASH_SQL,
-        args: ["sessions/main/thread", "sessions"],
+        args: ["transcript:main:thread", "sessions"],
       },
     ]);
   });

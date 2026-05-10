@@ -78,11 +78,11 @@ describe("listMemoryCorePublicArtifacts", () => {
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
+        relativePath: "memory/events/memory-host-events.json",
         absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events",
         agentIds: ["main"],
         contentType: "json",
-        content: expect.stringContaining('"type":"memory.recall.recorded"'),
+        content: expect.stringContaining('"type": "memory.recall.recorded"'),
         sizeBytes: expect.any(Number),
         updatedAtMs: Date.parse("2026-04-06T12:00:00.000Z"),
       },

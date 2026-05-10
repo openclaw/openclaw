@@ -68,7 +68,7 @@ describe("msteams polls", () => {
   });
 });
 
-const createFsStore = async () => {
+const createSqliteStore = async () => {
   const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-polls-"));
   return createMSTeamsPollStoreState({ stateDir });
 };
@@ -77,7 +77,7 @@ const createMemoryStore = () => createMSTeamsPollStoreMemory();
 
 describe.each([
   { name: "memory", createStore: createMemoryStore },
-  { name: "fs", createStore: createFsStore },
+  { name: "sqlite", createStore: createSqliteStore },
 ])("$name poll store", ({ createStore }) => {
   beforeEach(() => {
     resetPluginStateStoreForTests();

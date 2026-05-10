@@ -11,17 +11,16 @@ import type {
 } from "./types.js";
 
 /**
- * LegacyContextEngine wraps the existing compaction behavior behind the
- * ContextEngine interface, preserving 100% backward compatibility.
+ * Built-in context engine for the default "legacy" slot id.
  *
- * - ingest: no-op (SessionManager handles message persistence)
- * - assemble: pass-through (existing sanitize/validate/limit pipeline in attempt.ts handles this)
- * - compact: delegates to compactEmbeddedPiSessionDirect
+ * The public id stays "legacy" for config compatibility, but runtime transcript
+ * persistence is SQLite-owned now. This engine only preserves the default
+ * assembly and compaction behavior behind the ContextEngine interface.
  */
 export class LegacyContextEngine implements ContextEngine {
   readonly info: ContextEngineInfo = {
     id: "legacy",
-    name: "Legacy Context Engine",
+    name: "Built-in Context Engine",
     version: "1.0.0",
   };
 
@@ -31,7 +30,7 @@ export class LegacyContextEngine implements ContextEngine {
     message: AgentMessage;
     isHeartbeat?: boolean;
   }): Promise<IngestResult> {
-    // No-op: SessionManager handles message persistence in the legacy flow
+    // No-op: the active SQLite transcript writer owns message persistence.
     return { ingested: false };
   }
 
@@ -45,7 +44,7 @@ export class LegacyContextEngine implements ContextEngine {
     model?: string;
   }): Promise<AssembleResult> {
     // Pass-through: the existing sanitize -> validate -> limit -> repair pipeline
-    // in attempt.ts handles context assembly for the legacy engine.
+    // in attempt.ts handles context assembly for the default engine.
     // We just return the messages as-is with a rough token estimate.
     return {
       messages: params.messages,
@@ -63,7 +62,7 @@ export class LegacyContextEngine implements ContextEngine {
     tokenBudget?: number;
     runtimeContext?: ContextEngineRuntimeContext;
   }): Promise<void> {
-    // No-op: legacy flow persists context directly in SessionManager.
+    // No-op: persistence happens through the SQLite transcript writer.
   }
 
   async compact(params: {
@@ -80,6 +79,6 @@ export class LegacyContextEngine implements ContextEngine {
   }
 
   async dispose(): Promise<void> {
-    // Nothing to clean up for legacy engine
+    // Nothing to clean up for the built-in engine.
   }
 }

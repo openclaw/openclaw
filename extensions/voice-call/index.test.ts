@@ -595,37 +595,22 @@ describe("voice-call plugin", () => {
     expect(runtimeStub.manager.speak).not.toHaveBeenCalled();
   });
 
-  it("normalizes legacy config through runtime creation and warns to run doctor", async () => {
-    const { methods } = setup({
-      enabled: true,
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
-      },
-      streaming: {
+  it("rejects legacy runtime config and warns to run doctor", async () => {
+    expect(() =>
+      setup({
         enabled: true,
-        sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
-      },
-    });
-    const handler = methods.get("voicecall.status") as
-      | ((ctx: {
-          params: Record<string, unknown>;
-          respond: ReturnType<typeof vi.fn>;
-        }) => Promise<void>)
-      | undefined;
-    const respond = vi.fn();
-
-    await handler?.({ params: { callId: "call-1" }, respond });
-
-    expect(vi.mocked(createVoiceCallRuntime)).toHaveBeenCalledTimes(1);
-    const runtimeConfig = firstRuntimeConfig();
-    expect(runtimeConfig?.enabled).toBe(true);
-    expect(runtimeConfig?.provider).toBe("mock");
-    expect(runtimeConfig?.fromNumber).toBe("+15550001234");
-    expect(runtimeConfig?.streaming?.enabled).toBe(true);
-    expect(runtimeConfig?.streaming?.provider).toBe("openai");
-    expect(runtimeConfig?.streaming?.providers?.openai?.apiKey).toBe("sk-test");
+        provider: "log",
+        twilio: {
+          from: "+15550001234",
+        },
+        streaming: {
+          enabled: true,
+          sttProvider: "openai",
+          openaiApiKey: "sk-test", // pragma: allowlist secret
+        },
+      }),
+    ).toThrow();
+    expect(vi.mocked(createVoiceCallRuntime)).not.toHaveBeenCalled();
     expectWarningIncludes('Run "openclaw doctor --fix"');
   });
 

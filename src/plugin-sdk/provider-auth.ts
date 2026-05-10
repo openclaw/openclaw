@@ -148,10 +148,12 @@ function parseCachedCopilotToken(value: unknown): CachedCopilotToken | undefined
     return undefined;
   }
   const updatedAt = (value as { updatedAt?: unknown }).updatedAt;
+  const integrationId = (value as { integrationId?: unknown }).integrationId;
   return {
     token: (value as { token: string }).token,
     expiresAt: (value as { expiresAt: number }).expiresAt,
     updatedAt: typeof updatedAt === "number" ? updatedAt : 0,
+    integrationId: typeof integrationId === "string" ? integrationId : undefined,
   };
 }
 

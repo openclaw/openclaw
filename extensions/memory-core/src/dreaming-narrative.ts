@@ -93,14 +93,14 @@ const DREAMS_FILENAMES = ["DREAMS.md", "dreams.md"] as const;
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const DREAMS_UPDATE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.updateLocks");
 
-type DreamsFileLockEntry = {
+type DreamsUpdateLockEntry = {
   withLock: ReturnType<typeof createAsyncLock>;
   refs: number;
 };
 
-const dreamsFileLocks = resolveGlobalMap<string, DreamsFileLockEntry>(DREAMS_FILE_LOCKS_KEY);
+const dreamsUpdateLocks = resolveGlobalMap<string, DreamsUpdateLockEntry>(DREAMS_UPDATE_LOCKS_KEY);
 
 function isRequestScopedSubagentRuntimeError(err: unknown): boolean {
   return (
@@ -503,10 +503,10 @@ async function updateDreamsFile<T>(params: {
 }): Promise<T> {
   const dreamsPath = await resolveDreamsPath(params.workspaceDir);
   await fs.mkdir(path.dirname(dreamsPath), { recursive: true });
-  let lockEntry = dreamsFileLocks.get(dreamsPath);
+  let lockEntry = dreamsUpdateLocks.get(dreamsPath);
   if (!lockEntry) {
     lockEntry = { withLock: createAsyncLock(), refs: 0 };
-    dreamsFileLocks.set(dreamsPath, lockEntry);
+    dreamsUpdateLocks.set(dreamsPath, lockEntry);
   }
   lockEntry.refs += 1;
   try {
@@ -520,8 +520,8 @@ async function updateDreamsFile<T>(params: {
     });
   } finally {
     lockEntry.refs -= 1;
-    if (lockEntry.refs <= 0 && dreamsFileLocks.get(dreamsPath) === lockEntry) {
-      dreamsFileLocks.delete(dreamsPath);
+    if (lockEntry.refs <= 0 && dreamsUpdateLocks.get(dreamsPath) === lockEntry) {
+      dreamsUpdateLocks.delete(dreamsPath);
     }
   }
 }

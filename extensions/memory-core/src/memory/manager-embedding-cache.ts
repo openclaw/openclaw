@@ -1,5 +1,6 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import {
+  MEMORY_INDEX_TABLE_NAMES,
   parseEmbedding,
   type MemoryChunk,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
@@ -36,7 +37,7 @@ export function loadMemoryEmbeddingCache(params: {
     return new Map();
   }
 
-  const tableName = params.tableName ?? "embedding_cache";
+  const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.embeddingCache;
   const out = new Map<string, number[]>();
   const baseParams: SQLInputValue[] = [provider.id, provider.model, params.providerKey];
   const batchSize = 400;
@@ -69,7 +70,7 @@ export function upsertMemoryEmbeddingCache(params: {
   if (!params.enabled || !provider || !params.providerKey || params.entries.length === 0) {
     return;
   }
-  const tableName = params.tableName ?? "embedding_cache";
+  const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.embeddingCache;
   const now = params.now ?? Date.now();
   const stmt = params.db.prepare(
     `INSERT INTO ${tableName} (provider, model, provider_key, hash, embedding, dims, updated_at)\n` +

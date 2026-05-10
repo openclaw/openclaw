@@ -287,7 +287,6 @@ export function createImageLifecycleCore() {
         runAssembled: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runAssembled"]>[0]) => {
             await params.recordInboundSession({
-              storePath: params.storePath,
               sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
               ctx: params.ctxPayload,
               groupResolution: params.record?.groupResolution,

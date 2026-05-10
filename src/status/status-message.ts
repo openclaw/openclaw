@@ -239,9 +239,8 @@ const formatQueueDetails = (queue?: QueueStatus) => {
   return detailParts.length ? ` (${detailParts.join(" · ")})` : "";
 };
 
-const readUsageFromSessionLog = (
+const readUsageFromSessionTranscript = (
   sessionId?: string,
-  sessionEntry?: SessionEntry,
   agentId?: string,
   sessionKey?: string,
 ):
@@ -255,7 +254,6 @@ const readUsageFromSessionLog = (
       model?: string;
     }
   | undefined => {
-  // Session-file-shaped paths are stable transcript identities; content is read from SQLite.
   if (!sessionId) {
     return undefined;
   }
@@ -570,9 +568,8 @@ export function buildStatusMessage(args: StatusArgs): string {
   // Prefer prompt-size tokens from the session transcript when it looks larger
   // (cached prompt tokens are often missing from agent meta/store).
   if (args.includeTranscriptUsage) {
-    const logUsage = readUsageFromSessionLog(
+    const logUsage = readUsageFromSessionTranscript(
       entry?.sessionId,
-      entry,
       args.agentId,
       args.sessionKey,
     );

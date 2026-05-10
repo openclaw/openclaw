@@ -1110,7 +1110,7 @@ export async function loadSessionLogs(params: {
         cost,
       });
     } catch {
-      // Ignore malformed lines
+      // Ignore malformed transcript entries.
     }
   }
 

@@ -190,7 +190,7 @@ function pruneCronRunLogRows(params: {
   rows.forEach((row, index) => {
     runningBytes += row.entry_json.length + 1;
     if (index + 1 > params.keepLines || runningBytes > params.maxBytes) {
-      deleteSeqs.push(Number(row.seq));
+      deleteSeqs.push(row.seq);
     }
   });
   if (deleteSeqs.length === 0) {

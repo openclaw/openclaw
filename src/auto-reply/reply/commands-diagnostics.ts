@@ -531,9 +531,9 @@ function resolveDiagnosticsSessionChannel(
 ): string | undefined {
   return (
     normalizeOptionalString(entry.deliveryContext?.channel) ??
+    normalizeOptionalString(entry.lastChannel) ??
     normalizeOptionalString(entry.origin?.provider) ??
     normalizeOptionalString(entry.channel) ??
-    normalizeOptionalString(entry.lastChannel) ??
     (sessionKey === params.sessionKey ? params.command.channel : undefined)
   );
 }

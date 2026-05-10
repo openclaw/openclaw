@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
@@ -11,16 +9,6 @@ import {
   updatePairedNodeMetadata,
   verifyNodeToken,
 } from "./node-pairing.js";
-import { readPairingStateRecord } from "./pairing-files.js";
-
-function resolveObsoletePairingFixturePaths(baseDir: string, subdir: string) {
-  const dir = path.join(baseDir, subdir);
-  return {
-    dir,
-    pendingPath: path.join(dir, "pending.json"),
-    pairedPath: path.join(dir, "paired.json"),
-  };
-}
 
 async function setupPairedNode(baseDir: string): Promise<string> {
   const request = await requestNodePairing(
@@ -162,42 +150,6 @@ describe("node pairing tokens", () => {
     });
   });
 
-  test("ignores legacy pairing state files at runtime", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const paths = resolveObsoletePairingFixturePaths(baseDir, "nodes");
-      await fs.mkdir(paths.dir, { recursive: true });
-      await fs.writeFile(paths.pendingPath, "[]", "utf8");
-      await fs.writeFile(paths.pairedPath, "[]", "utf8");
-
-      const pending = await requestNodePairing(
-        {
-          nodeId: "node-array-state",
-          platform: "darwin",
-          commands: ["system.run"],
-        },
-        baseDir,
-      );
-      const approved = await approveNodePairing(
-        pending.request.requestId,
-        { callerScopes: ["operator.pairing", "operator.admin"] },
-        baseDir,
-      );
-
-      expect(approved).toEqual(
-        expect.objectContaining({
-          node: expect.objectContaining({ nodeId: "node-array-state" }),
-        }),
-      );
-      expect(Array.isArray(JSON.parse(await fs.readFile(paths.pendingPath, "utf8")))).toBe(true);
-      expect(Array.isArray(JSON.parse(await fs.readFile(paths.pairedPath, "utf8")))).toBe(true);
-      expect(readPairingStateRecord({ baseDir, subdir: "nodes", key: "paired" })).toEqual(
-        expect.objectContaining({
-          "node-array-state": expect.objectContaining({ nodeId: "node-array-state" }),
-        }),
-      );
-    });
-  });
-
   test("generates base64url node tokens and rejects mismatches", async () => {
     await withNodePairingDir(async (baseDir) => {
       const token = await setupPairedNode(baseDir);
@@ -289,25 +241,6 @@ describe("node pairing tokens", () => {
       expect(approvedRecord.requestId).toBe(commandlessRequest.request.requestId);
       expect(approvedNode.nodeId).toBe("node-2");
       expect(approvedNode.commands).toBeUndefined();
-    });
-  });
-
-  test("ignores corrupt legacy paired node state when requesting pairing", async () => {
-    await withNodePairingDir(async (baseDir) => {
-      const { dir, pairedPath } = resolveObsoletePairingFixturePaths(baseDir, "nodes");
-      await fs.mkdir(dir, { recursive: true });
-      await fs.writeFile(pairedPath, "{not-json}", "utf8");
-
-      await expect(
-        requestNodePairing(
-          {
-            nodeId: "node-1",
-            platform: "darwin",
-          },
-          baseDir,
-        ),
-      ).resolves.toEqual(expect.objectContaining({ status: "pending" }));
-      await expect(fs.readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
     });
   });
 

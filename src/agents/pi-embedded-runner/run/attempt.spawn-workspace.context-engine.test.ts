@@ -84,7 +84,6 @@ async function runBootstrap(
     contextEngine,
     sessionId: embeddedSessionId,
     sessionKey,
-    sessionManager: hoisted.sessionManager,
     runtimeContext: {},
     runMaintenance: hoisted.runContextEngineMaintenanceMock,
     warn: () => {},
@@ -125,7 +124,6 @@ async function finalizeTurn(
     tokenBudget: 2048,
     runtimeContext: {},
     runMaintenance: hoisted.runContextEngineMaintenanceMock,
-    sessionManager: hoisted.sessionManager,
     warn: () => {},
     ...overrides,
   });

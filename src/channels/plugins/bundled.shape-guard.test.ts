@@ -512,12 +512,12 @@ describe("bundled channel entry shape guards", () => {
         "globalThis.__bundledSetupOnlySetupLoaded = (globalThis.__bundledSetupOnlySetupLoaded ?? 0) + 1;",
         "export default {",
         "  kind: 'bundled-channel-setup-entry',",
-        "  features: { legacyStateMigrations: true },",
+        "  features: { doctorLegacyState: true },",
         "  loadSetupPlugin() {",
         "    globalThis.__bundledSetupOnlyPluginLoaded = true;",
         "    throw new Error('setup plugin loaded');",
         "  },",
-        "  loadLegacyStateMigrationDetector() {",
+        "  loadDoctorLegacyStateDetector() {",
         "    return ({ oauthDir }) => [{",
         "      kind: 'copy',",
         "      label: 'Alpha state',",
@@ -542,13 +542,13 @@ describe("bundled channel entry shape guards", () => {
       );
 
       expect(
-        bundled.listBundledChannelLegacyStateMigrationDetectors({
+        bundled.listBundledChannelDoctorLegacyStateDetectors({
           config: { channels: { alpha: { enabled: false } } },
         }),
       ).toStrictEqual([]);
       expect(testGlobal.__bundledSetupOnlySetupLoaded).toBeUndefined();
 
-      const detectors = bundled.listBundledChannelLegacyStateMigrationDetectors();
+      const detectors = bundled.listBundledChannelDoctorLegacyStateDetectors();
       expect(
         detectors.map((detector) =>
           detector({ cfg: {}, env: {}, stateDir: "/state", oauthDir: "/oauth" } as never),
@@ -737,7 +737,7 @@ describe("bundled channel entry shape guards", () => {
           setupFeatures?: Record<string, boolean>;
         };
       };
-      for (const feature of ["legacyStateMigrations", "legacySessionSurfaces"]) {
+      for (const feature of ["doctorLegacyState", "legacySessionSurfaces"]) {
         const usesFeature = setupEntrySource.includes(`${feature}: true`);
         const hasHint = packageJson.openclaw?.setupFeatures?.[feature] === true;
         if (usesFeature !== hasHint) {

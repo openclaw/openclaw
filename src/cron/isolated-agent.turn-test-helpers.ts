@@ -86,7 +86,7 @@ export async function runCronTurn(home: string, options: RunCronTurnOptions = {}
     "agent:main:main": {
       sessionId: "main-session",
       updatedAt: Date.now(),
-      lastProvider: "webchat",
+      lastChannel: "webchat",
       lastTo: "",
     },
     ...options.storeEntries,

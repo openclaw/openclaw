@@ -875,7 +875,7 @@ Validation:
 
 - Canonical matrix: [SecretRef Credential Surface](/reference/secretref-credential-surface)
 - `secrets apply` targets supported `openclaw.json` credential paths.
-- `auth-profiles.json` refs are included in runtime resolution and audit coverage.
+- SQLite auth-profile refs are included in runtime resolution and audit coverage.
 
 ### Secret providers config
 
@@ -936,9 +936,9 @@ Notes:
 }
 ```
 
-- Per-agent profiles are stored at `<agentDir>/auth-profiles.json`.
-- `auth-profiles.json` supports value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
-- Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` rewrites them to canonical `provider:default` API-key profiles with a `.legacy-flat.*.bak` backup.
+- Per-agent profiles are stored in `state/openclaw.sqlite#kv/auth-profiles/<agentDir>`.
+- SQLite auth-profile rows support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
+- Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` imports them as canonical `provider:default` API-key profiles.
 - OAuth-mode profiles (`auth.profiles.<id>.mode = "oauth"`) do not support SecretRef-backed auth-profile credentials.
 - Static runtime credentials come from in-memory resolved snapshots; legacy static `auth.json` entries are scrubbed when discovered.
 - Legacy OAuth imports from `~/.openclaw/credentials/oauth.json`.

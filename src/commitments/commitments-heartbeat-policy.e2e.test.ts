@@ -68,7 +68,6 @@ describe("commitments heartbeat delivery policy e2e", () => {
       };
       await seedHeartbeatSession("main", sessionKey, {
         lastChannel: "telegram",
-        lastProvider: "telegram",
         lastTo: "155462274",
       });
       await saveCommitmentStore({

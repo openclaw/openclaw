@@ -1,5 +1,3 @@
-import os from "node:os";
-import path from "node:path";
 import { expect } from "vitest";
 import { WebSocket } from "ws";
 import {
@@ -15,20 +13,19 @@ import {
 } from "../infra/device-pairing.js";
 import { trackConnectChallengeNonce } from "./test-helpers.js";
 
-export function resolveDeviceIdentityPath(name: string): string {
-  const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.json`);
+export function resolveDeviceIdentityKey(name: string): string {
+  return `test:${name}`;
 }
 
 export function loadDeviceIdentity(name: string): {
-  identityPath: string;
+  identityKey: string;
   identity: DeviceIdentity;
   publicKey: string;
 } {
-  const identityPath = resolveDeviceIdentityPath(name);
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identityKey = resolveDeviceIdentityKey(name);
+  const identity = loadOrCreateDeviceIdentity({ key: identityKey });
   return {
-    identityPath,
+    identityKey,
     identity,
     publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
   };
@@ -41,7 +38,7 @@ export async function pairDeviceIdentity(params: {
   clientId?: string;
   clientMode?: string;
 }): Promise<{
-  identityPath: string;
+  identityKey: string;
   identity: DeviceIdentity;
   publicKey: string;
 }> {
@@ -68,7 +65,7 @@ export async function issueOperatorToken(params: {
   clientMode?: string;
 }): Promise<{
   deviceId: string;
-  identityPath: string;
+  identityKey: string;
   token: string;
 }> {
   const paired = await pairDeviceIdentity({
@@ -91,7 +88,7 @@ export async function issueOperatorToken(params: {
     }
     return {
       deviceId: paired.identity.deviceId,
-      identityPath: paired.identityPath,
+      identityKey: paired.identityKey,
       token,
     };
   }
@@ -104,7 +101,7 @@ export async function issueOperatorToken(params: {
   expect(device?.approvedScopes).toEqual(params.approvedScopes);
   return {
     deviceId: paired.identity.deviceId,
-    identityPath: paired.identityPath,
+    identityKey: paired.identityKey,
     token,
   };
 }

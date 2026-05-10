@@ -50,7 +50,6 @@ describe("commitments full-chain integration", () => {
       };
       await seedHeartbeatSession("main", sessionKey, {
         lastChannel: "telegram",
-        lastProvider: "telegram",
         lastTo: "stale-target",
       });
       configureCommitmentExtractionRuntime({

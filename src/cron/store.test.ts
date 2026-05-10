@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { loadCronStore, loadCronStoreSync, saveCronStore, updateCronStoreJobs } from "./store.js";
-import type { CronStoreFile } from "./types.js";
+import type { CronStoreSnapshot } from "./types.js";
 
 let fixtureRoot = "";
 let caseId = 0;
@@ -34,7 +34,7 @@ function makeStoreKey() {
   };
 }
 
-function makeStore(jobId: string, enabled: boolean): CronStoreFile {
+function makeStore(jobId: string, enabled: boolean): CronStoreSnapshot {
   const now = Date.now();
   return {
     version: 1,
@@ -62,7 +62,7 @@ describe("cron store", () => {
     expect(loaded).toEqual({ version: 1, jobs: [] });
   });
 
-  it("persists and round-trips job definitions through SQLite without writing jobs.json", async () => {
+  it("persists and round-trips job definitions", async () => {
     const { storeKey } = makeStoreKey();
     const payload = makeStore("job-1", true);
     payload.jobs[0].state = {

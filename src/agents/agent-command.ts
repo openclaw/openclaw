@@ -774,7 +774,6 @@ async function agentCommandInternal(
         await persistSessionEntry({
           sessionStore,
           sessionKey,
-          storePath,
           entry,
         });
       }
@@ -954,12 +953,14 @@ async function agentCommandInternal(
       const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,
         sessionKey,
-        sessionStore,
         sessionEntry,
         agentId: sessionAgentId,
         threadId: opts.threadId,
       });
       sessionEntry = resolvedTranscriptTarget.sessionEntry;
+      if (sessionEntry) {
+        sessionStore[sessionKey] = sessionEntry;
+      }
     } else {
       const resolvedTranscriptTarget = await resolveSessionTranscriptTarget({
         sessionId,

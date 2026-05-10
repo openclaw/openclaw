@@ -1,5 +1,3 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -22,16 +20,7 @@ import {
   type PairedDevice,
   type RotateDeviceTokenResult,
 } from "./device-pairing.js";
-import { readPairingStateRecord, writePairingStateRecord } from "./pairing-files.js";
-
-function resolveObsoletePairingFixturePaths(baseDir: string, subdir: string) {
-  const dir = path.join(baseDir, subdir);
-  return {
-    dir,
-    pendingPath: path.join(dir, "pending.json"),
-    pairedPath: path.join(dir, "paired.json"),
-  };
-}
+import { readPairingStateRecord, writePairingStateRecord } from "./pairing-state.js";
 
 async function setupPairedOperatorDevice(baseDir: string, scopes: string[]) {
   const request = await requestDevicePairing(
@@ -208,44 +197,6 @@ describe("device pairing tokens", () => {
     expect(first.created).toBe(true);
     expect(second.created).toBe(false);
     expect(second.request.requestId).toBe(first.request.requestId);
-  });
-
-  test("ignores legacy pairing state files at runtime", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const paths = resolveObsoletePairingFixturePaths(baseDir, "devices");
-    await mkdir(paths.dir, { recursive: true });
-    await writeFile(paths.pendingPath, "[]", "utf8");
-    await writeFile(paths.pairedPath, "[]", "utf8");
-
-    const pending = await requestDevicePairing(
-      {
-        deviceId: "device-array-state",
-        publicKey: "public-key-array-state",
-        role: "operator",
-        scopes: ["operator.read"],
-      },
-      baseDir,
-    );
-    const approved = await approveDevicePairing(
-      pending.request.requestId,
-      { callerScopes: ["operator.read"] },
-      baseDir,
-    );
-
-    expect(approved).toEqual(
-      expect.objectContaining({
-        status: "approved",
-        device: expect.objectContaining({ deviceId: "device-array-state" }),
-      }),
-    );
-    expect(Array.isArray(JSON.parse(await readFile(paths.pendingPath, "utf8")))).toBe(true);
-    expect(
-      readPairingStateRecord<PairedDevice>({ baseDir, subdir: "devices", key: "paired" }),
-    ).toEqual(
-      expect.objectContaining({
-        "device-array-state": expect.objectContaining({ deviceId: "device-array-state" }),
-      }),
-    );
   });
 
   test("re-requesting with identical params preserves the original ts to prevent queue-jumping", async () => {
@@ -1504,27 +1455,6 @@ describe("device pairing tokens", () => {
       ),
     ).resolves.toBeNull();
     await expect(getPairedDevice("device-1", baseDir)).resolves.toBeNull();
-  });
-
-  test("ignores corrupt legacy paired device state at runtime", async () => {
-    const baseDir = await makeDevicePairingDir();
-    const request = await requestDevicePairing(
-      {
-        deviceId: "device-1",
-        publicKey: "public-key-1",
-        role: "node",
-        scopes: [],
-      },
-      baseDir,
-    );
-    const { pairedPath } = resolveObsoletePairingFixturePaths(baseDir, "devices");
-    await mkdir(path.dirname(pairedPath), { recursive: true });
-    await writeFile(pairedPath, "{not-json}", "utf8");
-
-    await expect(
-      approveDevicePairing(request.request.requestId, { callerScopes: [] }, baseDir),
-    ).resolves.toEqual(expect.objectContaining({ status: "approved" }));
-    await expect(readFile(pairedPath, "utf8")).resolves.toBe("{not-json}");
   });
 
   test("clears paired device state by device id", async () => {

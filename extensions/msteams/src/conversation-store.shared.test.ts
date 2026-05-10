@@ -16,7 +16,7 @@ type StoreFactory = {
 
 const storeFactories: StoreFactory[] = [
   {
-    name: "fs",
+    name: "sqlite",
     createStore: async () => {
       const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
       return createMSTeamsConversationStoreState({

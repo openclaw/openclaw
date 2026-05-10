@@ -125,6 +125,9 @@ describe("skill upload store", () => {
       }),
       "upload is already committed",
     );
+    await expect(
+      fs.access(path.join(rootDir, "state", "openclaw.sqlite")),
+    ).resolves.toBeUndefined();
   });
 
   it("rejects traversal slugs and missing uploads", async () => {

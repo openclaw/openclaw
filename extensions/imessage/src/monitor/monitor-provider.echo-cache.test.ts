@@ -105,7 +105,7 @@ describe("iMessage sent-message echo cache", () => {
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-1" })).toBe(true);
   });
 
-  it("stores persisted echoes in SQLite without writing sent-echoes.jsonl", () => {
+  it("persists sent echoes across cache instances", () => {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-imsg-echo-perm-"));
     tempDirs.push(stateDir);
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
@@ -115,11 +115,6 @@ describe("iMessage sent-message echo cache", () => {
       text: "perm-test",
       messageId: "guid-perm",
     });
-
-    const echoFile = path.join(stateDir, "imessage", "sent-echoes.jsonl");
-    const sqliteFile = path.join(stateDir, "state", "openclaw.sqlite");
-    expect(fs.existsSync(echoFile)).toBe(false);
-    expect(fs.existsSync(sqliteFile)).toBe(true);
 
     const cache = createSentMessageCache();
     expect(cache.has("acct:imessage:+1555", { messageId: "guid-perm" })).toBe(true);

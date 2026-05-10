@@ -536,7 +536,7 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.acp).toEqual(existingAcpMeta);
   });
 
-  it("rotates a stale session id without carrying legacy transcript paths", async () => {
+  it("rotates a stale session id", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     dateOnlyFakeClockActive = true;
     vi.setSystemTime(new Date("2026-05-07T12:00:00.000Z"));

@@ -2,7 +2,6 @@ import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript
 import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
-  migrateSessionEntries,
   type SessionEntry as PiSessionEntry,
   type TranscriptEntry,
 } from "./transcript/session-transcript-contract.js";
@@ -88,7 +87,6 @@ export async function readBtwTranscriptMessages(params: {
     })
       .map((entry) => entry.event)
       .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
-    migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is PiSessionEntry => entry.type !== "session",
     );

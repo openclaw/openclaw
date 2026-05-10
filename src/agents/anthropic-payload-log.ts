@@ -123,11 +123,10 @@ export function createAnthropicPayloadLogger(params: {
   };
 
   const record = (event: PayloadLogEvent) => {
-    const line = safeJsonStringify(event);
-    if (!line) {
+    if (!safeJsonStringify(event)) {
       return;
     }
-    writer.write(`${line}\n`);
+    writer.write(event);
   };
 
   const wrapStreamFn: AnthropicPayloadLogger["wrapStreamFn"] = (streamFn) => {

@@ -15,7 +15,6 @@ type HeartbeatSessionSeed = {
   sessionId?: string;
   updatedAt?: number;
   lastChannel: string;
-  lastProvider: string;
   lastTo: string;
   pendingFinalDelivery?: boolean;
   pendingFinalDeliveryText?: string;

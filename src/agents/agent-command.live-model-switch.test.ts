@@ -255,7 +255,7 @@ vi.mock("../terminal/ansi.js", () => ({
 vi.mock("../trajectory/runtime.js", () => ({
   createTrajectoryRuntimeRecorder: () => ({
     enabled: true,
-    runtimeLocator: "sqlite:default:trajectory:session-1",
+    runtimeScope: "sqlite:default:trajectory:session-1",
     recordEvent: (...args: unknown[]) => state.trajectoryRecordEventMock(...args),
     flush: () => state.trajectoryFlushMock(),
   }),

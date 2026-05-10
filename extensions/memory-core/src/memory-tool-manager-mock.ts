@@ -39,7 +39,7 @@ const stubManager = {
     chunks: 1,
     dirty: false,
     workspaceDir,
-    dbPath: "/workspace/.memory/index.sqlite",
+    dbPath: "/workspace/.openclaw/agents/main/agent/openclaw-agent.sqlite",
     provider: "builtin",
     model: "builtin",
     requestedProvider: "builtin",

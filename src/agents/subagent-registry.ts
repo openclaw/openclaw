@@ -850,7 +850,6 @@ async function sweepSubagentRuns() {
           method: "sessions.delete",
           params: {
             key: entry.childSessionKey,
-            deleteTranscript: true,
             emitLifecycleHooks: false,
           },
           timeoutMs: 10_000,

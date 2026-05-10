@@ -39,7 +39,7 @@ export type {
   MemorySource,
   MemorySyncProgressUpdate,
 } from "./host/types.js";
-export { ensureMemoryIndexSchema } from "./host/memory-schema.js";
+export { ensureMemoryIndexSchema, MEMORY_INDEX_TABLE_NAMES } from "./host/memory-schema.js";
 export { loadSqliteVecExtension } from "./host/sqlite-vec.js";
 export {
   closeMemorySqliteWalMaintenance,

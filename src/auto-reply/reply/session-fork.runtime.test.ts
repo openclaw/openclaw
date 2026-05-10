@@ -47,10 +47,6 @@ function seedTranscript(params: { agentId?: string; sessionId: string; events: u
   });
 }
 
-function transcriptParentReference(params: { agentId: string; sessionId: string }): string {
-  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
-}
-
 function readTranscript(agentId: string, sessionId: string): unknown[] {
   return loadSqliteSessionTranscriptEvents({ agentId, sessionId }).map((entry) => entry.event);
 }
@@ -64,7 +60,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
     const events: unknown[] = [
       {
         type: "session",
-        version: 3,
+        version: 1,
         id: sessionId,
         timestamp: new Date().toISOString(),
         cwd: process.cwd(),
@@ -118,7 +114,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
     const events: unknown[] = [
       {
         type: "session",
-        version: 3,
+        version: 1,
         id: sessionId,
         timestamp: new Date().toISOString(),
         cwd: process.cwd(),
@@ -159,7 +155,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
       events: [
         {
           type: "session",
-          version: 3,
+          version: 1,
           id: sessionId,
           timestamp: new Date().toISOString(),
           cwd: process.cwd(),
@@ -205,7 +201,7 @@ describe("resolveParentForkTokenCountRuntime", () => {
       events: [
         {
           type: "session",
-          version: 3,
+          version: 1,
           id: sessionId,
           timestamp: new Date().toISOString(),
           cwd: process.cwd(),
@@ -248,14 +244,14 @@ describe("forkSessionFromParentRuntime", () => {
     const cwd = path.join(root, "workspace");
     await fs.mkdir(cwd);
     const parentSessionId = "parent-session";
-    const parentTranscriptReference = transcriptParentReference({
+    const parentTranscriptScope = {
       agentId: "main",
       sessionId: parentSessionId,
-    });
+    };
     const events = [
       {
         type: "session",
-        version: 3,
+        version: 1,
         id: parentSessionId,
         timestamp: "2026-05-01T00:00:00.000Z",
         cwd,
@@ -310,7 +306,7 @@ describe("forkSessionFromParentRuntime", () => {
       type: "session",
       id: fork.sessionId,
       cwd,
-      parentSession: parentTranscriptReference,
+      parentTranscriptScope,
     });
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
@@ -328,16 +324,16 @@ describe("forkSessionFromParentRuntime", () => {
     const root = await makeRoot("openclaw-parent-fork-empty-");
     useStateRoot(root);
     const parentSessionId = "parent-empty";
-    const parentTranscriptReference = transcriptParentReference({
+    const parentTranscriptScope = {
       agentId: "main",
       sessionId: parentSessionId,
-    });
+    };
     seedTranscript({
       sessionId: parentSessionId,
       events: [
         {
           type: "session",
-          version: 3,
+          version: 1,
           id: parentSessionId,
           timestamp: "2026-05-01T00:00:00.000Z",
           cwd: root,
@@ -361,7 +357,7 @@ describe("forkSessionFromParentRuntime", () => {
     expect(entries[0]).toMatchObject({
       type: "session",
       id: fork.sessionId,
-      parentSession: parentTranscriptReference,
+      parentTranscriptScope,
     });
   });
 });

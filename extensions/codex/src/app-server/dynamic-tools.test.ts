@@ -120,7 +120,7 @@ function expectContextFields(context: unknown, fields: Record<string, unknown>) 
   }
 }
 
-function expectToolResult(value: unknown, expected: AgentToolResult<unknown>) {
+function expectToolResult(value: unknown, expected: AgentToolResult) {
   const result = requireRecord(value, "tool result");
   expect(result.content).toEqual(expected.content);
   expect(result.details).toEqual(expected.details);

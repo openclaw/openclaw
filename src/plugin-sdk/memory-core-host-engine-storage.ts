@@ -15,6 +15,7 @@ export {
   isFileMissingError,
   listMemoryFiles,
   loadSqliteVecExtension,
+  MEMORY_INDEX_TABLE_NAMES,
   normalizeExtraMemoryPaths,
   parseEmbedding,
   readMemoryFile,

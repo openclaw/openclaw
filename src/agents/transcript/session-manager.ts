@@ -1,18 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
+  appendSqliteSessionTranscriptMessage,
   appendSqliteSessionTranscriptEvent,
-  listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
 import type {
   SessionContext,
   SessionEntry,
   SessionHeader,
-  SessionInfo,
-  SessionListProgress,
   SessionManager,
   SessionTranscriptScope,
   SessionTreeNode,
@@ -20,26 +17,15 @@ import type {
 } from "./session-transcript-types.js";
 import { TranscriptState } from "./transcript-state.js";
 
-function createSessionHeader(params: {
-  id?: string;
-  cwd: string;
-  parentSession?: string;
-}): SessionHeader {
+function createSessionHeader(params: { id?: string; cwd: string }): SessionHeader {
   return {
     type: "session",
     version: CURRENT_SESSION_VERSION,
     id: params.id ?? randomUUID(),
     timestamp: new Date().toISOString(),
     cwd: params.cwd,
-    parentSession: params.parentSession,
   };
 }
-
-type SqliteTranscriptRecord = {
-  agentId: string;
-  sessionId: string;
-  updatedAt: number;
-};
 
 function normalizeTranscriptScopeId(value: string, label: string): string {
   const trimmed = value.trim();
@@ -59,12 +45,6 @@ function createTranscriptScope(params: {
     agentId,
     sessionId,
   };
-}
-
-function formatTranscriptParentReference(
-  scope: SessionTranscriptScope | undefined,
-): string | undefined {
-  return scope ? `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}` : undefined;
 }
 
 function createTranscriptStateFromEvents(events: unknown[]): TranscriptState {
@@ -90,11 +70,16 @@ function persistFullTranscriptStateToSqlite(
   });
 }
 
-function appendTranscriptEntryToSqlite(scope: SessionTranscriptScope, entry: SessionEntry): void {
+function appendTranscriptEntryToSqlite(
+  scope: SessionTranscriptScope,
+  entry: SessionEntry,
+  options?: { parentMode?: "database-tail" },
+): void {
   appendSqliteSessionTranscriptEvent({
     agentId: scope.agentId,
     sessionId: scope.sessionId,
     event: entry,
+    ...(options?.parentMode ? { parentMode: options.parentMode } : {}),
   });
 }
 
@@ -124,141 +109,13 @@ function loadTranscriptStateForSession(params: {
   return { state, scope };
 }
 
-function isMessageWithContent(
-  message: unknown,
-): message is { role: string; content: unknown; timestamp?: unknown } {
-  return Boolean(
-    message &&
-    typeof message === "object" &&
-    typeof (message as { role?: unknown }).role === "string" &&
-    "content" in message,
-  );
-}
-
-function extractTextContent(message: { content: unknown }): string {
-  if (typeof message.content === "string") {
-    return message.content;
-  }
-  if (!Array.isArray(message.content)) {
-    return "";
-  }
-  return message.content
-    .filter((block): block is { type: "text"; text: string } =>
-      Boolean(
-        block &&
-        typeof block === "object" &&
-        (block as { type?: unknown }).type === "text" &&
-        typeof (block as { text?: unknown }).text === "string",
-      ),
-    )
-    .map((block) => block.text)
-    .join(" ");
-}
-
-function buildSessionInfoFromState(
-  scope: SessionTranscriptScope,
-  state: TranscriptState,
-  modifiedFallback: Date,
-): SessionInfo | null {
-  const header = state.getHeader();
-  if (!header) {
-    return null;
-  }
-  try {
-    let messageCount = 0;
-    let firstMessage = "";
-    const allMessages: string[] = [];
-    let lastActivityTime: number | undefined;
-    for (const entry of state.getEntries()) {
-      if (entry.type === "session_info") {
-        continue;
-      }
-      if (entry.type !== "message") {
-        continue;
-      }
-      messageCount += 1;
-      const message = entry.message;
-      if (
-        !isMessageWithContent(message) ||
-        (message.role !== "user" && message.role !== "assistant")
-      ) {
-        continue;
-      }
-      const textContent = extractTextContent(message);
-      if (textContent) {
-        allMessages.push(textContent);
-        if (!firstMessage && message.role === "user") {
-          firstMessage = textContent;
-        }
-      }
-      if (typeof message.timestamp === "number") {
-        lastActivityTime = Math.max(lastActivityTime ?? 0, message.timestamp);
-      } else {
-        const entryTimestamp = Date.parse(entry.timestamp);
-        if (Number.isFinite(entryTimestamp)) {
-          lastActivityTime = Math.max(lastActivityTime ?? 0, entryTimestamp);
-        }
-      }
-    }
-    const headerTime = Date.parse(header.timestamp);
-    return {
-      id: header.id,
-      transcriptScope: { ...scope },
-      cwd: header.cwd,
-      name: state.getSessionName(),
-      parentSession: header.parentSession,
-      created: Number.isFinite(headerTime) ? new Date(headerTime) : modifiedFallback,
-      modified:
-        typeof lastActivityTime === "number" && lastActivityTime > 0
-          ? new Date(lastActivityTime)
-          : Number.isFinite(headerTime)
-            ? new Date(headerTime)
-            : modifiedFallback,
-      messageCount,
-      firstMessage: firstMessage || "(no messages)",
-      allMessagesText: allMessages.join(" "),
-    };
-  } catch {
-    return null;
-  }
-}
-
-function listSqliteTranscriptRecords(): SqliteTranscriptRecord[] {
-  const seen = new Set<string>();
-  return [
-    ...listSqliteSessionTranscripts(),
-    ...listSqliteSessionTranscripts({ agentId: DEFAULT_AGENT_ID }),
-  ]
-    .filter((entry) => {
-      const key = `${entry.agentId}\0${entry.sessionId}`;
-      if (seen.has(key)) {
-        return false;
-      }
-      seen.add(key);
-      return true;
-    })
-    .map((entry) => ({
-      agentId: entry.agentId,
-      sessionId: entry.sessionId,
-      updatedAt: entry.updatedAt,
-    }));
-}
-
-function loadTranscriptStateForRecord(record: SqliteTranscriptRecord): TranscriptState {
-  return createTranscriptStateFromEvents(
-    loadSqliteSessionTranscriptEvents({
-      agentId: record.agentId,
-      sessionId: record.sessionId,
-    }).map((entry) => entry.event),
-  );
-}
-
-export class TranscriptSessionManager implements SessionManager {
+class TranscriptSessionManager implements SessionManager {
   private state: TranscriptState;
   private persist: boolean;
   private sqliteScope: SessionTranscriptScope | undefined;
+  private explicitBranchSelection = false;
 
-  private constructor(params: {
+  constructor(params: {
     state: TranscriptState;
     persist: boolean;
     sqliteScope?: SessionTranscriptScope;
@@ -268,34 +125,6 @@ export class TranscriptSessionManager implements SessionManager {
     this.sqliteScope = params.sqliteScope;
   }
 
-  static openForSession(params: {
-    agentId: string;
-    sessionId: string;
-    cwd?: string;
-  }): TranscriptSessionManager {
-    const loaded = loadTranscriptStateForSession(params);
-    return new TranscriptSessionManager({
-      persist: true,
-      state: loaded.state,
-      sqliteScope: loaded.scope,
-    });
-  }
-
-  static create(cwd: string): TranscriptSessionManager {
-    const header = createSessionHeader({ cwd });
-    const sqliteScope = createTranscriptScope({
-      agentId: DEFAULT_AGENT_ID,
-      sessionId: header.id,
-    });
-    const state = new TranscriptState({ header, entries: [] });
-    persistFullTranscriptStateToSqlite(sqliteScope, state);
-    return new TranscriptSessionManager({
-      persist: true,
-      state,
-      sqliteScope,
-    });
-  }
-
   static inMemory(cwd = process.cwd()): TranscriptSessionManager {
     const header = createSessionHeader({ cwd });
     return new TranscriptSessionManager({
@@ -303,97 +132,6 @@ export class TranscriptSessionManager implements SessionManager {
       state: new TranscriptState({ header, entries: [] }),
       sqliteScope: undefined,
     });
-  }
-
-  static continueRecent(cwd: string): TranscriptSessionManager {
-    const newestSqlite = listSqliteTranscriptRecords().find((entry) => {
-      const state = loadTranscriptStateForRecord(entry);
-      return state.getCwd() === cwd;
-    });
-    if (newestSqlite) {
-      return TranscriptSessionManager.openForSession({
-        agentId: newestSqlite.agentId,
-        sessionId: newestSqlite.sessionId,
-        cwd,
-      });
-    }
-    return TranscriptSessionManager.create(cwd);
-  }
-
-  static forkFromSession(params: {
-    agentId: string;
-    sessionId: string;
-    targetCwd: string;
-  }): TranscriptSessionManager {
-    const sourceScope = createTranscriptScope({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-    });
-    const sourceState = createTranscriptStateFromEvents(
-      loadSqliteSessionTranscriptEvents(sourceScope).map((entry) => entry.event),
-    );
-    const header = createSessionHeader({
-      cwd: params.targetCwd,
-      parentSession: formatTranscriptParentReference(sourceScope),
-    });
-    const state = new TranscriptState({ header, entries: sourceState.getEntries() });
-    const sqliteScope = createTranscriptScope({
-      agentId: sourceScope.agentId,
-      sessionId: header.id,
-    });
-    persistFullTranscriptStateToSqlite(sqliteScope, state);
-    return TranscriptSessionManager.openForSession({
-      agentId: sqliteScope.agentId,
-      sessionId: sqliteScope.sessionId,
-      cwd: params.targetCwd,
-    });
-  }
-
-  static async list(cwd: string, onProgress?: SessionListProgress): Promise<SessionInfo[]> {
-    return (await TranscriptSessionManager.listAll(onProgress)).filter(
-      (session) => session.cwd === cwd,
-    );
-  }
-
-  static async listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]> {
-    const records = listSqliteTranscriptRecords();
-    const sessions: SessionInfo[] = [];
-    let loaded = 0;
-    for (const record of records) {
-      const state = loadTranscriptStateForRecord(record);
-      loaded += 1;
-      onProgress?.(loaded, records.length);
-      const info = buildSessionInfoFromState(
-        { agentId: record.agentId, sessionId: record.sessionId },
-        state,
-        new Date(record.updatedAt),
-      );
-      if (info) {
-        sessions.push(info);
-      }
-    }
-    return sessions.toSorted((a, b) => b.modified.getTime() - a.modified.getTime());
-  }
-
-  newSession(options?: {
-    id?: string;
-    parentSession?: string;
-  }): SessionTranscriptScope | undefined {
-    const header = createSessionHeader({
-      id: options?.id,
-      cwd: this.getCwd(),
-      parentSession: options?.parentSession,
-    });
-    this.state = new TranscriptState({ header, entries: [] });
-    if (this.persist) {
-      const agentId = this.sqliteScope?.agentId ?? DEFAULT_AGENT_ID;
-      this.sqliteScope = createTranscriptScope({
-        agentId,
-        sessionId: header.id,
-      });
-      persistFullTranscriptStateToSqlite(this.sqliteScope, this.state);
-    }
-    return this.getTranscriptScope();
   }
 
   isPersisted(): boolean {
@@ -413,6 +151,17 @@ export class TranscriptSessionManager implements SessionManager {
   }
 
   appendMessage(message: Parameters<SessionManager["appendMessage"]>[0]): string {
+    if (this.persist && this.sqliteScope && !this.explicitBranchSelection) {
+      const result = appendSqliteSessionTranscriptMessage({
+        agentId: this.sqliteScope.agentId,
+        sessionId: this.sqliteScope.sessionId,
+        sessionVersion: this.state.getHeader()?.version ?? CURRENT_SESSION_VERSION,
+        cwd: this.state.getCwd(),
+        message,
+      });
+      this.reloadPersistedState();
+      return result.messageId;
+    }
     return this.persistAppendedEntry(this.state.appendMessage(message));
   }
 
@@ -505,10 +254,12 @@ export class TranscriptSessionManager implements SessionManager {
 
   branch(branchFromId: string): void {
     this.state.branch(branchFromId);
+    this.explicitBranchSelection = true;
   }
 
   resetLeaf(): void {
     this.state.resetLeaf();
+    this.explicitBranchSelection = true;
   }
 
   removeTailEntries(
@@ -518,6 +269,7 @@ export class TranscriptSessionManager implements SessionManager {
     const removed = this.state.removeTailEntries(shouldRemove, options);
     if (removed > 0 && this.persist && this.sqliteScope) {
       persistFullTranscriptStateToSqlite(this.sqliteScope, this.state);
+      this.explicitBranchSelection = false;
     }
     return removed;
   }
@@ -530,43 +282,37 @@ export class TranscriptSessionManager implements SessionManager {
   ): string {
     return this.persistAppendedEntry(
       this.state.branchWithSummary(branchFromId, summary, details, fromHook),
+      { preserveParent: true },
     );
   }
 
-  createBranchedSession(leafId: string): SessionTranscriptScope | undefined {
-    const branch = this.getBranch(leafId);
-    if (branch.length === 0) {
-      throw new Error(`Entry ${leafId} not found`);
-    }
-    const header = createSessionHeader({
-      cwd: this.getCwd(),
-      parentSession: formatTranscriptParentReference(this.sqliteScope),
-    });
-    if (!this.persist) {
-      return undefined;
-    }
-    const branchScope = createTranscriptScope({
-      agentId: this.sqliteScope?.agentId ?? DEFAULT_AGENT_ID,
-      sessionId: header.id,
-    });
-    const state = new TranscriptState({
-      header,
-      entries: branch.filter((e) => e.type !== "label"),
-    });
-    persistFullTranscriptStateToSqlite(branchScope, state);
-    return { ...branchScope };
-  }
-
-  private persistAppendedEntry(entry: SessionEntry): string {
+  private persistAppendedEntry(
+    entry: SessionEntry,
+    options?: { preserveParent?: boolean },
+  ): string {
     if (!this.persist || !this.sqliteScope) {
       return entry.id;
     }
-    if (this.state.migrated) {
-      persistFullTranscriptStateToSqlite(this.sqliteScope, this.state);
-    } else {
-      appendTranscriptEntryToSqlite(this.sqliteScope, entry);
+    appendTranscriptEntryToSqlite(
+      this.sqliteScope,
+      entry,
+      options?.preserveParent || this.explicitBranchSelection
+        ? undefined
+        : { parentMode: "database-tail" },
+    );
+    if (!options?.preserveParent && !this.explicitBranchSelection) {
+      this.reloadPersistedState();
     }
     return entry.id;
+  }
+
+  private reloadPersistedState(): void {
+    if (!this.sqliteScope) {
+      return;
+    }
+    this.state = createTranscriptStateFromEvents(
+      loadSqliteSessionTranscriptEvents(this.sqliteScope).map((entry) => entry.event),
+    );
   }
 }
 
@@ -575,18 +321,14 @@ export function openTranscriptSessionManagerForSession(params: {
   sessionId: string;
   cwd?: string;
 }): SessionManager {
-  return TranscriptSessionManager.openForSession(params);
+  const loaded = loadTranscriptStateForSession(params);
+  return new TranscriptSessionManager({
+    persist: true,
+    state: loaded.state,
+    sqliteScope: loaded.scope,
+  });
 }
 
 export const SessionManagerValue = {
-  create: (cwd: string) => TranscriptSessionManager.create(cwd),
-  openForSession: (params: { agentId: string; sessionId: string; cwd?: string }) =>
-    TranscriptSessionManager.openForSession(params),
-  continueRecent: (cwd: string) => TranscriptSessionManager.continueRecent(cwd),
   inMemory: (cwd?: string) => TranscriptSessionManager.inMemory(cwd),
-  forkFromSession: (params: { agentId: string; sessionId: string; targetCwd: string }) =>
-    TranscriptSessionManager.forkFromSession(params),
-  list: (cwd: string, onProgress?: SessionListProgress) =>
-    TranscriptSessionManager.list(cwd, onProgress),
-  listAll: (onProgress?: SessionListProgress) => TranscriptSessionManager.listAll(onProgress),
 };

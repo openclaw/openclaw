@@ -118,7 +118,7 @@ class RejectInboundReplayWithHangupFailureProvider extends RejectInboundReplayPr
 
 describe("Voice-call webhook hangup-once lifecycle", () => {
   afterEach(() => {
-    // Each test uses an isolated store path, so only server cleanup is needed.
+    // Each test uses isolated state, so only server cleanup is needed.
   });
 
   it("hangs up a rejected inbound replay only once across duplicate webhook delivery", async () => {

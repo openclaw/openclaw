@@ -462,8 +462,7 @@ describe("mattermost inbound user posts", () => {
     await monitor;
 
     expect(runtimeCore.channel.session.recordInboundSession).toHaveBeenCalledTimes(1);
-    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls.at(0) ?? [];
-    expect(recordCall?.storePath).toBe("/tmp/openclaw-test-sessions.json");
+    const [recordCall] = runtimeCore.channel.session.recordInboundSession.mock.calls[0] ?? [];
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
     const updateLastRoute = recordCall?.updateLastRoute;
     expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");

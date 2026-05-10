@@ -29,7 +29,7 @@ describe("auth profile runtime state persistence", () => {
     await fs.rm(agentDir, { recursive: true, force: true });
   });
 
-  it("reads runtime state from SQLite without auth-state.json", async () => {
+  it("reads runtime state from SQLite", async () => {
     savePersistedAuthProfileState(
       {
         order: { openai: ["openai:default"] },
@@ -38,9 +38,6 @@ describe("auth profile runtime state persistence", () => {
       },
       agentDir,
     );
-    await expect(fs.access(path.join(agentDir, "auth-state.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
 
     expect(loadPersistedAuthProfileState(agentDir)).toEqual({
       order: { openai: ["openai:default"] },
@@ -59,9 +56,6 @@ describe("auth profile runtime state persistence", () => {
 
     expect(savePersistedAuthProfileState({}, agentDir)).toBeNull();
 
-    await expect(fs.access(path.join(agentDir, "auth-state.json"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
     expect(
       readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, authProfileStateKey(agentDir)),
     ).toBeUndefined();

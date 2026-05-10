@@ -363,9 +363,6 @@ describe("active-memory plugin", () => {
     });
 
     expect(offResult.text).toContain("off for this session");
-    await expect(
-      fs.access(path.join(stateDir, "plugins", "active-memory", "session-toggles.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const statusResult = await command.handler({
       channel: "webchat",
@@ -3858,7 +3855,7 @@ describe("active-memory plugin", () => {
     const rmSpy = vi.spyOn(fs, "rm");
 
     await hooks.before_prompt_build(
-      { prompt: "what wings should i order? temp transcript path", messages: [] },
+      { prompt: "what wings should i order? sqlite transcript scope", messages: [] },
       {
         agentId: "main",
         trigger: "user",

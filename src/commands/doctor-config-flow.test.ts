@@ -1362,7 +1362,7 @@ vi.mock("./doctor-config-analysis.js", () => {
   };
 });
 
-vi.mock("./doctor-state-migrations.js", () => ({
+vi.mock("./doctor/state-migrations.js", () => ({
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
 }));
 

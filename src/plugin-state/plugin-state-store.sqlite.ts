@@ -12,7 +12,7 @@ import {
   type OpenClawStateDatabaseOptions,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   PluginStateStoreError,
   type PluginStateEntry,
@@ -77,7 +77,7 @@ function wrapPluginStateError(
   operation: PluginStateStoreOperation,
   fallbackCode: PluginStateStoreErrorCode,
   message: string,
-  pathname = resolvePluginStateSqlitePath(process.env),
+  pathname = resolveOpenClawStateSqlitePath(process.env),
 ): PluginStateStoreError {
   if (error instanceof PluginStateStoreError) {
     return error;
@@ -100,7 +100,7 @@ function parseStoredJson(raw: string, operation: PluginStateStoreOperation): unk
       code: "PLUGIN_STATE_CORRUPT",
       operation,
       message: "Plugin state entry contains corrupt JSON.",
-      path: resolvePluginStateSqlitePath(process.env),
+      path: resolveOpenClawStateSqlitePath(process.env),
       cause: error,
     });
   }
@@ -304,7 +304,7 @@ function openPluginStateDatabase(
   options: OpenClawStateDatabaseOptions = {},
 ): PluginStateDatabase {
   const env = options.env ?? process.env;
-  const pathname = resolvePluginStateSqlitePath(env);
+  const pathname = resolveOpenClawStateSqlitePath(env);
   if (cachedDatabase && cachedDatabase.path === pathname && cachedDatabase.db.isOpen) {
     return cachedDatabase;
   }
@@ -649,12 +649,12 @@ export function isPluginStateDatabaseOpen(): boolean {
   return cachedDatabase?.db.isOpen === true;
 }
 
-export function clearPluginStateSqliteStoreForTests(): void {
+export function clearPluginStateDatabaseForTests(): void {
   const store = openPluginStateDatabase("clear");
   store.db.exec("DELETE FROM plugin_state_entries;");
 }
 
-export function seedPluginStateSqliteEntriesForTests(
+export function seedPluginStateDatabaseEntriesForTests(
   entries: readonly PluginStateSeedEntryForTests[],
 ): void {
   if (entries.length === 0) {
@@ -681,7 +681,7 @@ export function seedPluginStateSqliteEntriesForTests(
 }
 
 export function probePluginStateStore(): PluginStateStoreProbeResult {
-  const dbPath = resolvePluginStateSqlitePath(process.env);
+  const databasePath = resolveOpenClawStateSqlitePath(process.env);
   const steps: PluginStateStoreProbeStep[] = [];
   const wasOpen = cachedDatabase !== null;
 
@@ -694,7 +694,7 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
             code: "PLUGIN_STATE_OPEN_FAILED",
             operation: "probe",
             message: error instanceof Error ? error.message : String(error),
-            path: dbPath,
+            path: databasePath,
             cause: error,
           });
     steps.push({ name, ok: false, code: wrapped.code, message: wrapped.message });
@@ -710,11 +710,11 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
         code: "PLUGIN_STATE_SQLITE_UNAVAILABLE",
         operation: "load-sqlite",
         message: "SQLite support is unavailable for plugin state storage.",
-        path: dbPath,
+        path: databasePath,
         cause: error,
       }),
     );
-    return { ok: false, dbPath, steps };
+    return { ok: false, databasePath, steps };
   }
 
   try {
@@ -753,13 +753,13 @@ export function probePluginStateStore(): PluginStateStoreProbeResult {
     pushFailure("probe", error);
   } finally {
     if (!wasOpen) {
-      closePluginStateSqliteStore();
+      closePluginStateDatabase();
     }
   }
 
-  return { ok: steps.every((step) => step.ok), dbPath, steps };
+  return { ok: steps.every((step) => step.ok), databasePath, steps };
 }
 
-export function closePluginStateSqliteStore(): void {
+export function closePluginStateDatabase(): void {
   cachedDatabase = null;
 }

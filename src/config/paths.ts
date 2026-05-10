@@ -262,19 +262,6 @@ export function resolveDefaultConfigCandidates(
 export const DEFAULT_GATEWAY_PORT = 18789;
 
 /**
- * Gateway lock directory (ephemeral).
- * Default: os.tmpdir()/openclaw-<uid> (uid suffix when available).
- */
-export function resolveGatewayLockDir(tmpdir: () => string = os.tmpdir): string {
-  const base = tmpdir();
-  const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
-  const suffix = uid != null ? `openclaw-${uid}` : "openclaw";
-  return path.join(base, suffix);
-}
-
-const OAUTH_FILENAME = "oauth.json";
-
-/**
  * OAuth credentials storage directory.
  *
  * Precedence:
@@ -290,13 +277,6 @@ export function resolveOAuthDir(
     return resolveUserPath(override, env, envHomedir(env));
   }
   return path.join(stateDir, "credentials");
-}
-
-export function resolveOAuthPath(
-  env: NodeJS.ProcessEnv = process.env,
-  stateDir: string = resolveStateDir(env, envHomedir(env)),
-): string {
-  return path.join(resolveOAuthDir(env, stateDir), OAUTH_FILENAME);
 }
 
 function parseGatewayPortEnvValue(raw: string | undefined): number | null {

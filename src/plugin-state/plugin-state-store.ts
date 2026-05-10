@@ -1,7 +1,7 @@
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
-  clearPluginStateSqliteStoreForTests,
-  closePluginStateSqliteStore,
+  clearPluginStateDatabaseForTests,
+  closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   pluginStateClear,
   pluginStateConsume,
@@ -32,7 +32,7 @@ export type {
 } from "./plugin-state-store.types.js";
 export { PluginStateStoreError } from "./plugin-state-store.types.js";
 export {
-  closePluginStateSqliteStore,
+  closePluginStateDatabase,
   isPluginStateDatabaseOpen,
   probePluginStateStore,
   sweepExpiredPluginStateEntries,
@@ -420,13 +420,13 @@ export function createCorePluginStateSyncKeyedStore<T>(
 }
 
 export function clearPluginStateStoreForTests(): void {
-  clearPluginStateSqliteStoreForTests();
+  clearPluginStateDatabaseForTests();
   namespaceOptionSignatures.clear();
 }
 
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
-    closePluginStateSqliteStore();
+    closePluginStateDatabase();
     closeOpenClawStateDatabaseForTest();
   }
   namespaceOptionSignatures.clear();

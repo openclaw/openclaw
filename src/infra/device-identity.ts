@@ -24,7 +24,12 @@ export type StoredDeviceIdentity = {
 
 const DEVICE_IDENTITY_SCOPE = "identity.device";
 const DEVICE_IDENTITY_KEY = "default";
-const DEVICE_IDENTITY_PATH_KEY_PREFIX = "path:";
+
+export type DeviceIdentityStoreOptions = {
+  env?: NodeJS.ProcessEnv;
+  key?: string;
+  checkLegacyIdentity?: boolean;
+};
 
 export class DeviceIdentityMigrationRequiredError extends Error {
   constructor(filePath: string) {
@@ -42,43 +47,21 @@ export class DeviceIdentityStorageError extends Error {
   }
 }
 
-function resolveDefaultIdentityPath(): string {
-  return path.join(resolveStateDir(), "identity", "device.json");
-}
-
-function stateDbOptionsForIdentityPath(filePath: string): { env: NodeJS.ProcessEnv } {
-  const resolved = path.resolve(filePath);
-  const envStateDir = resolveStateDir(process.env);
-  if (resolved.endsWith(path.join("identity", "device.json"))) {
-    return {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: path.dirname(path.dirname(resolved)),
-      },
-    };
-  }
-  if (resolved.startsWith(`${path.resolve(envStateDir)}${path.sep}`)) {
-    return {
-      env: {
-        ...process.env,
-        OPENCLAW_STATE_DIR: envStateDir,
-      },
-    };
-  }
+function normalizeIdentityStoreOptions(
+  options: DeviceIdentityStoreOptions = {},
+): Required<Pick<DeviceIdentityStoreOptions, "env" | "key" | "checkLegacyIdentity">> {
+  const env = options.env ?? process.env;
+  const key = options.key?.trim() || DEVICE_IDENTITY_KEY;
   return {
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: path.dirname(resolved),
-    },
+    env,
+    key,
+    checkLegacyIdentity:
+      options.checkLegacyIdentity ?? (key === DEVICE_IDENTITY_KEY && options.env === undefined),
   };
 }
 
-function identityKeyForPath(filePath: string): string {
-  const resolved = path.resolve(filePath);
-  if (resolved.endsWith(path.join("identity", "device.json"))) {
-    return DEVICE_IDENTITY_KEY;
-  }
-  return `${DEVICE_IDENTITY_PATH_KEY_PREFIX}${crypto.createHash("sha256").update(resolved).digest("hex")}`;
+function resolveLegacyIdentityPath(env: NodeJS.ProcessEnv): string {
+  return path.join(resolveStateDir(env), "identity", "device.json");
 }
 
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
@@ -133,12 +116,11 @@ function parseStoredIdentity(value: unknown): StoredDeviceIdentity | null {
   return value as StoredDeviceIdentity;
 }
 
-function readStoredIdentity(filePath: string): StoredDeviceIdentity | null {
-  const result = readOpenClawStateKvJsonResult(
-    DEVICE_IDENTITY_SCOPE,
-    identityKeyForPath(filePath),
-    stateDbOptionsForIdentityPath(filePath),
-  );
+function readStoredIdentity(options?: DeviceIdentityStoreOptions): StoredDeviceIdentity | null {
+  const store = normalizeIdentityStoreOptions(options);
+  const result = readOpenClawStateKvJsonResult(DEVICE_IDENTITY_SCOPE, store.key, {
+    env: store.env,
+  });
   if (!result.exists) {
     return null;
   }
@@ -149,16 +131,6 @@ function readStoredIdentity(filePath: string): StoredDeviceIdentity | null {
     );
   }
   return parsed;
-}
-
-function readStoredIdentityForEnv(env: NodeJS.ProcessEnv): StoredDeviceIdentity | null {
-  const result = readOpenClawStateKvJsonResult(DEVICE_IDENTITY_SCOPE, DEVICE_IDENTITY_KEY, {
-    env,
-  });
-  if (!result.exists) {
-    return null;
-  }
-  return parseStoredIdentity(result.value);
 }
 
 function legacyIdentityFileExists(filePath: string): boolean {
@@ -175,19 +147,22 @@ function assertNoUnimportedLegacyIdentity(filePath: string): void {
   }
 }
 
-function writeStoredIdentity(filePath: string, stored: StoredDeviceIdentity): void {
+function writeStoredIdentity(
+  stored: StoredDeviceIdentity,
+  options?: DeviceIdentityStoreOptions,
+): void {
+  const store = normalizeIdentityStoreOptions(options);
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_IDENTITY_SCOPE,
-    identityKeyForPath(filePath),
+    store.key,
     stored as unknown as OpenClawStateJsonValue,
-    stateDbOptionsForIdentityPath(filePath),
+    { env: store.env },
   );
 }
 
-export function loadOrCreateDeviceIdentity(
-  filePath: string = resolveDefaultIdentityPath(),
-): DeviceIdentity {
-  const parsed = readStoredIdentity(filePath);
+export function loadOrCreateDeviceIdentity(options?: DeviceIdentityStoreOptions): DeviceIdentity {
+  const store = normalizeIdentityStoreOptions(options);
+  const parsed = readStoredIdentity(store);
   if (parsed) {
     const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
     if (derivedId && derivedId !== parsed.deviceId) {
@@ -195,7 +170,7 @@ export function loadOrCreateDeviceIdentity(
         ...parsed,
         deviceId: derivedId,
       };
-      writeStoredIdentity(filePath, updated);
+      writeStoredIdentity(updated, store);
       return {
         deviceId: derivedId,
         publicKeyPem: parsed.publicKeyPem,
@@ -209,7 +184,9 @@ export function loadOrCreateDeviceIdentity(
     };
   }
 
-  assertNoUnimportedLegacyIdentity(filePath);
+  if (store.checkLegacyIdentity) {
+    assertNoUnimportedLegacyIdentity(resolveLegacyIdentityPath(store.env));
+  }
 
   const identity = generateIdentity();
   const stored: StoredDeviceIdentity = {
@@ -219,15 +196,15 @@ export function loadOrCreateDeviceIdentity(
     privateKeyPem: identity.privateKeyPem,
     createdAtMs: Date.now(),
   };
-  writeStoredIdentity(filePath, stored);
+  writeStoredIdentity(stored, store);
   return identity;
 }
 
 export function loadDeviceIdentityIfPresent(
-  filePath: string = resolveDefaultIdentityPath(),
+  options?: DeviceIdentityStoreOptions,
 ): DeviceIdentity | null {
   try {
-    const parsed = readStoredIdentity(filePath);
+    const parsed = readStoredIdentity(options);
     if (!parsed) {
       return null;
     }
@@ -248,23 +225,7 @@ export function loadDeviceIdentityIfPresent(
 export function loadDeviceIdentityIfPresentForEnv(
   env: NodeJS.ProcessEnv = process.env,
 ): DeviceIdentity | null {
-  try {
-    const parsed = readStoredIdentityForEnv(env);
-    if (!parsed) {
-      return null;
-    }
-    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
-    if (!derivedId || derivedId !== parsed.deviceId) {
-      return null;
-    }
-    return {
-      deviceId: parsed.deviceId,
-      publicKeyPem: parsed.publicKeyPem,
-      privateKeyPem: parsed.privateKeyPem,
-    };
-  } catch {
-    return null;
-  }
+  return loadDeviceIdentityIfPresent({ env });
 }
 
 export function parseStoredDeviceIdentitySnapshot(value: unknown): StoredDeviceIdentity | null {
@@ -272,10 +233,10 @@ export function parseStoredDeviceIdentitySnapshot(value: unknown): StoredDeviceI
 }
 
 export function writeStoredDeviceIdentitySnapshot(
-  filePath: string,
   stored: StoredDeviceIdentity,
+  options?: DeviceIdentityStoreOptions,
 ): void {
-  writeStoredIdentity(filePath, stored);
+  writeStoredIdentity(stored, options);
 }
 
 export function signDevicePayload(privateKeyPem: string, payload: string): string {

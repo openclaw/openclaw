@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AcpSessionStoreEntry } from "../acp/runtime/session-meta.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
-import type { CronStoreFile } from "../cron/types.js";
+import type { CronStoreSnapshot } from "../cron/types.js";
 import type { ParsedAgentSessionKey } from "../routing/session-key.js";
 import {
   resetDetachedTaskLifecycleRuntimeForTests,
@@ -59,7 +59,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   acpEntry?: AcpSessionStoreEntry["entry"];
   activeCronJobIds?: string[];
   activeRunIds?: string[];
-  cronStore?: CronStoreFile;
+  cronStore?: CronStoreSnapshot;
   cronRunLogEntries?: Record<string, CronRunLogEntry[]>;
   cronRuntimeAuthoritative?: boolean;
 }) {

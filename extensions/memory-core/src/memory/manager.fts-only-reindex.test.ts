@@ -83,7 +83,7 @@ describe("memory manager FTS-only reindex", () => {
     const db = new DatabaseSync(indexPath);
     try {
       const row = db
-        .prepare(`SELECT COUNT(*) as c FROM chunks WHERE text LIKE ?`)
+        .prepare(`SELECT COUNT(*) as c FROM memory_index_chunks WHERE text LIKE ?`)
         .get(`%${term}%`) as { c: number } | undefined;
       return row?.c ?? 0;
     } finally {

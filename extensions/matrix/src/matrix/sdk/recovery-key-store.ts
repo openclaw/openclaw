@@ -1,7 +1,11 @@
 import { decodeRecoveryKey } from "matrix-js-sdk/lib/crypto-api/recovery-key.js";
 import { formatMatrixErrorMessage, formatMatrixErrorReason } from "../errors.js";
 import { LogService } from "./logger.js";
-import { readMatrixRecoveryKey, writeMatrixRecoveryKey } from "./recovery-key-state.js";
+import {
+  readMatrixRecoveryKey,
+  writeMatrixRecoveryKey,
+  type MatrixRecoveryKeyRef,
+} from "./recovery-key-state.js";
 import type {
   MatrixCryptoBootstrapApi,
   MatrixCryptoCallbacks,
@@ -36,7 +40,7 @@ export class MatrixRecoveryKeyStore {
   private stagedRecoveryKeyUsed = false;
   private readonly stagedCacheKeyIds = new Set<string>();
 
-  constructor(private readonly recoveryKeyPath?: string) {}
+  constructor(private readonly recoveryKeyRef?: MatrixRecoveryKeyRef) {}
 
   buildCryptoCallbacks(): MatrixCryptoCallbacks {
     return {
@@ -337,10 +341,10 @@ export class MatrixRecoveryKeyStore {
       });
     }
 
-    if (generatedRecoveryKey && this.recoveryKeyPath) {
+    if (generatedRecoveryKey && this.recoveryKeyRef) {
       LogService.warn(
         "MatrixClientLite",
-        `Generated Matrix recovery key and saved it to SQLite state for ${this.recoveryKeyPath}. Keep this key secure.`,
+        "Generated Matrix recovery key and saved it to SQLite state. Keep this key secure.",
       );
     }
   }
@@ -394,18 +398,18 @@ export class MatrixRecoveryKeyStore {
   }
 
   private loadStoredRecoveryKey(): MatrixStoredRecoveryKey | null {
-    if (!this.recoveryKeyPath) {
+    if (!this.recoveryKeyRef) {
       return null;
     }
     try {
-      return readMatrixRecoveryKey(this.recoveryKeyPath);
+      return readMatrixRecoveryKey(this.recoveryKeyRef);
     } catch {
       return null;
     }
   }
 
   private saveRecoveryKeyToState(params: MatrixGeneratedSecretStorageKey): void {
-    if (!this.recoveryKeyPath) {
+    if (!this.recoveryKeyRef) {
       return;
     }
     try {
@@ -422,7 +426,7 @@ export class MatrixRecoveryKeyStore {
             }
           : undefined,
       };
-      writeMatrixRecoveryKey(this.recoveryKeyPath, payload);
+      writeMatrixRecoveryKey(this.recoveryKeyRef, payload);
     } catch (err) {
       LogService.warn("MatrixClientLite", "Failed to persist recovery key:", err);
     }

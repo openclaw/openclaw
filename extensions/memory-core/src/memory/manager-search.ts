@@ -121,6 +121,7 @@ function planKeywordSearch(params: {
 export async function searchVector(params: {
   db: DatabaseSync;
   vectorTable: string;
+  chunksTable: string;
   providerModel: string;
   queryVec: number[];
   limit: number;
@@ -137,7 +138,7 @@ export async function searchVector(params: {
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
     // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
     // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
-    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // downstream merge/minScore pipeline expects. (the vector table is created with
     // sqlite-vec's default L2 distance, so v.distance cannot be used directly
     // for scoring.)
     const qBlob = vectorToBlob(params.queryVec);
@@ -148,7 +149,7 @@ export async function searchVector(params: {
             `       c.source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
-            `  JOIN chunks c ON c.id = v.id\n` +
+            `  JOIN ${params.chunksTable} c ON c.id = v.id\n` +
             ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
@@ -176,7 +177,7 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM ${params.chunksTable} c WHERE c.model = ?${params.sourceFilterVec.sql}`,
           )
           .get(params.providerModel, ...params.sourceFilterVec.params) as
           | { count?: number | bigint }
@@ -207,6 +208,7 @@ export async function searchVector(params: {
 
   return searchChunksByEmbedding({
     db: params.db,
+    chunksTable: params.chunksTable,
     providerModel: params.providerModel,
     sourceFilter: params.sourceFilterChunks,
     queryVec: params.queryVec,
@@ -217,6 +219,7 @@ export async function searchVector(params: {
 
 function searchChunksByEmbedding(params: {
   db: DatabaseSync;
+  chunksTable: string;
   providerModel: string;
   sourceFilter: { sql: string; params: SearchSource[] };
   queryVec: number[];
@@ -229,7 +232,7 @@ function searchChunksByEmbedding(params: {
   const rows = params.db
     .prepare(
       `SELECT id, path, start_line, end_line, text, embedding, source\n` +
-        `  FROM chunks\n` +
+        `  FROM ${params.chunksTable}\n` +
         ` WHERE model = ?${params.sourceFilter.sql}`,
     )
     .iterate(params.providerModel, ...params.sourceFilter.params) as IterableIterator<{

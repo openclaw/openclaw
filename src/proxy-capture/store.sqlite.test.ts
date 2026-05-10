@@ -8,7 +8,6 @@ import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
 } from "../state/sqlite-schema-shape.test-support.js";
-import { resolveDebugProxySettings } from "./env.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -34,14 +33,22 @@ afterEach(() => {
 function makeStore() {
   const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-"));
   cleanupDirs.push(root);
-  return new DebugProxyCaptureStore(path.join(root, "capture.sqlite"), path.join(root, "blobs"));
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  process.env.OPENCLAW_STATE_DIR = root;
+  const store = new DebugProxyCaptureStore();
+  if (previousStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousStateDir;
+  }
+  return store;
 }
 
 describe("DebugProxyCaptureStore", () => {
   it("types query preset rows by preset", () => {
     const store = null as unknown as DebugProxyCaptureStore;
 
-    if (false) {
+    const assertTypes = () => {
       expectTypeOf(store.queryPreset("double-sends")).toEqualTypeOf<
         CaptureQueryRowsByPreset["double-sends"][]
       >();
@@ -50,11 +57,14 @@ describe("DebugProxyCaptureStore", () => {
       >();
 
       // @ts-expect-error Preset-specific rows do not expose other preset columns.
-      store.queryPreset("double-sends")[0]?.outboundFrames;
+      const outboundFrames = store.queryPreset("double-sends")[0]?.outboundFrames;
+      void outboundFrames;
 
       // @ts-expect-error Preset-specific rows do not expose other preset columns.
-      store.queryPreset("missing-ack")[0]?.duplicateCount;
-    }
+      const duplicateCount = store.queryPreset("missing-ack")[0]?.duplicateCount;
+      void duplicateCount;
+    };
+    void assertTypes;
 
     expect(true).toBe(true);
   });
@@ -62,11 +72,11 @@ describe("DebugProxyCaptureStore", () => {
   it("keeps the cached store open until the last lease releases", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-lease-"));
     cleanupDirs.push(root);
-    const dbPath = path.join(root, "capture.sqlite");
-    const blobDir = path.join(root, "blobs");
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
 
-    const first = acquireDebugProxyCaptureStore(dbPath, blobDir);
-    const second = acquireDebugProxyCaptureStore(dbPath, blobDir);
+    const first = acquireDebugProxyCaptureStore();
+    const second = acquireDebugProxyCaptureStore();
 
     expect(second.store).toBe(first.store);
     first.release();
@@ -75,9 +85,14 @@ describe("DebugProxyCaptureStore", () => {
     second.release();
     expect(first.store.isClosed).toBe(true);
 
-    const reopened = getDebugProxyCaptureStore(dbPath, blobDir);
+    const reopened = getDebugProxyCaptureStore();
     expect(Object.is(reopened, first.store)).toBe(false);
     expect(reopened.isClosed).toBe(false);
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
   });
 
   it("ignores duplicate close calls", () => {
@@ -88,12 +103,16 @@ describe("DebugProxyCaptureStore", () => {
     expect(store.isClosed).toBe(true);
   });
 
-  it("creates the capture schema from the committed SQL shape", () => {
+  it("creates capture tables from the shared state SQL shape", () => {
     const store = makeStore();
-
-    expect(collectSqliteSchemaShape(store.db)).toEqual(
-      createSqliteSchemaShapeFromSql(new URL("./schema.sql", import.meta.url)),
+    const actual = collectSqliteSchemaShape(store.db);
+    const expected = createSqliteSchemaShapeFromSql(
+      new URL("../state/openclaw-state-schema.sql", import.meta.url),
     );
+
+    expect(actual.capture_sessions).toEqual(expected.capture_sessions);
+    expect(actual.capture_events).toEqual(expected.capture_events);
+    expect(actual.capture_blobs).toEqual(expected.capture_blobs);
   });
 
   it("uses the shared OpenClaw state schema for default capture storage", () => {
@@ -102,8 +121,7 @@ describe("DebugProxyCaptureStore", () => {
     const previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = root;
     try {
-      const settings = resolveDebugProxySettings(process.env);
-      const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+      const store = getDebugProxyCaptureStore();
 
       store.upsertSession({
         id: "shared-state-session",
@@ -111,8 +129,6 @@ describe("DebugProxyCaptureStore", () => {
         mode: "proxy-run",
         sourceScope: "openclaw",
         sourceProcess: "openclaw",
-        dbPath: settings.dbPath,
-        blobDir: settings.blobDir,
       });
 
       const schema = collectSqliteSchemaShape(store.db);
@@ -144,8 +160,6 @@ describe("DebugProxyCaptureStore", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
-      dbPath: store.dbPath,
-      blobDir: store.blobDir,
     });
     const firstPayload = persistEventPayload(store, {
       data: '{"ok":true}',
@@ -204,8 +218,6 @@ describe("DebugProxyCaptureStore", () => {
         mode: "proxy-run",
         sourceScope: "openclaw",
         sourceProcess: "openclaw",
-        dbPath: store.dbPath,
-        blobDir: store.blobDir,
       });
       store.recordEvent({
         sessionId,
@@ -240,8 +252,6 @@ describe("DebugProxyCaptureStore", () => {
       mode: "proxy-run",
       sourceScope: "openclaw",
       sourceProcess: "openclaw",
-      dbPath: store.dbPath,
-      blobDir: store.blobDir,
     });
     const payload = persistEventPayload(store, {
       data: "purge me",

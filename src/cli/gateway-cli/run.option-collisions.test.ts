@@ -33,8 +33,8 @@ const readConfigFileSnapshotWithPluginMetadata = vi.fn(async () => ({
 }));
 const writeDiagnosticStabilityBundleForFailureSync = vi.fn((_reason: string, _error: unknown) => ({
   status: "written" as const,
-  message: "wrote stability bundle: /tmp/openclaw-stability.json",
-  path: "/tmp/openclaw-stability.json",
+  message: "wrote stability bundle: sqlite:diagnostics.stability/bundle:test",
+  path: "sqlite:diagnostics.stability/bundle:test",
 }));
 const controlUiState = vi.hoisted(() => ({
   root: "/tmp/openclaw-control-ui" as string | null,

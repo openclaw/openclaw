@@ -6,8 +6,8 @@ import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
-import { validateSessionId } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { validateSessionId } from "./session-id.js";
 import { resolveAndPersistSessionTranscriptScope } from "./session-scope.js";
 import {
   getSessionEntry,
@@ -185,7 +185,7 @@ describe("session lifecycle timestamps", () => {
         events: [
           {
             type: "session",
-            version: 3,
+            version: 1,
             id: "lifecycle-session",
             timestamp: headerTimestamp,
             cwd: dir,
@@ -490,15 +490,15 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
       sessionKey,
       sessionEntry: sessionStore[sessionKey],
       agentId: "main",
-      topicId: 456,
     });
 
     expect(result).toMatchObject({ agentId: "main", sessionId });
 
     const saved = readFixtureSessionEntries();
+    expect(saved[sessionKey]).toEqual(store[sessionKey]);
   });
 
-  it("creates SQLite scope without persisting transcript handles when session is not yet present", async () => {
+  it("creates SQLite scope when session is not yet present", async () => {
     const sessionId = "new-session-id";
     const sessionKey = "agent:main:telegram:group:123";
 
@@ -537,5 +537,12 @@ describe("resolveAndPersistSessionTranscriptScope", () => {
     expect(result).toMatchObject({ agentId: "main", sessionId: nextSessionId });
 
     const saved = readFixtureSessionEntries();
+    expect(saved[sessionKey]).toEqual({
+      ...store[sessionKey],
+      sessionId: nextSessionId,
+      sessionStartedAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+    });
+    expect(saved[sessionKey]?.sessionStartedAt).not.toBe(store[sessionKey].updatedAt);
   });
 });

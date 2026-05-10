@@ -5,11 +5,7 @@ import {
   replaceSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "../../config/sessions/transcript-store.sqlite.js";
-import {
-  buildSessionContext,
-  CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
-} from "./session-transcript-format.js";
+import { buildSessionContext } from "./session-transcript-format.js";
 import type {
   SessionContext,
   SessionEntry,
@@ -37,10 +33,6 @@ function isSessionEntry(entry: TranscriptEntry): entry is SessionEntry {
   return entry.type !== "session";
 }
 
-function sessionHeaderVersion(header: SessionHeader | null): number {
-  return typeof header?.version === "number" ? header.version : 1;
-}
-
 function generateEntryId(byId: { has(id: string): boolean }): string {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const id = randomUUID().slice(0, 8);
@@ -52,14 +44,10 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
 }
 
 function transcriptStateFromEntries(transcriptEntries: TranscriptEntry[]): TranscriptState {
-  const headerBeforeMigration =
-    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
-  migrateSessionEntries(transcriptEntries);
   const header =
     transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = transcriptEntries.filter(isSessionEntry);
-  return new TranscriptState({ header, entries, migrated });
+  return new TranscriptState({ header, entries });
 }
 
 function transcriptStateFromSqliteScope(scope: TranscriptStateScope): TranscriptState | undefined {
@@ -94,20 +82,14 @@ function resolveTranscriptWriteScopeForSession(
 export class TranscriptState {
   readonly header: SessionHeader | null;
   readonly entries: SessionEntry[];
-  readonly migrated: boolean;
   private readonly byId = new Map<string, SessionEntry>();
   private readonly labelsById = new Map<string, string>();
   private readonly labelTimestampsById = new Map<string, string>();
   private leafId: string | null = null;
 
-  constructor(params: {
-    header: SessionHeader | null;
-    entries: SessionEntry[];
-    migrated?: boolean;
-  }) {
+  constructor(params: { header: SessionHeader | null; entries: SessionEntry[] }) {
     this.header = params.header;
     this.entries = [...params.entries];
-    this.migrated = params.migrated === true;
     this.rebuildIndex();
   }
 
@@ -428,55 +410,19 @@ export function readTranscriptStateForSessionSync(scope: TranscriptStateScope): 
   );
 }
 
-export async function replaceTranscriptStateEventsForSession(
-  scope: TranscriptStateScope,
-  entries: Array<SessionHeader | SessionEntry>,
-): Promise<void> {
-  const writeScope = resolveTranscriptWriteScopeForSession(scope, entries);
-  if (!writeScope) {
-    throw new Error(
-      `Cannot write SQLite transcript without a session header for agent ${scope.agentId} session ${scope.sessionId}`,
-    );
-  }
-  replaceSqliteSessionTranscriptEvents({
-    ...writeScope,
-    events: entries,
-  });
-}
-
-export function replaceTranscriptStateEventsForSessionSync(
-  scope: TranscriptStateScope,
-  entries: Array<SessionHeader | SessionEntry>,
-): void {
-  const writeScope = resolveTranscriptWriteScopeForSession(scope, entries);
-  if (!writeScope) {
-    throw new Error(
-      `Cannot write SQLite transcript without a session header for agent ${scope.agentId} session ${scope.sessionId}`,
-    );
-  }
-  replaceSqliteSessionTranscriptEvents({
-    ...writeScope,
-    events: entries,
-  });
-}
-
 export async function persistTranscriptStateMutationForSession(params: {
   agentId: string;
   sessionId: string;
   state: TranscriptState;
   appendedEntries: SessionEntry[];
 }): Promise<void> {
-  if (params.appendedEntries.length === 0 && !params.state.migrated) {
+  if (params.appendedEntries.length === 0) {
     return;
   }
   const allEntries = [
     ...(params.state.header ? [params.state.header] : []),
     ...params.state.entries,
   ];
-  if (params.state.migrated) {
-    await replaceTranscriptStateEventsForSession(params, allEntries);
-    return;
-  }
   const scope = resolveTranscriptWriteScopeForSession(params, allEntries);
   if (!scope) {
     throw new Error(
@@ -494,17 +440,13 @@ export function persistTranscriptStateMutationForSessionSync(params: {
   state: TranscriptState;
   appendedEntries: SessionEntry[];
 }): void {
-  if (params.appendedEntries.length === 0 && !params.state.migrated) {
+  if (params.appendedEntries.length === 0) {
     return;
   }
   const allEntries = [
     ...(params.state.header ? [params.state.header] : []),
     ...params.state.entries,
   ];
-  if (params.state.migrated) {
-    replaceTranscriptStateEventsForSessionSync(params, allEntries);
-    return;
-  }
   const scope = resolveTranscriptWriteScopeForSession(params, allEntries);
   if (!scope) {
     throw new Error(
@@ -514,4 +456,26 @@ export function persistTranscriptStateMutationForSessionSync(params: {
   for (const entry of params.appendedEntries) {
     appendSqliteSessionTranscriptEvent({ ...scope, event: entry });
   }
+}
+
+export function removeTailEntriesFromSqliteTranscript(params: {
+  agentId: string;
+  sessionId: string;
+  shouldRemove: (entry: SessionEntry) => boolean;
+  options?: { maxEntries?: number; minEntries?: number };
+}): number {
+  const state = readTranscriptStateForSessionSync({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  });
+  const removed = state.removeTailEntries(params.shouldRemove, params.options);
+  if (removed === 0) {
+    return 0;
+  }
+  replaceSqliteSessionTranscriptEvents({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+    events: [...(state.header ? [state.header] : []), ...state.entries],
+  });
+  return removed;
 }

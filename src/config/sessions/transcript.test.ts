@@ -470,7 +470,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: targetSessionId,
-      event: { type: "session", version: 3, id: targetSessionId },
+      event: { type: "session", version: 1, id: targetSessionId },
     });
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
@@ -523,7 +523,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "sqlite-import-session",
-      event: { type: "session", version: 3, id: "sqlite-import-session" },
+      event: { type: "session", version: 1, id: "sqlite-import-session" },
       now: () => 100,
     });
     appendSqliteSessionTranscriptEvent({

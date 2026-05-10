@@ -12,6 +12,7 @@ import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
+  MEMORY_INDEX_TABLE_NAMES,
   remapChunkLines,
   type MemoryChunk,
   type MemoryFileEntry,
@@ -40,9 +41,11 @@ import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
+const FILES_TABLE = MEMORY_INDEX_TABLE_NAMES.files;
+const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
+const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
+const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
+const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
 const EMBEDDING_BATCH_MAX_TOKENS = 8000;
 const EMBEDDING_INDEX_CONCURRENCY = 4;
 const EMBEDDING_RETRY_MAX_ATTEMPTS = 3;
@@ -527,7 +530,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       try {
         this.db
           .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM chunks WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?)`,
           )
           .run(pathname, source);
       } catch {}
@@ -543,13 +546,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         });
       } catch {}
     }
-    this.db.prepare(`DELETE FROM chunks WHERE path = ? AND source = ?`).run(pathname, source);
+    this.db
+      .prepare(`DELETE FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?`)
+      .run(pathname, source);
   }
 
   private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
     this.db
       .prepare(
-        `INSERT INTO files (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
+        `INSERT INTO ${FILES_TABLE} (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(path) DO UPDATE SET
            source=excluded.source,
            hash=excluded.hash,
@@ -560,7 +565,9 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
   }
 
   private deleteFileRecord(pathname: string, source: MemorySource): void {
-    this.db.prepare(`DELETE FROM files WHERE path = ? AND source = ?`).run(pathname, source);
+    this.db
+      .prepare(`DELETE FROM ${FILES_TABLE} WHERE path = ? AND source = ?`)
+      .run(pathname, source);
   }
 
   private async readIndexEntryContent(
@@ -601,7 +608,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       );
       this.db
         .prepare(
-          `INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+          `INSERT INTO ${CHUNKS_TABLE} (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
              hash=excluded.hash,

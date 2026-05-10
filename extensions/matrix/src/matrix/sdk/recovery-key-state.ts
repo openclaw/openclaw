@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import path from "node:path";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { withMatrixSqliteStateEnv } from "../sqlite-state.js";
 import type { MatrixStoredRecoveryKey } from "./types.js";
@@ -11,23 +10,27 @@ const RECOVERY_KEY_STORE = createPluginStateSyncKeyedStore<MatrixStoredRecoveryK
   maxEntries: 10_000,
 });
 
-export function resolveMatrixRecoveryKeyStateKey(recoveryKeyPath: string): string {
+export type MatrixRecoveryKeyRef = {
+  stateDir?: string;
+  storageKey: string;
+};
+
+function resolveMatrixRecoveryKeyStorageKey(ref: MatrixRecoveryKeyRef): string {
+  const storageKey = ref.storageKey.trim();
+  if (!storageKey) {
+    throw new Error("Matrix recovery key SQLite storage key must be non-empty");
+  }
+  return storageKey;
+}
+
+export function resolveMatrixRecoveryKeyStateKey(ref: MatrixRecoveryKeyRef): string {
   return createHash("sha256")
-    .update(path.resolve(recoveryKeyPath), "utf8")
+    .update(resolveMatrixRecoveryKeyStorageKey(ref), "utf8")
     .digest("hex")
     .slice(0, 32);
 }
 
-function resolveStateDirFromRecoveryKeyPath(recoveryKeyPath: string): string | undefined {
-  const parts = path.resolve(recoveryKeyPath).split(path.sep);
-  const matrixIndex = parts.lastIndexOf("matrix");
-  if (matrixIndex <= 0) {
-    return undefined;
-  }
-  return parts.slice(0, matrixIndex).join(path.sep) || path.sep;
-}
-
-function toPlainJsonValue(value: unknown, seen = new WeakSet<object>()): unknown | undefined {
+function toPlainJsonValue(value: unknown, seen = new WeakSet<object>()): unknown {
   if (value === null) {
     return null;
   }
@@ -122,25 +125,23 @@ function normalizeMatrixRecoveryKey(raw: unknown): MatrixStoredRecoveryKey | nul
   return normalized;
 }
 
-export function readMatrixRecoveryKey(recoveryKeyPath: string): MatrixStoredRecoveryKey | null {
-  const stateDir = resolveStateDirFromRecoveryKeyPath(recoveryKeyPath);
+export function readMatrixRecoveryKey(ref: MatrixRecoveryKeyRef): MatrixStoredRecoveryKey | null {
+  const stateDir = ref.stateDir;
   return withMatrixSqliteStateEnv(stateDir ? { stateDir } : undefined, () =>
-    normalizeMatrixRecoveryKey(
-      RECOVERY_KEY_STORE.lookup(resolveMatrixRecoveryKeyStateKey(recoveryKeyPath)),
-    ),
+    normalizeMatrixRecoveryKey(RECOVERY_KEY_STORE.lookup(resolveMatrixRecoveryKeyStateKey(ref))),
   );
 }
 
 export function writeMatrixRecoveryKey(
-  recoveryKeyPath: string,
+  ref: MatrixRecoveryKeyRef,
   payload: MatrixStoredRecoveryKey,
 ): void {
   const normalized = normalizeMatrixRecoveryKey(payload);
   if (!normalized) {
     return;
   }
-  const stateDir = resolveStateDirFromRecoveryKeyPath(recoveryKeyPath);
+  const stateDir = ref.stateDir;
   withMatrixSqliteStateEnv(stateDir ? { stateDir } : undefined, () => {
-    RECOVERY_KEY_STORE.register(resolveMatrixRecoveryKeyStateKey(recoveryKeyPath), normalized);
+    RECOVERY_KEY_STORE.register(resolveMatrixRecoveryKeyStateKey(ref), normalized);
   });
 }

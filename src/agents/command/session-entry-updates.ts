@@ -49,7 +49,7 @@ function removeLifecycleStateFromMetadataPatch(entry: SessionEntry): SessionEntr
 
 function persistMergedSessionEntry(params: {
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore?: Record<string, SessionEntry>;
   patch: SessionEntry;
 }): SessionEntry {
   const agentId = resolveAgentIdFromSessionKey(params.sessionKey);
@@ -58,14 +58,18 @@ function persistMergedSessionEntry(params: {
       `Session stores are SQLite-only; cannot resolve agent for ${params.sessionKey}`,
     );
   }
-  const existing = getSessionEntry({ agentId, sessionKey: params.sessionKey });
+  const existing =
+    getSessionEntry({ agentId, sessionKey: params.sessionKey }) ??
+    params.sessionStore?.[params.sessionKey];
   const merged = mergeSessionEntry(existing, params.patch);
   upsertSessionEntry({
     agentId,
     sessionKey: params.sessionKey,
     entry: merged,
   });
-  params.sessionStore[params.sessionKey] = merged;
+  if (params.sessionStore) {
+    params.sessionStore[params.sessionKey] = merged;
+  }
   return merged;
 }
 
@@ -265,10 +269,14 @@ export async function updateSessionEntryAfterAgentRun(params: {
 export async function clearCliSessionEntry(params: {
   provider: string;
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore?: Record<string, SessionEntry>;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore } = params;
-  const entry = sessionStore[sessionKey];
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId) {
+    throw new Error(`Session stores are SQLite-only; cannot resolve agent for ${sessionKey}`);
+  }
+  const entry = getSessionEntry({ agentId, sessionKey }) ?? sessionStore?.[sessionKey];
   if (!entry) {
     return undefined;
   }
@@ -287,10 +295,14 @@ export async function clearCliSessionEntry(params: {
 export async function recordCliCompactionInSessionEntry(params: {
   provider: string;
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
+  sessionStore?: Record<string, SessionEntry>;
 }): Promise<SessionEntry | undefined> {
   const { provider, sessionKey, sessionStore } = params;
-  const entry = sessionStore[sessionKey];
+  const agentId = resolveAgentIdFromSessionKey(sessionKey);
+  if (!agentId) {
+    throw new Error(`Session stores are SQLite-only; cannot resolve agent for ${sessionKey}`);
+  }
+  const entry = getSessionEntry({ agentId, sessionKey }) ?? sessionStore?.[sessionKey];
   if (!entry) {
     return undefined;
   }

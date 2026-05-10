@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,12 +21,12 @@ import {
 } from "../test-helpers.js";
 
 let sessionManagerModulePromise:
-  | Promise<typeof import("../../agents/transcript/session-transcript-contract.js")>
+  | Promise<typeof import("../../agents/transcript/session-manager.js")>
   | undefined;
 let gatewayConfigModulePromise: Promise<typeof import("../../config/config.js")> | undefined;
 
 export async function getSessionManagerModule() {
-  sessionManagerModulePromise ??= import("../../agents/transcript/session-transcript-contract.js");
+  sessionManagerModulePromise ??= import("../../agents/transcript/session-manager.js");
   return await sessionManagerModulePromise;
 }
 
@@ -304,14 +305,12 @@ export function setupGatewaySessionsTestHarness() {
   }
 
   async function seedActiveMainSession() {
-    const { dir } = await createSessionFixtureDir();
-    await writeSingleLineSession(dir, "sess-main", "hello");
+    await seedSqliteSessionTranscript("sess-main", "hello");
     await seedGatewaySessionEntries({
       entries: {
         main: sessionStoreEntry("sess-main"),
       },
     });
-    return { dir };
   }
 
   return {
@@ -322,8 +321,7 @@ export function setupGatewaySessionsTestHarness() {
   };
 }
 
-export async function writeSingleLineSession(
-  _dir: string,
+export async function seedSqliteSessionTranscript(
   sessionId: string,
   content: string,
   opts: { agentId?: string } = {},
@@ -350,8 +348,12 @@ export function sessionStoreEntry(sessionId: string, overrides: Partial<SessionE
 }
 
 export async function createCheckpointFixture(dir: string) {
-  const { SessionManager } = await getSessionManagerModule();
-  const session = SessionManager.create(dir);
+  const { openTranscriptSessionManagerForSession } = await getSessionManagerModule();
+  const session = openTranscriptSessionManagerForSession({
+    agentId: "main",
+    sessionId: randomUUID(),
+    cwd: dir,
+  });
   const userMessage: UserMessage = {
     role: "user",
     content: "before compaction",
@@ -393,7 +395,6 @@ export async function createCheckpointFixture(dir: string) {
   const checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
     agentId: "main",
     sessionId: header.id,
-    sessionManager: session,
   });
   if (!checkpointSnapshot?.sessionId) {
     throw new Error("expected persisted checkpoint snapshot");

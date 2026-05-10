@@ -222,9 +222,6 @@ describe("saveAuthProfileStore", () => {
       expect(authProfiles.lastGood).toBeUndefined();
       expect(authProfiles.usageStats).toBeUndefined();
 
-      await expect(fs.access(path.join(agentDir, "auth-state.json"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
       const sqliteState = readOpenClawStateKvJson(
         AUTH_PROFILE_STATE_KV_SCOPE,
         authProfileStateKey(agentDir),

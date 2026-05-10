@@ -84,10 +84,6 @@ function createHomeDir(): string {
   return dir;
 }
 
-function approvalsFilePath(homeDir: string): string {
-  return path.join(homeDir, ".openclaw", "exec-approvals.json");
-}
-
 function readApprovalsFile(): ExecApprovalsFile {
   return loadExecApprovals();
 }
@@ -162,22 +158,14 @@ describe("exec approvals store helpers", () => {
     ).toEqual({ path: resolveExecApprovalsSocketPath(), token: "" });
   });
 
-  it("returns normalized snapshots from SQLite and ignores legacy files until import", () => {
-    const dir = createHomeDir();
+  it("returns normalized snapshots from SQLite", () => {
+    createHomeDir();
 
     const missing = readExecApprovalsSnapshot();
     expect(missing.exists).toBe(false);
     expect(missing.raw).toBeNull();
     expect(missing.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
     expect(missing.path).toBe(resolveExecApprovalsStoreLocationForDisplay());
-
-    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
-    fs.writeFileSync(approvalsFilePath(dir), "{invalid", "utf8");
-
-    const ignoredLegacy = readExecApprovalsSnapshot();
-    expect(ignoredLegacy.exists).toBe(false);
-    expect(ignoredLegacy.raw).toBeNull();
-    expect(ignoredLegacy.file).toEqual(normalizeExecApprovals({ version: 1, agents: {} }));
 
     saveExecApprovals({ version: 1, defaults: { security: "deny" }, agents: {} });
     const sqlite = readExecApprovalsSnapshot();
@@ -187,7 +175,7 @@ describe("exec approvals store helpers", () => {
   });
 
   it("ensures approvals in SQLite with default socket path and generated token", () => {
-    const dir = createHomeDir();
+    createHomeDir();
 
     const ensured = ensureExecApprovals();
     const raw = readSqliteRaw();
@@ -196,7 +184,6 @@ describe("exec approvals store helpers", () => {
     expect(ensured.socket?.token).toMatch(/^[A-Za-z0-9_-]{32}$/);
     expect(raw?.endsWith("\n")).toBe(true);
     expect(readApprovalsFile().socket).toEqual(ensured.socket);
-    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
   });
 
   it("adds trimmed allowlist entries once and persists generated ids", () => {

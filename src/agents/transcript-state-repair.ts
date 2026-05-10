@@ -10,7 +10,7 @@ export const BLANK_USER_FALLBACK_TEXT = "(continue)";
 
 type RepairReport = {
   repaired: boolean;
-  droppedLines: number;
+  droppedEntries: number;
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
@@ -42,12 +42,11 @@ function isSessionHeader(entry: unknown): entry is { type: string; id: string } 
 /**
  * Detect a `type: "message"` entry whose `message.role` is missing, `null`, or
  * not a non-empty string. Such entries surface in the wild as "null role"
- * JSONL corruption (e.g. #77228 reported transcripts that contained 935+
- * entries with null roles after an earlier failure). They cannot be replayed
- * to any provider — every provider router branches on `message.role` — and
- * preserving them through repair just relocates the corruption from the
- * original file into the post-repair file. Treat them as malformed lines:
- * drop during repair so the cleaned transcript no longer carries them.
+ * transcript corruption (e.g. #77228 reported transcripts that contained 935+
+ * entries with null roles after an earlier failure). They cannot be replayed to
+ * any provider — every provider router branches on `message.role` — and
+ * preserving them through repair just relocates the corruption inside SQLite.
+ * Drop them during repair so the cleaned transcript no longer carries them.
  */
 function isStructurallyInvalidMessageEntry(entry: unknown): boolean {
   if (!entry || typeof entry !== "object") {
@@ -167,14 +166,15 @@ function repairUserEntryWithBlankTextContent(entry: SessionMessageEntry): UserEn
 }
 
 function buildRepairSummaryParts(params: {
-  droppedLines: number;
+  droppedEntries: number;
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
 }): string {
   const parts: string[] = [];
-  if (params.droppedLines > 0) {
-    parts.push(`dropped ${params.droppedLines} malformed line(s)`);
+  if (params.droppedEntries > 0) {
+    const noun = params.droppedEntries === 1 ? "entry" : "entries";
+    parts.push(`dropped ${params.droppedEntries} malformed ${noun}`);
   }
   if (params.rewrittenAssistantMessages > 0) {
     parts.push(`rewrote ${params.rewrittenAssistantMessages} assistant message(s)`);
@@ -196,16 +196,15 @@ async function repairTranscriptEntries(params: {
 }): Promise<RepairReport> {
   const storedEntries = loadSqliteSessionTranscriptEvents(params.scope).map((entry) => entry.event);
   const entries: unknown[] = [];
-  let droppedLines = 0;
+  let droppedEntries = 0;
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
 
   for (const entry of storedEntries) {
     if (isStructurallyInvalidMessageEntry(entry)) {
-      // Drop "null role" / missing-role message entries the same way the old
-      // JSONL repair dropped malformed lines: providers cannot replay them.
-      droppedLines += 1;
+      // Drop "null role" / missing-role message entries: providers cannot replay them.
+      droppedEntries += 1;
       continue;
     }
     if (isAssistantEntryWithEmptyContent(entry)) {
@@ -235,21 +234,21 @@ async function repairTranscriptEntries(params: {
   }
 
   if (entries.length === 0) {
-    return { repaired: false, droppedLines, reason: "empty session transcript" };
+    return { repaired: false, droppedEntries, reason: "empty session transcript" };
   }
 
   if (!isSessionHeader(entries[0])) {
     params.warn?.(`session transcript repair skipped: invalid session header (${params.label})`);
-    return { repaired: false, droppedLines, reason: "invalid session header" };
+    return { repaired: false, droppedEntries, reason: "invalid session header" };
   }
 
   if (
-    droppedLines === 0 &&
+    droppedEntries === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
     rewrittenUserMessages === 0
   ) {
-    return { repaired: false, droppedLines: 0 };
+    return { repaired: false, droppedEntries: 0 };
   }
 
   try {
@@ -260,7 +259,7 @@ async function repairTranscriptEntries(params: {
   } catch (err) {
     return {
       repaired: false,
-      droppedLines,
+      droppedEntries,
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
@@ -270,7 +269,7 @@ async function repairTranscriptEntries(params: {
 
   params.debug?.(
     `session transcript repaired: ${buildRepairSummaryParts({
-      droppedLines,
+      droppedEntries,
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
@@ -278,7 +277,7 @@ async function repairTranscriptEntries(params: {
   );
   return {
     repaired: true,
-    droppedLines,
+    droppedEntries,
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
@@ -294,7 +293,7 @@ export async function repairTranscriptSessionStateIfNeeded(params: {
   const agentId = params.agentId.trim();
   const sessionId = params.sessionId.trim();
   if (!agentId || !sessionId) {
-    return { repaired: false, droppedLines: 0, reason: "missing SQLite transcript scope" };
+    return { repaired: false, droppedEntries: 0, reason: "missing SQLite transcript scope" };
   }
 
   return repairTranscriptEntries({

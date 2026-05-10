@@ -74,8 +74,7 @@ describe("config observe recovery", () => {
     };
   }
 
-  async function readObserveEvents(auditPath: string): Promise<Record<string, unknown>[]> {
-    const stateDir = path.dirname(path.dirname(auditPath));
+  async function readObserveEvents(stateDir: string): Promise<Record<string, unknown>[]> {
     return listConfigAuditRecordsForTests({
       env: { OPENCLAW_STATE_DIR: stateDir } as NodeJS.ProcessEnv,
       homedir: () => path.dirname(stateDir),
@@ -133,9 +132,9 @@ describe("config observe recovery", () => {
   }
 
   async function readLastObserveEvent(
-    auditPath: string,
+    stateDir: string,
   ): Promise<Record<string, unknown> | undefined> {
-    return (await readObserveEvents(auditPath)).at(-1);
+    return (await readObserveEvents(stateDir)).at(-1);
   }
 
   async function recoverClobberedUpdateChannel(params: {
@@ -202,7 +201,7 @@ describe("config observe recovery", () => {
   ): {
     deps: ObserveRecoveryDeps;
     configPath: string;
-    auditPath: string;
+    stateDir: string;
     warn: ReturnType<typeof vi.fn>;
   } {
     const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -215,14 +214,14 @@ describe("config observe recovery", () => {
         logger: { warn },
       },
       configPath,
-      auditPath: path.join(home, ".openclaw", "logs", "config-audit.jsonl"),
+      stateDir: path.join(home, ".openclaw"),
       warn,
     };
   }
 
   it("auto-restores suspicious update-channel-only roots from backup", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const { deps, configPath, stateDir, warn } = makeDeps(home);
       await seedConfigBackup(configPath, {
         meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
         update: { channel: "beta" },
@@ -238,7 +237,7 @@ describe("config observe recovery", () => {
       await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedUpdateChannelRaw);
       expectWarnContaining(warn, "Config auto-restored from backup:");
 
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
       expectSuspiciousIncludes(observe, "update-channel-only-root");
@@ -247,7 +246,7 @@ describe("config observe recovery", () => {
 
   it("auto-restores when metadata disappears from an otherwise valid config", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeConfigRaw(configPath, {
         update: { channel: "beta" },
@@ -258,7 +257,7 @@ describe("config observe recovery", () => {
       const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
 
       expect((recovered.parsed as { meta?: unknown }).meta).toEqual(recoverableTelegramConfig.meta);
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousIncludes(observe, "missing-meta-vs-last-good");
     });
@@ -266,7 +265,7 @@ describe("config observe recovery", () => {
 
   it("auto-restores when gateway mode disappears from the last-good shape", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeConfigRaw(configPath, {
         meta: { lastTouchedAt: "2026-04-22T00:00:00.000Z" },
@@ -277,7 +276,7 @@ describe("config observe recovery", () => {
       const recovered = await recoverSuspiciousConfigRead({ deps, configPath, ...clobbered });
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
     });
@@ -301,7 +300,7 @@ describe("config observe recovery", () => {
 
   it("auto-restores after a large size drop against last-good config", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, {
         ...recoverableTelegramConfig,
         channels: {
@@ -324,7 +323,7 @@ describe("config observe recovery", () => {
         (recovered.parsed as { channels?: { telegram?: { allowFrom?: string[] } } }).channels
           ?.telegram?.allowFrom,
       ).toHaveLength(60);
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(true);
       expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
     });
@@ -332,7 +331,7 @@ describe("config observe recovery", () => {
 
   it("does not restore noncritical config edits", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const editedConfig = {
         ...recoverableTelegramConfig,
@@ -344,13 +343,13 @@ describe("config observe recovery", () => {
 
       expect(recovered.parsed).toEqual(editedConfig);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(edited.raw);
-      await expectPathMissing(auditPath);
+      await expect(readObserveEvents(stateDir)).resolves.toHaveLength(0);
     });
   });
 
   it("records copyFile failure instead of falsely claiming restore succeeded", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const { deps, configPath, stateDir, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
@@ -374,7 +373,7 @@ describe("config observe recovery", () => {
       expectWarnContaining(warn, "Config auto-restore from backup failed:");
       expectWarnNotContaining(warn, "Config auto-restored from backup:");
 
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(false);
       expect(observe?.valid).toBe(false);
       expect(observe?.restoreErrorCode).toBe("EACCES");
@@ -384,7 +383,7 @@ describe("config observe recovery", () => {
 
   it("sync recovery records copyFileSync failure instead of falsely claiming restore succeeded", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const { deps, configPath, stateDir, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       const clobbered = await writeClobberedUpdateChannel(configPath);
 
@@ -408,7 +407,7 @@ describe("config observe recovery", () => {
       expectWarnContaining(warn, "EACCES: permission denied");
       expectWarnNotContaining(warn, "Config auto-restored from backup:");
 
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(false);
       expect(observe?.valid).toBe(false);
       expect(observe?.restoreErrorCode).toBe("EACCES");
@@ -418,21 +417,21 @@ describe("config observe recovery", () => {
 
   it("dedupes repeated suspicious hashes", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       await writeClobberedUpdateChannel(configPath);
 
       await recoverClobberedUpdateChannel({ deps, configPath });
       await recoverClobberedUpdateChannel({ deps, configPath });
 
-      const observeEvents = await readObserveEvents(auditPath);
+      const observeEvents = await readObserveEvents(stateDir);
       expect(observeEvents).toHaveLength(1);
     });
   });
 
   it("caps concurrent recovery clobber snapshots while preserving audit records", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const { deps, configPath, stateDir, warn } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       await writeClobberedUpdateChannel(configPath);
 
@@ -444,7 +443,7 @@ describe("config observe recovery", () => {
 
       const clobberFiles = await listClobberFiles(configPath);
       expect(clobberFiles.length).toBeLessThanOrEqual(CONFIG_CLOBBER_SNAPSHOT_LIMIT);
-      const observeEvents = await readObserveEvents(auditPath);
+      const observeEvents = await readObserveEvents(stateDir);
       expect(observeEvents.length).toBeGreaterThan(0);
       expect(observeEvents.at(-1)).toHaveProperty("clobberedPath");
       let capWarningCount = 0;
@@ -462,14 +461,14 @@ describe("config observe recovery", () => {
 
   it("sync recovery uses backup baseline when health state is absent", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath } = makeDeps(home);
+      const { deps, configPath, stateDir } = makeDeps(home);
       await seedConfigBackup(configPath, recoverableTelegramConfig);
       await writeClobberedUpdateChannel(configPath);
 
       const recovered = recoverClobberedUpdateChannelSync({ deps, configPath });
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.backupHash).toBeTypeOf("string");
       expect(observe?.lastKnownGoodIno ?? null).toBeNull();
     });
@@ -491,11 +490,10 @@ describe("config observe recovery", () => {
     });
   });
 
-  it("stores promoted config health state in SQLite instead of config-health.json", async () => {
+  it("stores promoted config health state in SQLite", async () => {
     await withSuiteHome(async (home) => {
       const { deps, configPath } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, recoverableTelegramConfig);
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
 
       await expect(
         promoteConfigSnapshotToLastKnownGood({
@@ -505,7 +503,6 @@ describe("config observe recovery", () => {
         }),
       ).resolves.toBe(true);
 
-      await expect(fsp.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(readConfigHealthStateFromSqlite(deps.env, deps.homedir).entries?.[configPath]).toEqual(
         expect.objectContaining({
           lastKnownGood: expect.objectContaining({
@@ -523,7 +520,7 @@ describe("config observe recovery", () => {
 
   it("promotes a valid startup config and restores it after an invalid direct edit", async () => {
     await withSuiteHome(async (home) => {
-      const { deps, configPath, auditPath, warn } = makeDeps(home);
+      const { deps, configPath, stateDir, warn } = makeDeps(home);
       const snapshot = await makeSnapshot(configPath, {
         gateway: { mode: "local", auth: { mode: "token", token: "secret-token" } },
         channels: { discord: { enabled: true, dmPolicy: "pairing" } },
@@ -554,7 +551,7 @@ describe("config observe recovery", () => {
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
       expectWarnContaining(warn, "Config auto-restored from last-known-good:");
       expectWarnContaining(warn, "Rejected validation details: gateway.mode: Expected string.");
-      const observe = await readLastObserveEvent(auditPath);
+      const observe = await readLastObserveEvent(stateDir);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
     });

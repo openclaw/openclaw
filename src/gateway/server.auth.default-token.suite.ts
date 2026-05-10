@@ -267,13 +267,8 @@ export function registerDefaultAuthTokenSuite(): void {
 
     test("hello-ok reports persisted token scopes when reusing an existing device token", async () => {
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
-      const path = await import("node:path");
       const token = resolveGatewayTokenOrEnv();
-      const deviceIdentityPath = path.join(
-        os.tmpdir(),
-        `openclaw-shared-auth-scope-reuse-${randomUUID()}.json`,
-      );
+      const deviceIdentityKey = `test:shared-auth-scope-reuse:${randomUUID()}`;
       const wsInitial = await openWs(port);
       let pairedDeviceToken: string | undefined;
       let pairedDeviceScopes: unknown;
@@ -281,7 +276,7 @@ export function registerDefaultAuthTokenSuite(): void {
         const initial = await connectReq(wsInitial, {
           token,
           scopes: ["operator.admin"],
-          deviceIdentityPath,
+          deviceIdentityKey,
         });
         expect(initial.ok).toBe(true);
         const helloOk = initial.payload as
@@ -307,7 +302,7 @@ export function registerDefaultAuthTokenSuite(): void {
         const reconnect = await connectReq(wsReconnect, {
           token,
           scopes: ["operator.read"],
-          deviceIdentityPath,
+          deviceIdentityKey,
         });
         expect(reconnect.ok).toBe(true);
         const helloOk = reconnect.payload as
@@ -334,15 +329,13 @@ export function registerDefaultAuthTokenSuite(): void {
       const nonce = await readConnectChallengeNonce(ws);
 
       const { randomUUID } = await import("node:crypto");
-      const os = await import("node:os");
-      const path = await import("node:path");
       // Fresh identity: avoid leaking prior scopes (presence merges lists).
       const { identity, device } = await createSignedDevice({
         token,
         scopes: [],
         clientId: GATEWAY_CLIENT_NAMES.TEST,
         clientMode: GATEWAY_CLIENT_MODES.TEST,
-        identityPath: path.join(os.tmpdir(), `openclaw-test-device-${randomUUID()}.json`),
+        identityKey: `test:default-token:${randomUUID()}`,
         nonce,
       });
 

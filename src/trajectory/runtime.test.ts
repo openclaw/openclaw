@@ -141,7 +141,7 @@ describe("trajectory runtime", () => {
     expect(listTrajectoryRuntimeEvents({ agentId: "main", sessionId: "session-1" })).toHaveLength(
       0,
     );
-    expect(runtimeRecorder.runtimeLocator).toBe("sqlite:worker:trajectory:session-1");
+    expect(runtimeRecorder.runtimeScope).toBe("sqlite:worker:trajectory:session-1");
   });
 
   it("mirrors runtime trajectory capture into the artifact store on flush", async () => {
@@ -165,7 +165,7 @@ describe("trajectory runtime", () => {
     expect(artifacts.writes).toHaveLength(1);
     expect(artifacts.writes[0]).toMatchObject({
       artifactId: "trajectory-runtime",
-      kind: "trajectory/runtime-jsonl",
+      kind: "trajectory/runtime-events",
       metadata: {
         traceSchema: "openclaw-trajectory-artifact",
         schemaVersion: 1,
@@ -177,7 +177,7 @@ describe("trajectory runtime", () => {
         modelId: "gpt-5.4",
         modelApi: "responses",
         workspaceDir: "/tmp/workspace",
-        runtimeLocator: "sqlite:main:trajectory:session-1",
+        runtimeScope: "sqlite:main:trajectory:session-1",
         eventCount: 2,
       },
     });
@@ -210,11 +210,11 @@ describe("trajectory runtime", () => {
     );
   });
 
-  it("stops runtime capture at the file budget and records a truncation event", async () => {
+  it("stops runtime capture at the byte budget and records a truncation event", async () => {
     useTempStateDir();
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
-      maxRuntimeFileBytes: 900,
+      maxRuntimeCaptureBytes: 900,
     });
 
     const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);

@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "../agent-core-contract.js";
 import type {
   BranchSummaryEntry,
@@ -6,94 +5,9 @@ import type {
   CustomMessageEntry,
   SessionContext,
   SessionEntry,
-  SessionHeader,
-  TranscriptEntry,
 } from "./session-transcript-types.js";
 
-export const CURRENT_SESSION_VERSION = 3;
-
-function generateSessionEntryId(ids: Set<string>): string {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    const id = randomUUID().slice(0, 8);
-    if (!ids.has(id)) {
-      ids.add(id);
-      return id;
-    }
-  }
-  const id = randomUUID();
-  ids.add(id);
-  return id;
-}
-
-function migrateV1ToV2(entries: TranscriptEntry[]): void {
-  const ids = new Set<string>();
-  let previousId: string | null = null;
-  for (const entry of entries) {
-    if (entry.type === "session") {
-      entry.version = 2;
-      continue;
-    }
-    entry.id = generateSessionEntryId(ids);
-    entry.parentId = previousId;
-    previousId = entry.id;
-
-    if (entry.type === "compaction") {
-      const legacy = entry as CompactionEntry & { firstKeptEntryIndex?: number };
-      if (typeof legacy.firstKeptEntryIndex === "number") {
-        const targetEntry = entries[legacy.firstKeptEntryIndex];
-        if (targetEntry?.type !== "session") {
-          legacy.firstKeptEntryId = targetEntry.id;
-        }
-        delete legacy.firstKeptEntryIndex;
-      }
-    }
-  }
-}
-
-function migrateV2ToV3(entries: TranscriptEntry[]): void {
-  for (const entry of entries) {
-    if (entry.type === "session") {
-      entry.version = 3;
-      continue;
-    }
-    if (
-      entry.type === "message" &&
-      entry.message &&
-      (entry.message as { role?: string }).role === "hookMessage"
-    ) {
-      (entry.message as { role?: string }).role = "custom";
-    }
-  }
-}
-
-export function parseSessionEntries(content: string): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  for (const line of content.trim().split("\n")) {
-    if (!line.trim()) {
-      continue;
-    }
-    try {
-      entries.push(JSON.parse(line) as TranscriptEntry);
-    } catch {
-      // Keep compatibility with PI's tolerant JSONL reader.
-    }
-  }
-  return entries;
-}
-
-export function migrateSessionEntries(entries: TranscriptEntry[]): void {
-  const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
-  const version = header?.version ?? 1;
-  if (version >= CURRENT_SESSION_VERSION) {
-    return;
-  }
-  if (version < 2) {
-    migrateV1ToV2(entries);
-  }
-  if (version < 3) {
-    migrateV2ToV3(entries);
-  }
-}
+export const CURRENT_SESSION_VERSION = 1;
 
 function toTranscriptMessageTimestamp(timestamp: string): number {
   return new Date(timestamp).getTime();

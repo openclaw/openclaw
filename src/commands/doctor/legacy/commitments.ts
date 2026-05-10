@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { saveCommitmentStore } from "../../../commitments/store.js";
-import type { CommitmentRecord, CommitmentStoreFile } from "../../../commitments/types.js";
+import type { CommitmentRecord, CommitmentStoreSnapshot } from "../../../commitments/types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 
 const STORE_VERSION = 1 as const;
@@ -56,7 +56,7 @@ function coerceCommitment(raw: unknown): CommitmentRecord | undefined {
   return commitment;
 }
 
-function coerceCommitmentStore(parsed: unknown): CommitmentStoreFile {
+function coerceCommitmentStore(parsed: unknown): CommitmentStoreSnapshot {
   if (!isRecord(parsed) || parsed.version !== STORE_VERSION || !Array.isArray(parsed.commitments)) {
     return { version: STORE_VERSION, commitments: [] };
   }

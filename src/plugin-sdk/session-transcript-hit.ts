@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 
@@ -9,23 +8,24 @@ export type SessionTranscriptHitIdentity = {
   ownerAgentId?: string;
 };
 
-function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } {
-  const normalized = hitPath.replace(/\\/g, "/");
-  const fromSessionsRoot = normalized.startsWith("sessions/")
-    ? normalized.slice("sessions/".length)
-    : normalized;
-  const parts = fromSessionsRoot.split("/").filter(Boolean);
-  const base = path.posix.basename(fromSessionsRoot);
-  const ownerAgentId =
-    normalized.startsWith("sessions/") && parts.length === 2
-      ? normalizeAgentId(parts[0])
-      : undefined;
-  return { base, ownerAgentId };
+const TRANSCRIPT_KEY_PREFIX = "transcript:";
+
+function parseSessionsPath(hitPath: string): { base: string; ownerAgentId?: string } | null {
+  if (!hitPath.startsWith(TRANSCRIPT_KEY_PREFIX)) {
+    return null;
+  }
+  const parts = hitPath.slice(TRANSCRIPT_KEY_PREFIX.length).split(":");
+  const agentId = parts.shift()?.trim();
+  const sessionId = parts.join(":").trim();
+  if (!agentId || !sessionId) {
+    return null;
+  }
+  return { base: sessionId, ownerAgentId: normalizeAgentId(agentId) };
 }
 
 /**
- * Derive transcript stem `S` from a memory search hit path for `source === "sessions"`.
- * Builtin index uses `sessions/<agent>/<session>`; QMD exports use `<stem>.md`.
+ * Derive transcript stem `S` from a memory search hit key for `source === "sessions"`.
+ * Session memory hits use opaque SQLite-backed keys: `transcript:<agent>:<session>`.
  */
 export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): string | null {
   return extractTranscriptIdentityFromSessionsMemoryHit(hitPath)?.stem ?? null;
@@ -34,15 +34,8 @@ export function extractTranscriptStemFromSessionsMemoryHit(hitPath: string): str
 export function extractTranscriptIdentityFromSessionsMemoryHit(
   hitPath: string,
 ): SessionTranscriptHitIdentity | null {
-  const { base, ownerAgentId } = parseSessionsPath(hitPath);
-  if (base.endsWith(".md")) {
-    const stem = base.slice(0, -".md".length);
-    return stem ? { stem } : null;
-  }
-  if (hitPath.replace(/\\/g, "/").startsWith("sessions/") && base) {
-    return { stem: base, ownerAgentId };
-  }
-  return null;
+  const parsed = parseSessionsPath(hitPath);
+  return parsed ? { stem: parsed.base, ownerAgentId: parsed.ownerAgentId } : null;
 }
 
 /**

@@ -2,13 +2,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveMemoryDreamingWorkspaces } from "openclaw/plugin-sdk/memory-core-host-status";
 import type { MemoryPluginPublicArtifact } from "openclaw/plugin-sdk/memory-host-core";
-import {
-  readMemoryHostEvents,
-  renderMemoryHostEventsJsonl,
-} from "openclaw/plugin-sdk/memory-host-events";
+import { readMemoryHostEvents } from "openclaw/plugin-sdk/memory-host-events";
 import type { OpenClawConfig } from "../api.js";
 
-const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = "memory/.dreams/events.jsonl";
+const MEMORY_HOST_EVENT_LOG_RELATIVE_PATH = "memory/events/memory-host-events.json";
 const MEMORY_HOST_EVENT_LOG_SQLITE_LABEL =
   "sqlite:plugin_state_entries/memory-core/memory-host.events";
 
@@ -66,14 +63,12 @@ async function collectWorkspaceArtifacts(params: {
     });
   }
 
-  const eventContent = renderMemoryHostEventsJsonl(
-    await readMemoryHostEvents({ workspaceDir: params.workspaceDir }),
-  );
-  if (eventContent.trim()) {
-    const eventLines = eventContent.trim().split(/\r?\n/u);
-    const lastEvent = JSON.parse(eventLines.at(-1) ?? "{}") as { timestamp?: string };
+  const events = await readMemoryHostEvents({ workspaceDir: params.workspaceDir });
+  if (events.length > 0) {
+    const eventContent = JSON.stringify(events, null, 2);
+    const lastEvent = events.at(-1);
     const updatedAtMs =
-      typeof lastEvent.timestamp === "string" && Number.isFinite(Date.parse(lastEvent.timestamp))
+      typeof lastEvent?.timestamp === "string" && Number.isFinite(Date.parse(lastEvent.timestamp))
         ? Date.parse(lastEvent.timestamp)
         : Date.now();
     artifacts.push({

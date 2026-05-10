@@ -112,7 +112,7 @@ async function verifyRuntimeContextTranscriptShape() {
 
 async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Promise<string> {
   const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
-  const sessionFile = path.join(sessionsDir, "broken.jsonl");
+  const legacyTranscriptJsonl = path.join(sessionsDir, "broken.jsonl");
   await fs.mkdir(sessionsDir, { recursive: true });
   const entries = [
     { type: "session", version: 3, id: "broken-session" },
@@ -157,7 +157,7 @@ async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Prom
     },
   ];
   await fs.writeFile(
-    sessionFile,
+    legacyTranscriptJsonl,
     `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
     "utf-8",
   );
@@ -179,13 +179,13 @@ async function seedBrokenLegacySessionForDoctorMigration(stateDir: string): Prom
     ),
     "utf-8",
   );
-  return sessionFile;
+  return legacyTranscriptJsonl;
 }
 
 async function verifyDoctorRepair(root: string) {
   const stateDir = path.join(root, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const sessionFile = await seedBrokenLegacySessionForDoctorMigration(stateDir);
+  const legacyTranscriptJsonl = await seedBrokenLegacySessionForDoctorMigration(stateDir);
   await fs.mkdir(path.dirname(configPath), { recursive: true });
   await fs.writeFile(configPath, JSON.stringify({ plugins: { enabled: false } }, null, 2));
 
@@ -216,14 +216,19 @@ async function verifyDoctorRepair(root: string) {
     result.status === 0,
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
-  await fs.access(sessionFile).then(
+  await fs.access(legacyTranscriptJsonl).then(
     () => {
       throw new Error("doctor left legacy transcript JSONL after SQLite import");
     },
     () => undefined,
   );
   const { loadSqliteSessionTranscriptEvents } =
-    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as typeof import("../../src/config/sessions/transcript-store.sqlite.js");
+    (await import("../../dist/config/sessions/transcript-store.sqlite.js")) as {
+      loadSqliteSessionTranscriptEvents: (scope: {
+        agentId: string;
+        sessionId: string;
+      }) => Array<{ event: unknown }>;
+    };
   const entries = loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "broken-session",

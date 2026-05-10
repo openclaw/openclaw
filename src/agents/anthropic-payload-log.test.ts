@@ -10,13 +10,12 @@ import { createAnthropicPayloadLogger } from "./anthropic-payload-log.js";
 
 describe("createAnthropicPayloadLogger", () => {
   it("sanitizes credential fields and image base64 payload data before writing logs", async () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const logger = createAnthropicPayloadLogger({
       env: { OPENCLAW_ANTHROPIC_PAYLOAD_LOG: "1" },
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
     expect(typeof logger?.wrapStreamFn).toBe("function");
@@ -52,7 +51,7 @@ describe("createAnthropicPayloadLogger", () => {
     }
     await wrapped({ api: "anthropic-messages" } as never, { messages: [] } as never, {});
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     const sanitizedPayload = (event.payload ?? {}) as Record<string, unknown>;
     const message = ((sanitizedPayload.messages as unknown[] | undefined) ?? []) as Array<
       Record<string, unknown>

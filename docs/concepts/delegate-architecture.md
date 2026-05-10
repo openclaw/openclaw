@@ -248,7 +248,7 @@ Copy or create auth profiles for the delegate's `agentDir`:
 
 ```bash
 # Delegate reads from its own auth store
-~/.openclaw/agents/delegate/agent/auth-profiles.json
+~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<delegateAgentDir>
 ```
 
 Never share the main agent's `agentDir` with the delegate. See [Multi-Agent Routing](/concepts/multi-agent) for auth isolation details.

@@ -155,6 +155,17 @@ function formatAttachmentFailureForLog(err: unknown): string {
   return `${primary}\nCaused by: ${causeText}`;
 }
 
+function shouldSuppressPromptPersistenceForAgentRun(params: {
+  inputProvenance?: InputProvenance;
+  internalEvents?: AgentInternalEvent[];
+}): boolean {
+  return (
+    params.inputProvenance?.kind === "inter_session" &&
+    params.inputProvenance.sourceTool === "subagent_announce" &&
+    params.internalEvents?.some((event) => event.type === "task_completion") === true
+  );
+}
+
 function logAttachmentFailure(
   logGateway: Pick<GatewayRequestContext["logGateway"], "error">,
   label: string,
@@ -639,6 +650,14 @@ export const agentHandlers: GatewayRequestHandlers = {
     if (cached) {
       respond(cached.ok, cached.payload, cached.error, {
         cached: true,
+      });
+      return;
+    }
+    const activeRun = context.chatAbortControllers.get(idem);
+    if (activeRun) {
+      respond(true, { runId: idem, status: "in_flight" }, undefined, {
+        cached: true,
+        runId: idem,
       });
       return;
     }
@@ -1464,6 +1483,10 @@ export const agentHandlers: GatewayRequestHandlers = {
             acpTurnSource: request.acpTurnSource,
             internalEvents: request.internalEvents,
             inputProvenance,
+            suppressPromptPersistence: shouldSuppressPromptPersistenceForAgentRun({
+              inputProvenance,
+              internalEvents: request.internalEvents,
+            }),
             initialVfsEntries: request.initialVfsEntries,
             cleanupBundleMcpOnRunEnd: request.cleanupBundleMcpOnRunEnd,
             abortSignal: activeRunAbort.controller.signal,

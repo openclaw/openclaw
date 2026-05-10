@@ -450,20 +450,6 @@ describe("pairing store", () => {
     });
   });
 
-  it("stores allowFrom approvals in SQLite without writing legacy files", async () => {
-    await withTempStateDir(async (stateDir) => {
-      const result = await addChannelAllowFromStoreEntry({
-        channel: "telegram",
-        accountId: "yy",
-        entry: "12345",
-      });
-
-      expect(result).toEqual({ changed: true, allowFrom: ["12345"] });
-      expect(await readChannelAllowFromStore("telegram", process.env, "yy")).toEqual(["12345"]);
-      expect(fsSync.existsSync(resolveAllowFromFilePath(stateDir, "telegram", "yy"))).toBe(false);
-    });
-  });
-
   it("reads allowFrom variants with account-scoped isolation", async () => {
     await withTempStateDir(async (stateDir) => {
       for (const { setup, accountId, expected, expectedLegacy } of [

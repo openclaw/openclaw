@@ -6,7 +6,7 @@ import { afterAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type WebSocket from "ws";
 import { resetConfigRuntimeState } from "../config/config.js";
 import { resolveCronStoreKey, saveCronStore } from "../cron/store.js";
-import type { CronStoreFile } from "../cron/types.js";
+import type { CronStoreSnapshot } from "../cron/types.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import type { GatewayCronState } from "./server-cron.js";
 import {
@@ -59,7 +59,7 @@ vi.mock("../plugin-sdk/browser-maintenance.js", () => ({
 
 installGatewayTestHooks({ scope: "suite" });
 const CRON_WAIT_TIMEOUT_MS = 10_000;
-const EMPTY_CRON_STORE: CronStoreFile = { version: 1, jobs: [] };
+const EMPTY_CRON_STORE: CronStoreSnapshot = { version: 1, jobs: [] };
 let cronSuiteTempRootPromise: Promise<string> | null = null;
 let cronSuiteCaseId = 0;
 
@@ -153,7 +153,7 @@ async function setupCronTestRun(params: {
   testState.cronEnabled = params.cronEnabled;
   await saveCronStore(testState.cronStoreKey, {
     version: 1,
-    jobs: (params.jobs ?? EMPTY_CRON_STORE.jobs) as CronStoreFile["jobs"],
+    jobs: (params.jobs ?? EMPTY_CRON_STORE.jobs) as CronStoreSnapshot["jobs"],
   });
   return { prevSkipCron, dir };
 }

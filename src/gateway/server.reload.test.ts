@@ -676,7 +676,7 @@ describe("gateway hot reload", () => {
           token: "secret",
           gmail: { account: "me@example.com" },
         },
-        cron: { enabled: true, store: "/tmp/cron.json" },
+        cron: { enabled: true },
         agents: { defaults: { heartbeat: { every: "1m" }, maxConcurrent: 2 } },
         web: { enabled: true },
         channels: {

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import {
@@ -8,17 +6,11 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import {
-  openOpenClawStateDatabase,
-  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-} from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { decodeCaptureBlobText, encodeCaptureBlob } from "./blob-store.js";
-import type { DB as ProxyCaptureKyselyDatabase } from "./db.generated.js";
-import { PROXY_CAPTURE_SCHEMA_SQL } from "./schema.generated.js";
 import type {
   CaptureBlobRecord,
   CaptureEventRecord,
@@ -30,39 +22,6 @@ import type {
   CaptureSessionRecord,
   CaptureSessionSummary,
 } from "./types.js";
-
-function ensureParentDir(filePath: string) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-}
-
-type OpenedDatabase = {
-  db: DatabaseSync;
-  walMaintenance?: SqliteWalMaintenance;
-  ownsDatabase: boolean;
-};
-
-function isDefaultOpenClawStateDatabasePath(dbPath: string): boolean {
-  return path.resolve(dbPath) === path.resolve(resolveOpenClawStateSqlitePath());
-}
-
-function openDatabase(dbPath: string): OpenedDatabase {
-  if (isDefaultOpenClawStateDatabasePath(dbPath)) {
-    return { db: openOpenClawStateDatabase().db, ownsDatabase: false };
-  }
-
-  ensureParentDir(dbPath);
-  const { DatabaseSync } = requireNodeSqlite();
-  const db = new DatabaseSync(dbPath);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: "proxy-capture",
-    databasePath: dbPath,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
-  db.exec(PROXY_CAPTURE_SCHEMA_SQL);
-  return { db, walMaintenance, ownsDatabase: true };
-}
 
 function serializeJson(value: unknown): string | null {
   return value == null ? null : JSON.stringify(value);
@@ -91,7 +50,7 @@ function sortObservedCounts(counts: Map<string, number>): CaptureObservedDimensi
 }
 
 function getCaptureKysely(db: DatabaseSync) {
-  return getNodeSqliteKysely<ProxyCaptureKyselyDatabase>(db);
+  return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
 }
 
 function captureBlobRecordFromEncoded(
@@ -127,29 +86,20 @@ function assertNeverCaptureQueryPreset(preset: never): never {
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
-  private readonly walMaintenance?: SqliteWalMaintenance;
-  private readonly ownsDatabase: boolean;
+  readonly stateDatabasePath: string;
   private closed = false;
 
-  constructor(
-    readonly dbPath: string,
-    readonly blobDir: string,
-  ) {
-    const opened = openDatabase(dbPath);
+  constructor() {
+    const opened = openOpenClawStateDatabase();
     this.db = opened.db;
-    this.walMaintenance = opened.walMaintenance;
-    this.ownsDatabase = opened.ownsDatabase;
+    this.stateDatabasePath = opened.path;
   }
 
   close(): void {
     if (this.closed) {
       return;
     }
-    if (this.ownsDatabase) {
-      this.walMaintenance?.close();
-      clearNodeSqliteKyselyCacheForDatabase(this.db);
-      this.db.close();
-    }
+    clearNodeSqliteKyselyCacheForDatabase(this.db);
     this.closed = true;
   }
 
@@ -170,8 +120,6 @@ export class DebugProxyCaptureStore {
           source_scope: session.sourceScope,
           source_process: session.sourceProcess,
           proxy_url: session.proxyUrl ?? null,
-          db_path: session.dbPath,
-          blob_dir: session.blobDir,
         })
         .onConflict((conflict) =>
           conflict.column("id").doUpdateSet({
@@ -195,7 +143,7 @@ export class DebugProxyCaptureStore {
 
   persistPayload(data: Buffer, contentType?: string): CaptureBlobRecord {
     const encoded = encodeCaptureBlob({ data, contentType });
-    const row: Insertable<ProxyCaptureKyselyDatabase["capture_blobs"]> = {
+    const row: Insertable<OpenClawStateKyselyDatabase["capture_blobs"]> = {
       blob_id: encoded.blobId,
       content_type: encoded.contentType ?? null,
       encoding: encoded.encoding,
@@ -575,14 +523,12 @@ export class DebugProxyCaptureStore {
 }
 
 let cachedStore: DebugProxyCaptureStore | null = null;
-let cachedKey = "";
 let cachedStoreLeases = 0;
 
-export function getDebugProxyCaptureStore(dbPath: string, blobDir: string): DebugProxyCaptureStore {
-  const key = `${dbPath}:${blobDir}`;
-  if (!cachedStore || cachedStore.isClosed || cachedKey !== key) {
-    cachedStore = new DebugProxyCaptureStore(dbPath, blobDir);
-    cachedKey = key;
+export function getDebugProxyCaptureStore(): DebugProxyCaptureStore {
+  const stateDatabasePath = resolveOpenClawStateSqlitePath();
+  if (!cachedStore || cachedStore.isClosed || cachedStore.stateDatabasePath !== stateDatabasePath) {
+    cachedStore = new DebugProxyCaptureStore();
     cachedStoreLeases = 0;
   }
   return cachedStore;
@@ -594,16 +540,14 @@ export function closeDebugProxyCaptureStore(): void {
   }
   cachedStore.close();
   cachedStore = null;
-  cachedKey = "";
   cachedStoreLeases = 0;
 }
 
-export function acquireDebugProxyCaptureStore(
-  dbPath: string,
-  blobDir: string,
-): { store: DebugProxyCaptureStore; release: () => void } {
-  const store = getDebugProxyCaptureStore(dbPath, blobDir);
-  const key = cachedKey;
+export function acquireDebugProxyCaptureStore(): {
+  store: DebugProxyCaptureStore;
+  release: () => void;
+} {
+  const store = getDebugProxyCaptureStore();
   cachedStoreLeases += 1;
   let released = false;
   return {
@@ -614,7 +558,7 @@ export function acquireDebugProxyCaptureStore(
       }
       released = true;
       cachedStoreLeases = Math.max(0, cachedStoreLeases - 1);
-      if (cachedStoreLeases === 0 && cachedStore === store && cachedKey === key) {
+      if (cachedStoreLeases === 0 && cachedStore === store) {
         closeDebugProxyCaptureStore();
       }
     },

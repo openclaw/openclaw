@@ -27,7 +27,6 @@ export async function runMemoryTargetedSessionSync(params: {
   targetSessionTranscriptKeys: Set<string> | null;
   reason?: string;
   progress?: TargetedSyncProgress;
-  useUnsafeReindex: boolean;
   dirtySessionTranscripts: Set<string>;
   syncSessionTranscripts: (params: {
     needsFullReindex: boolean;
@@ -36,12 +35,7 @@ export async function runMemoryTargetedSessionSync(params: {
   }) => Promise<void>;
   shouldFallbackOnError: (message: string) => boolean;
   activateFallbackProvider: (reason: string) => Promise<boolean>;
-  runSafeReindex: (params: {
-    reason?: string;
-    force?: boolean;
-    progress?: TargetedSyncProgress;
-  }) => Promise<void>;
-  runUnsafeReindex: (params: {
+  runFullReindex: (params: {
     reason?: string;
     force?: boolean;
     progress?: TargetedSyncProgress;
@@ -79,11 +73,7 @@ export async function runMemoryTargetedSessionSync(params: {
       force: true,
       progress: params.progress,
     };
-    if (params.useUnsafeReindex) {
-      await params.runUnsafeReindex(reindexParams);
-    } else {
-      await params.runSafeReindex(reindexParams);
-    }
+    await params.runFullReindex(reindexParams);
     return {
       handled: true,
       sessionsDirty: params.dirtySessionTranscripts.size > 0,

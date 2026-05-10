@@ -1,12 +1,12 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import type { AssistantMessage } from "../agents/pi-ai-contract.js";
-import { SessionManager } from "../agents/transcript/session-transcript-contract.js";
+import { openTranscriptSessionManagerForSession } from "../agents/transcript/session-manager.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import {
-  exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
   hasSqliteSessionTranscriptSnapshot,
   loadSqliteSessionTranscriptEvents,
@@ -26,15 +26,19 @@ import {
 
 const tempDirs: string[] = [];
 
-function transcriptParentReference(sessionId: string, agentId = DEFAULT_AGENT_ID): string {
-  return `agent-db:${agentId}:transcript_events:${sessionId}`;
-}
-
 function readSqliteTranscriptEvents(sessionId: string): Record<string, unknown>[] {
   return loadSqliteSessionTranscriptEvents({
     agentId: DEFAULT_AGENT_ID,
     sessionId,
   }).map((entry) => entry.event as Record<string, unknown>);
+}
+
+function createScopedSessionManager(cwd: string) {
+  return openTranscriptSessionManagerForSession({
+    agentId: DEFAULT_AGENT_ID,
+    sessionId: randomUUID(),
+    cwd,
+  });
 }
 
 afterEach(async () => {
@@ -46,7 +50,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir);
+    const session = createScopedSessionManager(dir);
     session.appendMessage({
       role: "user",
       content: "before async compaction",
@@ -64,78 +68,65 @@ describe("session-compaction-checkpoints", () => {
     const leafId = session.getLeafId();
     expect(leafId).toBeTruthy();
 
-    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "openForSession");
-    const originalBefore = exportSqliteSessionTranscriptJsonl({
+    const originalBefore = readSqliteTranscriptEvents(session.getSessionId());
+    const snapshot = await captureCompactionCheckpointSnapshotAsync({
       agentId: DEFAULT_AGENT_ID,
       sessionId: session.getSessionId(),
     });
-    try {
-      const snapshot = await captureCompactionCheckpointSnapshotAsync({
+
+    expect(snapshot).not.toBeNull();
+    expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
+    expect(snapshot?.sourceSessionId).toBe(session.getSessionId());
+    expect(snapshot?.leafId).toBe(leafId);
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
         agentId: DEFAULT_AGENT_ID,
         sessionId: session.getSessionId(),
-        sessionManager: session,
-      });
-
-      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-      expect(snapshot).not.toBeNull();
-      expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
-      expect(snapshot?.sourceSessionId).toBe(session.getSessionId());
-      expect(snapshot?.leafId).toBe(leafId);
-      expect(
-        hasSqliteSessionTranscriptSnapshot({
-          agentId: DEFAULT_AGENT_ID,
-          sessionId: session.getSessionId(),
-          snapshotId: snapshot!.sessionId,
+        snapshotId: snapshot!.sessionId,
+      }),
+    ).toBe(true);
+    const snapshotBefore = readSqliteTranscriptEvents(snapshot!.sessionId);
+    expect(snapshotBefore).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({ content: "before async compaction" }),
+      }),
+    );
+    expect(snapshotBefore).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "async working on it" }],
         }),
-      ).toBe(true);
-      const snapshotBefore = exportSqliteSessionTranscriptJsonl({
+      }),
+    );
+    expect(snapshotBefore).not.toBe(originalBefore);
+
+    session.appendCompaction("checkpoint summary", leafId!, 123, { ok: true });
+
+    expect(readSqliteTranscriptEvents(snapshot!.sessionId)).toEqual(snapshotBefore);
+    expect(readSqliteTranscriptEvents(session.getSessionId())).not.toEqual(originalBefore);
+
+    await cleanupCompactionCheckpointSnapshot(snapshot);
+
+    expect(
+      hasSqliteSessionTranscriptEvents({
         agentId: DEFAULT_AGENT_ID,
         sessionId: snapshot!.sessionId,
-      });
-      expect(snapshotBefore).toContain("before async compaction");
-      expect(snapshotBefore).toContain("async working on it");
-      expect(snapshotBefore).not.toBe(originalBefore);
-
-      session.appendCompaction("checkpoint summary", leafId!, 123, { ok: true });
-
-      expect(
-        exportSqliteSessionTranscriptJsonl({
-          agentId: DEFAULT_AGENT_ID,
-          sessionId: snapshot!.sessionId,
-        }),
-      ).toBe(snapshotBefore);
-      expect(
-        exportSqliteSessionTranscriptJsonl({
-          agentId: DEFAULT_AGENT_ID,
-          sessionId: session.getSessionId(),
-        }),
-      ).not.toBe(originalBefore);
-
-      await cleanupCompactionCheckpointSnapshot(snapshot);
-
-      expect(
-        hasSqliteSessionTranscriptEvents({
-          agentId: DEFAULT_AGENT_ID,
-          sessionId: snapshot!.sessionId,
-        }),
-      ).toBe(false);
-      expect(
-        hasSqliteSessionTranscriptSnapshot({
-          agentId: DEFAULT_AGENT_ID,
-          sessionId: session.getSessionId(),
-          snapshotId: snapshot!.sessionId,
-        }),
-      ).toBe(false);
-    } finally {
-      sessionManagerOpenSpy.mockRestore();
-    }
+      }),
+    ).toBe(false);
+    expect(
+      hasSqliteSessionTranscriptSnapshot({
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: session.getSessionId(),
+        snapshotId: snapshot!.sessionId,
+      }),
+    ).toBe(false);
   });
 
-  test("async capture derives session metadata without synchronous SessionManager.open", async () => {
+  test("async capture derives session metadata from SQLite without a mutable manager", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-metadata-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir);
+    const session = createScopedSessionManager(dir);
     session.appendMessage({
       role: "user",
       content: "derive checkpoint metadata",
@@ -155,7 +146,6 @@ describe("session-compaction-checkpoints", () => {
     expect(sessionId).toBeTruthy();
     expect(leafId).toBeTruthy();
 
-    const sessionManagerOpenSpy = vi.spyOn(SessionManager, "openForSession");
     let snapshot: Awaited<ReturnType<typeof captureCompactionCheckpointSnapshotAsync>> = null;
     try {
       expect(
@@ -169,7 +159,6 @@ describe("session-compaction-checkpoints", () => {
         sessionId,
       });
 
-      expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(snapshot).not.toBeNull();
       expect(snapshot?.agentId).toBe(DEFAULT_AGENT_ID);
       expect(snapshot?.sourceSessionId).toBe(sessionId);
@@ -177,7 +166,6 @@ describe("session-compaction-checkpoints", () => {
       expect(snapshot?.leafId).toBe(leafId);
     } finally {
       await cleanupCompactionCheckpointSnapshot(snapshot);
-      sessionManagerOpenSpy.mockRestore();
     }
   });
 
@@ -219,7 +207,10 @@ describe("session-compaction-checkpoints", () => {
     expect(readSqliteTranscriptEvents(snapshot!.sessionId)[0]).toMatchObject({
       type: "session",
       id: snapshot!.sessionId,
-      parentSession: transcriptParentReference(sourceSessionId),
+      parentTranscriptScope: {
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+      },
     });
   });
 
@@ -227,7 +218,7 @@ describe("session-compaction-checkpoints", () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-oversized-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir);
+    const session = createScopedSessionManager(dir);
     session.appendMessage({
       role: "user",
       content: "before compaction",
@@ -236,7 +227,6 @@ describe("session-compaction-checkpoints", () => {
     const snapshot = await captureCompactionCheckpointSnapshotAsync({
       agentId: DEFAULT_AGENT_ID,
       sessionId: session.getSessionId(),
-      sessionManager: session,
       maxBytes: 64,
     });
 
@@ -244,11 +234,11 @@ describe("session-compaction-checkpoints", () => {
     expect(MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES).toBeGreaterThan(64);
   });
 
-  test("async fork creates a checkpoint branch transcript without SessionManager sync reads", async () => {
+  test("async fork creates a checkpoint branch transcript from SQLite rows", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-fork-"));
     tempDirs.push(dir);
 
-    const session = SessionManager.create(dir);
+    const session = createScopedSessionManager(dir);
     session.appendMessage({
       role: "user",
       content: "before checkpoint fork",
@@ -263,23 +253,13 @@ describe("session-compaction-checkpoints", () => {
       timestamp: Date.now(),
     } as unknown as AssistantMessage);
 
-    const openSpy = vi.spyOn(SessionManager, "openForSession");
-    const forkSpy = vi.spyOn(SessionManager, "forkFromSession");
-    let forked: Awaited<ReturnType<typeof forkCompactionCheckpointTranscriptAsync>> = null;
-    try {
-      forked = await forkCompactionCheckpointTranscriptAsync({
-        agentId: DEFAULT_AGENT_ID,
-        sourceSessionId: session.getSessionId(),
-      });
+    const forked = await forkCompactionCheckpointTranscriptAsync({
+      agentId: DEFAULT_AGENT_ID,
+      sourceSessionId: session.getSessionId(),
+    });
 
-      expect(openSpy).not.toHaveBeenCalled();
-      expect(forkSpy).not.toHaveBeenCalled();
-      expect(forked).not.toBeNull();
-      expect(forked?.sessionId).toBeTruthy();
-    } finally {
-      openSpy.mockRestore();
-      forkSpy.mockRestore();
-    }
+    expect(forked).not.toBeNull();
+    expect(forked?.sessionId).toBeTruthy();
 
     const forkedEntries = readSqliteTranscriptEvents(forked!.sessionId);
     const sourceEntries = readSqliteTranscriptEvents(session.getSessionId());
@@ -288,7 +268,10 @@ describe("session-compaction-checkpoints", () => {
       type: "session",
       id: forked!.sessionId,
       cwd: dir,
-      parentSession: transcriptParentReference(session.getSessionId()),
+      parentTranscriptScope: {
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: session.getSessionId(),
+      },
     });
     expect(forkedEntries.slice(1)).toEqual(
       sourceEntries.filter((entry) => entry.type !== "session"),
@@ -328,7 +311,10 @@ describe("session-compaction-checkpoints", () => {
       type: "session",
       id: forked!.sessionId,
       cwd: "/tmp/openclaw-virtual-fork",
-      parentSession: transcriptParentReference(sourceSessionId),
+      parentTranscriptScope: {
+        agentId: DEFAULT_AGENT_ID,
+        sessionId: sourceSessionId,
+      },
     });
     expect(forkedEntries[1]).toMatchObject({
       type: "message",

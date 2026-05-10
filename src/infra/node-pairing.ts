@@ -2,14 +2,14 @@ import { randomUUID } from "node:crypto";
 import { resolveMissingRequestedScope } from "../shared/operator-scope-compat.js";
 import { normalizeArrayBackedTrimmedStringList } from "../shared/string-normalization.js";
 import { type NodeApprovalScope, resolveNodePairApprovalScopes } from "./node-pairing-authz.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
   reconcilePendingPairingRequests,
   readPairingStateRecord,
   writePairingStateRecord,
-} from "./pairing-files.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
+} from "./pairing-state.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 type NodeDeclaredSurface = {

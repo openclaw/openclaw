@@ -174,13 +174,6 @@ describe("resolveSessionAuthProfileOverride", () => {
 
       expect(resolved).toBeUndefined();
       expect(authStoreMocks.ensureAuthProfileStore).not.toHaveBeenCalled();
-      try {
-        await fs.access(`${agentDir}/auth-profiles.json`);
-      } catch (error) {
-        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
-        return;
-      }
-      throw new Error("Expected auth-profiles.json to be absent");
     });
   });
 

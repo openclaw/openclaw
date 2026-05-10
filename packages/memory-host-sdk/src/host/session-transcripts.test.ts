@@ -8,9 +8,9 @@ import {
 } from "./openclaw-runtime-session.js";
 import {
   buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
+  listSessionTranscriptScopesForAgent,
   readSessionTranscriptDeltaStats,
-  sessionSourceKeyForTranscript,
+  sessionTranscriptKeyForScope,
   type SessionTranscriptEntry,
   type SessionTranscriptScope,
 } from "./session-transcripts.js";
@@ -70,7 +70,7 @@ function seedTranscript(params: {
   return { agentId, sessionId: params.sessionId };
 }
 
-describe("listSessionTranscriptsForAgent", () => {
+describe("listSessionTranscriptScopesForAgent", () => {
   it("lists SQLite transcript scopes for an agent", async () => {
     const includedScope = seedTranscript({
       sessionId: "active",
@@ -82,7 +82,7 @@ describe("listSessionTranscriptsForAgent", () => {
       events: [{ type: "session", id: "other-active" }],
     });
 
-    const scopes = await listSessionTranscriptsForAgent("main");
+    const scopes = await listSessionTranscriptScopesForAgent("main");
 
     expect(scopes).toEqual([includedScope]);
   });
@@ -93,19 +93,19 @@ describe("listSessionTranscriptsForAgent", () => {
       events: [{ type: "message", message: { role: "user", content: "Stored only in SQLite" } }],
     });
 
-    const scopes = await listSessionTranscriptsForAgent("main");
+    const scopes = await listSessionTranscriptScopesForAgent("main");
 
     expect(scopes).toEqual([scope]);
     const entry = await buildSessionTranscriptEntry(scope);
     expect(entry?.content).toBe("User: Stored only in SQLite");
-    expect(entry?.path).toBe("sessions/main/sqlite-only");
+    expect(entry?.path).toBe("transcript:main:sqlite-only");
   });
 });
 
-describe("sessionSourceKeyForTranscript", () => {
-  it("formats SQLite scopes as stable memory source keys", () => {
-    expect(sessionSourceKeyForTranscript({ agentId: "main", sessionId: "active-session" })).toBe(
-      "sessions/main/active-session",
+describe("sessionTranscriptKeyForScope", () => {
+  it("formats SQLite scopes as stable opaque memory keys", () => {
+    expect(sessionTranscriptKeyForScope({ agentId: "main", sessionId: "active-session" })).toBe(
+      "transcript:main:active-session",
     );
   });
 });
@@ -130,9 +130,9 @@ describe("buildSessionTranscriptEntry", () => {
       },
       { type: "message", message: { role: "user", content: "Tell me a joke" } },
     ];
-    const filePath = seedTranscript({ sessionId: "session", events });
+    const scope = seedTranscript({ sessionId: "session", events });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.messageCount).toBe(7);
 
     // The content should have 3 lines (3 message records)
@@ -150,7 +150,7 @@ describe("buildSessionTranscriptEntry", () => {
   });
 
   it("returns empty lineMap when no messages are found", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "empty-session",
       events: [
         { type: "custom", customType: "model-snapshot", data: {} },
@@ -158,7 +158,7 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("");
     expect(entry.lineMap).toEqual([]);
   });
@@ -211,7 +211,7 @@ describe("buildSessionTranscriptEntry", () => {
   });
 
   it("skips non-message events without breaking lineMap", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "gaps",
       events: [
         { type: "custom", customType: "ignored" },
@@ -221,12 +221,12 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.lineMap).toEqual([2, 4]);
   });
 
   it("strips inbound metadata when a user envelope is split across text blocks", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "enveloped-session-array",
       events: [
         {
@@ -251,12 +251,12 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("User: Actual user text");
   });
 
   it("skips inter-session user messages", async () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "inter-session-session",
       events: [
         {
@@ -278,13 +278,13 @@ describe("buildSessionTranscriptEntry", () => {
       ],
     });
 
-    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(filePath));
+    const entry = requireSessionTranscriptEntry(await buildSessionTranscriptEntry(scope));
     expect(entry.content).toBe("Assistant: User-facing summary.\nUser: Actual user follow-up.");
     expect(entry.lineMap).toStrictEqual([2, 3]);
   });
 
   it("returns SQLite transcript delta stats from transcript events", () => {
-    const filePath = seedTranscript({
+    const scope = seedTranscript({
       sessionId: "delta-session",
       events: [
         { type: "message", message: { role: "user", content: "First" } },
@@ -294,7 +294,7 @@ describe("buildSessionTranscriptEntry", () => {
       now: 1_770_000_000_123,
     });
 
-    const stats = readSessionTranscriptDeltaStats(filePath);
+    const stats = readSessionTranscriptDeltaStats(scope);
 
     expect(stats).not.toBeNull();
     expect(stats!.messageCount).toBe(3);

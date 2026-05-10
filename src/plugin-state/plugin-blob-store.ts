@@ -192,6 +192,8 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
   const namespace = validateNamespace(options.namespace);
   const maxEntries = validateMaxEntries(options.maxEntries);
   const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
+  const env = options.env;
+  const databaseOptions = env ? { env } : {};
   assertConsistentOptions(pluginId, namespace, { maxEntries, defaultTtlMs });
 
   const now = () => Date.now();
@@ -280,11 +282,11 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
             );
           }
         }
-      });
+      }, databaseOptions);
     },
     lookup(key) {
       const normalizedKey = validateKey(key);
-      const database = openOpenClawStateDatabase();
+      const database = openOpenClawStateDatabase(databaseOptions);
       const row = executeSqliteQueryTakeFirstSync(
         database.db,
         getPluginBlobKysely(database.db)
@@ -320,25 +322,27 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
             .where("entry_key", "=", normalizedKey),
         );
         return found;
-      });
+      }, databaseOptions);
       return row ? rowToEntry<TMetadata>(row) : undefined;
     },
     delete(key) {
       const normalizedKey = validateKey(key);
-      const result = runOpenClawStateWriteTransaction((database) =>
-        executeSqliteQuerySync(
-          database.db,
-          getPluginBlobKysely(database.db)
-            .deleteFrom("plugin_blob_entries")
-            .where("plugin_id", "=", pluginId)
-            .where("namespace", "=", namespace)
-            .where("entry_key", "=", normalizedKey),
-        ),
+      const result = runOpenClawStateWriteTransaction(
+        (database) =>
+          executeSqliteQuerySync(
+            database.db,
+            getPluginBlobKysely(database.db)
+              .deleteFrom("plugin_blob_entries")
+              .where("plugin_id", "=", pluginId)
+              .where("namespace", "=", namespace)
+              .where("entry_key", "=", normalizedKey),
+          ),
+        databaseOptions,
       );
       return Number(result.numAffectedRows ?? 0) > 0;
     },
     entries() {
-      const database = openOpenClawStateDatabase();
+      const database = openOpenClawStateDatabase(databaseOptions);
       const rows = executeSqliteQuerySync(
         database.db,
         getPluginBlobKysely(database.db)
@@ -361,7 +365,7 @@ export function createPluginBlobSyncStore<TMetadata = Record<string, unknown>>(
             .where("plugin_id", "=", pluginId)
             .where("namespace", "=", namespace),
         );
-      });
+      }, databaseOptions);
     },
   };
 }

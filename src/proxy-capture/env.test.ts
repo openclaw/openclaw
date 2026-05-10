@@ -31,8 +31,6 @@ describe("resolveDebugProxySettings", () => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-proxy-state" };
 
     expect(resolveDebugProxyDbPath(env)).toBe("/tmp/openclaw-proxy-state/state/openclaw.sqlite");
-    expect(resolveDebugProxySettings(env).dbPath).toBe(
-      "/tmp/openclaw-proxy-state/state/openclaw.sqlite",
-    );
+    expect(resolveDebugProxySettings(env)).not.toHaveProperty("dbPath");
   });
 });

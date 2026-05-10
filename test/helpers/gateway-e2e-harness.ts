@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { request as httpRequest } from "node:http";
-import path from "node:path";
 import { GatewayClient } from "../../src/gateway/client.js";
 import { connectGatewayClient } from "../../src/gateway/test-helpers.e2e.js";
 import { loadOrCreateDeviceIdentity } from "../../src/infra/device-identity.js";
@@ -88,8 +87,7 @@ export async function connectNode(
   inst: GatewayInstance,
   label: string,
 ): Promise<{ client: GatewayClient; nodeId: string }> {
-  const identityPath = path.join(inst.homeDir, `${label}-device.json`);
-  const deviceIdentity = loadOrCreateDeviceIdentity(identityPath);
+  const deviceIdentity = loadOrCreateDeviceIdentity({ key: `test:${inst.name}:${label}` });
   const nodeId = deviceIdentity.deviceId;
   const client = await connectGatewayClient({
     url: `ws://127.0.0.1:${inst.port}`,

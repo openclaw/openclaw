@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { autoMigrateLegacyMatrixCredentials } from "../legacy-credentials.js";
+import { autoMigrateLegacyMatrixCredentials } from "../doctor-legacy-credentials.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import {
   credentialsMatchConfig,

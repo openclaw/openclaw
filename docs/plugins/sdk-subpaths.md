@@ -21,16 +21,16 @@ For the plugin authoring guide, see [Plugin SDK overview](/plugins/sdk-overview)
 
 ## Plugin entry
 
-| Subpath                                   | Key exports                                                                                                                                                                  |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `plugin-sdk/plugin-entry`                 | `definePluginEntry`                                                                                                                                                          |
-| `plugin-sdk/core`                         | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema`       |
-| `plugin-sdk/config-schema`                | `OpenClawSchema`                                                                                                                                                             |
-| `plugin-sdk/provider-entry`               | `defineSingleProviderPluginEntry`                                                                                                                                            |
-| `plugin-sdk/provider-ai`                  | OpenClaw-owned provider stream/model/message types plus simple streaming helpers used by bundled provider plugins                                                            |
-| `plugin-sdk/provider-ai-oauth`            | OpenClaw-owned OAuth helper facade for provider runtime code                                                                                                                 |
-| `plugin-sdk/migration`                    | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                       |
-| `plugin-sdk/migration-runtime`            | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                                    |
+| Subpath                        | Key exports                                                                                                                                                            |
+| ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `plugin-sdk/plugin-entry`      | `definePluginEntry`                                                                                                                                                    |
+| `plugin-sdk/core`              | `defineChannelPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `defineSetupPluginEntry`, `buildChannelConfigSchema`, `buildJsonChannelConfigSchema` |
+| `plugin-sdk/config-schema`     | `OpenClawSchema`                                                                                                                                                       |
+| `plugin-sdk/provider-entry`    | `defineSingleProviderPluginEntry`                                                                                                                                      |
+| `plugin-sdk/provider-ai`       | OpenClaw-owned provider stream/model/message types plus simple streaming helpers used by bundled provider plugins                                                      |
+| `plugin-sdk/provider-ai-oauth` | OpenClaw-owned OAuth helper facade for provider runtime code                                                                                                           |
+| `plugin-sdk/migration`         | Migration provider item helpers such as `createMigrationItem`, reason constants, item status markers, redaction helpers, and `summarizeMigrationItems`                 |
+| `plugin-sdk/migration-runtime` | Runtime migration helpers such as `copyMigrationFileItem`, `withCachedMigrationConfigRuntime`, and `writeMigrationReport`                                              |
 
 ### Deprecated compatibility and test helpers
 
@@ -242,7 +242,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/session-store-runtime` | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
     | `plugin-sdk/sqlite-runtime` | Focused SQLite database open/path helpers for first-party runtime and migration tests |
     | `plugin-sdk/cron-store-runtime` | SQLite cron store load/save helpers |
-    | `plugin-sdk/state-paths` | State/OAuth dir path helpers |
+    | `plugin-sdk/state-paths` | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
     | `plugin-sdk/routing` | Route/session-key/account binding helpers such as `resolveAgentRoute`, `buildAgentSessionKey`, and `resolveDefaultAgentBoundAccountId` |
     | `plugin-sdk/status-helpers` | Shared channel/account status summary helpers, runtime-state defaults, and issue metadata helpers |
     | `plugin-sdk/target-resolver-runtime` | Shared target resolver helpers |
@@ -257,7 +257,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/markdown-table-runtime` | Markdown table mode and conversion helpers |
     | `plugin-sdk/model-session-runtime` | Model/session override helpers such as `applyModelOverrideToSessionEntry` and `resolveAgentMaxConcurrent` |
     | `plugin-sdk/talk-config-runtime` | Talk provider config resolution helpers |
-    | `plugin-sdk/json-store` | Small JSON state read/write helpers |
+    | `plugin-sdk/json-store` | External JSON config/import helpers; runtime state and caches belong in SQLite stores |
     | `plugin-sdk/persistent-dedupe` | SQLite-backed dedupe cache helpers |
     | `plugin-sdk/acp-runtime` | ACP runtime/session and reply-dispatch helpers |
     | `plugin-sdk/acp-runtime-backend` | Lightweight ACP backend registration and reply-dispatch helpers for startup-loaded plugins |

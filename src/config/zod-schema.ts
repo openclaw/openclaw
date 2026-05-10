@@ -92,14 +92,6 @@ const MemoryQmdPathSchema = z
   })
   .strict();
 
-const MemoryQmdSessionSchema = z
-  .object({
-    enabled: z.boolean().optional(),
-    exportDir: z.string().optional(),
-    retentionDays: z.number().int().nonnegative().optional(),
-  })
-  .strict();
-
 const MemoryQmdUpdateSchema = z
   .object({
     interval: z.string().optional(),
@@ -150,7 +142,6 @@ const MemoryQmdSchema = z
     searchTool: z.string().trim().min(1).optional(),
     includeDefaultMemory: z.boolean().optional(),
     paths: z.array(MemoryQmdPathSchema).optional(),
-    sessions: MemoryQmdSessionSchema.optional(),
     update: MemoryQmdUpdateSchema.optional(),
     limits: MemoryQmdLimitsSchema.optional(),
     scope: SessionSendPolicySchema.optional(),

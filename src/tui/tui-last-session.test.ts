@@ -20,10 +20,6 @@ async function makeTempStateDir() {
   return dir;
 }
 
-function legacyTuiLastSessionStatePath(stateDir: string): string {
-  return path.join(stateDir, "tui", "last-session.json");
-}
-
 afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
@@ -45,12 +41,9 @@ describe("tui last session state", () => {
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe("agent:main:tui-123");
-    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
   });
 
-  it("restores from SQLite without legacy JSON", async () => {
+  it("restores from SQLite", async () => {
     const stateDir = await makeTempStateDir();
     const scopeKey = buildTuiLastSessionScopeKey({
       connectionUrl: "local",
@@ -62,9 +55,6 @@ describe("tui last session state", () => {
       scopeKey,
       sessionKey: "agent:main:tui-sqlite",
       stateDir,
-    });
-    await expect(fs.access(legacyTuiLastSessionStatePath(stateDir))).rejects.toMatchObject({
-      code: "ENOENT",
     });
 
     await expect(readTuiLastSessionKey({ scopeKey, stateDir })).resolves.toBe(

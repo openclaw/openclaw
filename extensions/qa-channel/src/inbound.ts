@@ -1,6 +1,6 @@
-import { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import { dispatchChannelMessageReplyWithBase } from "openclaw/plugin-sdk/channel-message";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildAgentMediaPayload,
   saveMediaBuffer,

@@ -21,13 +21,6 @@ const SCHEMAS = [
     schemaOutFile: "src/state/openclaw-agent-schema.generated.ts",
     schemaExport: "OPENCLAW_AGENT_SCHEMA_SQL",
   },
-  {
-    name: "proxy-capture",
-    schema: "src/proxy-capture/schema.sql",
-    outFile: "src/proxy-capture/db.generated.d.ts",
-    schemaOutFile: "src/proxy-capture/schema.generated.ts",
-    schemaExport: "PROXY_CAPTURE_SCHEMA_SQL",
-  },
 ];
 
 const verify = process.argv.includes("--verify") || process.argv.includes("--check");

@@ -141,11 +141,20 @@ By default, runtime trajectory events are written to the owning agent database:
 trajectory_runtime_events
 ```
 
-The export manifest reports this source as an agent-database reference, for
+The export manifest reports this source as structured database provenance, for
 example:
 
-```text
-agent-db:<agentId>:trajectory_runtime_events:<sessionId>
+```json
+{
+  "sourceDatabases": {
+    "runtime": {
+      "role": "agent",
+      "agentId": "<agentId>",
+      "table": "trajectory_runtime_events",
+      "sessionId": "<sessionId>"
+    }
+  }
+}
 ```
 
 `/export-trajectory` reads runtime events from SQLite and materializes

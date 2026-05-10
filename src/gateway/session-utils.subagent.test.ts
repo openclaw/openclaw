@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import {
   addSubagentRunForTests,
@@ -10,7 +8,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { getSessionEntry, upsertSessionEntry, type SessionEntry } from "../config/sessions.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
-import { withEnv } from "../test-utils/env.js";
 import {
   listSessionsFromStore,
   loadCombinedSessionEntriesForGateway,
@@ -783,46 +780,6 @@ describe("listSessionsFromStore subagent metadata", () => {
     });
 
     expect(result.sessions.map((session) => session.key)).toEqual(childKeys);
-  });
-
-  test("does not read the subagent registry when raw filters drop every session", () => {
-    const tempRoot = fs.mkdtempSync(
-      path.join(os.tmpdir(), "openclaw-session-utils-subagent-cache-empty-"),
-    );
-    const stateDir = path.join(tempRoot, "state");
-    const registryPath = path.join(stateDir, "subagents", "runs.json");
-    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-    fs.writeFileSync(registryPath, JSON.stringify({ version: 2, runs: {} }, null, 2), "utf-8");
-
-    const statSpy = vi.spyOn(fs, "statSync");
-    try {
-      const result = withEnv(
-        {
-          OPENCLAW_STATE_DIR: stateDir,
-          OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_DISK: "1",
-        },
-        () =>
-          listSessionsFromStore({
-            cfg,
-            store: {
-              "agent:main:filtered-out": {
-                label: "keep-me-out",
-                updatedAt: Date.now(),
-              } as SessionEntry,
-            },
-            opts: { label: "wanted-label" },
-          }),
-      );
-
-      expect(result.sessions).toStrictEqual([]);
-      const registryStatCount = statSpy.mock.calls.filter(
-        ([pathname]) => path.normalize(String(pathname)) === path.normalize(registryPath),
-      ).length;
-      expect(registryStatCount).toBe(0);
-    } finally {
-      statSpy.mockRestore();
-      fs.rmSync(tempRoot, { recursive: true, force: true });
-    }
   });
 
   test("includes explicit parentSessionKey relationships for dashboard child sessions", () => {

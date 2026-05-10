@@ -35,9 +35,11 @@ describe("session cost usage", () => {
   const writeTranscript = (params: { agentId?: string; sessionId: string; events: unknown[] }) => {
     const eventTimestamp = params.events
       .map((event) =>
-        event && typeof event === "object"
-          ? Date.parse(String((event as { timestamp?: unknown }).timestamp ?? ""))
-          : NaN,
+        event &&
+        typeof event === "object" &&
+        typeof (event as { timestamp?: unknown }).timestamp === "string"
+          ? Date.parse((event as { timestamp: string }).timestamp)
+          : Number.NaN,
       )
       .find((value) => Number.isFinite(value));
     replaceSqliteSessionTranscriptEvents({

@@ -139,7 +139,6 @@ export function resolveMSTeamsCredentials(cfg?: MSTeamsConfig): MSTeamsCredentia
 // Delegated token storage / resolution
 // ---------------------------------------------------------------------------
 
-export const MSTEAMS_DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
 export const MSTEAMS_DELEGATED_TOKEN_NAMESPACE = "delegated-tokens";
 const MSTEAMS_PLUGIN_ID = "msteams";
 const MSTEAMS_DELEGATED_TOKEN_KEY = "current";

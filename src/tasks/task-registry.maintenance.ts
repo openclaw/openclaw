@@ -15,7 +15,7 @@ import { isCronJobActive } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesFromSqliteSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronStoreSync, resolveCronStoreKey } from "../cron/store.js";
-import type { CronJob, CronStoreFile } from "../cron/types.js";
+import type { CronJob, CronStoreSnapshot } from "../cron/types.js";
 import { getAgentRunContext } from "../infra/agent-events.js";
 import { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -165,7 +165,7 @@ type CronTerminalRecovery = {
 
 type CronRecoveryContext = {
   storeKey: string;
-  store?: CronStoreFile | null;
+  store?: CronStoreSnapshot | null;
   runLogsByJobId: Map<string, CronRunLogEntry[]>;
 };
 
@@ -291,7 +291,7 @@ function getCronRunLogEntries(context: CronRecoveryContext, jobId: string): Cron
   return entries;
 }
 
-function getCronStore(context: CronRecoveryContext): CronStoreFile | null {
+function getCronStore(context: CronRecoveryContext): CronStoreSnapshot | null {
   if (context.store !== undefined) {
     return context.store;
   }

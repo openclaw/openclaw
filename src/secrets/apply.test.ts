@@ -114,7 +114,7 @@ function writeAuthStoreFixture(fixture: ApplyFixture, value: unknown): void {
   );
 }
 
-function readAuthStoreFixture<T>(fixture: ApplyFixture): T {
+function readAuthStoreFixture(fixture: ApplyFixture): OpenClawStateJsonValue {
   const result = readOpenClawStateKvJsonResult(
     AUTH_PROFILE_STORE_KV_SCOPE,
     authProfileStoreKey(fixture.authStoreAgentDir),
@@ -123,7 +123,7 @@ function readAuthStoreFixture<T>(fixture: ApplyFixture): T {
   if (!result.exists || result.value === undefined) {
     throw new Error("Expected auth profile store fixture to exist.");
   }
-  return result.value as T;
+  return result.value;
 }
 
 async function seedDefaultApplyFixture(fixture: ApplyFixture): Promise<void> {
@@ -309,9 +309,9 @@ describe("secrets apply", () => {
     };
     expect(nextConfig.models.providers.openai.apiKey).toEqual(OPENAI_API_KEY_ENV_REF);
 
-    const nextAuthStore = readAuthStoreFixture<{
+    const nextAuthStore = readAuthStoreFixture(fixture) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    }>(fixture);
+    };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
       source: "env",
@@ -343,9 +343,9 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = readAuthStoreFixture<{
+    const nextAuthStore = readAuthStoreFixture(fixture) as {
       profiles: { "openai:bot": { token?: string; tokenRef?: unknown } };
-    }>(fixture);
+    };
     expect(nextAuthStore.profiles["openai:bot"].token).toBeUndefined();
     expect(nextAuthStore.profiles["openai:bot"].tokenRef).toEqual(OPENAI_API_KEY_ENV_REF);
   });
@@ -369,9 +369,9 @@ describe("secrets apply", () => {
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
 
-    const nextAuthStore = readAuthStoreFixture<{
+    const nextAuthStore = readAuthStoreFixture(fixture) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    }>(fixture);
+    };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toBeUndefined();
   });
@@ -538,9 +538,9 @@ describe("secrets apply", () => {
     expect(result.changed).toBe(true);
     expect(result.changedFiles).toContain(fixture.stateDbPath);
 
-    const nextAuthStore = readAuthStoreFixture<{
+    const nextAuthStore = readAuthStoreFixture(fixture) as {
       profiles: { "openai:default": { key?: string; keyRef?: unknown } };
-    }>(fixture);
+    };
     expect(nextAuthStore.profiles["openai:default"].key).toBeUndefined();
     expect(nextAuthStore.profiles["openai:default"].keyRef).toEqual({
       source: "env",
@@ -572,7 +572,7 @@ describe("secrets apply", () => {
     };
 
     await runSecretsApply({ plan, env: fixture.env, write: true });
-    const nextAuthStore = readAuthStoreFixture<{
+    const nextAuthStore = readAuthStoreFixture(fixture) as {
       profiles: {
         "openai:bot": {
           type: string;
@@ -580,7 +580,7 @@ describe("secrets apply", () => {
           tokenRef?: unknown;
         };
       };
-    }>(fixture);
+    };
     expect(nextAuthStore.profiles["openai:bot"]).toEqual({
       type: "token",
       provider: "openai",

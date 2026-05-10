@@ -48,35 +48,10 @@ type AuthRequestCall = {
   store?: unknown;
 };
 
-function requireMockCallAt<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  index: number,
-  label: string,
-): Calls[number] {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index}`);
-  }
-  return call as Calls[number];
-}
-
-function requireFirstMockCall<const Calls extends readonly unknown[][]>(
-  mock: { mock: { calls: Calls } },
-  label: string,
-): Calls[number] {
-  return requireMockCallAt(mock, 0, label);
-}
-
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`Expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
-
-vi.mock("@earendil-works/pi-ai", async () => {
-  const actual =
-    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
+vi.mock("../agents/pi-ai-contract.js", async () => {
+  const actual = await vi.importActual<typeof import("../agents/pi-ai-contract.js")>(
+    "../agents/pi-ai-contract.js",
+  );
   return {
     ...actual,
     complete: completeMock,
@@ -116,6 +91,7 @@ vi.mock("../plugins/provider-runtime.js", async () => ({
 
 vi.mock("../agents/pi-embedded-runner/model.js", () => ({
   resolveModelAsync: resolveModelAsyncMock,
+  resolveModelWithRegistry: resolveModelWithRegistryMock,
 }));
 
 const { describeImageWithModel } = await import("./image.js");

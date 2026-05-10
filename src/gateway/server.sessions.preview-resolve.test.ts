@@ -1,10 +1,7 @@
 import { expect, test } from "vitest";
-import { listSessionEntries, type SessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
-import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
-import { rpcReq, testState, seedGatewaySessionEntries } from "./test-helpers.js";
+import { rpcReq, seedGatewaySessionEntries } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
   sessionStoreEntry,
@@ -28,30 +25,6 @@ function seedTranscriptLines(sessionId: string, lines: string[], agentId?: strin
     agentId,
     events: lines.map((line) => JSON.parse(line) as unknown),
   });
-}
-
-function seedRawSessionRows(store: Record<string, unknown>) {
-  const databases = new Map<string, ReturnType<typeof openOpenClawAgentDatabase>>();
-  const getDatabase = (agentId: string) => {
-    const existing = databases.get(agentId);
-    if (existing) {
-      return existing;
-    }
-    const database = openOpenClawAgentDatabase({ agentId });
-    database.db.prepare("DELETE FROM session_entries").run();
-    databases.set(agentId, database);
-    return database;
-  };
-  for (const [key, value] of Object.entries(store)) {
-    const entry = value as SessionEntry;
-    const agentId = parseAgentSessionKey(key)?.agentId ?? "main";
-    const database = getDatabase(agentId);
-    const insert = database.db.prepare(`
-      INSERT INTO session_entries (session_key, entry_json, updated_at)
-      VALUES (?, ?, ?)
-    `);
-    insert.run(key, JSON.stringify(entry), entry.updatedAt ?? Date.now());
-  }
 }
 
 test("sessions.preview returns transcript previews", async () => {
@@ -79,101 +52,6 @@ test("sessions.preview returns transcript previews", async () => {
   expect(entry?.status).toBe("ok");
   expect(entry?.items.map((item) => item.role)).toEqual(["assistant", "tool", "assistant"]);
   expect(entry?.items[1]?.text).toContain("call weather");
-});
-
-test("sessions.resolve and mutators use canonical main key without cleaning legacy ghost keys", async () => {
-  await createSessionFixtureDir();
-  testState.agentsConfig = { list: [{ id: "ops", default: true }] };
-  testState.sessionConfig = { mainKey: "work" };
-  const sessionId = "sess-alias-cleanup";
-  seedTranscript({
-    sessionId,
-    agentId: "ops",
-    events: Array.from({ length: 8 }).map((_, idx) => ({
-      type: "message",
-      id: `line-${idx}`,
-      message: { role: "assistant", content: `line ${idx}` },
-    })),
-  });
-
-  const writeRawStore = async (store: Record<string, unknown>) => {
-    seedRawSessionRows(store);
-  };
-  const readStore = async () =>
-    Object.fromEntries(
-      listSessionEntries({ agentId: "ops" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    ) as Record<string, Record<string, unknown>>;
-
-  await writeRawStore({
-    "agent:ops:work": { sessionId, updatedAt: Date.now() },
-    "agent:ops:MAIN": { sessionId, updatedAt: Date.now() - 2_000 },
-    "agent:ops:Main": { sessionId, updatedAt: Date.now() - 1_000 },
-  });
-
-  const { ws } = await openClient();
-
-  const resolved = await rpcReq<{ ok: true; key: string }>(ws, "sessions.resolve", {
-    key: "main",
-  });
-  expect(resolved.ok).toBe(true);
-  expect(resolved.payload?.key).toBe("agent:ops:work");
-  let store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual([
-    "agent:ops:MAIN",
-    "agent:ops:Main",
-    "agent:ops:work",
-  ]);
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:MAIN": { ...store["agent:ops:work"] },
-  });
-  const patched = await rpcReq<{ ok: true; key: string }>(ws, "sessions.patch", {
-    key: "main",
-    thinkingLevel: "medium",
-  });
-  expect(patched.ok).toBe(true);
-  expect(patched.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual([
-    "agent:ops:MAIN",
-    "agent:ops:Main",
-    "agent:ops:work",
-  ]);
-  expect(store["agent:ops:work"]?.thinkingLevel).toBe("medium");
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:MAIN": { ...store["agent:ops:work"] },
-  });
-  const compacted = await rpcReq<{ ok: true; compacted: boolean }>(ws, "sessions.compact", {
-    key: "main",
-    maxLines: 3,
-  });
-  expect(compacted.ok).toBe(true);
-  expect(compacted.payload?.compacted).toBe(true);
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual([
-    "agent:ops:MAIN",
-    "agent:ops:Main",
-    "agent:ops:work",
-  ]);
-
-  await writeRawStore({
-    ...store,
-    "agent:ops:MAIN": { ...store["agent:ops:work"] },
-  });
-  const reset = await rpcReq<{ ok: true; key: string }>(ws, "sessions.reset", { key: "main" });
-  expect(reset.ok).toBe(true);
-  expect(reset.payload?.key).toBe("agent:ops:work");
-  store = await readStore();
-  expect(Object.keys(store).toSorted()).toEqual([
-    "agent:ops:MAIN",
-    "agent:ops:Main",
-    "agent:ops:work",
-  ]);
-
-  ws.close();
 });
 
 test("sessions.resolve by sessionId ignores fuzzy-search list limits and returns the exact match", async () => {

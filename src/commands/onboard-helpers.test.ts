@@ -68,7 +68,6 @@ describe("handleReset", () => {
     const defaultStateDir = path.join(homeDir, ".openclaw");
     const profileConfigPath = path.join(profileStateDir, "openclaw.json");
     const profileCredentialsDir = path.join(profileStateDir, "credentials");
-    const profileSessionsDir = path.join(profileStateDir, "agents", "main", "sessions");
     const profileAgentDb = path.join(
       profileStateDir,
       "agents",
@@ -80,7 +79,6 @@ describe("handleReset", () => {
     const defaultCredentialsDir = path.join(defaultStateDir, "credentials");
 
     fs.mkdirSync(profileCredentialsDir, { recursive: true });
-    fs.mkdirSync(profileSessionsDir, { recursive: true });
     fs.mkdirSync(path.dirname(profileAgentDb), { recursive: true });
     fs.mkdirSync(workspaceDir, { recursive: true });
     fs.mkdirSync(defaultCredentialsDir, { recursive: true });
@@ -103,7 +101,6 @@ describe("handleReset", () => {
     expect(trashedPaths).toEqual([
       profileConfigPath,
       profileCredentialsDir,
-      profileSessionsDir,
       profileAgentDb,
       `${profileAgentDb}-wal`,
       `${profileAgentDb}-shm`,

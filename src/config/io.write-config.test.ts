@@ -114,10 +114,9 @@ describe("config io write", () => {
       logger: silentLogger,
     });
 
-  it("stores config health state in SQLite instead of config-health.json", async () => {
+  it("stores config health state in SQLite", async () => {
     await withSuiteHome(async (home) => {
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const healthPath = path.join(home, ".openclaw", "logs", "config-health.json");
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
@@ -133,7 +132,6 @@ describe("config io write", () => {
 
       await expect(io.readConfigFileSnapshot()).resolves.toMatchObject({ exists: true });
       expect(io.loadConfig()).toMatchObject({ gateway: { mode: "local" } });
-      await expect(fs.stat(healthPath)).rejects.toMatchObject({ code: "ENOENT" });
       expect(
         readConfigHealthStateFromSqlite(
           { OPENCLAW_TEST_FAST: "1" } as NodeJS.ProcessEnv,

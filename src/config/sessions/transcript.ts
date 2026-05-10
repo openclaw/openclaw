@@ -1,5 +1,5 @@
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
-import type { SessionManager } from "../../agents/transcript/session-transcript-contract.js";
+import type { PersistableSessionMessage } from "../../agents/transcript/session-transcript-types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   DEFAULT_AGENT_ID,
@@ -11,7 +11,6 @@ import { extractAssistantVisibleText } from "../../shared/chat-message-content.j
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAndPersistSessionTranscriptScope } from "./session-scope.js";
 import { getSessionEntry, normalizeSessionRowKey } from "./store.js";
-import { parseSessionThreadInfo } from "./thread-info.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import {
@@ -26,7 +25,7 @@ export type SessionTranscriptAppendResult =
 
 export type SessionTranscriptUpdateMode = "inline" | "signal-only" | "none";
 
-export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appendMessage"]>[0] & {
+export type SessionTranscriptAssistantMessage = PersistableSessionMessage & {
   role: "assistant";
 };
 
@@ -94,24 +93,18 @@ export async function resolveSessionTranscriptTarget(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore?: Record<string, SessionEntry>;
   agentId: string;
   threadId?: string | number;
 }): Promise<{ agentId: string; sessionId: string; sessionEntry: SessionEntry | undefined }> {
   let sessionEntry = params.sessionEntry;
 
-  const threadIdFromSessionKey = parseSessionThreadInfo(params.sessionKey).threadId;
   const resolvedTranscript = await resolveAndPersistSessionTranscriptScope({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry,
     agentId: params.agentId,
-    topicId: params.threadId ?? threadIdFromSessionKey,
   });
   sessionEntry = resolvedTranscript.sessionEntry;
-  if (params.sessionStore) {
-    params.sessionStore[params.sessionKey] = sessionEntry;
-  }
 
   return {
     agentId: resolvedTranscript.agentId,

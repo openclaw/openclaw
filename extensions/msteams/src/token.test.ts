@@ -297,9 +297,6 @@ describe("delegated token storage", () => {
       scopes: ["ChatMessage.Send", "offline_access"],
       userPrincipalName: "user@example.com",
     });
-    expect(
-      fs.existsSync(path.join(process.env.OPENCLAW_STATE_DIR ?? "", "msteams-delegated.json")),
-    ).toBe(false);
   });
 
   it("rejects invalid delegated token payloads", () => {

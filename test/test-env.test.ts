@@ -226,7 +226,6 @@ describe("installTestEnv", () => {
       ),
     ).toBe(true);
     const tempAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
-    expect(fs.existsSync(path.join(tempAgentDir, "auth-profiles.json"))).toBe(false);
     expect(loadPersistedAuthProfileStore(tempAgentDir)?.profiles["openai:default"]).toEqual({
       type: "api_key",
       provider: "openai",

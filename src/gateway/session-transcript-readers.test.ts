@@ -14,7 +14,7 @@ import {
   readRecentSessionMessages,
   readRecentSessionMessagesWithStats,
   readRecentSessionMessagesWithStatsAsync,
-  readRecentSessionTranscriptLines,
+  readRecentSessionTranscriptEvents,
   readRecentSessionUsageFromTranscript,
   readRecentSessionUsageFromTranscriptAsync,
   readSessionMessageCount,
@@ -212,7 +212,7 @@ describe("SQLite transcript readers", () => {
     });
   });
 
-  test("reads transcript JSONL windows from SQLite for manual compaction", () => {
+  test("reads transcript event windows from SQLite for manual compaction", () => {
     setupState();
     const sessionId = "manual-window";
     seedTranscript({
@@ -223,17 +223,15 @@ describe("SQLite transcript readers", () => {
       ],
     });
 
-    const result = readRecentSessionTranscriptLines({
+    const result = readRecentSessionTranscriptEvents({
       agentId: "main",
       sessionId,
-      maxLines: 3,
+      maxEvents: 3,
     });
-    expect(result?.totalLines).toBe(11);
-    expect(result?.lines.map((line) => JSON.parse(line).message?.content)).toEqual([
-      "m7",
-      "m8",
-      "m9",
-    ]);
+    expect(result?.totalEvents).toBe(11);
+    expect(
+      result?.events.map((event) => (event as { message?: { content?: string } }).message?.content),
+    ).toEqual(["m7", "m8", "m9"]);
   });
 
   test("aggregates and reads latest usage snapshots from SQLite", async () => {

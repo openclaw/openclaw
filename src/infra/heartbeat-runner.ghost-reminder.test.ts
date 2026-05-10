@@ -52,7 +52,6 @@ describe("Ghost reminder bug (issue #13317)", () => {
     };
     const sessionKey = await seedMainHeartbeatSession(params.agentId, cfg, {
       lastChannel: "telegram",
-      lastProvider: "telegram",
       lastTo: "-100155462274",
     });
 

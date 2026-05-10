@@ -46,7 +46,6 @@ export type OpenClawTestState = {
   writeJson: (relativePath: string, value: unknown) => Promise<string>;
   writeText: (relativePath: string, value: string) => Promise<string>;
   writeAuthProfiles: (store: unknown, agentId?: string) => Promise<string>;
-  writeLegacyAuthProfiles: (store: unknown, agentId?: string) => Promise<string>;
   applyEnv: () => void;
   restoreEnv: () => void;
   cleanup: () => Promise<void>;
@@ -306,10 +305,6 @@ export async function createOpenClawTestState(
         env,
       });
       return resolveAuthProfileStoreLocationForDisplay(targetAgentDir, env);
-    },
-    writeLegacyAuthProfiles: (store, agentId = "main") => {
-      const filePath = path.join(agentDir(agentId), "auth-profiles.json");
-      return writeJsonFile(filePath, store);
     },
     applyEnv: () => {
       for (const [key, value] of Object.entries(envVars)) {

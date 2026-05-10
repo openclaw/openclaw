@@ -150,13 +150,11 @@ export {
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
 export { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
-export type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
+export type { CommitmentRecord, CommitmentStoreSnapshot } from "../commitments/types.js";
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
   buildSessionContext,
   CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
-  parseSessionEntries,
   SessionManager,
   type AgentSession,
   type ExtensionAPI,

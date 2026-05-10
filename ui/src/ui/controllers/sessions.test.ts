@@ -142,11 +142,9 @@ describe("deleteSessionsAndRefresh", () => {
     expect(request).toHaveBeenCalledTimes(3);
     expect(request).toHaveBeenNthCalledWith(1, "sessions.delete", {
       key: "key-a",
-      deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(2, "sessions.delete", {
       key: "key-b",
-      deleteTranscript: true,
     });
     expect(request).toHaveBeenNthCalledWith(3, "sessions.list", {
       includeGlobal: true,

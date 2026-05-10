@@ -1,8 +1,6 @@
 import { randomUUID } from "node:crypto";
 import {
   CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
-  SessionManager,
   type SessionHeader,
   type TranscriptEntry as PiTranscriptEntry,
 } from "../agents/transcript/session-transcript-contract.js";
@@ -124,10 +122,6 @@ function latestEntryId(entries: readonly PiTranscriptEntry[]): string | null {
   return null;
 }
 
-function formatTranscriptParentReference(params: { agentId: string; sessionId: string }): string {
-  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
-}
-
 export async function readSessionLeafIdFromTranscriptAsync(
   scope: { agentId: string; sessionId: string },
   maxBytes = MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES,
@@ -155,8 +149,6 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
   if (!sourceHeader) {
     return null;
   }
-  migrateSessionEntries(entries);
-
   const targetCwd = params.targetCwd ?? sourceHeader.cwd ?? process.cwd();
   const sessionId = randomUUID();
   const timestamp = new Date().toISOString();
@@ -167,10 +159,10 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
     id: sessionId,
     timestamp,
     cwd: targetCwd,
-    parentSession: formatTranscriptParentReference({
+    parentTranscriptScope: {
       agentId,
       sessionId: params.sourceSessionId,
-    }),
+    },
   };
 
   try {
@@ -189,41 +181,24 @@ export async function forkCompactionCheckpointTranscriptAsync(params: {
 }
 
 /**
- * Capture a bounded pre-compaction transcript snapshot without blocking the
- * Gateway event loop on synchronous file reads/copies.
+ * Capture a bounded pre-compaction transcript snapshot from SQLite without
+ * blocking the Gateway event loop on large transcript materialization.
  */
 export async function captureCompactionCheckpointSnapshotAsync(params: {
   agentId: string;
   sessionId: string;
-  sessionManager?: Pick<SessionManager, "getEntries" | "getHeader" | "getLeafId">;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
-  const getLeafId =
-    params.sessionManager && typeof params.sessionManager.getLeafId === "function"
-      ? params.sessionManager.getLeafId.bind(params.sessionManager)
-      : null;
-  if (params.sessionManager && !getLeafId) {
-    return null;
-  }
-  const liveLeafId = getLeafId ? getLeafId() : undefined;
-  if (getLeafId && !liveLeafId) {
-    return null;
-  }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_SNAPSHOT_BYTES;
-  const entries = params.sessionManager
-    ? cloneTranscriptEvents([
-        params.sessionManager.getHeader(),
-        ...params.sessionManager.getEntries(),
-      ])
-    : loadTranscriptEntriesFromSqlite({
-        agentId: params.agentId,
-        sessionId: params.sessionId,
-      });
+  const entries = loadTranscriptEntriesFromSqlite({
+    agentId: params.agentId,
+    sessionId: params.sessionId,
+  });
   if (!entries || transcriptEventsByteLength(entries) > maxBytes) {
     return null;
   }
   const sourceHeader = entries[0] as SessionHeader | undefined;
-  const leafId = liveLeafId ?? latestEntryId(entries);
+  const leafId = latestEntryId(entries);
   if (!sourceHeader?.id || !leafId) {
     return null;
   }
@@ -233,10 +208,10 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     ...sourceHeader,
     id: snapshotSessionId,
     timestamp: new Date().toISOString(),
-    parentSession: formatTranscriptParentReference({
+    parentTranscriptScope: {
       agentId: snapshotAgentId,
       sessionId: sourceHeader.id,
-    }),
+    },
   };
   replaceSqliteSessionTranscriptEvents({
     agentId: snapshotAgentId,

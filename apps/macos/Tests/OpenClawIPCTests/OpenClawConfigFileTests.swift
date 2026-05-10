@@ -11,7 +11,7 @@ struct OpenClawConfigFileTests {
             .path
     }
 
-    private func configSidecarURLs(in stateDir: URL) -> (audit: URL, health: URL) {
+    private func legacyConfigSidecarURLs(in stateDir: URL) -> (audit: URL, health: URL) {
         let logsDir = stateDir.appendingPathComponent("logs", isDirectory: true)
         return (
             logsDir.appendingPathComponent("config-audit.jsonl"),
@@ -142,7 +142,7 @@ struct OpenClawConfigFileTests {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let sidecars = self.configSidecarURLs(in: stateDir)
+        let sidecars = self.legacyConfigSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -272,7 +272,7 @@ struct OpenClawConfigFileTests {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let sidecars = self.configSidecarURLs(in: stateDir)
+        let sidecars = self.legacyConfigSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -328,7 +328,7 @@ struct OpenClawConfigFileTests {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let sidecars = self.configSidecarURLs(in: stateDir)
+        let sidecars = self.legacyConfigSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -375,7 +375,7 @@ struct OpenClawConfigFileTests {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let sidecars = self.configSidecarURLs(in: stateDir)
+        let sidecars = self.legacyConfigSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 

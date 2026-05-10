@@ -77,13 +77,17 @@ function optionLabels(options: Array<{ value: unknown; label: string }> | undefi
   return options?.map((option) => ({ value: option.value, label: option.label }));
 }
 
+function expectDeletePrompt(label: string) {
+  const message = confirmArg().message;
+  expect(message).toContain(`Delete ${label} configuration from `);
+  expect(message).toMatch(/\.openclaw\/openclaw\.json\?$/u);
+}
+
 function expectUnknownChannelRemovalPrompt(unsafeChannel: string, label: string) {
   expectOption(selectArg().options, channelChoice(unsafeChannel), label);
-  expect(confirmArg().message).toBe(
-    `Delete ${label} configuration from ~/.openclaw/openclaw.json?`,
-  );
+  expectDeletePrompt(label);
   expect(note).toHaveBeenCalledWith(
-    `${label} removed from config.\nNote: credentials/sessions on disk are unchanged.`,
+    `${label} removed from config.\nNote: credentials and SQLite session state are unchanged.`,
     "Channel removed",
   );
 }
@@ -137,12 +141,10 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirmArg().message).toBe(
-      "Delete Telegram configuration from ~/.openclaw/openclaw.json?",
-    );
+    expectDeletePrompt("Telegram");
     expect(next.channels).toEqual({ twitch: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
-      "Telegram removed from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Telegram removed from config.\nNote: credentials and SQLite session state are unchanged.",
       "Channel removed",
     );
   });
@@ -160,10 +162,10 @@ describe("removeChannelConfigWizard", () => {
       {} as never,
     );
 
-    expect(confirmArg().message).toBe("Delete done configuration from ~/.openclaw/openclaw.json?");
+    expectDeletePrompt("done");
     expect(next.channels).toEqual({ telegram: { token: "secret" } });
     expect(note).toHaveBeenCalledWith(
-      "done removed from config.\nNote: credentials/sessions on disk are unchanged.",
+      "done removed from config.\nNote: credentials and SQLite session state are unchanged.",
       "Channel removed",
     );
   });
@@ -226,11 +228,9 @@ describe("removeChannelConfigWizard", () => {
     );
 
     expectOption(selectArg().options, channelChoice("telegram"), "Telegram\\nBot");
-    expect(confirmArg().message).toBe(
-      "Delete Telegram\\nBot configuration from ~/.openclaw/openclaw.json?",
-    );
+    expectDeletePrompt("Telegram\\nBot");
     expect(note).toHaveBeenCalledWith(
-      "Telegram\\nBot removed from config.\nNote: credentials/sessions on disk are unchanged.",
+      "Telegram\\nBot removed from config.\nNote: credentials and SQLite session state are unchanged.",
       "Channel removed",
     );
   });

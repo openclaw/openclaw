@@ -2430,8 +2430,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               await rewriteUserTranscriptMedia();
               // WebChat persistence has two owners. Agent runs persist model-visible turns
               // through Pi's SessionManager; this dispatcher only owns live delivery payloads.
-              // Do not blindly mirror agent-run final payloads into JSONL or chat.history can
-              // duplicate normal Pi assistant turns. The non-agent branch below has no Pi
+              // Do not blindly mirror agent-run final payloads into the transcript or chat.history
+              // can duplicate normal Pi assistant turns. The non-agent branch below has no Pi
               // assistant turn, so it appends a gateway-injected assistant entry before
               // broadcasting the final UI event.
               if (!agentRunStarted) {

@@ -188,8 +188,8 @@ describe("models-config", () => {
     expect(observedSnapshot).toBe(pluginMetadataSnapshot);
   });
 
-  it("normalizes retired Gemini ids preserved from existing models.json rows", async () => {
-    const plan = await planOpenClawModelsJsonWithDeps(
+  it("normalizes retired Gemini ids preserved from stored catalog rows", async () => {
+    const plan = await planOpenClawModelCatalogWithDeps(
       {
         cfg: { models: { mode: "merge", providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -236,7 +236,7 @@ describe("models-config", () => {
 
     expect(plan.action).toBe("write");
     if (plan.action !== "write") {
-      throw new Error("Expected models.json write plan");
+      throw new Error("Expected stored model catalog write plan");
     }
     const parsed = JSON.parse(plan.contents) as {
       providers?: Record<string, { models?: Array<{ id?: string }> }>;

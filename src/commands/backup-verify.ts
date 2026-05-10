@@ -10,13 +10,13 @@ import { isRecord, resolveUserPath } from "../utils.js";
 
 const WINDOWS_ABSOLUTE_ARCHIVE_PATH_RE = /^[A-Za-z]:[\\/]/;
 
-type BackupManifestAsset = {
+export type BackupManifestAsset = {
   kind: string;
   sourcePath: string;
   archivePath: string;
 };
 
-type BackupManifest = {
+export type BackupManifest = {
   schemaVersion: number;
   createdAt: string;
   archiveRoot: string;
@@ -59,6 +59,11 @@ export type BackupVerifyResult = {
   runtimeVersion: string;
   assetCount: number;
   entryCount: number;
+};
+
+export type VerifiedBackupArchive = {
+  result: BackupVerifyResult;
+  manifest: BackupManifest;
 };
 
 function stripTrailingSlashes(value: string): string {
@@ -244,7 +249,10 @@ function isRootManifestEntry(entryPath: string): boolean {
   return parts.length === 2 && parts[0] !== "" && parts[1] === "manifest.json";
 }
 
-function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<string>): void {
+function verifyManifestAgainstEntries(
+  manifest: BackupManifest,
+  entries: Set<string>,
+): BackupManifest {
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
@@ -261,6 +269,7 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
   }
 
   const payloadRoot = path.posix.join(archiveRoot, "payload");
+  const assets: BackupManifestAsset[] = [];
   for (const asset of manifest.assets) {
     const assetArchivePath = normalizeArchivePath(asset.archivePath, "Backup manifest asset path");
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
@@ -273,8 +282,10 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     if (!exact && !nested) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
+    assets.push({ ...asset, archivePath: assetArchivePath });
   }
 
+  const databaseSnapshots: BackupManifest["databaseSnapshots"] = [];
   for (const snapshot of manifest.databaseSnapshots ?? []) {
     const snapshotArchivePath = normalizeArchivePath(
       snapshot.archivePath,
@@ -288,7 +299,15 @@ function verifyManifestAgainstEntries(manifest: BackupManifest, entries: Set<str
     if (!normalizedEntrySet.has(snapshotArchivePath)) {
       throw new Error(`Archive is missing database snapshot: ${snapshotArchivePath}`);
     }
+    databaseSnapshots.push({ ...snapshot, archivePath: snapshotArchivePath });
   }
+
+  return {
+    ...manifest,
+    archiveRoot,
+    assets,
+    databaseSnapshots,
+  };
 }
 
 async function verifyDatabaseSnapshots(params: {
@@ -355,10 +374,9 @@ function findDuplicateNormalizedEntryPath(
   return undefined;
 }
 
-export async function backupVerifyCommand(
-  runtime: RuntimeEnv,
-  opts: BackupVerifyOptions,
-): Promise<BackupVerifyResult> {
+export async function verifyBackupArchive(opts: {
+  archive: string;
+}): Promise<VerifiedBackupArchive> {
   const archivePath = resolveUserPath(opts.archive);
   const rawEntries = await listArchiveEntries(archivePath);
   if (rawEntries.length === 0) {
@@ -385,8 +403,7 @@ export async function backupVerifyCommand(
   }
 
   const manifestRaw = await extractManifest({ archivePath, manifestEntryPath });
-  const manifest = parseManifest(manifestRaw);
-  verifyManifestAgainstEntries(manifest, normalizedEntrySet);
+  const manifest = verifyManifestAgainstEntries(parseManifest(manifestRaw), normalizedEntrySet);
   await verifyDatabaseSnapshots({ archivePath, manifest });
 
   const result: BackupVerifyResult = {
@@ -398,6 +415,15 @@ export async function backupVerifyCommand(
     assetCount: manifest.assets.length,
     entryCount: rawEntries.length,
   };
+
+  return { result, manifest };
+}
+
+export async function backupVerifyCommand(
+  runtime: RuntimeEnv,
+  opts: BackupVerifyOptions,
+): Promise<BackupVerifyResult> {
+  const { result } = await verifyBackupArchive({ archive: opts.archive });
 
   if (opts.json) {
     writeRuntimeJson(runtime, result);

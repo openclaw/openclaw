@@ -88,7 +88,7 @@ const mockState = vi.hoisted(() => ({
 
 const cleanupDirs: string[] = [];
 
-function readTranscriptJsonLines(): Array<Record<string, unknown>> {
+function readTranscriptEvents(): Array<Record<string, unknown>> {
   return loadSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: mockState.sessionId,
@@ -727,13 +727,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists agent-run audio replies emitted as media-bearing block payloads", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-audio-");
-    const audioPath = path.join(transcriptDir, "reply.mp3");
+    const workspaceDir = createTranscriptFixture("openclaw-chat-send-agent-audio-");
+    const audioPath = path.join(workspaceDir, "reply.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     mockState.config = {
       agents: {
         defaults: {
-          workspace: transcriptDir,
+          workspace: workspaceDir,
         },
       },
     };
@@ -775,13 +775,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists auto-TTS final media as audio-only so webchat does not duplicate assistant text", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
-    const audioPath = path.join(transcriptDir, "tts.mp3");
+    const workspaceDir = createTranscriptFixture("openclaw-chat-send-agent-tts-final-");
+    const audioPath = path.join(workspaceDir, "tts.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     mockState.config = {
       agents: {
         defaults: {
-          workspace: transcriptDir,
+          workspace: workspaceDir,
         },
       },
     };
@@ -833,12 +833,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("does not mirror agent-run stale media final text from live delivery", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
-    const staleAudioPath = path.join(transcriptDir, "stale.mp3");
+    const workspaceDir = createTranscriptFixture("openclaw-chat-send-agent-stale-tts-");
+    const staleAudioPath = path.join(workspaceDir, "stale.mp3");
     mockState.config = {
       agents: {
         defaults: {
-          workspace: transcriptDir,
+          workspace: workspaceDir,
         },
       },
     };
@@ -874,8 +874,8 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     // Agent-run delivery is a live projection; Pi message_end owns persisted
     // assistant transcript entries, including stale media/text final payloads.
     expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines();
-    const assistantEntries = transcriptLines.filter(
+    const transcriptEvents = readTranscriptEvents();
+    const assistantEntries = transcriptEvents.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
@@ -884,11 +884,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("does not mirror normal agent-run final text from live delivery", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-agent-text-only-");
+    const workspaceDir = createTranscriptFixture("openclaw-chat-send-agent-text-only-");
     mockState.config = {
       agents: {
         defaults: {
-          workspace: transcriptDir,
+          workspace: workspaceDir,
         },
       },
     };
@@ -918,11 +918,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         update.message !== null &&
         (update.message as { role?: unknown }).role === "assistant",
     );
-    // Normal agent-run final text must not be mirrored into JSONL by WebChat;
+    // Normal agent-run final text must not be mirrored into SQLite by WebChat;
     // Pi persists the model-visible assistant turn from message_end.
     expect(assistantUpdates).toStrictEqual([]);
-    const transcriptLines = readTranscriptJsonLines();
-    const assistantEntries = transcriptLines.filter(
+    const transcriptEvents = readTranscriptEvents();
+    const assistantEntries = transcriptEvents.filter(
       (entry) =>
         (entry as { message?: { role?: string } }).message?.role === "assistant" ||
         (entry as { role?: string }).role === "assistant",
@@ -931,13 +931,13 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("keeps visible text on non-agent TTS final media because no model transcript exists", async () => {
-    const transcriptDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
-    const audioPath = path.join(transcriptDir, "tts.mp3");
+    const workspaceDir = createTranscriptFixture("openclaw-chat-send-command-tts-final-");
+    const audioPath = path.join(workspaceDir, "tts.mp3");
     fs.writeFileSync(audioPath, Buffer.from([0xff, 0xfb, 0x90, 0x00]));
     mockState.config = {
       agents: {
         defaults: {
-          workspace: transcriptDir,
+          workspace: workspaceDir,
         },
       },
     };
@@ -2253,7 +2253,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
   });
 
   it("persists non-image chat.send attachments as media refs without dispatch images", async () => {
-    createTranscriptFixture("openclaw-chat-send-user-transcript-file-");
+    createTranscriptFixture("openclaw-chat-send-user-document-attachment-");
     mockState.finalText = "ok";
     mockState.triggerAgentRunStart = true;
     mockState.savedMediaResults = [
@@ -2265,7 +2265,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await runNonStreamingChatSend({
       context,
       respond,
-      idempotencyKey: "idem-user-transcript-file",
+      idempotencyKey: "idem-user-document-attachment",
       message: "summarize this",
       requestParams: {
         attachments: [

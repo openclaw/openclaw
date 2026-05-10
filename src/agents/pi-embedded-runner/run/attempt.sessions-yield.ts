@@ -1,5 +1,6 @@
 import type { AgentMessage } from "../../agent-core-contract.js";
-import { removeSessionManagerTailEntries } from "../../transcript/session-manager-tail.js";
+import type { SessionTranscriptScope } from "../../transcript/session-transcript-types.js";
+import { removeTailEntriesFromSqliteTranscript } from "../../transcript/transcript-state.js";
 import { log } from "../logger.js";
 
 const SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE = "openclaw.sessions_yield_interrupt";
@@ -146,11 +147,13 @@ export async function persistSessionsYieldContextMessage(
 }
 
 // Remove the synthetic yield interrupt + aborted assistant entry from the live transcript.
-export function stripSessionsYieldArtifacts(activeSession: {
-  messages: AgentMessage[];
-  agent: { state: { messages: AgentMessage[] } };
-  sessionManager?: unknown;
-}) {
+export function stripSessionsYieldArtifacts(
+  activeSession: {
+    messages: AgentMessage[];
+    agent: { state: { messages: AgentMessage[] } };
+  },
+  transcriptScope: SessionTranscriptScope,
+) {
   const strippedMessages = activeSession.messages.slice();
   while (strippedMessages.length > 0) {
     const last = strippedMessages.at(-1) as
@@ -174,18 +177,18 @@ export function stripSessionsYieldArtifacts(activeSession: {
     activeSession.agent.state.messages = strippedMessages;
   }
 
-  removeSessionManagerTailEntries(
-    activeSession.sessionManager,
-    (entry) => {
-      const message = entry.message as { role?: string; stopReason?: string } | undefined;
+  removeTailEntriesFromSqliteTranscript({
+    agentId: transcriptScope.agentId,
+    sessionId: transcriptScope.sessionId,
+    shouldRemove: (entry) => {
       return (
         (entry.type === "message" &&
-          message?.role === "assistant" &&
-          message.stopReason === "aborted") ||
+          entry.message.role === "assistant" &&
+          entry.message.stopReason === "aborted") ||
         (entry.type === "custom_message" &&
           entry.customType === SESSIONS_YIELD_INTERRUPT_CUSTOM_TYPE)
       );
     },
-    { minEntries: 1 },
-  );
+    options: { minEntries: 1 },
+  });
 }

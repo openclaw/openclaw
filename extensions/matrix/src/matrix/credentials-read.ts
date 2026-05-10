@@ -2,12 +2,12 @@ import os from "node:os";
 import path from "node:path";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getMatrixRuntime } from "../runtime.js";
 import {
   resolveMatrixCredentialsDir as resolveSharedMatrixCredentialsDir,
   resolveMatrixCredentialsPath as resolveSharedMatrixCredentialsPath,
 } from "../storage-paths.js";
-import { withMatrixSqliteStateEnv } from "./sqlite-state.js";
 
 export type MatrixStoredCredentials = {
   homeserver: string;
@@ -19,13 +19,15 @@ export type MatrixStoredCredentials = {
 };
 
 const MATRIX_CREDENTIALS_NAMESPACE = "credentials";
-const MATRIX_CREDENTIALS_STORE = createPluginStateSyncKeyedStore<MatrixStoredCredentials>(
-  "matrix",
-  {
+function createMatrixCredentialsStore(
+  stateDir: string,
+): PluginStateSyncKeyedStore<MatrixStoredCredentials> {
+  return createPluginStateSyncKeyedStore<MatrixStoredCredentials>("matrix", {
     namespace: MATRIX_CREDENTIALS_NAMESPACE,
     maxEntries: 1_000,
-  },
-);
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
 
 function resolveStateDir(env: NodeJS.ProcessEnv): string {
   try {
@@ -95,10 +97,22 @@ export function loadMatrixCredentials(
 ): MatrixStoredCredentials | null {
   try {
     const stateDir = resolveStateDir(env);
-    return withMatrixSqliteStateEnv({ stateDir }, () =>
-      normalizeMatrixCredentials(
-        MATRIX_CREDENTIALS_STORE.lookup(resolveMatrixCredentialsStateKey(accountId)),
-      ),
+    return normalizeMatrixCredentials(
+      createMatrixCredentialsStore(stateDir).lookup(resolveMatrixCredentialsStateKey(accountId)),
+    );
+  } catch {
+    return null;
+  }
+}
+
+export function loadMatrixCredentialsFromStateEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  accountId?: string | null,
+): MatrixStoredCredentials | null {
+  try {
+    const stateDir = resolveStateDir(env);
+    return normalizeMatrixCredentials(
+      createMatrixCredentialsStore(stateDir).lookup(resolveMatrixCredentialsStateKey(accountId)),
     );
   } catch {
     return null;
@@ -115,9 +129,10 @@ export function saveMatrixCredentialsState(
     return;
   }
   const stateDir = resolveStateDir(env);
-  withMatrixSqliteStateEnv({ stateDir }, () => {
-    MATRIX_CREDENTIALS_STORE.register(resolveMatrixCredentialsStateKey(accountId), normalized);
-  });
+  createMatrixCredentialsStore(stateDir).register(
+    resolveMatrixCredentialsStateKey(accountId),
+    normalized,
+  );
 }
 
 export function clearMatrixCredentials(
@@ -126,9 +141,7 @@ export function clearMatrixCredentials(
 ): void {
   try {
     const stateDir = resolveStateDir(env);
-    withMatrixSqliteStateEnv({ stateDir }, () => {
-      MATRIX_CREDENTIALS_STORE.delete(resolveMatrixCredentialsStateKey(accountId));
-    });
+    createMatrixCredentialsStore(stateDir).delete(resolveMatrixCredentialsStateKey(accountId));
   } catch {
     // ignore
   }

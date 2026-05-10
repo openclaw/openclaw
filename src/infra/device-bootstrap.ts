@@ -14,7 +14,7 @@ import {
   pruneExpiredPending,
   readPairingStateRecord,
   writePairingStateRecord,
-} from "./pairing-files.js";
+} from "./pairing-state.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export const DEVICE_BOOTSTRAP_TOKEN_TTL_MS = 10 * 60 * 1000;

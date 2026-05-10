@@ -11,18 +11,17 @@ import {
   acpManagerMocks,
   browserSessionTabMocks,
   bundleMcpRuntimeMocks,
-  writeSingleLineSession,
+  seedSqliteSessionTranscript,
   sessionStoreEntry,
   expectActiveRunCleanup,
   directSessionReq,
 } from "./test/server-sessions.test-helpers.js";
 
-const { createSessionFixtureDir, openClient } = setupGatewaySessionsTestHarness();
+const { openClient } = setupGatewaySessionsTestHarness();
 
 test("sessions.delete rejects main and aborts active runs", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSingleLineSession(dir, "sess-active", "active");
+  await seedSqliteSessionTranscript("sess-main", "hello");
+  await seedSqliteSessionTranscript("sess-active", "active");
 
   await seedGatewaySessionEntries({
     entries: {
@@ -80,9 +79,8 @@ test("sessions.delete rejects main and aborts active runs", async () => {
 });
 
 test("sessions.delete limits plugin-runtime cleanup to sessions owned by that plugin", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-owned", "owned");
-  await writeSingleLineSession(dir, "sess-foreign", "foreign");
+  await seedSqliteSessionTranscript("sess-owned", "owned");
+  await seedSqliteSessionTranscript("sess-foreign", "foreign");
 
   await seedGatewaySessionEntries({
     entries: {
@@ -130,9 +128,8 @@ test("sessions.delete limits plugin-runtime cleanup to sessions owned by that pl
 });
 
 test("sessions.delete closes ACP runtime handles before removing ACP sessions", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
-  await writeSingleLineSession(dir, "sess-acp", "acp");
+  await seedSqliteSessionTranscript("sess-main", "hello");
+  await seedSqliteSessionTranscript("sess-acp", "acp");
 
   await seedGatewaySessionEntries({
     entries: {
@@ -188,8 +185,7 @@ test("sessions.delete closes ACP runtime handles before removing ACP sessions", 
 });
 
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
+  await seedSqliteSessionTranscript("sess-main", "hello");
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-delete",
@@ -234,8 +230,7 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
 });
 
 test("sessions.delete does not emit lifecycle events when nothing was deleted", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-main", "hello");
+  await seedSqliteSessionTranscript("sess-main", "hello");
   await seedGatewaySessionEntries({
     entries: {
       main: sessionStoreEntry("sess-main"),
@@ -253,8 +248,7 @@ test("sessions.delete does not emit lifecycle events when nothing was deleted", 
 });
 
 test("sessions.delete emits subagent targetKind for subagent sessions", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
+  await seedSqliteSessionTranscript("sess-subagent", "hello");
   await seedGatewaySessionEntries({
     entries: {
       "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
@@ -282,8 +276,7 @@ test("sessions.delete emits subagent targetKind for subagent sessions", async ()
 });
 
 test("sessions.delete can skip lifecycle hooks while still unbinding thread bindings", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
+  await seedSqliteSessionTranscript("sess-subagent", "hello");
   await seedGatewaySessionEntries({
     entries: {
       "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
@@ -305,8 +298,7 @@ test("sessions.delete can skip lifecycle hooks while still unbinding thread bind
 });
 
 test("sessions.delete directly unbinds thread bindings when hooks are unavailable", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-subagent", "hello");
+  await seedSqliteSessionTranscript("sess-subagent", "hello");
   await seedGatewaySessionEntries({
     entries: {
       "agent:main:subagent:worker": sessionStoreEntry("sess-subagent"),
@@ -327,8 +319,7 @@ test("sessions.delete directly unbinds thread bindings when hooks are unavailabl
 });
 
 test("sessions.delete returns unavailable when active run does not stop", async () => {
-  const { dir } = await createSessionFixtureDir();
-  await writeSingleLineSession(dir, "sess-active", "active");
+  await seedSqliteSessionTranscript("sess-active", "active");
 
   await seedGatewaySessionEntries({
     entries: {

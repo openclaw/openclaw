@@ -112,7 +112,6 @@ export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][nu
   }
   const markers = [
     session.provider,
-    session.lastProvider,
     session.lastChannel,
     session.lastTo,
     session.origin?.provider,

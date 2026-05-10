@@ -10,14 +10,14 @@ import {
   resolveScopeOutsideRequestedRoles,
   roleScopesAllow,
 } from "../shared/operator-scope-compat.js";
+import { rejectPendingPairingRequest } from "./pairing-pending.js";
 import {
   createAsyncLock,
   pruneExpiredPending,
   reconcilePendingPairingRequests,
   readPairingStateRecord,
   writePairingStateRecord,
-} from "./pairing-files.js";
-import { rejectPendingPairingRequest } from "./pairing-pending.js";
+} from "./pairing-state.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
 export type DevicePairingPendingRequest = {

@@ -3,7 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
+import {
+  readExecApprovalsSnapshot,
+  saveExecApprovals,
+  type ExecApprovalsFile,
+} from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -265,7 +269,7 @@ function createElevatedAllowlistExecTool() {
 }
 
 async function expectGatewayExecWithoutApproval(options: {
-  config: Record<string, unknown>;
+  config: ExecApprovalsFile;
   command: string;
   ask?: "always" | "on-miss" | "off";
   security?: "allowlist" | "full";
@@ -676,7 +680,7 @@ describe("exec approvals", () => {
 
   it("uses exec-approvals defaults to suppress gateway prompts", async () => {
     const cases: Array<{
-      config: Record<string, unknown>;
+      config: ExecApprovalsFile;
       ask?: "always" | "on-miss" | "off";
       security?: "allowlist" | "full";
     }> = [

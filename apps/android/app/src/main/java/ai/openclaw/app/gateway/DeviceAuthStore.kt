@@ -1,6 +1,6 @@
 package ai.openclaw.app.gateway
 
-import ai.openclaw.app.SecurePrefs
+import android.content.Context
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -13,9 +13,18 @@ data class DeviceAuthEntry(
 )
 
 @Serializable
-private data class PersistedDeviceAuthMetadata(
+private data class PersistedDeviceAuthEntry(
+  val token: String,
+  val role: String,
   val scopes: List<String> = emptyList(),
   val updatedAtMs: Long = 0L,
+)
+
+@Serializable
+private data class PersistedDeviceAuthStore(
+  val version: Int = 1,
+  val deviceId: String,
+  val tokens: Map<String, PersistedDeviceAuthEntry> = emptyMap(),
 )
 
 interface DeviceAuthTokenStore {
@@ -43,28 +52,26 @@ interface DeviceAuthTokenStore {
 }
 
 class DeviceAuthStore(
-  private val prefs: SecurePrefs,
+  context: Context,
 ) : DeviceAuthTokenStore {
   private val json = Json { ignoreUnknownKeys = true }
+  private val kvStore = OpenClawSQLiteKVStore(context)
 
   override fun loadEntry(
     deviceId: String,
     role: String,
   ): DeviceAuthEntry? {
-    val key = tokenKey(deviceId, role)
-    val token = prefs.getString(key)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+    val store = readStore() ?: return null
+    val normalizedDevice = normalizeDeviceId(deviceId)
+    if (store.deviceId != normalizedDevice) return null
     val normalizedRole = normalizeRole(role)
-    val metadata =
-      prefs
-        .getString(metadataKey(deviceId, role))
-        ?.let { raw ->
-          runCatching { json.decodeFromString<PersistedDeviceAuthMetadata>(raw) }.getOrNull()
-        }
+    val entry = store.tokens[normalizedRole] ?: return null
+    val token = entry.token.trim().takeIf { it.isNotEmpty() } ?: return null
     return DeviceAuthEntry(
       token = token,
       role = normalizedRole,
-      scopes = metadata?.scopes ?: emptyList(),
-      updatedAtMs = metadata?.updatedAtMs ?: 0L,
+      scopes = normalizeScopes(entry.scopes),
+      updatedAtMs = entry.updatedAtMs,
     )
   }
 
@@ -74,16 +81,27 @@ class DeviceAuthStore(
     token: String,
     scopes: List<String>,
   ) {
+    val normalizedDevice = normalizeDeviceId(deviceId)
+    val normalizedRole = normalizeRole(role)
     val normalizedScopes = normalizeScopes(scopes)
-    val key = tokenKey(deviceId, role)
-    prefs.putString(key, token.trim())
-    prefs.putString(
-      metadataKey(deviceId, role),
-      json.encodeToString(
-        PersistedDeviceAuthMetadata(
-          scopes = normalizedScopes,
-          updatedAtMs = System.currentTimeMillis(),
-        ),
+    val existing = readStore()
+    val nextTokens =
+      if (existing?.deviceId == normalizedDevice) {
+        existing.tokens.toMutableMap()
+      } else {
+        mutableMapOf()
+      }
+    nextTokens[normalizedRole] =
+      PersistedDeviceAuthEntry(
+        token = token.trim(),
+        role = normalizedRole,
+        scopes = normalizedScopes,
+        updatedAtMs = System.currentTimeMillis(),
+      )
+    writeStore(
+      PersistedDeviceAuthStore(
+        deviceId = normalizedDevice,
+        tokens = nextTokens,
       ),
     )
   }
@@ -92,27 +110,29 @@ class DeviceAuthStore(
     deviceId: String,
     role: String,
   ) {
-    val key = tokenKey(deviceId, role)
-    prefs.remove(key)
-    prefs.remove(metadataKey(deviceId, role))
+    val normalizedDevice = normalizeDeviceId(deviceId)
+    val existing = readStore() ?: return
+    if (existing.deviceId != normalizedDevice) return
+    val normalizedRole = normalizeRole(role)
+    if (!existing.tokens.containsKey(normalizedRole)) return
+    val nextTokens = existing.tokens.toMutableMap()
+    nextTokens.remove(normalizedRole)
+    writeStore(existing.copy(tokens = nextTokens))
   }
 
-  private fun tokenKey(
-    deviceId: String,
-    role: String,
-  ): String {
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    return "gateway.deviceToken.$normalizedDevice.$normalizedRole"
+  private fun readStore(): PersistedDeviceAuthStore? {
+    val raw = kvStore.readString(DEVICE_AUTH_SCOPE, DEVICE_AUTH_KEY) ?: return null
+    return runCatching { json.decodeFromString<PersistedDeviceAuthStore>(raw) }
+      .getOrNull()
+      ?.takeIf { it.version == 1 && it.deviceId.isNotBlank() }
   }
 
-  private fun metadataKey(
-    deviceId: String,
-    role: String,
-  ): String {
-    val normalizedDevice = normalizeDeviceId(deviceId)
-    val normalizedRole = normalizeRole(role)
-    return "gateway.deviceTokenMeta.$normalizedDevice.$normalizedRole"
+  private fun writeStore(store: PersistedDeviceAuthStore) {
+    kvStore.writeString(
+      DEVICE_AUTH_SCOPE,
+      DEVICE_AUTH_KEY,
+      json.encodeToString(store),
+    )
   }
 
   private fun normalizeDeviceId(deviceId: String): String = deviceId.trim().lowercase()
@@ -125,4 +145,9 @@ class DeviceAuthStore(
       .filter { it.isNotEmpty() }
       .distinct()
       .sorted()
+
+  companion object {
+    private const val DEVICE_AUTH_SCOPE = "identity.device-auth"
+    private const val DEVICE_AUTH_KEY = "default"
+  }
 }

@@ -576,7 +576,7 @@ releases.
   | `plugin-sdk/reply-chunking` | Reply chunk helpers | Text/markdown chunking helpers |
   | `plugin-sdk/session-store-runtime` | Session row helpers | SQLite-backed session row, session-key, updated-at, and transcript row helpers |
   | `plugin-sdk/sqlite-runtime` | SQLite helpers | Focused database open/path helpers for first-party runtime and migration tests |
-  | `plugin-sdk/state-paths` | State path helpers | State and OAuth dir helpers |
+  | `plugin-sdk/state-paths` | State path helpers | Config, credentials, migration, and explicit operator-file path helpers; runtime state and caches belong in SQLite stores |
   | `plugin-sdk/routing` | Routing/session-key helpers | `resolveAgentRoute`, `buildAgentSessionKey`, `resolveDefaultAgentBoundAccountId`, session-key normalization helpers |
   | `plugin-sdk/status-helpers` | Channel status helpers | Channel/account status summary builders, runtime-state defaults, issue metadata helpers |
   | `plugin-sdk/target-resolver-runtime` | Target resolver helpers | Shared target resolver helpers |

@@ -92,7 +92,7 @@ ClawDock works with the same Docker config split described in [Docker](/install/
 
 - `<project>/.env` for Docker-specific values like image name, ports, and the gateway token
 - `~/.openclaw/.env` for env-backed provider keys and bot tokens
-- `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` for stored provider OAuth/API-key auth
+- `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>` for stored provider OAuth/API-key auth
 - `~/.openclaw/openclaw.json` for behavior config
 
 Use `clawdock-show-config` when you want to inspect the `.env` files and `openclaw.json` quickly. It redacts `.env` values in its printed output.

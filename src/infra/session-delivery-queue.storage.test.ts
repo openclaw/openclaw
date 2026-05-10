@@ -1,5 +1,3 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
@@ -56,25 +54,6 @@ describe("session-delivery queue storage", () => {
 
       await ackSessionDelivery(id, tempDir);
       expect(await loadPendingSessionDeliveries(tempDir)).toStrictEqual([]);
-    });
-  });
-
-  it("does not create legacy per-entry queue files", async () => {
-    await withTempDir({ prefix: "openclaw-session-delivery-" }, async (tempDir) => {
-      await enqueueSessionDelivery(
-        {
-          kind: "systemEvent",
-          sessionKey: "agent:main:main",
-          text: "restart complete",
-        },
-        tempDir,
-      );
-
-      await loadPendingSessionDeliveries(tempDir);
-
-      await expect(fs.access(path.join(tempDir, "session-delivery-queue"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
     });
   });
 });

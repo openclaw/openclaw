@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../../../config/paths.js";
 import { readJsonIfExists } from "../../../infra/json-files.js";
-import { coercePairingStateRecord, writePairingStateRecord } from "../../../infra/pairing-files.js";
+import { coercePairingStateRecord, writePairingStateRecord } from "../../../infra/pairing-state.js";
 
 export function resolveLegacyPairingPaths(baseDir: string | undefined, subdir: string) {
   const root = baseDir ?? resolveStateDir();

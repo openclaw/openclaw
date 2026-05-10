@@ -2,7 +2,6 @@ import type { SessionEntry, TranscriptEntry } from "openclaw/plugin-sdk/agent-ha
 import {
   buildSessionContext,
   loadSqliteSessionTranscriptEvents,
-  migrateSessionEntries,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 
@@ -30,7 +29,6 @@ export async function readCodexMirroredSessionHistoryMessages(
     if (firstEntry?.type !== "session" || typeof firstEntry.id !== "string") {
       return undefined;
     }
-    migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is SessionEntry => entry.type !== "session",
     );

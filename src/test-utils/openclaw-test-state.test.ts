@@ -166,7 +166,6 @@ describe("openclaw test state", () => {
         const profiles = loadPersistedAuthProfileStore(state.agentDir(), { env: state.env });
         expect(profiles?.version).toBe(1);
         expect(profiles?.profiles?.["openai:test"]?.provider).toBe("openai");
-        await expectPathMissing(path.join(state.agentDir(), "auth-profiles.json"));
       },
     );
   });

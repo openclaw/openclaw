@@ -61,7 +61,6 @@ function createHeartbeatConfig(params: {
 async function seedTelegramSession(agentId: string, cfg: OpenClawConfig) {
   await seedMainHeartbeatSession(agentId, cfg, {
     lastChannel: "telegram",
-    lastProvider: "telegram",
     lastTo: TELEGRAM_TARGET,
   });
 }

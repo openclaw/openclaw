@@ -53,8 +53,8 @@ async function createCompactionSessionFixture(entry: SessionEntry) {
   return { sessionKey, sessionStore };
 }
 
-async function rotateCompactionSessionId(params: { tempPrefix: string; newSessionId: string }) {
-  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), params.tempPrefix));
+async function rotateCompactionSessionId(newSessionId: string) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compact-rotate-"));
   tempDirs.push(tmp);
   vi.stubEnv("OPENCLAW_STATE_DIR", tmp);
   const sessionKey = "main";
@@ -69,7 +69,7 @@ async function rotateCompactionSessionId(params: { tempPrefix: string; newSessio
     sessionEntry: entry,
     sessionStore,
     sessionKey,
-    newSessionId: params.newSessionId,
+    newSessionId,
   });
   const stored = readStoredMainAgentSessionRows();
   return { stored, sessionKey };
@@ -544,27 +544,8 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].totalTokensFresh).toBe(true);
   });
 
-  it("updates sessionId without persisting transcript metadata when compaction rotates sessions", async () => {
-    const { stored, sessionKey } = await rotateCompactionSessionId({
-      tempPrefix: "openclaw-compact-rotate-",
-      newSessionId: "s2",
-    });
-    expect(stored[sessionKey].sessionId).toBe("s2");
-  });
-
-  it("drops legacy fork transcript filenames when compaction rotates sessions", async () => {
-    const { stored, sessionKey } = await rotateCompactionSessionId({
-      tempPrefix: "openclaw-compact-fork-",
-      newSessionId: "s2",
-    });
-    expect(stored[sessionKey].sessionId).toBe("s2");
-  });
-
-  it("drops legacy transcript metadata during compaction rotation", async () => {
-    const { stored, sessionKey } = await rotateCompactionSessionId({
-      tempPrefix: "openclaw-compact-unsafe-",
-      newSessionId: "s2",
-    });
+  it("updates sessionId when compaction rotates sessions", async () => {
+    const { stored, sessionKey } = await rotateCompactionSessionId("s2");
     expect(stored[sessionKey].sessionId).toBe("s2");
   });
 
@@ -584,7 +565,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(4);
   });
 
-  it("updates sessionId without persisting transcript metadata when newSessionId is provided", async () => {
+  it("updates sessionId when newSessionId is provided", async () => {
     const entry = {
       sessionId: "old-session-id",
       updatedAt: Date.now(),
@@ -605,27 +586,7 @@ describe("incrementCompactionCount", () => {
     expect(stored[sessionKey].compactionCount).toBe(2);
   });
 
-  it("does not persist transcript metadata when newSessionId matches current sessionId", async () => {
-    const entry = {
-      sessionId: "same-id",
-      updatedAt: Date.now(),
-      compactionCount: 0,
-    } as SessionEntry;
-    const { sessionKey, sessionStore } = await createCompactionSessionFixture(entry);
-
-    await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      newSessionId: "same-id",
-    });
-
-    const stored = readStoredMainAgentSessionRows();
-    expect(stored[sessionKey].sessionId).toBe("same-id");
-    expect(stored[sessionKey].compactionCount).toBe(1);
-  });
-
-  it("does not persist transcript handles when rotation keeps the same sessionId", async () => {
+  it("keeps the sessionId when rotation reuses the current session", async () => {
     const entry = {
       sessionId: "same-id",
       updatedAt: Date.now(),

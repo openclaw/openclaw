@@ -197,16 +197,17 @@ async function persistTextTurnTranscript(
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     sessionEntry: params.sessionEntry,
-    sessionStore: params.sessionStore,
     agentId: params.sessionAgentId,
     threadId: params.threadId,
   });
+  if (sessionEntry && params.sessionStore) {
+    params.sessionStore[params.sessionKey] = sessionEntry;
+  }
   if (promptText) {
     await appendSessionTranscriptMessage({
       agentId: params.sessionAgentId,
       sessionId: params.sessionId,
       cwd: params.sessionCwd,
-      config: params.config,
       message: {
         role: "user",
         content: promptText,
@@ -233,7 +234,6 @@ async function persistTextTurnTranscript(
         agentId: params.sessionAgentId,
         sessionId: params.sessionId,
         cwd: params.sessionCwd,
-        config: params.config,
         message: {
           role: "assistant",
           content: [{ type: "text", text: replyText }],
@@ -462,7 +462,7 @@ export function runAgentAttempt(params: {
         `cli session reset: provider=${sanitizeForLog(cliExecutionProvider)} reason=transcript-missing sessionKey=${params.sessionKey ?? params.sessionId}`,
       );
 
-      if (params.sessionKey && params.sessionStore) {
+      if (params.sessionKey) {
         params.sessionEntry =
           (await clearCliSessionEntry({
             provider: cliExecutionProvider,
@@ -520,8 +520,7 @@ export function runAgentAttempt(params: {
           err instanceof FailoverError &&
           err.reason === "session_expired" &&
           activeCliSessionBinding?.sessionId &&
-          params.sessionKey &&
-          params.sessionStore
+          params.sessionKey
         ) {
           log.warn(
             `CLI session expired, clearing from SQLite session row: provider=${sanitizeForLog(cliExecutionProvider)} sessionKey=${params.sessionKey}`,
@@ -535,12 +534,8 @@ export function runAgentAttempt(params: {
             })) ?? params.sessionEntry;
 
           return await runCliWithSession(undefined).then(async (result) => {
-            if (
-              result.meta.agentMeta?.cliSessionBinding?.sessionId &&
-              params.sessionKey &&
-              params.sessionStore
-            ) {
-              const entry = params.sessionStore[params.sessionKey];
+            if (result.meta.agentMeta?.cliSessionBinding?.sessionId && params.sessionKey) {
+              const entry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
               if (entry) {
                 const updatedEntry = { ...entry };
                 setCliSessionBinding(

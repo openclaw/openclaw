@@ -32,7 +32,7 @@ function storedIdentityFrom(identity: ReturnType<typeof loadOrCreateDeviceIdenti
 describe("legacy device identity migration", () => {
   it("imports legacy identity/device.json into SQLite and removes the source", async () => {
     await withStateDirEnv("openclaw-doctor-device-identity-", async ({ stateDir }) => {
-      const original = loadOrCreateDeviceIdentity(path.join(stateDir, "seed-device.json"));
+      const original = loadOrCreateDeviceIdentity({ key: "seed" });
       const identityPath = path.join(stateDir, "identity", "device.json");
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(
@@ -52,7 +52,7 @@ describe("legacy device identity migration", () => {
 
   it("imports a stale device id and lets runtime repair the stored row", async () => {
     await withStateDirEnv("openclaw-doctor-device-identity-", async ({ stateDir }) => {
-      const original = loadOrCreateDeviceIdentity(path.join(stateDir, "seed-device.json"));
+      const original = loadOrCreateDeviceIdentity({ key: "seed" });
       const identityPath = path.join(stateDir, "identity", "device.json");
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(

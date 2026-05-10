@@ -7,26 +7,25 @@ import {
 } from "./session-transcript-hit.js";
 
 describe("extractTranscriptStemFromSessionsMemoryHit", () => {
-  it("uses canonical SQLite-backed session memory paths", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("sessions/main/abc-uuid")).toBe("abc-uuid");
-  });
-
-  it("uses .md basename for QMD exports", () => {
-    expect(extractTranscriptStemFromSessionsMemoryHit("qmd/sessions/x/y/z.md")).toBe("z");
+  it("uses opaque SQLite-backed session memory keys", () => {
+    expect(extractTranscriptStemFromSessionsMemoryHit("transcript:main:abc-uuid")).toBe("abc-uuid");
   });
 });
 
 describe("extractTranscriptIdentityFromSessionsMemoryHit", () => {
-  it("preserves owner metadata for canonical SQLite-backed paths", () => {
-    expect(extractTranscriptIdentityFromSessionsMemoryHit("sessions/main/abc-uuid")).toEqual({
+  it("preserves owner metadata for SQLite-backed transcript keys", () => {
+    expect(extractTranscriptIdentityFromSessionsMemoryHit("transcript:main:abc-uuid")).toEqual({
       stem: "abc-uuid",
       ownerAgentId: "main",
     });
   });
 
-  it("does not invent owner metadata for basename-only QMD exports", () => {
-    expect(extractTranscriptIdentityFromSessionsMemoryHit("qmd/sessions/abc-uuid.md")).toEqual({
-      stem: "abc-uuid",
+  it("allows colons inside session ids", () => {
+    expect(
+      extractTranscriptIdentityFromSessionsMemoryHit("transcript:main:agent:main:abc"),
+    ).toEqual({
+      stem: "agent:main:abc",
+      ownerAgentId: "main",
     });
   });
 });

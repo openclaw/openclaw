@@ -256,12 +256,10 @@ describe("spawnSubagentDirect filename validation", () => {
     const deleteParams = deleteCall?.params as
       | {
           key?: string;
-          deleteTranscript?: boolean;
           emitLifecycleHooks?: boolean;
         }
       | undefined;
     expect(deleteParams?.key).toMatch(/^agent:main:subagent:/);
-    expect(deleteParams?.deleteTranscript).toBe(true);
     expect(deleteParams?.emitLifecycleHooks).toBe(false);
   });
 });

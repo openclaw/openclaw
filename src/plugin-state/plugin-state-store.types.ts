@@ -87,6 +87,6 @@ export type PluginStateStoreProbeStep = {
 
 export type PluginStateStoreProbeResult = {
   ok: boolean;
-  dbPath: string;
+  databasePath: string;
   steps: PluginStateStoreProbeStep[];
 };

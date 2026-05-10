@@ -21,7 +21,7 @@ An **agent** is a fully scoped brain with its own:
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```text
-~/.openclaw/agents/<agentId>/agent/auth-profiles.json
+~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>
 ```
 
 <Note>
@@ -130,7 +130,7 @@ This lets **multiple people** share one Gateway server while keeping their AI "b
 
 ## Cross-agent QMD memory search
 
-If one agent should search another agent's QMD session transcripts, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared transcript collections.
+If one agent should search another agent's QMD-indexed memory notes, add extra collections under `agents.list[].memorySearch.qmd.extraCollections`. Use `agents.defaults.memorySearch.qmd.extraCollections` only when every agent should inherit the same shared memory collections. Runtime session transcripts stay in SQLite and are not exported into QMD collections.
 
 ```json5
 {
@@ -139,7 +139,7 @@ If one agent should search another agent's QMD session transcripts, add extra co
       workspace: "~/workspaces/main",
       memorySearch: {
         qmd: {
-          extraCollections: [{ path: "~/agents/family/sessions", name: "family-sessions" }],
+          extraCollections: [{ path: "~/agents/family/memory", name: "family-memory" }],
         },
       },
     },
@@ -163,7 +163,7 @@ If one agent should search another agent's QMD session transcripts, add extra co
 }
 ```
 
-The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own transcript search set.
+The extra collection path can be shared across agents, but the collection name stays explicit when the path is outside the agent workspace. Paths inside the workspace remain agent-scoped so each agent keeps its own memory search set.
 
 ## One WhatsApp number, multiple people (DM split)
 

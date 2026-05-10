@@ -13,7 +13,7 @@ import type {
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
-  CronStoreFile,
+  CronStoreSnapshot,
 } from "../types.js";
 
 export type CronEvent = {
@@ -141,7 +141,7 @@ export type CronServiceDepsInternal = Omit<CronServiceDeps, "nowMs" | "storeKey"
 
 export type CronServiceState = {
   deps: CronServiceDepsInternal;
-  store: CronStoreFile | null;
+  store: CronStoreSnapshot | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
   op: Promise<unknown>;

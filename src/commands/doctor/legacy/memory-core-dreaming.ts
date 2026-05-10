@@ -3,17 +3,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
+  createDreamingSessionIngestionLineStorageEntry,
   createDreamingWorkspaceMapStorageEntry,
   createDreamingWorkspaceValueStorageEntry,
-  createDreamingSessionCorpusLineStorageEntry,
   MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
   MEMORY_CORE_PLUGIN_ID,
-  MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
+  MEMORY_CORE_SESSION_INGESTION_LINES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
+  resolveDreamingSessionIngestionRelativePath,
 } from "../../../memory-host-sdk/dreaming-state-store.js";
 import { resolveMemoryDreamingWorkspaces } from "../../../memory-host-sdk/dreaming.js";
 import type { MemoryHostEvent } from "../../../memory-host-sdk/events.js";
@@ -129,7 +130,7 @@ function upsertValueRow(params: {
   });
 }
 
-function upsertSessionCorpusLine(params: {
+function upsertSessionIngestionLine(params: {
   workspaceDir: string;
   relativePath: string;
   lineNumber: number;
@@ -137,7 +138,7 @@ function upsertSessionCorpusLine(params: {
   createdAt: number;
   env: NodeJS.ProcessEnv;
 }): void {
-  const row = createDreamingSessionCorpusLineStorageEntry({
+  const row = createDreamingSessionIngestionLineStorageEntry({
     workspaceDir: params.workspaceDir,
     relativePath: params.relativePath,
     lineNumber: params.lineNumber,
@@ -145,7 +146,7 @@ function upsertSessionCorpusLine(params: {
   });
   upsertPluginStateMigrationEntry({
     pluginId: MEMORY_CORE_PLUGIN_ID,
-    namespace: MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
+    namespace: MEMORY_CORE_SESSION_INGESTION_LINES_NAMESPACE,
     key: row.key,
     value: row.value,
     createdAt: params.createdAt,
@@ -419,13 +420,14 @@ export async function importLegacyMemoryCoreDreamingStateFilesToSqlite(params: {
           continue;
         }
         const sourcePath = path.join(sessionCorpusDir, entry.name);
-        const relativePath = path.posix.join("memory", ".dreams", "session-corpus", entry.name);
+        const day = entry.name.replace(/\.(?:md|txt)$/u, "");
+        const relativePath = resolveDreamingSessionIngestionRelativePath(day);
         const raw = await fs.readFile(sourcePath, "utf8");
         const lines =
           raw.length === 0 ? [] : raw.replace(/\r\n/g, "\n").replace(/\n$/u, "").split("\n");
         const createdAt = Date.now();
         for (const [index, line] of lines.entries()) {
-          upsertSessionCorpusLine({
+          upsertSessionIngestionLine({
             workspaceDir,
             relativePath,
             lineNumber: index + 1,

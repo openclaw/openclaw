@@ -2,16 +2,20 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { savePersistedAuthProfileSecretsStore } from "../agents/auth-profiles/persisted.js";
+import {
+  AUTH_PROFILE_STORE_KV_SCOPE,
+  authProfileStoreKey,
+  savePersistedAuthProfileSecretsStore,
+} from "../agents/auth-profiles/persisted.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
+import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { runSecretsAudit } from "./audit.js";
 
 type AuditFixture = {
   rootDir: string;
   stateDir: string;
   configPath: string;
-  legacyAuthProfilePath: string;
   agentDir: string;
   modelCatalogSource: string;
   envPath: string;
@@ -47,6 +51,12 @@ function writeAuthProfileStore(
     fixture.agentDir,
     { env: fixture.env },
   );
+}
+
+function deleteAuthProfileStore(fixture: AuditFixture): void {
+  deleteOpenClawStateKvJson(AUTH_PROFILE_STORE_KV_SCOPE, authProfileStoreKey(fixture.agentDir), {
+    env: fixture.env,
+  });
 }
 
 async function writeExecResolverShellScript(params: {
@@ -142,7 +152,6 @@ async function createAuditFixture(): Promise<AuditFixture> {
   const stateDir = path.join(rootDir, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
   const agentDir = path.join(stateDir, "agents", "main", "agent");
-  const legacyAuthProfilePath = path.join(agentDir, "auth-profiles.json");
   const modelCatalogSource = `stored model catalog: ${agentDir}`;
   const envPath = path.join(stateDir, ".env");
 
@@ -153,7 +162,6 @@ async function createAuditFixture(): Promise<AuditFixture> {
     rootDir,
     stateDir,
     configPath,
-    legacyAuthProfilePath,
     agentDir,
     modelCatalogSource,
     envPath,
@@ -294,7 +302,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
+    deleteAuthProfileStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env });
@@ -336,7 +344,7 @@ describe("secrets audit", () => {
         },
       ],
     });
-    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
+    deleteAuthProfileStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });
@@ -400,7 +408,7 @@ describe("secrets audit", () => {
       )}\n`,
       "utf8",
     );
-    await fs.rm(fixture.legacyAuthProfilePath, { force: true });
+    deleteAuthProfileStore(fixture);
     await fs.writeFile(fixture.envPath, "", "utf8");
 
     const report = await runSecretsAudit({ env: fixture.env, allowExec: true });

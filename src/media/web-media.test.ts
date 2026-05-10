@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveStateDir } from "../config/paths.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -18,7 +17,6 @@ const CANVAS_HOST_PATH = "/__openclaw__/canvas";
 
 let fixtureRoot = "";
 let tinyPngFile = "";
-let stateDir = "";
 let canvasPngFile = "";
 let workspaceDir = "";
 let workspacePngFile = "";
@@ -47,16 +45,7 @@ beforeAll(async () => {
   workspacePngFile = path.join(workspaceDir, "chart.png");
   await fs.mkdir(workspaceDir, { recursive: true });
   await fs.writeFile(workspacePngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
-  stateDir = resolveStateDir();
-  canvasPngFile = path.join(
-    stateDir,
-    "canvas",
-    "documents",
-    "cv_test",
-    "collection.media",
-    "tiny.png",
-  );
-  await fs.mkdir(path.dirname(canvasPngFile), { recursive: true });
+  canvasPngFile = path.join(fixtureRoot, "canvas-tiny.png");
   await fs.writeFile(canvasPngFile, Buffer.from(TINY_PNG_BASE64, "base64"));
   installCanvasMediaResolver();
 });
@@ -65,12 +54,6 @@ afterAll(async () => {
   resetPluginRuntimeStateForTest();
   if (fixtureRoot) {
     await fs.rm(fixtureRoot, { recursive: true, force: true });
-  }
-  if (stateDir) {
-    await fs.rm(path.join(stateDir, "canvas", "documents", "cv_test"), {
-      recursive: true,
-      force: true,
-    });
   }
 });
 

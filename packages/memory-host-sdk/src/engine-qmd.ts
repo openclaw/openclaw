@@ -3,9 +3,9 @@
 export { extractKeywords, isQueryStopWordToken } from "./host/query-expansion.js";
 export {
   buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
+  listSessionTranscriptScopesForAgent,
   readSessionTranscriptDeltaStats,
-  sessionSourceKeyForTranscript,
+  sessionTranscriptKeyForScope,
   type BuildSessionTranscriptEntryOptions,
   type SessionTranscriptEntry,
   type SessionTranscriptDeltaStats,

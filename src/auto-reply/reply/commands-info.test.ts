@@ -230,16 +230,26 @@ describe("info command handlers", () => {
     expect(statusReplyParams.parentSessionKey).toBe("discord:group:parent-room");
   });
 
-  it("does not route the legacy session path through /status", async () => {
+  it("passes session metadata through /status", async () => {
     const params = buildInfoParams("/status", {
       commands: { text: true },
       channels: { whatsapp: { allowFrom: ["*"] } },
     } as OpenClawConfig);
+    params.sessionEntry = {
+      sessionId: "status-session",
+      updatedAt: Date.now(),
+    } as HandleCommandsParams["sessionEntry"];
 
     const statusResult = await handleStatusCommand(params, true);
 
     expect(statusResult?.shouldContinue).toBe(false);
-    expect(vi.mocked(buildStatusReply).mock.calls[0]?.[0]).not.toHaveProperty("storePath");
+    expect(vi.mocked(buildStatusReply)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionEntry: expect.objectContaining({
+          sessionId: "status-session",
+        }),
+      }),
+    );
   });
 
   it("prefers the target session entry when routing /status", async () => {

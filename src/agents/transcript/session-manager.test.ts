@@ -19,10 +19,6 @@ type TranscriptScope = {
   sessionId: string;
 };
 
-function transcriptParentReference(scope: TranscriptScope): string {
-  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
-}
-
 function readSessionEntries(scope: TranscriptScope) {
   return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
 }
@@ -34,7 +30,7 @@ afterEach(() => {
 });
 
 describe("TranscriptSessionManager", () => {
-  it("exposes create, in-memory, list, continue, and fork through the contract value", async () => {
+  it("exposes explicit SQLite sessions through a named opener and in-memory sessions through the contract value", async () => {
     await useTempStateDir();
     const memory = SessionManager.inMemory("/tmp/memory-workspace");
     expect(memory.isPersisted()).toBe(false);
@@ -46,35 +42,17 @@ describe("TranscriptSessionManager", () => {
     });
     expect(memory.getLeafId()).toBe(memoryUserId);
 
-    const created = SessionManager.create("/tmp/workspace");
+    const created = openTranscriptSessionManagerForSession({
+      agentId: "main",
+      sessionId: "contract-session",
+      cwd: "/tmp/workspace",
+    });
     created.appendMessage({ role: "user", content: "persist me", timestamp: 2 });
     const sourceSessionId = created.getSessionId();
     expect(created.getTranscriptScope()).toEqual({
       agentId: "main",
       sessionId: sourceSessionId,
     });
-
-    const listed = await SessionManager.list("/tmp/workspace");
-    expect(listed.map((session) => session.id)).toContain(sourceSessionId);
-
-    const continued = SessionManager.continueRecent("/tmp/workspace");
-    expect(continued.getSessionId()).toBe(sourceSessionId);
-
-    const forked = SessionManager.forkFromSession({
-      agentId: "main",
-      sessionId: sourceSessionId,
-      targetCwd: "/tmp/forked-workspace",
-    });
-    expect(forked.getHeader()).toMatchObject({
-      cwd: "/tmp/forked-workspace",
-      parentSession: transcriptParentReference({
-        agentId: "main",
-        sessionId: sourceSessionId,
-      }),
-    });
-    expect(forked.buildSessionContext().messages).toMatchObject([
-      { role: "user", content: "persist me" },
-    ]);
   });
 
   it("opens sqlite transcripts by agent and session scope", async () => {
@@ -124,90 +102,6 @@ describe("TranscriptSessionManager", () => {
         message: { role: "user", content: "seed" },
       },
     ]);
-  });
-
-  it("creates, branches, lists, and forks default sessions in sqlite", async () => {
-    await useTempStateDir();
-    const sessionManager = SessionManager.create("/tmp/sqlite-workspace");
-    const sessionId = sessionManager.getSessionId();
-
-    const userId = sessionManager.appendMessage({
-      role: "user",
-      content: "sqlite default",
-      timestamp: 3,
-    });
-    const branchScope = sessionManager.createBranchedSession(userId);
-    if (!branchScope) {
-      throw new Error("expected branched session");
-    }
-
-    const listed = await SessionManager.list("/tmp/sqlite-workspace");
-    expect(listed.map((session) => session.id)).toContain(sessionManager.getSessionId());
-
-    const forked = SessionManager.forkFromSession({
-      agentId: "main",
-      sessionId,
-      targetCwd: "/tmp/sqlite-fork",
-    });
-    expect(forked.getHeader()).toMatchObject({
-      cwd: "/tmp/sqlite-fork",
-      parentSession: transcriptParentReference({
-        agentId: "main",
-        sessionId,
-      }),
-    });
-  });
-
-  it("allocates a fresh sqlite session when starting a new persisted session", async () => {
-    await useTempStateDir();
-    const firstScope = { agentId: "main", sessionId: "first-session" };
-    const sessionManager = openTranscriptSessionManagerForSession({
-      ...firstScope,
-      cwd: "/tmp/workspace",
-    });
-    sessionManager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-
-    const secondScope = sessionManager.newSession({ id: "second-session" });
-    sessionManager.appendMessage({ role: "user", content: "second", timestamp: 2 });
-
-    expect(secondScope).toEqual({ agentId: "main", sessionId: "second-session" });
-    expect(readSessionEntries(firstScope).map((entry) => (entry as { id?: string }).id)).toEqual([
-      "first-session",
-      expect.any(String),
-    ]);
-    expect(readSessionEntries({ agentId: "main", sessionId: "second-session" })).toMatchObject([
-      { type: "session", id: "second-session" },
-      { type: "message", message: { role: "user", content: "second" } },
-    ]);
-  });
-
-  it("preserves non-main agent scope for sqlite branches and forks", async () => {
-    await useTempStateDir();
-    const scope = {
-      agentId: "qa",
-      sessionId: "qa-source-session",
-    };
-    const sessionManager = openTranscriptSessionManagerForSession({
-      ...scope,
-      cwd: "/tmp/qa-workspace",
-    });
-    const userId = sessionManager.appendMessage({
-      role: "user",
-      content: "qa source",
-      timestamp: 4,
-    });
-
-    const branchScope = sessionManager.createBranchedSession(userId);
-    expect(branchScope).toMatchObject({ agentId: "qa" });
-
-    const forked = SessionManager.forkFromSession({
-      ...scope,
-      targetCwd: "/tmp/qa-fork",
-    });
-    expect(forked.getHeader()).toMatchObject({
-      cwd: "/tmp/qa-fork",
-    });
-    expect(readSessionEntries({ agentId: "qa", sessionId: forked.getSessionId() })).toHaveLength(2);
   });
 
   it("persists initial user messages synchronously before the first assistant message", async () => {
@@ -262,7 +156,132 @@ describe("TranscriptSessionManager", () => {
     ]);
   });
 
-  it("removes persisted tail entries through SQLite instead of rewriting JSONL", async () => {
+  it("selects message parents inside SQLite for stale persisted managers", async () => {
+    await useTempStateDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "session-atomic-parent",
+    };
+    const first = openTranscriptSessionManagerForSession({
+      ...scope,
+      cwd: "/tmp/workspace",
+    });
+    const rootId = first.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const second = openTranscriptSessionManagerForSession(scope);
+
+    const firstReplyId = first.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "first" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 2,
+    });
+    const staleReplyId = second.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "stale manager" }],
+      api: "anthropic-messages",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      usage: {
+        input: 1,
+        output: 1,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 2,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 3,
+    });
+
+    const messages = readSessionEntries(scope).filter(
+      (entry): entry is { type: "message"; id: string; parentId: string | null } =>
+        Boolean(
+          entry && typeof entry === "object" && (entry as { type?: unknown }).type === "message",
+        ),
+    );
+    expect(messages.map((entry) => [entry.id, entry.parentId])).toEqual([
+      [rootId, null],
+      [firstReplyId, rootId],
+      [staleReplyId, firstReplyId],
+    ]);
+  });
+
+  it("deduplicates persisted message appends by SQLite idempotency key", async () => {
+    await useTempStateDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "session-idempotent-manager",
+    };
+    const sessionManager = openTranscriptSessionManagerForSession({
+      ...scope,
+      cwd: "/tmp/workspace",
+    });
+
+    const firstId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+      idempotencyKey: "same-message",
+    });
+    const secondId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello again",
+      timestamp: 2,
+      idempotencyKey: "same-message",
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(
+      readSessionEntries(scope).filter(
+        (entry) =>
+          Boolean(entry && typeof entry === "object") &&
+          (entry as { type?: unknown }).type === "message",
+      ),
+    ).toHaveLength(1);
+  });
+
+  it("selects metadata-entry parents inside SQLite for stale persisted managers", async () => {
+    await useTempStateDir();
+    const scope = {
+      agentId: "main",
+      sessionId: "session-atomic-metadata-parent",
+    };
+    const first = openTranscriptSessionManagerForSession({
+      ...scope,
+      cwd: "/tmp/workspace",
+    });
+    const rootId = first.appendMessage({ role: "user", content: "root", timestamp: 1 });
+    const second = openTranscriptSessionManagerForSession(scope);
+
+    const thinkingId = first.appendThinkingLevelChange("high");
+    const modelId = second.appendModelChange("openai", "gpt-5.5");
+
+    const entries = readSessionEntries(scope).filter(
+      (entry): entry is { id: string; parentId?: string | null; type: string } =>
+        Boolean(
+          entry && typeof entry === "object" && typeof (entry as { id?: unknown }).id === "string",
+        ),
+    );
+    expect(entries.map((entry) => [entry.type, entry.id, entry.parentId])).toEqual([
+      ["session", "session-atomic-metadata-parent", undefined],
+      ["message", rootId, null],
+      ["thinking_level_change", thinkingId, rootId],
+      ["model_change", modelId, thinkingId],
+    ]);
+  });
+
+  it("removes persisted tail entries by replacing SQLite transcript rows", async () => {
     await useTempStateDir();
     const scope = {
       agentId: "main",

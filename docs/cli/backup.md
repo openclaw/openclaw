@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw backup` (create local backup archives)"
+summary: "CLI reference for `openclaw backup` (create, verify, and restore local backup archives)"
 read_when:
   - You want a first-class backup archive for local OpenClaw state
   - You want to preview which paths would be included before reset or uninstall
@@ -8,16 +8,19 @@ title: "Backup"
 
 # `openclaw backup`
 
-Create a local backup archive for OpenClaw state, config, auth profiles, channel/provider credentials, sessions, and optionally workspaces.
+Create, verify, or restore a local backup archive for OpenClaw state, config,
+channel/provider credentials, sessions, auth profiles, and optionally
+workspaces.
 
 ```bash
 openclaw backup create
 openclaw backup create --output ~/Backups
 openclaw backup create --dry-run --json
-openclaw backup create --verify
+openclaw backup create --no-verify
 openclaw backup create --no-include-workspace
 openclaw backup create --only-config
 openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
+openclaw backup restore ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz --dry-run
 ```
 
 ## Notes
@@ -28,8 +31,10 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 - If the current working directory is inside a backed-up source tree, OpenClaw falls back to your home directory for the default archive location.
 - Existing archive files are never overwritten.
 - Output paths inside the source state/workspace trees are rejected to avoid self-inclusion.
-- `openclaw backup verify <archive>` validates that the archive contains exactly one root manifest, rejects traversal-style archive paths, checks that every manifest-declared payload exists in the tarball, and runs SQLite integrity checks for manifest-declared database snapshots.
-- `openclaw backup create --verify` runs that validation immediately after writing the archive.
+- `openclaw backup create` validates the written archive by default: it requires exactly one root manifest, rejects traversal-style archive paths, checks that every manifest-declared payload exists in the tarball, and runs SQLite integrity checks for manifest-declared database snapshots.
+- `openclaw backup create --no-verify` skips the post-write archive validation pass.
+- `openclaw backup restore <archive> --dry-run` validates the archive and previews the recorded source paths that would be replaced.
+- `openclaw backup restore <archive> --yes` restores the archive to the recorded source paths. Restore validates the archive before extracting, then replaces each manifest asset from the verifier-normalized payload.
 - `openclaw backup create --only-config` backs up just the active JSON config file.
 
 ## What gets backed up
@@ -41,9 +46,8 @@ openclaw backup verify ./2026-03-09T00-00-00.000Z-openclaw-backup.tar.gz
 - The resolved `credentials/` directory when it exists outside the state directory
 - Workspace directories discovered from the current config, unless you pass `--no-include-workspace`
 
-Model auth profiles are already part of the state directory under
-`agents/<agentId>/agent/auth-profiles.json`, so they are normally covered by the
-state backup entry.
+Model auth profiles are stored in SQLite under the state directory, so they are
+covered by the database snapshots in the state backup entry.
 
 If you use `--only-config`, OpenClaw skips state, credentials-directory, and workspace discovery and archives only the active config file path.
 
@@ -91,7 +95,7 @@ Practical limits come from the local machine and destination filesystem:
 
 - Available space for the temporary archive write plus the final archive
 - Time to walk large workspace trees and compress them into a `.tar.gz`
-- Time to rescan the archive if you use `openclaw backup create --verify` or run `openclaw backup verify`
+- Time to rescan the archive after `openclaw backup create`, unless you pass `--no-verify`
 - Filesystem behavior at the destination path. OpenClaw prefers a no-overwrite hard-link publish step and falls back to exclusive copy when hard links are unsupported
 
 Large workspaces are usually the main driver of archive size. If you want a smaller or faster backup, use `--no-include-workspace`.

@@ -29,7 +29,6 @@ describe("runHeartbeatOnce", () => {
 
         await seedMainHeartbeatSession(agentId, cfg, {
           lastChannel: "telegram",
-          lastProvider: "telegram",
           lastTo: "1644620762",
         });
 

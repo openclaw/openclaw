@@ -7,7 +7,7 @@ import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = ["src", "extensions", "packages", "ui", "apps"];
 const bridgeContractRoots = [...sourceRoots, "test"];
-const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs", ".swift"]);
+const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs", ".swift", ".kt"]);
 
 const legacyStoreMarkers = [
   { label: "sessions.json", pattern: /\bsessions\.json\b/u },
@@ -103,6 +103,7 @@ const legacyStoreMarkers = [
   { label: "File Transfer audit JSONL", pattern: /\bfile-transfer\.jsonl\b/u },
   { label: "Config audit JSONL", pattern: /\bconfig-audit\.jsonl\b/u },
   { label: "command logger text log", pattern: /\bcommands\.log\b/u },
+  { label: "Android camera debug log", pattern: /\bcamera_debug\.log\b/u },
   { label: "Config health JSON", pattern: /\bconfig-health\.json\b/u },
   { label: "macOS port guardian JSON", pattern: /\bport-guard\.json\b/u },
   {
@@ -137,6 +138,10 @@ const legacyStoreMarkers = [
   { label: "installed plugin index JSON", pattern: /\bplugins[/\\]installs\.json\b/u },
   { label: "QQBot known users JSON", pattern: /\bknown-users\.json\b/u },
   { label: "QQBot ref-index JSONL", pattern: /\bref-index\.jsonl\b/u },
+  {
+    label: "QQBot credential backup JSON",
+    pattern: /\bcredential-backup(?:-[A-Za-z0-9._-]+)?\.json\b/u,
+  },
   { label: "BlueBubbles catchup cursor JSON", pattern: /\bbluebubbles[/\\]catchup\b/u },
   { label: "BlueBubbles inbound dedupe JSON", pattern: /\bbluebubbles[/\\]inbound-dedupe\b/u },
   { label: "Telegram sticker cache JSON", pattern: /\bsticker-cache\.json\b/u },
@@ -164,6 +169,7 @@ const legacyStoreMarkers = [
   { label: "Microsoft Teams delegated token JSON", pattern: /\bmsteams-delegated\.json\b/u },
   { label: "Microsoft Teams feedback learnings JSON", pattern: /\.learnings\.json\b/u },
   { label: "Matrix sync store JSON", pattern: /\bbot-storage\.json\b/u },
+  { label: "Matrix QA sync store JSON", pattern: /\bsync-store\.json\b/u },
   { label: "Matrix storage metadata JSON", pattern: /\bstorage-meta\.json\b/u },
   { label: "Matrix inbound dedupe JSON", pattern: /\binbound-dedupe\.json\b/u },
   { label: "Matrix startup verification JSON", pattern: /\bstartup-verification\.json\b/u },
@@ -187,10 +193,17 @@ const legacyStoreMarkers = [
   { label: "sandbox registry JSON", pattern: /\b(?:containers|browsers)\.json\b/u },
   { label: "native hook relay bridge JSON", pattern: /\bopenclaw-native-hook-relays\b/u },
   { label: "plugin-state sidecar SQLite", pattern: /\bplugin-state[/\\]state\.sqlite\b/u },
+  { label: "runtime state sidecar SQLite", pattern: /\bopenclaw-state\.sqlite\b/u },
   { label: "task registry sidecar SQLite", pattern: /\btasks[/\\]runs\.sqlite\b/u },
   {
     label: "Task Flow registry sidecar SQLite",
     pattern: /\btasks[/\\]flows[/\\]registry\.sqlite\b/u,
+  },
+  { label: "debug proxy blob directory env", pattern: /\bOPENCLAW_DEBUG_PROXY_BLOB_DIR\b/u },
+  { label: "debug proxy sidecar schema", pattern: /\bPROXY_CAPTURE_SCHEMA_SQL\b/u },
+  {
+    label: "debug proxy sidecar SQLite schema file",
+    pattern: /\bsrc[/\\]proxy-capture[/\\]schema\.sql\b/u,
   },
 ];
 
@@ -198,6 +211,8 @@ const writeApiPattern =
   /\b(?:appendFile|appendFileSync|appendRegularFile|appendRegularFileSync|createWriteStream|getQueuedFileWriter|openSync|rename|renameSync|rm|rmSync|unlink|unlinkSync|writeFile|writeFileSync|writeJson|writeJsonAtomic)\b/u;
 const legacySessionStoreApiPattern =
   /\b(?:loadSessionStore|saveSessionStore|updateSessionStore|updateSessionStoreEntry|resolveStorePath|resolveLegacySessionStorePath)\b/u;
+const legacyTranscriptApiPattern =
+  /\b(?:parseSessionEntries|migrateSessionEntries|migrateLegacySessionEntries|parseTranscriptEntries|selectActivePath|hasBrokenPromptRewriteBranch|migrateSessionTranscriptFileToSqlite)\b/u;
 const forbiddenRuntimeLocatorContractMarkers = [
   {
     label: "transcript locator runtime contract",
@@ -210,6 +225,47 @@ const forbiddenRuntimeLocatorContractMarkers = [
   {
     label: "session transcript file runtime contract",
     pattern: /\bsessionFile\b/u,
+  },
+  {
+    label: "trajectory runtime locator contract",
+    pattern: /\bruntimeLocator\b/u,
+  },
+  {
+    label: "file-backed session manager opener",
+    pattern: /\bSessionManager\.open\(/u,
+  },
+  {
+    label: "legacy SessionManager SQLite opener facade",
+    pattern:
+      /\b(?:SessionManager|TranscriptSessionManager)\.(?:create|openForSession|continueRecent|forkFromSession|list|listAll)\b/u,
+  },
+  {
+    label: "session-manager transcript listing facade",
+    pattern: /\b(?:SessionManager|TranscriptSessionManager)\.listAll\b/u,
+  },
+  {
+    label: "session-manager transcript fork facade",
+    pattern: /\b(?:SessionManager|TranscriptSessionManager)\.forkFromSession\b/u,
+  },
+  {
+    label: "session-manager mutable new-session facade",
+    pattern: /\b(?:SessionManager|TranscriptSessionManager)\.newSession\b/u,
+  },
+  {
+    label: "session-manager branch-session facade",
+    pattern: /\b(?:SessionManager|TranscriptSessionManager)\.createBranchedSession\b/u,
+  },
+  {
+    label: "SessionManager-based tool result truncation",
+    pattern: /\btruncateOversizedToolResultsInSessionManager\b/u,
+  },
+  {
+    label: "SessionManager tail removal bridge",
+    pattern: /\bremoveSessionManagerTailEntries\b/u,
+  },
+  {
+    label: "session store path runtime contract",
+    pattern: /\bstorePath\b/u,
   },
   {
     label: "session accounting transcript locator output",
@@ -235,31 +291,151 @@ const forbiddenRuntimeLocatorContractMarkers = [
     label: "session JSONL export button",
     pattern: /\bdownload-json-btn\b/u,
   },
+  {
+    label: "file-shaped memory session transcript helper",
+    pattern: /\blistSessionTranscriptsForAgent\b/u,
+  },
+  {
+    label: "file-shaped memory session source-key helper",
+    pattern: /\bsessionSourceKeyFor(?:Scope|Transcript)\b/u,
+  },
+  {
+    label: "pi-mono raw stream diagnostics env",
+    pattern: /\bPI_RAW_STREAM(?:_PATH)?\b/u,
+  },
+  {
+    label: "pi-mono raw stream diagnostics JSONL",
+    pattern: /\braw-openai-completions\.jsonl\b/u,
+  },
+  {
+    label: "Android camera debug file contract",
+    pattern: /\bcamera_debug\.log\b/u,
+  },
+  {
+    label: "Android debug log temp file contract",
+    pattern: /\bdebug_logs\.txt\b/u,
+  },
+  {
+    label: "Android notification recent packages SharedPreferences key",
+    pattern: /\bnotifications\.(?:forwarding\.)?recentPackages\b/u,
+  },
+  {
+    label: "memory index file-path resolved contract",
+    pattern: /\b(?:settings|resolvedMemory)\.store\.path\b/u,
+  },
+  {
+    label: "workspace setup fake state path",
+    pattern: /\.openclaw[/\\]setup-state\b/u,
+  },
+  {
+    label: "ClawHub runtime lockfile abstraction",
+    pattern: /\bClawHubSkillsLockfile\b/u,
+  },
+  {
+    label: "ClawHub runtime origin file abstraction",
+    pattern: /\bClawHubSkillOrigin\b/u,
+  },
+];
+
+const forbiddenBridgeFixtureMarkers = [
+  {
+    label: "runtime state sidecar SQLite fixture",
+    pattern: /\bopenclaw-state\.sqlite\b/u,
+  },
+  {
+    label: "plugin-state sidecar-shaped SQLite helper",
+    pattern:
+      /\b(?:resolvePluginStateSqlitePath|closePluginStateSqliteStore|clearPluginStateSqliteStoreForTests|seedPluginStateSqliteEntriesForTests)\b/u,
+  },
+  {
+    label: "task registry sidecar-shaped SQLite helper",
+    pattern:
+      /\b(?:resolveTaskRegistrySqlitePath|resolveTaskFlowRegistrySqlitePath|closeTaskRegistrySqliteStore|closeTaskFlowRegistrySqliteStore)\b/u,
+  },
+];
+
+const forbiddenGenericMemoryIndexSqlMarkers = [
+  {
+    label: "generic memory vector table",
+    pattern: /\bchunks_vec\b/u,
+  },
+  {
+    label: "generic memory FTS table",
+    pattern: /\bchunks_fts\b/u,
+  },
+  {
+    label: "generic memory embedding cache table",
+    pattern: /\bembedding_cache\b/u,
+  },
+  {
+    label: "generic memory meta table SQL",
+    pattern:
+      /\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|FROM|INTO|UPDATE|DELETE\s+FROM)\s+meta\b/iu,
+  },
+  {
+    label: "generic memory files table SQL",
+    pattern:
+      /\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|FROM|INTO|UPDATE|DELETE\s+FROM)\s+files\b/iu,
+  },
+  {
+    label: "generic memory chunks table SQL",
+    pattern:
+      /\b(?:CREATE\s+TABLE(?:\s+IF\s+NOT\s+EXISTS)?|FROM|JOIN|INTO|UPDATE|DELETE\s+FROM)\s+chunks\b/iu,
+  },
+];
+
+const forbiddenRootDoctorLegacyModuleMarkers = [
+  {
+    label: "root doctor SQLite state importer module",
+    pattern:
+      /(?:^|[/\\])doctor-sqlite-state(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-sqlite-state\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor cron importer module",
+    pattern:
+      /(?:^|[/\\])doctor-cron(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-cron\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor sandbox registry importer module",
+    pattern:
+      /(?:^|[/\\])doctor-sandbox-registry-migration(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-sandbox-registry-migration\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor state migrations facade",
+    pattern:
+      /(?:^|[/\\])doctor-state-migrations\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-state-migrations\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor legacy config module",
+    pattern:
+      /(?:^|[/\\])doctor-legacy-config(?:\.migrations)?(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-legacy-config\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor legacy OAuth repair module",
+    pattern:
+      /(?:^|[/\\])doctor-auth-legacy-oauth(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-auth-legacy-oauth\.js(?:['"`])/u,
+  },
 ];
 
 const allowedExactPaths = new Set([
-  "extensions/discord/src/state-migrations.ts",
-  "extensions/feishu/src/state-migrations.ts",
-  "extensions/imessage/src/state-migrations.ts",
-  "extensions/matrix/src/state-migrations.ts",
-  "extensions/matrix/src/legacy-state.ts",
+  "extensions/discord/src/doctor-legacy-state.ts",
+  "extensions/feishu/src/doctor-legacy-state.ts",
+  "extensions/imessage/src/doctor-legacy-state.ts",
+  "extensions/matrix/src/doctor-legacy-state.ts",
+  "extensions/matrix/src/doctor-state-imports.ts",
   "extensions/memory-wiki/src/digest-state-migration.ts",
   "extensions/memory-wiki/src/source-sync-state-migration.ts",
   "extensions/memory-wiki/src/source-sync-migration.ts",
-  "extensions/msteams/src/state-migrations.ts",
-  "extensions/nostr/src/state-migrations.ts",
-  "extensions/skill-workshop/src/state-migrations.ts",
-  "extensions/qqbot/src/state-migrations.ts",
-  "extensions/telegram/src/state-migrations.ts",
-  "src/trajectory/export.ts",
+  "extensions/msteams/src/doctor-legacy-state.ts",
+  "extensions/nostr/src/doctor-legacy-state.ts",
+  "extensions/skill-workshop/src/doctor-legacy-state.ts",
+  "extensions/qqbot/src/doctor-legacy-state.ts",
+  "extensions/telegram/src/doctor-legacy-state.ts",
+  "extensions/whatsapp/src/doctor-legacy-state.ts",
   "extensions/memory-wiki/src/log-migration.ts",
 ]);
 
-const allowedPrefixes = [
-  "src/commands/doctor",
-  "src/commands/export-trajectory",
-  "src/commands/migrate",
-];
+const allowedPrefixes = ["src/commands/doctor", "src/commands/export-trajectory"];
 
 function toPosixPath(value) {
   return value.split(path.sep).join("/");
@@ -318,7 +494,7 @@ async function collectSourceFiles(root, options = {}) {
       ) {
         continue;
       }
-      files.push(...(await collectSourceFiles(entryPath)));
+      files.push(...(await collectSourceFiles(entryPath, options)));
       continue;
     }
     if (!entry.isFile() || !sourceExtensions.has(path.extname(entry.name))) {
@@ -352,6 +528,15 @@ function findViolations(content, relativePath) {
       });
     }
   }
+  if (legacyTranscriptApiPattern.test(content)) {
+    for (const match of content.matchAll(new RegExp(legacyTranscriptApiPattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: "legacy transcript JSONL API",
+      });
+    }
+  }
   if (writeApiPattern.test(content)) {
     for (const marker of legacyStoreMarkers) {
       for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
@@ -364,6 +549,15 @@ function findViolations(content, relativePath) {
     }
   }
   for (const marker of forbiddenRuntimeLocatorContractMarkers) {
+    for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
+  for (const marker of forbiddenGenericMemoryIndexSqlMarkers) {
     for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
       violations.push({
         path: relativePath,
@@ -386,6 +580,30 @@ function findBridgeContractViolations(content, relativePath) {
       });
     }
   }
+  for (const marker of forbiddenBridgeFixtureMarkers) {
+    for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
+  return violations;
+}
+
+function findRootDoctorLegacyModuleViolations(content, relativePath) {
+  const checkedText = `${relativePath}\n${content}`;
+  const violations = [];
+  for (const marker of forbiddenRootDoctorLegacyModuleMarkers) {
+    for (const match of checkedText.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(checkedText, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
   return violations;
 }
 
@@ -397,6 +615,7 @@ async function main() {
   for (const file of runtimeFiles) {
     const content = await fs.readFile(file.absolutePath, "utf8");
     violations.push(...findViolations(content, file.relativePath));
+    violations.push(...findRootDoctorLegacyModuleViolations(content, file.relativePath));
   }
   const testFiles = (
     await Promise.all(
@@ -410,6 +629,7 @@ async function main() {
   for (const file of testFiles) {
     const content = await fs.readFile(file.absolutePath, "utf8");
     violations.push(...findBridgeContractViolations(content, file.relativePath));
+    violations.push(...findRootDoctorLegacyModuleViolations(content, file.relativePath));
   }
 
   if (violations.length === 0) {

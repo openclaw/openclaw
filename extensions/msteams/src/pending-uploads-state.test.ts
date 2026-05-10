@@ -100,9 +100,6 @@ describe("msteams pending uploads (sqlite-backed)", () => {
       { env },
     );
 
-    // Confirm the old JSON sidecar is no longer written.
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    expect(fs.existsSync(storePath)).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(true);
 
     // Second "process": reader using the same state dir
@@ -174,15 +171,6 @@ describe("msteams pending uploads (sqlite-backed)", () => {
     await setPendingUploadActivityIdState("upload-a", "activity-xyz", { env });
     const loaded = await getPendingUploadState("upload-a", { env });
     expect(loaded?.consentCardActivityId).toBe("activity-xyz");
-  });
-
-  it("ignores leftover legacy JSON files at runtime", async () => {
-    const stateDir = await makeTempStateDir();
-    const env = makeEnv(stateDir);
-    const storePath = path.join(stateDir, "msteams-pending-uploads.json");
-    await fs.promises.writeFile(storePath, "not valid json", "utf-8");
-
-    expect(await getPendingUploadState("anything", { env })).toBeUndefined();
   });
 });
 

@@ -43,6 +43,13 @@ async function makeTestState(): Promise<OpenClawTestState> {
   return state;
 }
 
+function writeLegacyAuthProfiles(state: OpenClawTestState, store: unknown): string {
+  const authPath = path.join(state.agentDir(), "auth-profiles.json");
+  fs.mkdirSync(path.dirname(authPath), { recursive: true });
+  fs.writeFileSync(authPath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
+  return authPath;
+}
+
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
   for (const state of states.splice(0)) {
@@ -59,7 +66,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         baseUrl: "http://10.0.2.2:11434/v1",
       },
     };
-    const authPath = await state.writeLegacyAuthProfiles(legacy);
+    const authPath = writeLegacyAuthProfiles(state, legacy);
 
     const result = await maybeRepairLegacyFlatAuthProfileStores({
       cfg: {},
@@ -98,7 +105,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         },
       },
     };
-    const authPath = await state.writeLegacyAuthProfiles(legacy);
+    const authPath = writeLegacyAuthProfiles(state, legacy);
 
     const result = await maybeRepairLegacyFlatAuthProfileStores({
       cfg: {},
@@ -199,7 +206,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         apiKey: "sk-openai",
       },
     };
-    const authPath = await state.writeLegacyAuthProfiles(legacy);
+    const authPath = writeLegacyAuthProfiles(state, legacy);
 
     const result = await maybeRepairLegacyFlatAuthProfileStores({
       cfg: {},
@@ -228,7 +235,7 @@ describe("maybeRepairLegacyFlatAuthProfileStores", () => {
         },
       },
     };
-    const authPath = await state.writeLegacyAuthProfiles(legacy);
+    const authPath = writeLegacyAuthProfiles(state, legacy);
     const cfg = {};
 
     const result = await maybeRepairLegacyFlatAuthProfileStores({

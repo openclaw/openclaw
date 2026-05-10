@@ -79,26 +79,26 @@ describe("topic-name-cache", () => {
     expect(getTopicName("-100123", "42")).toBe("StringKeys");
   });
 
-  it("evicts the oldest entry when cache exceeds 2048", () => {
-    for (let i = 0; i < 2049; i++) {
+  it("evicts the oldest entry when cache exceeds the SQLite state budget", () => {
+    for (let i = 0; i < 901; i++) {
       updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicNameCacheSize()).toBe(900);
     expect(getTopicName(-100000, 0)).toBeUndefined();
-    expect(getTopicName(-100000, 2048)).toBe("Topic 2048");
+    expect(getTopicName(-100000, 900)).toBe("Topic 900");
   });
 
   it("refreshes recency on read so active topics survive eviction", async () => {
     vi.useFakeTimers();
     updateTopicName(-100000, 1, { name: "Active" });
     await vi.advanceTimersByTimeAsync(10);
-    for (let i = 2; i <= 2048; i++) {
+    for (let i = 2; i <= 900; i++) {
       updateTopicName(-100000, i, { name: `Topic ${i}` });
     }
     getTopicName(-100000, 1);
     updateTopicName(-100000, 9999, { name: "Newcomer" });
     expect(getTopicName(-100000, 1)).toBe("Active");
-    expect(topicNameCacheSize()).toBe(2048);
+    expect(topicNameCacheSize()).toBe(900);
   });
 
   it("reloads persisted entries from plugin state", () => {

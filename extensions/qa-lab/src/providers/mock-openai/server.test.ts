@@ -1511,7 +1511,7 @@ describe("qa mock openai server", () => {
             output: JSON.stringify({
               results: [
                 {
-                  path: "sessions/main/qa-session-memory-ranking",
+                  path: "transcript:main:qa-session-memory-ranking",
                   startLine: 2,
                   endLine: 3,
                 },

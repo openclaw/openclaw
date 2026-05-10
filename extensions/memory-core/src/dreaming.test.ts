@@ -2294,7 +2294,7 @@ describe("short-term dreaming trigger", () => {
 
   it("repairs recall artifacts before dreaming promotion runs", async () => {
     const logger = createLogger();
-    const workspaceDir = await createTempWorkspace("memory-dreaming-repair-");
+    const workspaceDir = await createTempWorkspace("memory-dreaming-recall-");
     await writeDailyMemoryNote(workspaceDir, "2026-04-03", [
       "Move backups to S3 Glacier and sync router failover notes.",
       "Keep router recovery docs current.",

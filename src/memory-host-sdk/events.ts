@@ -136,7 +136,3 @@ export async function readMemoryHostEvents(params: {
   const limit = Math.max(0, Math.floor(params.limit as number));
   return limit === 0 ? [] : events.slice(-limit);
 }
-
-export function renderMemoryHostEventsJsonl(events: readonly MemoryHostEvent[]): string {
-  return events.length === 0 ? "" : `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
-}

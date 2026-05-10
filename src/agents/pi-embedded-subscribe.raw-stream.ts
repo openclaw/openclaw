@@ -16,5 +16,5 @@ export function appendRawStream(payload: Record<string, unknown>) {
   getStateDiagnosticWriter(rawStreamStateWriters, {
     label: RAW_STREAM_SQLITE_LABEL,
     scope: RAW_STREAM_SQLITE_SCOPE,
-  }).write(`${JSON.stringify(payload)}\n`);
+  }).write(payload);
 }

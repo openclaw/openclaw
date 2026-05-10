@@ -7,7 +7,7 @@ export type SessionHeader = {
   id: string;
   timestamp: string;
   cwd: string;
-  parentSession?: string;
+  parentTranscriptScope?: SessionTranscriptScope;
 };
 
 export type SessionEntryBase = {
@@ -101,33 +101,17 @@ export type SessionContext = {
   model: { provider: string; modelId: string } | null;
 };
 
-export type SessionInfo = {
-  id: string;
-  transcriptScope: SessionTranscriptScope;
-  cwd: string;
-  name?: string;
-  parentSession?: string;
-  created: Date;
-  modified: Date;
-  messageCount: number;
-  firstMessage: string;
-  allMessagesText: string;
-};
-
 export type SessionTranscriptScope = {
   agentId: string;
   sessionId: string;
 };
 
-export type SessionListProgress = (loaded: number, total: number) => void;
-
-type PersistableSessionMessage = Exclude<
+export type PersistableSessionMessage = Exclude<
   AgentMessage,
   { role: "branchSummary" | "compactionSummary" }
 >;
 
 export type SessionManager = {
-  newSession(options?: { id?: string; parentSession?: string }): SessionTranscriptScope | undefined;
   isPersisted(): boolean;
   getCwd(): string;
   getSessionId(): string;
@@ -174,5 +158,4 @@ export type SessionManager = {
     details?: unknown,
     fromHook?: boolean,
   ): string;
-  createBranchedSession(leafId: string): SessionTranscriptScope | undefined;
 };

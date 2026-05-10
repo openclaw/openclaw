@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  exportSqliteSessionTranscriptJsonl,
+  loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -68,8 +68,8 @@ function writeTranscriptEvents(scope: typeof TEST_SCOPE, events: unknown[]) {
   });
 }
 
-async function readTranscriptJsonl(scope: typeof TEST_SCOPE): Promise<string> {
-  return exportSqliteSessionTranscriptJsonl(scope);
+async function readTranscriptEvents(scope: typeof TEST_SCOPE): Promise<unknown[]> {
+  return loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
 }
 
 describe("repairTranscriptSessionStateIfNeeded", () => {
@@ -88,10 +88,9 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
       sessionId: scope.sessionId,
     });
     expect(result.repaired).toBe(true);
-    expect(result.droppedLines).toBe(1);
+    expect(result.droppedEntries).toBe(1);
 
-    const repaired = await readTranscriptJsonl(scope);
-    expect(repaired.trim().split("\n")).toHaveLength(2);
+    await expect(readTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
   it("warns and skips repair when the session header is invalid", async () => {
@@ -154,19 +153,16 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(true);
-    expect(result.droppedLines).toBe(0);
+    expect(result.droppedEntries).toBe(0);
     expect(result.rewrittenAssistantMessages).toBe(1);
     expect(debug).toHaveBeenCalledTimes(1);
     const debugMessage = debug.mock.calls[0]?.[0] as string;
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
     expect(debugMessage).not.toContain("dropped");
 
-    const repaired = await readTranscriptJsonl(scope);
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(4);
-    const repairedEntry: { message: { content: { type: string; text: string }[] } } = JSON.parse(
-      repairedLines[2],
-    );
+    const repaired = await readTranscriptEvents(scope);
+    expect(repaired).toHaveLength(4);
+    const repairedEntry = repaired[2] as { message: { content: { type: string; text: string }[] } };
     expect(repairedEntry.message.content).toEqual([
       { type: "text", text: "[assistant turn failed before producing content]" },
     ]);
@@ -199,10 +195,9 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     expect(result.droppedBlankUserMessages).toBe(0);
     expect(debug.mock.calls[0]?.[0]).toContain("rewrote 1 user message(s)");
 
-    const repaired = await readTranscriptJsonl(scope);
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(3);
-    const rewrittenEntry = JSON.parse(repairedLines[1]);
+    const repaired = await readTranscriptEvents(scope);
+    expect(repaired).toHaveLength(3);
+    const rewrittenEntry = repaired[1] as { id: string; message: { content: unknown } };
     expect(rewrittenEntry.id).toBe("msg-blank");
     expect(rewrittenEntry.message.content).toEqual([
       { type: "text", text: BLANK_USER_FALLBACK_TEXT },
@@ -232,10 +227,9 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
 
-    const repaired = await readTranscriptJsonl(scope);
-    const repairedLines = repaired.trim().split("\n");
-    expect(repairedLines).toHaveLength(3);
-    const rewrittenEntry = JSON.parse(repairedLines[1]);
+    const repaired = await readTranscriptEvents(scope);
+    expect(repaired).toHaveLength(3);
+    const rewrittenEntry = repaired[1] as { message: { content: unknown } };
     expect(rewrittenEntry.message.content).toBe(BLANK_USER_FALLBACK_TEXT);
   });
 
@@ -264,8 +258,8 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(true);
     expect(result.rewrittenUserMessages).toBe(1);
-    const repaired = await readTranscriptJsonl(scope);
-    const repairedEntry = JSON.parse(repaired.trim().split("\n")[1] ?? "{}");
+    const repaired = await readTranscriptEvents(scope);
+    const repairedEntry = repaired[1] as { message: { content: unknown } };
     expect(repairedEntry.message.content).toEqual([
       { type: "image", data: "AA==", mimeType: "image/png" },
     ]);
@@ -303,10 +297,10 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(true);
-    expect(result.droppedLines).toBe(1);
+    expect(result.droppedEntries).toBe(1);
     expect(result.rewrittenAssistantMessages).toBe(1);
     const debugMessage = debug.mock.calls[0]?.[0] as string;
-    expect(debugMessage).toContain("dropped 1 malformed line(s)");
+    expect(debugMessage).toContain("dropped 1 malformed entry");
     expect(debugMessage).toContain("rewrote 1 assistant message(s)");
   });
 
@@ -345,9 +339,11 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(silentReplyEntry)}\n${JSON.stringify(followUp)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([
+      header,
+      silentReplyEntry,
+      followUp,
+    ]);
   });
 
   it("preserves delivered trailing assistant messages", async () => {
@@ -373,9 +369,7 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
 
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, message, assistantEntry]);
   });
 
   it("preserves multiple consecutive delivered trailing assistant messages", async () => {
@@ -412,9 +406,12 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
 
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(assistantEntry1)}\n${JSON.stringify(assistantEntry2)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([
+      header,
+      message,
+      assistantEntry1,
+      assistantEntry2,
+    ]);
   });
 
   it("does not trim non-trailing assistant messages", async () => {
@@ -473,9 +470,11 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(false);
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([
+      header,
+      message,
+      toolCallAssistant,
+    ]);
   });
 
   it("preserves adjacent trailing tool-call and text assistant messages", async () => {
@@ -512,9 +511,12 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
 
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(plainAssistant)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([
+      header,
+      message,
+      toolCallAssistant,
+      plainAssistant,
+    ]);
   });
 
   it("preserves final text assistant turn that follows a tool-call/tool-result pair", async () => {
@@ -569,9 +571,13 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
 
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(message)}\n${JSON.stringify(toolCallAssistant)}\n${JSON.stringify(toolResult)}\n${JSON.stringify(finalAssistant)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([
+      header,
+      message,
+      toolCallAssistant,
+      toolResult,
+      finalAssistant,
+    ]);
   });
 
   it("preserves assistant-only session history after the header", async () => {
@@ -597,9 +603,7 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
 
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(assistantEntry)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, assistantEntry]);
   });
 
   it("is a no-op on a session that was already repaired", async () => {
@@ -637,9 +641,7 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
 
     expect(result.repaired).toBe(false);
     expect(result.rewrittenAssistantMessages ?? 0).toBe(0);
-    const original = `${JSON.stringify(header)}\n${JSON.stringify(healedEntry)}\n${JSON.stringify(followUp)}\n`;
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(original);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, healedEntry, followUp]);
   });
 
   it("drops type:message entries with null role instead of preserving them through repair (#77228)", async () => {
@@ -682,14 +684,9 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(true);
-    expect(result.droppedLines).toBe(3);
+    expect(result.droppedEntries).toBe(3);
 
-    const after = await readTranscriptJsonl(scope);
-    const lines = after.trimEnd().split("\n");
-    expect(lines).toHaveLength(2);
-    expect(JSON.parse(lines[0])).toEqual(header);
-    expect(JSON.parse(lines[1])).toEqual(message);
-    expect(after).not.toContain('"role":null');
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, message]);
   });
 
   it("drops a type:message entry whose message field is missing or non-object", async () => {
@@ -718,11 +715,9 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(true);
-    expect(result.droppedLines).toBe(2);
+    expect(result.droppedEntries).toBe(2);
 
-    const after = await readTranscriptJsonl(scope);
-    const lines = after.trimEnd().split("\n");
-    expect(lines).toHaveLength(2);
+    await expect(readTranscriptEvents(scope)).resolves.toHaveLength(2);
   });
 
   it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {
@@ -751,14 +746,7 @@ describe("repairTranscriptSessionStateIfNeeded", () => {
     });
 
     expect(result.repaired).toBe(false);
-    expect(result.droppedLines).toBe(0);
-    const content = [
-      JSON.stringify(header),
-      JSON.stringify(message),
-      JSON.stringify(summary),
-      JSON.stringify(custom),
-    ].join("\n");
-    const after = await readTranscriptJsonl(scope);
-    expect(after).toBe(`${content}\n`);
+    expect(result.droppedEntries).toBe(0);
+    await expect(readTranscriptEvents(scope)).resolves.toEqual([header, message, summary, custom]);
   });
 });

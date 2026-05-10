@@ -441,7 +441,6 @@ async function cleanupFailedSpawn(params: {
     cfg: params.cfg,
     sessionKey: params.sessionKey,
     shouldDeleteSession: params.shouldDeleteSession,
-    deleteTranscript: false,
     runtimeCloseHandle: params.initializedRuntime,
   });
 }

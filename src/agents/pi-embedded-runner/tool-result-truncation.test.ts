@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,8 @@ import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-d
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import type { AssistantMessage, ToolResultMessage, UserMessage } from "../pi-ai-contract.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { SessionManager } from "../transcript/session-transcript-contract.js";
+import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
+import type { SessionManager } from "../transcript/session-transcript-contract.js";
 import { readTranscriptStateForSession } from "../transcript/transcript-state.js";
 
 let truncateToolResultText: typeof import("./tool-result-truncation.js").truncateToolResultText;
@@ -112,6 +114,14 @@ function transcriptScopeForSessionManager(sessionManager: SessionManager): Trans
     throw new Error("missing test session id");
   }
   return { agentId: "main", sessionId };
+}
+
+function createScopedSessionManager(cwd: string) {
+  return openTranscriptSessionManagerForSession({
+    agentId: "main",
+    sessionId: randomUUID(),
+    cwd,
+  });
 }
 
 async function loadBranch(scope: TranscriptScope) {
@@ -444,7 +454,7 @@ describe("truncateOversizedToolResultsInMessages", () => {
 describe("truncateOversizedToolResultsInSession", () => {
   it("readably truncates aggregate medium tool results in a SQLite transcript", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir);
+    const sm = createScopedSessionManager(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const medium = "alpha beta gamma delta epsilon ".repeat(600);
@@ -463,9 +473,6 @@ describe("truncateOversizedToolResultsInSession", () => {
       )
       .filter((length) => length > 0);
 
-    const openSpy = vi.spyOn(SessionManager, "openForSession").mockImplementation(() => {
-      throw new Error("SessionManager.openForSession should not be used for persisted truncation");
-    });
     const listener = vi.fn();
     const cleanup = onSessionTranscriptUpdate(listener);
     const result = await truncateOversizedToolResultsInSession({
@@ -474,7 +481,6 @@ describe("truncateOversizedToolResultsInSession", () => {
       contextWindowTokens: 100,
     });
     cleanup();
-    openSpy.mockRestore();
 
     expect(result.truncated).toBe(true);
     expect(result.truncatedCount).toBeGreaterThan(0);
@@ -512,7 +518,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("prefers truncating newer aggregate tool-result entries before older larger ones", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir);
+    const sm = createScopedSessionManager(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const olderLarge = "older-large ".repeat(1_000);
@@ -552,7 +558,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("allows persisted-session recovery truncation to shrink below the old 2k floor", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir);
+    const sm = createScopedSessionManager(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
@@ -578,7 +584,7 @@ describe("truncateOversizedToolResultsInSession", () => {
   });
   it("combines oversized and aggregate recovery truncation in the same session rewrite", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir);
+    const sm = createScopedSessionManager(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     sm.appendMessage(makeToolResult("x".repeat(500_000), "call_1"));
@@ -610,7 +616,7 @@ describe("truncateOversizedToolResultsInSession", () => {
 
   it("lets aggregate recovery honor a tiny explicit cap during persisted rewrite", async () => {
     const dir = await createTmpDir();
-    const sm = SessionManager.create(dir);
+    const sm = createScopedSessionManager(dir);
     sm.appendMessage(makeUserMessage("hello"));
     sm.appendMessage(makeAssistantMessage("calling tools"));
     const medium = "alpha beta gamma delta epsilon ".repeat(800);

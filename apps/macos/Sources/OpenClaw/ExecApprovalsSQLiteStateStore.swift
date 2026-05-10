@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 
 enum ExecApprovalsSQLiteStateStore {
     private static let stateScope = "exec.approvals"

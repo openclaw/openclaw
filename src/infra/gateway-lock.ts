@@ -55,8 +55,6 @@ export type GatewayLockOptions = {
   port?: number;
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
-  /** Deprecated test seam retained for older callers; gateway locks now use SQLite. */
-  lockDir?: string;
   /** Override process command-line reader (testing seam). */
   readProcessCmdline?: (pid: number) => string[] | null;
 };

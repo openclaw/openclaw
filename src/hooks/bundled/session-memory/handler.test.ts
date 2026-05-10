@@ -605,7 +605,7 @@ describe("session-memory hook", () => {
   it("reads the canonical SQLite transcript by session identity", async () => {
     const { tempDir } = await createSessionMemoryWorkspace();
 
-    const sessionId = "missing-session-file";
+    const sessionId = "sqlite-session-identity";
     seedSessionTranscript({
       sessionId,
       content: createMockSessionContent([

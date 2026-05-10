@@ -32,6 +32,42 @@ export interface Kv {
   value_json: string;
 }
 
+export interface MemoryEmbeddingCache {
+  dims: number | null;
+  embedding: string;
+  hash: string;
+  model: string;
+  provider: string;
+  provider_key: string;
+  updated_at: number;
+}
+
+export interface MemoryIndexChunks {
+  embedding: string;
+  end_line: number;
+  hash: string;
+  id: string | null;
+  model: string;
+  path: string;
+  source: Generated<string>;
+  start_line: number;
+  text: string;
+  updated_at: number;
+}
+
+export interface MemoryIndexFiles {
+  hash: string;
+  mtime: number;
+  path: string | null;
+  size: number;
+  source: Generated<string>;
+}
+
+export interface MemoryIndexMeta {
+  key: string | null;
+  value: string;
+}
+
 export interface RunArtifacts {
   blob: Uint8Array | null;
   created_at: number;
@@ -105,6 +141,10 @@ export interface DB {
   acp_parent_stream_events: AcpParentStreamEvents;
   cache_entries: CacheEntries;
   kv: Kv;
+  memory_embedding_cache: MemoryEmbeddingCache;
+  memory_index_chunks: MemoryIndexChunks;
+  memory_index_files: MemoryIndexFiles;
+  memory_index_meta: MemoryIndexMeta;
   run_artifacts: RunArtifacts;
   session_entries: SessionEntries;
   tool_artifacts: ToolArtifacts;

@@ -131,7 +131,7 @@ openclaw health
 - **Wrong port:** Gateway WS defaults to `ws://127.0.0.1:18789`; keep app + CLI on the same port.
 - **Where state lives:**
   - Channel/provider state: `~/.openclaw/credentials/`
-  - Model auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+  - Model auth profiles: `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
   - Sessions: `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
   - Logs: `/tmp/openclaw/`
 
@@ -144,7 +144,7 @@ Use this when debugging auth or deciding what to back up:
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite` (`kv` scope `pairing.channel`)
-- **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
   More detail: [Security](/gateway/security#credential-storage-map).

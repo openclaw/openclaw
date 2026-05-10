@@ -232,7 +232,7 @@ Model behavior:
 
 Credential and profile paths:
 
-- Auth profiles (API keys + OAuth): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- Auth profiles (API keys + OAuth): `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
 - Legacy OAuth import: `~/.openclaw/credentials/oauth.json`
 
 Credential storage mode:
@@ -259,10 +259,10 @@ Credential storage mode:
 
 <Note>
 Headless and server tip: complete OAuth on a machine with a browser, then copy
-that agent's `auth-profiles.json` (for example
-`~/.openclaw/agents/<agentId>/agent/auth-profiles.json`, or the matching
-`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
-is only a legacy import source.
+that agent's SQLite auth-profile row (for example
+`~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`, or the matching
+`$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json` is
+only a legacy import source.
 </Note>
 
 ## Outputs and internals

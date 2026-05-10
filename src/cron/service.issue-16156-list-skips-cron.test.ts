@@ -140,7 +140,7 @@ describe("#16156: cron.list() must not silently advance past-due recurring jobs"
     const store = await makeStoreKey();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
 
-    // Write a store file with a cron job that has no nextRunAtMs.
+    // Seed a cron job row with no nextRunAtMs.
     await writeJobsStore(store.storeKey, [
       {
         id: "missing-next",

@@ -69,7 +69,6 @@ function createHeartbeatTelegramConfig(): OpenClawConfig {
 async function seedHeartbeatTelegramSession(agentId: string, cfg: OpenClawConfig) {
   return seedMainHeartbeatSession(agentId, cfg, {
     lastChannel: "telegram",
-    lastProvider: "telegram",
     lastTo: "123",
   });
 }
@@ -226,12 +225,10 @@ describe("heartbeat runner skips when target session lane is busy", () => {
   });
 
   it("does not defer on a recent heartbeat ack pending final delivery", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ agentId, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
-      cfg.session = { store: storePath };
-      await seedMainSessionStore(storePath, cfg, {
+      await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "telegram",
-        lastProvider: "heartbeat",
         lastTo: "heartbeat",
         updatedAt: Date.now(),
         pendingFinalDelivery: true,
@@ -254,13 +251,11 @@ describe("heartbeat runner skips when target session lane is busy", () => {
   });
 
   it("keeps deferring recent pending delivery when ackMaxChars makes the remainder real content", async () => {
-    await withTempHeartbeatSandbox(async ({ storePath, replySpy }) => {
+    await withTempHeartbeatSandbox(async ({ agentId, replySpy }) => {
       const cfg = createHeartbeatTelegramConfig();
-      cfg.session = { store: storePath };
       cfg.agents!.defaults!.heartbeat = { every: "30m", ackMaxChars: 0 };
-      await seedMainSessionStore(storePath, cfg, {
+      await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "telegram",
-        lastProvider: "heartbeat",
         lastTo: "heartbeat",
         updatedAt: Date.now(),
         pendingFinalDelivery: true,

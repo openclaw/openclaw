@@ -122,6 +122,52 @@ CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_events_run
   ON trajectory_runtime_events(run_id, event_id)
   WHERE run_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS memory_index_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_index_files (
+  path TEXT PRIMARY KEY,
+  source TEXT NOT NULL DEFAULT 'memory',
+  hash TEXT NOT NULL,
+  mtime INTEGER NOT NULL,
+  size INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS memory_index_chunks (
+  id TEXT PRIMARY KEY,
+  path TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'memory',
+  start_line INTEGER NOT NULL,
+  end_line INTEGER NOT NULL,
+  hash TEXT NOT NULL,
+  model TEXT NOT NULL,
+  text TEXT NOT NULL,
+  embedding TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
+  ON memory_index_chunks(path);
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
+  ON memory_index_chunks(source);
+
+CREATE TABLE IF NOT EXISTS memory_embedding_cache (
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  provider_key TEXT NOT NULL,
+  hash TEXT NOT NULL,
+  embedding TEXT NOT NULL,
+  dims INTEGER,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (provider, model, provider_key, hash)
+);
+
+CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at
+  ON memory_embedding_cache(updated_at);
+
 CREATE TABLE IF NOT EXISTS cache_entries (
   scope TEXT NOT NULL,
   key TEXT NOT NULL,

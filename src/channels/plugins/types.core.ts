@@ -152,26 +152,26 @@ export type ChannelHeartbeatDeps = {
   hasActiveWebListener?: (accountId?: string) => boolean;
 };
 
-export type ChannelLegacyStateMigrationApplyResult = {
+export type ChannelDoctorLegacyStateMigrationApplyResult = {
   changes: string[];
   warnings: string[];
 };
 
-export type ChannelLegacyStateMigrationApplyContext = {
+export type ChannelDoctorLegacyStateMigrationApplyContext = {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
 };
 
-export type ChannelLegacyStateMigrationFilePlan = {
+export type ChannelDoctorLegacyStateMigrationFilePlan = {
   kind: "copy" | "move";
   label: string;
   sourcePath: string;
   targetPath: string;
 };
 
-export type ChannelLegacyStateMigrationCustomPlan = {
+export type ChannelDoctorLegacyStateMigrationCustomPlan = {
   kind: "custom";
   label: string;
   sourcePath: string;
@@ -179,13 +179,15 @@ export type ChannelLegacyStateMigrationCustomPlan = {
   targetTable?: string;
   recordCount?: number;
   apply: (
-    context: ChannelLegacyStateMigrationApplyContext,
-  ) => ChannelLegacyStateMigrationApplyResult | Promise<ChannelLegacyStateMigrationApplyResult>;
+    context: ChannelDoctorLegacyStateMigrationApplyContext,
+  ) =>
+    | ChannelDoctorLegacyStateMigrationApplyResult
+    | Promise<ChannelDoctorLegacyStateMigrationApplyResult>;
 };
 
-export type ChannelLegacyStateMigrationPlan =
-  | ChannelLegacyStateMigrationFilePlan
-  | ChannelLegacyStateMigrationCustomPlan;
+export type ChannelDoctorLegacyStateMigrationPlan =
+  | ChannelDoctorLegacyStateMigrationFilePlan
+  | ChannelDoctorLegacyStateMigrationCustomPlan;
 
 /** User-facing metadata used in docs, pickers, and setup surfaces. */
 export type ChannelMeta = {

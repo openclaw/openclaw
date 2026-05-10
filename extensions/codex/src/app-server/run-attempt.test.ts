@@ -687,9 +687,9 @@ describe("runCodexAppServerAttempt", () => {
   });
 
   it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = "codex-dynamic-tools";
     const workspaceDir = path.join(tempDir, "workspace");
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParams(sessionId, workspaceDir);
     params.disableTools = false;
     params.config = {
       tools: {
@@ -825,10 +825,7 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("web_search"),
     ]);
     const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createParams("session", path.join(tempDir, "workspace"));
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.sourceReplyDeliveryMode = "message_tool_only";
@@ -859,10 +856,7 @@ describe("runCodexAppServerAttempt", () => {
       createRuntimeDynamicTool("wiki_status"),
     ]);
     const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createParams("codex-dynamic-tools-session", path.join(tempDir, "workspace"));
     params.disableTools = false;
     params.runtimePlan = createCodexRuntimePlanFixture();
     params.toolsAllow = ["wiki_status"];
@@ -3222,10 +3216,12 @@ describe("runCodexAppServerAttempt", () => {
     const run = runCodexAppServerAttempt(createParams("session", path.join(tempDir, "workspace")));
     await waitForMethod("turn/start");
 
-    expect(queueActiveRunMessageForTest("session", "first", { steeringMode: "one-at-a-time" }))
-      .toBe(true);
-    expect(queueActiveRunMessageForTest("session", "second", { steeringMode: "one-at-a-time" }))
-      .toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session", "first", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session", "second", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -3458,10 +3454,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("surfaces Codex-native image generation saved paths as reply media", async () => {
     const harness = createStartedThreadHarness();
-    const params = createParams(
-      path.join(tempDir, "session.jsonl"),
-      path.join(tempDir, "workspace"),
-    );
+    const params = createParams("codex-image-generation-session", path.join(tempDir, "workspace"));
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");

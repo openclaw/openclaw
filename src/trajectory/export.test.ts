@@ -103,7 +103,7 @@ function writeSimpleSessionTranscript(
   const sessionId = params.sessionId ?? "session-1";
   const header = {
     type: "session",
-    version: 3,
+    version: 1,
     id: sessionId,
     timestamp: "2026-04-01T05:46:39.000Z",
     cwd: workspaceDir,
@@ -128,7 +128,7 @@ function writeSimpleSessionTranscript(
 function writeToolCallOnlySessionTranscript(workspaceDir: string): void {
   const header = {
     type: "session",
-    version: 3,
+    version: 1,
     id: "session-1",
     timestamp: "2026-04-01T05:46:39.000Z",
     cwd: workspaceDir,
@@ -153,7 +153,7 @@ function writeToolCallOnlySessionTranscript(workspaceDir: string): void {
 function writeToolCallSessionTranscript(workspaceDir: string): void {
   const header = {
     type: "session",
-    version: 3,
+    version: 1,
     id: "session-1",
     timestamp: "2026-04-01T05:46:39.000Z",
     cwd: workspaceDir,
@@ -295,6 +295,58 @@ describe("exportTrajectoryBundle", () => {
     expect(exportedEvents.find((event) => event.type === "user.message")?.ts).toBe(
       "2026-04-01T05:46:40.000Z",
     );
+  });
+
+  it("exports the SQLite parent chain without legacy row-order migration", async () => {
+    const tmpDir = makeTempDir();
+    const outputDir = path.join(tmpDir, "bundle");
+    writeSessionTranscript([
+      {
+        type: "session",
+        version: 1,
+        id: "session-branch",
+        timestamp: "2026-04-01T05:46:39.000Z",
+        cwd: tmpDir,
+      },
+      {
+        type: "message",
+        id: "entry-root",
+        parentId: null,
+        timestamp: "2026-04-01T05:46:40.000Z",
+        message: userMessage("root"),
+      },
+      {
+        type: "message",
+        id: "entry-abandoned",
+        parentId: "entry-root",
+        timestamp: "2026-04-01T05:46:41.000Z",
+        message: assistantMessage([{ type: "text", text: "old branch" }]),
+      },
+      {
+        type: "message",
+        id: "entry-leaf",
+        parentId: "entry-root",
+        timestamp: "2026-04-01T05:46:42.000Z",
+        message: assistantMessage([{ type: "text", text: "current branch" }]),
+      },
+    ]);
+
+    const bundle = await exportTrajectoryBundle({
+      outputDir,
+      agentId: "main",
+      sessionId: "session-branch",
+      workspaceDir: tmpDir,
+    });
+
+    expect(bundle.manifest.leafId).toBe("entry-leaf");
+    expect(bundle.manifest.transcriptEventCount).toBe(2);
+    const branch = JSON.parse(fs.readFileSync(path.join(outputDir, "session-branch.json"), "utf8"));
+    expect(branch.entries.map((entry: { id: string }) => entry.id)).toEqual([
+      "entry-root",
+      "entry-leaf",
+    ]);
+    expect(JSON.stringify(bundle.events)).toContain("current branch");
+    expect(JSON.stringify(bundle.events)).not.toContain("old branch");
   });
 
   it("includes run-scoped SQLite tool artifact metadata without embedding blobs", async () => {
@@ -442,9 +494,12 @@ describe("exportTrajectoryBundle", () => {
     expect(bundle.manifest.runtimeEventCount).toBe(1);
     expect(eventTypes(bundle.events)).toContain("context.compiled");
     expect(eventTypes(bundle.events)).not.toContain("session.started");
-    expect(bundle.manifest.sourceFiles?.runtime).toBe(
-      "agent-db:worker:trajectory_runtime_events:session-shared",
-    );
+    expect(bundle.manifest.sourceDatabases.runtime).toEqual({
+      role: "agent",
+      agentId: "worker",
+      table: "trajectory_runtime_events",
+      sessionId: "session-shared",
+    });
   });
 
   it("counts expanded transcript events when enforcing the total event limit", async () => {
@@ -688,12 +743,25 @@ describe("exportTrajectoryBundle", () => {
 
     const manifest = JSON.parse(fs.readFileSync(path.join(outputDir, "manifest.json"), "utf8")) as {
       contents?: Array<{ path: string; mediaType: string; bytes: number }>;
-      sourceFiles?: { session?: string; runtime?: string };
+      sourceDatabases?: {
+        session?: { role: string; agentId: string; table: string; sessionId: string };
+        runtime?: { role: string; agentId: string; table: string; sessionId: string };
+      };
       workspaceDir?: string;
     };
     expect(manifest.workspaceDir).toBe("$WORKSPACE_DIR");
-    expect(manifest.sourceFiles?.session).toBe("agent-db:main:transcript_events:session-1");
-    expect(manifest.sourceFiles?.runtime).toBe("agent-db:main:trajectory_runtime_events:session-1");
+    expect(manifest.sourceDatabases?.session).toEqual({
+      role: "agent",
+      agentId: "main",
+      table: "transcript_events",
+      sessionId: "session-1",
+    });
+    expect(manifest.sourceDatabases?.runtime).toEqual({
+      role: "agent",
+      agentId: "main",
+      table: "trajectory_runtime_events",
+      sessionId: "session-1",
+    });
     expect(manifest.contents?.map((entry) => entry.path).toSorted()).toEqual([
       "artifacts.json",
       "events.jsonl",

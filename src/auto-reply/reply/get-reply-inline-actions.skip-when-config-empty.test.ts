@@ -281,7 +281,11 @@ describe("handleInlineActions", () => {
 
     expect(result).toEqual({ kind: "reply", reply: undefined });
     expect(buildStatusReplyMock).toHaveBeenCalledTimes(1);
-    expect(buildStatusReplyMock.mock.calls[0]?.[0]).not.toHaveProperty("storePath");
+    expect(buildStatusReplyMock.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        sessionKey: "s:main",
+      }),
+    );
     expect(handleCommandsMock).not.toHaveBeenCalled();
     expect(typing.cleanup).toHaveBeenCalledTimes(1);
   });

@@ -68,7 +68,7 @@ async function emitLifecycleAssistantReply(params: {
     agentId: "main",
     sessionId,
     events: [
-      { type: "session", version: 3, id: sessionId },
+      { type: "session", version: 1, id: sessionId },
       {
         type: "message",
         id: `${runId}-assistant`,

@@ -14,11 +14,8 @@ function createDeps() {
     checkShellCompletionStatus: vi.fn(async (_binName: string) => ({
       shell: "zsh" as const,
       profileInstalled: false,
-      cacheExists: false,
-      cachePath: "/tmp/openclaw.zsh",
-      usesSlowPattern: false,
+      usesRetiredCache: false,
     })),
-    ensureCompletionCacheExists: vi.fn(async (_binName: string) => true),
     installCompletion: vi.fn(async () => {}),
   };
   return deps;
@@ -32,7 +29,6 @@ describe("setupWizardShellCompletion", () => {
     await setupWizardShellCompletion({ flow: "quickstart", prompter, deps });
 
     expect(prompter.confirm).not.toHaveBeenCalled();
-    expect(deps.ensureCompletionCacheExists).toHaveBeenCalledWith("openclaw");
     expect(deps.installCompletion).toHaveBeenCalledWith("zsh", true, "openclaw");
     expect(prompter.note).toHaveBeenCalled();
   });
@@ -44,7 +40,6 @@ describe("setupWizardShellCompletion", () => {
     await setupWizardShellCompletion({ flow: "advanced", prompter, deps });
 
     expect(prompter.confirm).toHaveBeenCalledTimes(1);
-    expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
     expect(deps.installCompletion).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
   });

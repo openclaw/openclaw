@@ -272,28 +272,6 @@ Default storage:
 SQLite diagnostics (`diagnostics.raw_stream`). Use an explicit export/debug
 command when you need a file artifact.
 
-## Raw chunk logging (pi-mono)
-
-To capture **raw OpenAI-compat chunks** before they are parsed into blocks,
-pi-mono exposes a separate logger:
-
-```bash
-PI_RAW_STREAM=1
-```
-
-Optional path:
-
-```bash
-PI_RAW_STREAM_PATH=~/.pi-mono/logs/raw-openai-completions.jsonl
-```
-
-Default file:
-
-`~/.pi-mono/logs/raw-openai-completions.jsonl`
-
-> Note: this is only emitted by processes using pi-mono's
-> `openai-completions` provider.
-
 ## Safety notes
 
 - Raw stream logs can include full prompts, tool output, and user data.

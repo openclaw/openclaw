@@ -2094,12 +2094,10 @@ export const registerTelegramHandlers = ({
 
           // Directly set model override in session
           try {
-            // Use the fresh runtimeCfg (loaded at callback entry) so store path
-            // and default-model resolution stay consistent with the next
-            // inbound message.  The outer `cfg` is a snapshot captured at
-            // handler-registration time and becomes stale after config reloads,
-            // which can cause the override to be written to the wrong store or
-            // incorrectly treated as the default model (clearing the override).
+            // Use the fresh runtimeCfg loaded at callback entry so default-model
+            // resolution stays consistent with the next inbound message. The
+            // outer `cfg` is a snapshot captured at handler registration time
+            // and becomes stale after config reloads.
             const resolvedDefault = resolveDefaultModelForAgent({
               cfg: runtimeCfg,
               agentId: sessionState.agentId,

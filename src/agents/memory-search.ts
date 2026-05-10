@@ -46,8 +46,7 @@ export type ResolvedMemorySearchConfig = {
   };
   store: {
     driver: "sqlite";
-    path: string;
-    managedAgentDatabase: boolean;
+    databasePath: string;
     fts: {
       tokenizer: "unicode61" | "trigram";
     };
@@ -137,14 +136,8 @@ function normalizeSources(
   return Array.from(normalized);
 }
 
-function resolveMemoryStore(agentId: string): {
-  path: string;
-  managedAgentDatabase: boolean;
-} {
-  return {
-    path: resolveOpenClawAgentSqlitePath({ agentId, env: process.env }),
-    managedAgentDatabase: true,
-  };
+function resolveMemoryStore(agentId: string): string {
+  return resolveOpenClawAgentSqlitePath({ agentId, env: process.env });
 }
 
 function getConfiguredMemoryEmbeddingProvider(
@@ -255,11 +248,9 @@ function mergeConfig(
   const fts = {
     tokenizer: overrides?.store?.fts?.tokenizer ?? defaults?.store?.fts?.tokenizer ?? "unicode61",
   };
-  const resolvedStore = resolveMemoryStore(agentId);
   const store = {
     driver: overrides?.store?.driver ?? defaults?.store?.driver ?? "sqlite",
-    path: resolvedStore.path,
-    managedAgentDatabase: resolvedStore.managedAgentDatabase,
+    databasePath: resolveMemoryStore(agentId),
     fts,
     vector,
   };

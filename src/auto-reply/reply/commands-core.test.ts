@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { SqliteSessionTranscriptEvent } from "../../config/sessions/transcript-store.sqlite.js";
 import type { HookRunner } from "../../plugins/hooks.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
@@ -8,13 +9,13 @@ const hookRunnerMocks = vi.hoisted(() => ({
 }));
 
 const sqliteTranscriptMocks = vi.hoisted(() => ({
-  exportSqliteSessionTranscriptJsonl: vi.fn(() => ""),
   hasSqliteSessionTranscriptEvents: vi.fn(() => false),
+  loadSqliteSessionTranscriptEvents: vi.fn<() => SqliteSessionTranscriptEvent[]>(() => []),
 }));
 
 vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
-  exportSqliteSessionTranscriptJsonl: sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents: sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents: sqliteTranscriptMocks.loadSqliteSessionTranscriptEvents,
 }));
 
 vi.mock("../../plugins/hook-runner-global.js", () => ({
@@ -70,8 +71,8 @@ describe("emitResetCommandHooks", () => {
     hookRunnerMocks.runBeforeReset.mockReset();
     hookRunnerMocks.hasHooks.mockImplementation((hookName) => hookName === "before_reset");
     hookRunnerMocks.runBeforeReset.mockResolvedValue(undefined);
-    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue("");
     sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(false);
+    sqliteTranscriptMocks.loadSqliteSessionTranscriptEvents.mockReturnValue([]);
   });
 
   afterEach(() => {
@@ -136,19 +137,28 @@ describe("emitResetCommandHooks", () => {
     );
   });
 
-  it("uses scoped SQLite transcript events for before_reset without legacy JSONL input", async () => {
+  it("uses scoped SQLite transcript events for before_reset", async () => {
     sqliteTranscriptMocks.hasSqliteSessionTranscriptEvents.mockReturnValue(true);
-    sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl.mockReturnValue(
-      `${JSON.stringify({
-        type: "session",
-        id: "prev-session",
-        timestamp: "2026-05-06T12:00:00.000Z",
-      })}\n${JSON.stringify({
-        type: "message",
-        id: "m1",
-        message: { role: "assistant", content: "Recovered from SQLite" },
-      })}\n`,
-    );
+    sqliteTranscriptMocks.loadSqliteSessionTranscriptEvents.mockReturnValue([
+      {
+        seq: 1,
+        event: {
+          type: "session",
+          id: "prev-session",
+          timestamp: "2026-05-06T12:00:00.000Z",
+        },
+        createdAt: Date.parse("2026-05-06T12:00:00.000Z"),
+      },
+      {
+        seq: 2,
+        event: {
+          type: "message",
+          id: "m1",
+          message: { role: "assistant", content: "Recovered from SQLite" },
+        },
+        createdAt: Date.parse("2026-05-06T12:00:01.000Z"),
+      },
+    ]);
     const command = {
       surface: "discord",
       senderId: "vac",
@@ -175,7 +185,7 @@ describe("emitResetCommandHooks", () => {
       agentId: "target",
       sessionId: "prev-session",
     });
-    expect(sqliteTranscriptMocks.exportSqliteSessionTranscriptJsonl).toHaveBeenCalledWith({
+    expect(sqliteTranscriptMocks.loadSqliteSessionTranscriptEvents).toHaveBeenCalledWith({
       agentId: "target",
       sessionId: "prev-session",
     });

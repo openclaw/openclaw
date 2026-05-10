@@ -819,8 +819,8 @@ extension OnboardingView {
                     self.featureRow(
                         title: "Remote gateway checklist",
                         subtitle: """
-                        On your gateway host: install/update the `openclaw` package and make sure credentials exist
-                        (typically `~/.openclaw/credentials/oauth.json`). Then connect again if needed.
+                        On your gateway host: install/update the `openclaw` package and make sure credentials are present
+                        in the OpenClaw SQLite state database. Then connect again if needed.
                         """,
                         systemImage: "network")
                     Divider()

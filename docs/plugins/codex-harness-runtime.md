@@ -17,8 +17,8 @@ Codex mode is not PI with a different model call underneath. Codex owns more of
 the native model loop, and OpenClaw adapts its plugin, tool, session, and
 diagnostic surfaces around that boundary.
 
-OpenClaw still owns channel routing, session files, visible message delivery,
-OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
+OpenClaw still owns channel routing, SQLite session state, visible message
+delivery, OpenClaw dynamic tools, approvals, media delivery, and a transcript mirror.
 Codex owns the canonical native thread, native model loop, native tool
 continuation, and native compaction.
 

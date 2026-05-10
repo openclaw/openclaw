@@ -121,10 +121,10 @@ conversation, but it can read the recent exchange needed to decide whether a
 follow-up exists.
 
 Stored commitments are local OpenClaw state in
-`~/.openclaw/state/openclaw.sqlite` (`kv` scope `commitments`). Legacy
+`~/.openclaw/state/openclaw.sqlite` (`commitments` table). Legacy
 `~/.openclaw/commitments/commitments.json` files are imported by
-`openclaw doctor --fix`. Commitments are operational memory, not long-term
-memory. Disable the feature with:
+`openclaw doctor --fix` and are doctor migration inputs only. Commitments are
+operational memory, not long-term memory. Disable the feature with:
 
 ```bash
 openclaw config set commitments.enabled false

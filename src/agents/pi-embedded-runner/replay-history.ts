@@ -36,7 +36,7 @@ import {
   resolveTranscriptPolicy,
   shouldAllowProviderOwnedThinkingReplay,
 } from "../transcript-policy.js";
-import type { SessionManager } from "../transcript/session-manager-contract.js";
+import type { SessionManager } from "../transcript/session-transcript-contract.js";
 import {
   makeZeroUsageSnapshot,
   normalizeUsage,

@@ -18,7 +18,6 @@ export async function cleanupFailedAcpSpawn(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   shouldDeleteSession: boolean;
-  deleteTranscript: boolean;
   runtimeCloseHandle?: AcpSpawnRuntimeCloseHandle;
 }): Promise<void> {
   if (params.runtimeCloseHandle) {
@@ -67,7 +66,6 @@ export async function cleanupFailedAcpSpawn(params: {
     method: "sessions.delete",
     params: {
       key: params.sessionKey,
-      deleteTranscript: params.deleteTranscript,
       emitLifecycleHooks: false,
     },
     timeoutMs: 10_000,

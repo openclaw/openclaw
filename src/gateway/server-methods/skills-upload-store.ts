@@ -185,7 +185,7 @@ function decodeBase64Chunk(dataBase64: string): Buffer {
 }
 
 function resolveStateDatabaseOptions(rootDir?: string): OpenClawStateDatabaseOptions {
-  return rootDir ? { path: path.join(path.resolve(rootDir), "openclaw-state.sqlite") } : {};
+  return rootDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: path.resolve(rootDir) } } : {};
 }
 
 function getUploadDatabase(database: OpenClawStateDatabase) {
@@ -207,13 +207,13 @@ function rowToRecord(row: SkillUploadRow, archivePath: string): SkillUploadRecor
     uploadId: row.upload_id,
     slug: row.slug,
     force: boolFromSqlite(row.force),
-    sizeBytes: Number(row.size_bytes),
+    sizeBytes: row.size_bytes,
     ...(row.sha256 ? { sha256: row.sha256 } : {}),
     ...(row.actual_sha256 ? { actualSha256: row.actual_sha256 } : {}),
-    receivedBytes: Number(row.received_bytes),
+    receivedBytes: row.received_bytes,
     archivePath,
-    createdAt: Number(row.created_at),
-    expiresAt: Number(row.expires_at),
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
     committed: boolFromSqlite(row.committed),
     ...(numberFromSqlite(row.committed_at) !== undefined
       ? { committedAt: numberFromSqlite(row.committed_at) }
@@ -395,7 +395,7 @@ async function countActiveUploads(
       .select(({ fn }) => fn.count<number>("upload_id").as("count"))
       .where("expires_at", ">", nowMs),
   );
-  return Number(row?.count ?? 0);
+  return row?.count ?? 0;
 }
 
 async function writeArchiveChunk(params: {
@@ -491,7 +491,7 @@ export function createSkillUploadStore(options?: {
               existing.kind !== params.kind ||
               existing.slug !== slug ||
               boolFromSqlite(existing.force) !== force ||
-              Number(existing.size_bytes) !== sizeBytes ||
+              existing.size_bytes !== sizeBytes ||
               existing.sha256 !== sha256
             ) {
               throw new SkillUploadRequestError("idempotencyKey conflicts with a different upload");

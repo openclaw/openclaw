@@ -63,14 +63,14 @@ State lives under the OpenClaw state directory. Default is `~/.openclaw`. If `OP
 To reset everything:
 
 - `openclaw.json` for config
-- `agents/<agentId>/agent/auth-profiles.json` for model auth profiles (API keys + OAuth)
+- `state/openclaw.sqlite#kv/auth-profiles/<agentDir>` for model auth profiles (API keys + OAuth)
 - `credentials/` for provider/channel state that still lives outside the auth profile store
 - `state/openclaw.sqlite` for shared gateway state, device/pairing state, and push registration state
 - `agents/<agentId>/agent/openclaw-agent.sqlite` for agent session history, transcript events, VFS scratch state, and artifacts
 - `agents/<agentId>/sessions/` or `sessions/` only if you are clearing legacy imports/debug exports
 - `workspace/` if you want a blank workspace
 
-If you only want to reset sessions, delete `agents/<agentId>/agent/openclaw-agent.sqlite` for that agent after stopping the gateway. If you want to keep auth, leave `agents/<agentId>/agent/auth-profiles.json` and any provider state under `credentials/` in place.
+If you only want to reset sessions, delete `agents/<agentId>/agent/openclaw-agent.sqlite` for that agent after stopping the gateway. If you want to keep auth, leave `state/openclaw.sqlite` and any provider state under `credentials/` in place.
 
 ## References
 

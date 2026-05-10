@@ -16,7 +16,7 @@ import {
   type DeviceBootstrapTokenRecord,
 } from "./device-bootstrap.js";
 import { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } from "./device-identity.js";
-import { readPairingStateRecord, writePairingStateRecord } from "./pairing-files.js";
+import { readPairingStateRecord, writePairingStateRecord } from "./pairing-state.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-device-bootstrap-test-");
@@ -482,7 +482,10 @@ describe("device bootstrap tokens", () => {
 
   it("accepts equivalent public key encodings after binding the bootstrap token", async () => {
     const baseDir = await createTempDir();
-    const identity = loadOrCreateDeviceIdentity(path.join(baseDir, "device.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+      key: "bootstrap-token",
+    });
     const issued = await issueDeviceBootstrapToken({ baseDir });
     const rawPublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
 

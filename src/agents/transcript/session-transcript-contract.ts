@@ -1,15 +1,6 @@
 import { SessionManagerValue } from "./session-manager.js";
-import type {
-  SessionInfo,
-  SessionListProgress,
-  SessionManager as SessionManagerType,
-} from "./session-transcript-types.js";
-export {
-  buildSessionContext,
-  CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
-  parseSessionEntries,
-} from "./session-transcript-format.js";
+import type { SessionManager as SessionManagerType } from "./session-transcript-types.js";
+export { buildSessionContext, CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
 export type {
   AgentSession,
   ExtensionAPI,
@@ -26,9 +17,7 @@ export type {
   SessionEntry,
   SessionEntryBase,
   SessionHeader,
-  SessionInfo,
   SessionInfoEntry,
-  SessionListProgress,
   SessionMessageEntry,
   SessionTranscriptScope,
   SessionTreeNode,
@@ -39,15 +28,5 @@ export type {
 export type SessionManager = SessionManagerType;
 
 export const SessionManager = SessionManagerValue as {
-  create(cwd: string): SessionManagerType;
-  openForSession(params: { agentId: string; sessionId: string; cwd?: string }): SessionManagerType;
-  continueRecent(cwd: string): SessionManagerType;
   inMemory(cwd?: string): SessionManagerType;
-  forkFromSession(params: {
-    agentId: string;
-    sessionId: string;
-    targetCwd: string;
-  }): SessionManagerType;
-  list(cwd: string, onProgress?: SessionListProgress): Promise<SessionInfo[]>;
-  listAll(onProgress?: SessionListProgress): Promise<SessionInfo[]>;
 };

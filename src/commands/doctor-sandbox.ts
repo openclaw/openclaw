@@ -19,7 +19,7 @@ import {
   migrateLegacySandboxRegistryFiles,
   type LegacySandboxRegistryInspection,
   type LegacySandboxRegistryMigrationResult,
-} from "./doctor-sandbox-registry-migration.js";
+} from "./doctor/legacy/sandbox-registry.js";
 
 type SandboxScriptInfo = {
   scriptPath: string;

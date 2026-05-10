@@ -21,8 +21,6 @@ export type CaptureSessionRecord = {
   sourceScope: "openclaw";
   sourceProcess: string;
   proxyUrl?: string;
-  dbPath: string;
-  blobDir: string;
 };
 
 export type CaptureBlobRecord = {

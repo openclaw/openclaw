@@ -23,7 +23,7 @@ async function runLaneCase(home: string, lane?: string) {
     "agent:main:main": {
       sessionId: "main-session",
       updatedAt: Date.now(),
-      lastProvider: "webchat",
+      lastChannel: "webchat",
       lastTo: "",
     },
   });

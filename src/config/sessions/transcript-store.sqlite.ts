@@ -29,6 +29,7 @@ export type SqliteSessionTranscriptStoreOptions = OpenClawStateDatabaseOptions &
 export type AppendSqliteSessionTranscriptEventOptions = SqliteSessionTranscriptStoreOptions & {
   event: unknown;
   now?: () => number;
+  parentMode?: "database-tail";
 };
 
 export type AppendSqliteSessionTranscriptMessageOptions = SqliteSessionTranscriptStoreOptions & {
@@ -43,8 +44,6 @@ export type ReplaceSqliteSessionTranscriptEventsOptions = SqliteSessionTranscrip
   events: unknown[];
   now?: () => number;
 };
-
-export type ExportSqliteTranscriptJsonlOptions = SqliteSessionTranscriptStoreOptions;
 
 export type SqliteSessionTranscriptScope = {
   agentId: string;
@@ -108,6 +107,56 @@ function openTranscriptAgentDatabase(
   options: SqliteSessionTranscriptStoreOptions,
 ): OpenClawAgentDatabase {
   return openOpenClawAgentDatabase({ env: options.env, agentId: options.agentId });
+}
+
+function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: string): number {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getAgentTranscriptKysely(database.db)
+      .selectFrom("transcript_events")
+      .select((eb) =>
+        eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(-1)), "+", eb.lit(1)).as(
+          "next_seq",
+        ),
+      )
+      .where("session_id", "=", sessionId),
+  );
+  return typeof row?.next_seq === "bigint" ? Number(row.next_seq) : (row?.next_seq ?? 0);
+}
+
+function readLatestTranscriptTailEventId(
+  database: OpenClawAgentDatabase,
+  sessionId: string,
+): string | null {
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    getAgentTranscriptKysely(database.db)
+      .selectFrom("transcript_event_identities")
+      .select(["event_id"])
+      .where("session_id", "=", sessionId)
+      .where("event_type", "!=", "session")
+      .where("has_parent", "=", 1)
+      .orderBy("seq", "desc")
+      .limit(1),
+  );
+  return typeof row?.event_id === "string" ? row.event_id : null;
+}
+
+function withDatabaseTailParent(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  event: unknown;
+}): unknown {
+  if (!params.event || typeof params.event !== "object" || Array.isArray(params.event)) {
+    return params.event;
+  }
+  if (!Object.hasOwn(params.event, "parentId")) {
+    return params.event;
+  }
+  return {
+    ...params.event,
+    parentId: readLatestTranscriptTailEventId(params.database, params.sessionId),
+  };
 }
 
 function bindTranscriptEvent(params: {
@@ -348,11 +397,11 @@ export function listSqliteSessionTranscripts(
         const updatedAt =
           typeof record.updated_at === "bigint"
             ? Number(record.updated_at)
-            : Number(record.updated_at ?? 0);
+            : (record.updated_at ?? 0);
         const eventCount =
           typeof record.event_count === "bigint"
             ? Number(record.event_count)
-            : Number(record.event_count ?? 0);
+            : (record.event_count ?? 0);
         return [
           {
             agentId: agentDatabase.agentId,
@@ -388,12 +437,12 @@ export function getSqliteSessionTranscriptStats(
       .where("session_id", "=", sessionId),
   );
   const eventCount =
-    typeof row?.event_count === "bigint" ? Number(row.event_count) : Number(row?.event_count ?? 0);
+    typeof row?.event_count === "bigint" ? Number(row.event_count) : (row?.event_count ?? 0);
   if (!Number.isFinite(eventCount) || eventCount <= 0) {
     return null;
   }
   const updatedAt =
-    typeof row?.updated_at === "bigint" ? Number(row.updated_at) : Number(row?.updated_at ?? 0);
+    typeof row?.updated_at === "bigint" ? Number(row.updated_at) : (row?.updated_at ?? 0);
   return {
     sessionId,
     updatedAt: Number.isFinite(updatedAt) ? updatedAt : 0,
@@ -407,23 +456,16 @@ export function appendSqliteSessionTranscriptEvent(
   const { agentId, sessionId } = normalizeTranscriptScope(options);
   const now = options.now?.() ?? Date.now();
   const seq = runOpenClawAgentWriteTransaction((database) => {
-    const row = executeSqliteQueryTakeFirstSync(
-      database.db,
-      getAgentTranscriptKysely(database.db)
-        .selectFrom("transcript_events")
-        .select((eb) =>
-          eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(-1)), "+", eb.lit(1)).as(
-            "next_seq",
-          ),
-        )
-        .where("session_id", "=", sessionId),
-    );
-    const nextSeq = typeof row?.next_seq === "bigint" ? Number(row.next_seq) : (row?.next_seq ?? 0);
+    const nextSeq = readNextTranscriptSeq(database, sessionId);
+    const event =
+      options.parentMode === "database-tail"
+        ? withDatabaseTailParent({ database, sessionId, event: options.event })
+        : options.event;
     insertTranscriptEvent({
       database,
       sessionId,
       seq: nextSeq,
-      event: options.event,
+      event,
       createdAt: now,
     });
     return nextSeq;
@@ -440,21 +482,7 @@ export function appendSqliteSessionTranscriptMessage(
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   const messageId = runOpenClawAgentWriteTransaction((database) => {
     const db = getAgentTranscriptKysely(database.db);
-    const nextSeqRow = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_events")
-        .select((eb) =>
-          eb(eb.fn.coalesce(eb.fn.max<number | bigint>("seq"), eb.lit(-1)), "+", eb.lit(1)).as(
-            "next_seq",
-          ),
-        )
-        .where("session_id", "=", sessionId),
-    );
-    let nextSeq =
-      typeof nextSeqRow?.next_seq === "bigint"
-        ? Number(nextSeqRow.next_seq)
-        : (nextSeqRow?.next_seq ?? 0);
+    let nextSeq = readNextTranscriptSeq(database, sessionId);
 
     if (nextSeq === 0) {
       insertTranscriptEvent({
@@ -500,17 +528,7 @@ export function appendSqliteSessionTranscriptMessage(
       }
     }
 
-    const tail = executeSqliteQueryTakeFirstSync(
-      database.db,
-      db
-        .selectFrom("transcript_event_identities")
-        .select(["event_id"])
-        .where("session_id", "=", sessionId)
-        .where("event_type", "!=", "session")
-        .where("has_parent", "=", 1)
-        .orderBy("seq", "desc")
-        .limit(1),
-    );
+    const tailEventId = readLatestTranscriptTailEventId(database, sessionId);
     const newMessageId = randomUUID();
     insertTranscriptEvent({
       database,
@@ -519,7 +537,7 @@ export function appendSqliteSessionTranscriptMessage(
       event: {
         type: "message",
         id: newMessageId,
-        parentId: typeof tail?.event_id === "string" ? tail.event_id : null,
+        parentId: tailEventId,
         timestamp: new Date(now).toISOString(),
         message: options.message,
       },
@@ -684,13 +702,4 @@ export function deleteSqliteSessionTranscript(
     return Number(events.numAffectedRows ?? 0) > 0;
   }, options);
   return removed;
-}
-
-export function exportSqliteSessionTranscriptJsonl(
-  options: ExportSqliteTranscriptJsonlOptions,
-): string {
-  const lines = loadSqliteSessionTranscriptEvents(options).map((entry) =>
-    JSON.stringify(entry.event),
-  );
-  return lines.length > 0 ? `${lines.join("\n")}\n` : "";
 }

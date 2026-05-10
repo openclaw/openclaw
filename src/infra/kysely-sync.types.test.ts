@@ -23,7 +23,7 @@ describe("kysely sync helper types", () => {
       .select((eb) => ["id as itemId", "name", "data", eb.fn.countAll<number>().as("total")])
       .groupBy(["id", "name", "data"]);
 
-    if (false) {
+    const assertTypes = () => {
       const result = executeSqliteQuerySync(nativeDb, query);
       expectTypeOf(result.rows).toEqualTypeOf<
         Array<{
@@ -59,7 +59,8 @@ describe("kysely sync helper types", () => {
 
       // @ts-expect-error Kysely checks order references and selected aliases.
       query.orderBy("missingAlias");
-    }
+    };
+    void assertTypes;
 
     expect(query.compile().sql).toContain("select");
   });

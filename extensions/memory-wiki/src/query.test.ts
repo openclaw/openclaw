@@ -171,20 +171,13 @@ function createMemoryManager(overrides?: {
 }
 
 describe("isSessionMemoryPath", () => {
-  it("classifies all current session storage layouts", () => {
-    for (const relPath of [
-      "sessions/main/child-session",
-      "qmd/sessions/child-session.md",
-      "qmd/sessions-main/child-session.md",
-      "qmd\\sessions-main\\child-session.md",
-      "qmd/sessions",
-    ]) {
+  it("classifies opaque session transcript keys only", () => {
+    for (const relPath of ["transcript:main:child-session"]) {
       expect(isSessionMemoryPath(relPath)).toBe(true);
     }
 
     for (const relPath of [
-      "sessionsx/child-session.jsonl",
-      "qmd/sessionsxxx",
+      "transcriptx:main:child-session",
       "wiki/sessions/foo.md",
       "wiki\\sessions\\foo.md",
     ]) {
@@ -732,7 +725,7 @@ describe("searchMemoryWiki", () => {
     const manager = createMemoryManager({
       searchResults: [
         {
-          path: "sessions/main/child-session",
+          path: "transcript:main:child-session",
           startLine: 1,
           endLine: 2,
           score: 30,
@@ -740,7 +733,7 @@ describe("searchMemoryWiki", () => {
           source: "sessions",
         },
         {
-          path: "qmd/sessions-main/sibling-session.md",
+          path: "transcript:main:sibling-session",
           startLine: 3,
           endLine: 4,
           score: 20,
@@ -769,7 +762,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results.map((result) => result.path)).toEqual([
-      "sessions/main/child-session",
+      "transcript:main:child-session",
       "MEMORY.md",
     ]);
   });
@@ -785,7 +778,7 @@ describe("searchMemoryWiki", () => {
     const manager = createMemoryManager({
       searchResults: [
         {
-          path: "sessions/main/child-session",
+          path: "transcript:main:child-session",
           startLine: 1,
           endLine: 2,
           score: 30,
@@ -793,7 +786,7 @@ describe("searchMemoryWiki", () => {
           source: "sessions",
         },
         {
-          path: "qmd/sessions-main/sibling-session.md",
+          path: "transcript:main:sibling-session",
           startLine: 3,
           endLine: 4,
           score: 20,
@@ -822,7 +815,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results.map((result) => result.path)).toEqual([
-      "sessions/main/child-session",
+      "transcript:main:child-session",
       "MEMORY.md",
     ]);
   });
@@ -1123,7 +1116,7 @@ describe("getMemoryWikiPage", () => {
     mockSessionTranscriptStore();
     const manager = createMemoryManager({
       readResult: {
-        path: "qmd/sessions-main/sibling-session.md",
+        path: "transcript:main:sibling-session",
         text: "sibling transcript content",
       },
     });
@@ -1134,7 +1127,7 @@ describe("getMemoryWikiPage", () => {
       appConfig: createSessionVisibilityAppConfig(),
       agentSessionKey: "agent:main:child-session",
       sandboxed: true,
-      lookup: "qmd/sessions-main/sibling-session.md",
+      lookup: "transcript:main:sibling-session",
     });
 
     expect(result).toBeNull();
@@ -1151,7 +1144,7 @@ describe("getMemoryWikiPage", () => {
     mockSessionTranscriptStore();
     const manager = createMemoryManager({
       readResult: {
-        path: "qmd/sessions-main/child-session.md",
+        path: "transcript:main:child-session",
         text: "own transcript content",
       },
     });
@@ -1162,17 +1155,17 @@ describe("getMemoryWikiPage", () => {
       appConfig: createSessionVisibilityAppConfig(),
       agentSessionKey: "agent:main:child-session",
       sandboxed: true,
-      lookup: "qmd/sessions-main/child-session.md",
+      lookup: "transcript:main:child-session",
     });
 
     expectFields(result, {
       corpus: "memory",
-      path: "qmd/sessions-main/child-session.md",
+      path: "transcript:main:child-session",
       content: "own transcript content",
     });
     expect(manager.readFile).toHaveBeenCalledTimes(1);
     expect(manager.readFile).toHaveBeenCalledWith({
-      relPath: "qmd/sessions-main/child-session.md",
+      relPath: "transcript:main:child-session",
       from: 1,
       lines: 200,
     });
@@ -1191,7 +1184,7 @@ describe("getMemoryWikiPage", () => {
         config,
         agentSessionKey: "agent:main:child-session",
         sandboxed: true,
-        lookup: "sessions/main/child-session",
+        lookup: "transcript:main:child-session",
       }),
     ).rejects.toThrow(/wiki_get requires appConfig/);
   });

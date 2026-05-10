@@ -28,7 +28,6 @@ import type {
   ContextEngineInfo,
   AssembleResult,
   CompactResult,
-  ContextEngineMaintenanceResult,
   IngestResult,
 } from "./types.js";
 
@@ -165,200 +164,6 @@ class MockContextEngine implements ContextEngine {
 
   async dispose(): Promise<void> {
     // no-op
-  }
-}
-
-class LegacySessionKeyStrictEngine implements ContextEngine {
-  readonly info: ContextEngineInfo;
-  readonly ingestCalls: Array<Record<string, unknown>> = [];
-  readonly assembleCalls: Array<Record<string, unknown>> = [];
-  readonly compactCalls: Array<Record<string, unknown>> = [];
-  readonly maintainCalls: Array<Record<string, unknown>> = [];
-  readonly ingestedMessages: AgentMessage[] = [];
-
-  constructor(engineId = "legacy-sessionkey-strict") {
-    this.info = {
-      id: engineId,
-      name: "Legacy SessionKey Strict Engine",
-    };
-  }
-
-  private rejectLegacyCompatKeys(params: { sessionKey?: string; transcriptScope?: unknown }): void {
-    if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
-      throw new Error("Unrecognized key(s) in object: 'sessionKey'");
-    }
-    if (Object.prototype.hasOwnProperty.call(params, "transcriptScope")) {
-      throw new Error("Unrecognized key(s) in object: 'transcriptScope'");
-    }
-  }
-
-  async ingest(params: {
-    sessionId: string;
-    sessionKey?: string;
-    message: AgentMessage;
-    isHeartbeat?: boolean;
-  }): Promise<IngestResult> {
-    this.ingestCalls.push({ ...params });
-    this.rejectLegacyCompatKeys(params);
-    this.ingestedMessages.push(params.message);
-    return { ingested: true };
-  }
-
-  async assemble(params: {
-    sessionId: string;
-    sessionKey?: string;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-    availableTools?: Set<string>;
-    citationsMode?: MemoryCitationsMode;
-    prompt?: string;
-  }): Promise<AssembleResult> {
-    this.assembleCalls.push({ ...params });
-    this.rejectLegacyCompatKeys(params);
-    return {
-      messages: params.messages,
-      estimatedTokens: 7,
-    };
-  }
-
-  async compact(params: {
-    sessionId: string;
-    sessionKey?: string;
-    transcriptScope?: unknown;
-    tokenBudget?: number;
-    compactionTarget?: "budget" | "threshold";
-    customInstructions?: string;
-    runtimeContext?: Record<string, unknown>;
-  }): Promise<CompactResult> {
-    this.compactCalls.push({ ...params });
-    this.rejectLegacyCompatKeys(params);
-    return {
-      ok: true,
-      compacted: true,
-      result: {
-        tokensBefore: 50,
-        tokensAfter: 25,
-      },
-    };
-  }
-
-  async maintain(params: {
-    sessionId: string;
-    sessionKey?: string;
-    transcriptScope?: unknown;
-    runtimeContext?: Record<string, unknown>;
-  }): Promise<ContextEngineMaintenanceResult> {
-    this.maintainCalls.push({ ...params });
-    this.rejectLegacyCompatKeys(params);
-    return {
-      changed: false,
-      bytesFreed: 0,
-      rewrittenEntries: 0,
-    };
-  }
-}
-
-class SessionKeyRuntimeErrorEngine implements ContextEngine {
-  readonly info: ContextEngineInfo;
-  assembleCalls = 0;
-  constructor(
-    engineId = "sessionkey-runtime-error",
-    private readonly errorMessage = "sessionKey lookup failed",
-  ) {
-    this.info = {
-      id: engineId,
-      name: "SessionKey Runtime Error Engine",
-    };
-  }
-
-  async ingest(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    message: AgentMessage;
-    isHeartbeat?: boolean;
-  }): Promise<IngestResult> {
-    return { ingested: true };
-  }
-
-  async assemble(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-  }): Promise<AssembleResult> {
-    this.assembleCalls += 1;
-    throw new Error(this.errorMessage);
-  }
-
-  async compact(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    tokenBudget?: number;
-    compactionTarget?: "budget" | "threshold";
-    customInstructions?: string;
-    runtimeContext?: Record<string, unknown>;
-  }): Promise<CompactResult> {
-    return {
-      ok: true,
-      compacted: false,
-    };
-  }
-}
-
-class LegacyAssembleStrictEngine implements ContextEngine {
-  readonly info: ContextEngineInfo;
-  readonly assembleCalls: Array<Record<string, unknown>> = [];
-
-  constructor(engineId = "legacy-assemble-strict") {
-    this.info = {
-      id: engineId,
-      name: "Legacy Assemble Strict Engine",
-    };
-  }
-
-  async ingest(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    message: AgentMessage;
-    isHeartbeat?: boolean;
-  }): Promise<IngestResult> {
-    return { ingested: true };
-  }
-
-  async assemble(params: {
-    sessionId: string;
-    sessionKey?: string;
-    messages: AgentMessage[];
-    tokenBudget?: number;
-    availableTools?: Set<string>;
-    citationsMode?: MemoryCitationsMode;
-    prompt?: string;
-  }): Promise<AssembleResult> {
-    this.assembleCalls.push({ ...params });
-    if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
-      throw new Error("Unrecognized key(s) in object: 'sessionKey'");
-    }
-    if (Object.prototype.hasOwnProperty.call(params, "prompt")) {
-      throw new Error("Unrecognized key(s) in object: 'prompt'");
-    }
-    return {
-      messages: params.messages,
-      estimatedTokens: 3,
-    };
-  }
-
-  async compact(_params: {
-    sessionId: string;
-    sessionKey?: string;
-    tokenBudget?: number;
-    compactionTarget?: "budget" | "threshold";
-    customInstructions?: string;
-    runtimeContext?: Record<string, unknown>;
-  }): Promise<CompactResult> {
-    return {
-      ok: true,
-      compacted: false,
-    };
   }
 }
 
@@ -572,127 +377,46 @@ describe("Registry tests", () => {
       existingOwner: "core",
     });
   });
+
+  it("returns resolved engines directly and does not strip current runtime params", async () => {
+    const engineId = uniqueEngineId("strict-current-contract");
+    const assembleCalls: Array<Record<string, unknown>> = [];
+    const engine: ContextEngine = {
+      info: { id: engineId, name: "Strict Current Contract" },
+      async ingest() {
+        return { ingested: true };
+      },
+      async assemble(params) {
+        assembleCalls.push({ ...params });
+        if (Object.prototype.hasOwnProperty.call(params, "sessionKey")) {
+          throw new Error("sessionKey is part of the current contract");
+        }
+        return { messages: params.messages, estimatedTokens: 0 };
+      },
+      async compact() {
+        return { ok: true, compacted: false };
+      },
+    };
+    registerContextEngine(engineId, () => engine);
+
+    const resolved = await resolveContextEngine(configWithSlot(engineId));
+
+    expect(resolved).toBe(engine);
+    await expect(
+      resolved.assemble({
+        sessionId: "s1",
+        sessionKey: "agent:main:test",
+        messages: [makeMockMessage()],
+      }),
+    ).rejects.toThrow("sessionKey is part of the current contract");
+    expect(assembleCalls).toHaveLength(1);
+    expect(assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 3. Default engine selection
 // ═══════════════════════════════════════════════════════════════════════════
-
-describe("Legacy sessionKey compatibility", () => {
-  it("memoizes legacy mode after the first strict compatibility retry", async () => {
-    const engineId = `legacy-sessionkey-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-    const firstAssembled = await engine.assemble({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      messages: [makeMockMessage()],
-    });
-    const compacted = await engine.compact({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      transcriptScope: { agentId: "main", sessionId: "s1" },
-    });
-
-    expect(firstAssembled.estimatedTokens).toBe(7);
-    expect(compacted.compacted).toBe(true);
-    expect(strictEngine.assembleCalls).toHaveLength(2);
-    expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
-    expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.compactCalls).toHaveLength(2);
-    expect(strictEngine.compactCalls[0]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.compactCalls[0]).toHaveProperty("transcriptScope");
-    expect(strictEngine.compactCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.compactCalls[1]).not.toHaveProperty("transcriptScope");
-  });
-
-  it("retries strict ingest once and ingests each message only once", async () => {
-    const engineId = `legacy-sessionkey-ingest-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-    const firstMessage = makeMockMessage("user", "first");
-    const secondMessage = makeMockMessage("assistant", "second");
-
-    await engine.ingest({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      message: firstMessage,
-    });
-    await engine.ingest({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      message: secondMessage,
-    });
-
-    expect(strictEngine.ingestCalls).toHaveLength(3);
-    expect(strictEngine.ingestCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
-    expect(strictEngine.ingestCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.ingestCalls[2]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.ingestedMessages).toEqual([firstMessage, secondMessage]);
-  });
-
-  it("retries strict maintain once and memoizes legacy mode there too", async () => {
-    const engineId = `legacy-sessionkey-maintain-${Date.now().toString(36)}`;
-    const strictEngine = new LegacySessionKeyStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-
-    await engine.maintain?.({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      transcriptScope: { agentId: "main", sessionId: "s1" },
-    });
-
-    expect(strictEngine.maintainCalls).toHaveLength(3);
-    expect(strictEngine.maintainCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
-    expect(strictEngine.maintainCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.maintainCalls[1]).toHaveProperty("transcriptScope");
-    expect(strictEngine.maintainCalls[2]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.maintainCalls[2]).not.toHaveProperty("transcriptScope");
-  });
-
-  it("does not retry non-compat runtime errors", async () => {
-    const engineId = `sessionkey-runtime-${Date.now().toString(36)}`;
-    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(engineId);
-    registerContextEngine(engineId, () => runtimeErrorEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-
-    await expect(
-      engine.assemble({
-        sessionId: "s1",
-        sessionKey: "agent:main:test",
-        messages: [makeMockMessage()],
-      }),
-    ).rejects.toThrow("sessionKey lookup failed");
-    expect(runtimeErrorEngine.assembleCalls).toBe(1);
-  });
-
-  it("does not treat 'Unknown sessionKey' runtime failures as schema-compat errors", async () => {
-    const engineId = `sessionkey-unknown-runtime-${Date.now().toString(36)}`;
-    const runtimeErrorEngine = new SessionKeyRuntimeErrorEngine(
-      engineId,
-      'Unknown sessionKey "agent:main:missing"',
-    );
-    registerContextEngine(engineId, () => runtimeErrorEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-
-    await expect(
-      engine.assemble({
-        sessionId: "s1",
-        sessionKey: "agent:main:missing",
-        messages: [makeMockMessage()],
-      }),
-    ).rejects.toThrow('Unknown sessionKey "agent:main:missing"');
-    expect(runtimeErrorEngine.assembleCalls).toBe(1);
-  });
-});
 
 describe("Default engine selection", () => {
   // Ensure both legacy and a custom test engine are registered before these tests.
@@ -1104,29 +828,6 @@ describe("assemble() prompt forwarding", () => {
         expect(calls[0], testCase.name).toHaveProperty("prompt", testCase.expectedPrompt);
       }
     }
-  });
-
-  it("retries strict legacy assemble without sessionKey and prompt", async () => {
-    const engineId = `prompt-legacy-${Date.now().toString(36)}`;
-    const strictEngine = new LegacyAssembleStrictEngine(engineId);
-    registerContextEngine(engineId, () => strictEngine);
-
-    const engine = await resolveContextEngine(configWithSlot(engineId));
-    const result = await engine.assemble({
-      sessionId: "s1",
-      sessionKey: "agent:main:test",
-      messages: [makeMockMessage("user", "hello")],
-      prompt: "hello",
-    });
-
-    expect(result.estimatedTokens).toBe(3);
-    expect(strictEngine.assembleCalls).toHaveLength(3);
-    expect(strictEngine.assembleCalls[0]).toHaveProperty("sessionKey", "agent:main:test");
-    expect(strictEngine.assembleCalls[0]).toHaveProperty("prompt", "hello");
-    expect(strictEngine.assembleCalls[1]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.assembleCalls[1]).toHaveProperty("prompt", "hello");
-    expect(strictEngine.assembleCalls[2]).not.toHaveProperty("sessionKey");
-    expect(strictEngine.assembleCalls[2]).not.toHaveProperty("prompt");
   });
 });
 

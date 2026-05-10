@@ -1,6 +1,6 @@
 import { appendSessionTranscriptMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatUnknownError } from "./errors.js";
 import { buildFeedbackEvent, runFeedbackReflection } from "./feedback-reflection.js";
 import { respondToMSTeamsFileConsentInvoke } from "./file-consent-invoke.js";

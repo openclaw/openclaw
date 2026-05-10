@@ -131,7 +131,7 @@ Example:
 Canonical session metadata lives in the shared state database:
 
 - `~/.openclaw/state/openclaw.sqlite`
-- JSONL transcripts live alongside the store
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 
 Legacy `sessions.json` indexes are imported by `openclaw doctor --fix` and
 removed after SQLite has the rows. Custom offline repair stores can still use an
@@ -139,10 +139,9 @@ explicit `--store` path, but per-agent runtime metadata should go through the
 shared state database. Startup does not import or rewrite legacy session
 indexes.
 
-Gateway and ACP session discovery reads per-agent SQLite metadata and scans
-disk-backed transcripts under the default `agents/` root. Discovered transcript
-files must stay inside that resolved agent root. Symlinks and out-of-root paths
-are ignored.
+Gateway and ACP session discovery read SQLite metadata. JSONL transcript files
+are legacy doctor-import inputs or explicit export artifacts only; runtime code
+must not create, select, or bridge through transcript files or locators.
 
 ## WebChat behavior
 

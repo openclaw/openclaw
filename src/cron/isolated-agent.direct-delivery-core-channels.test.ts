@@ -124,7 +124,7 @@ async function expectCoreChannelAnnounceDelivery({
   testCase: ChannelCase;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
+    await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);
@@ -226,7 +226,7 @@ async function expectTelegramAnnounceDelivery({
   to: string;
 }): Promise<void> {
   await withTempCronHome(async (home) => {
-    await seedMainRouteSession(home, { lastProvider: "webchat", lastTo: "" });
+    await seedMainRouteSession(home, { lastChannel: "webchat", lastTo: "" });
     const deps = createCliDeps();
     if (meta) {
       mockAgentPayloads(payloads, meta);

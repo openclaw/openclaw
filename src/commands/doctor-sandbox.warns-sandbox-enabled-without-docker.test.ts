@@ -21,7 +21,7 @@ vi.mock("../agents/sandbox.js", () => ({
   resolveSandboxScope: vi.fn(() => "shared"),
 }));
 
-vi.mock("./doctor-sandbox-registry-migration.js", () => ({
+vi.mock("./doctor/legacy/sandbox-registry.js", () => ({
   inspectLegacySandboxRegistryFiles,
   migrateLegacySandboxRegistryFiles,
 }));

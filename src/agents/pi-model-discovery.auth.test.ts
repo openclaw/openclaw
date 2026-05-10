@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { AuthProfileStore } from "./auth-profiles.js";
+import { saveAuthProfileStore, type AuthProfileStore } from "./auth-profiles.js";
 import { resolvePiCredentialMapFromStore } from "./pi-auth-credentials.js";
 import { addEnvBackedPiCredentials } from "./pi-auth-discovery-core.js";
 import { discoverAuthStorage } from "./pi-model-discovery.js";
@@ -62,8 +62,8 @@ async function writeLegacyAuthJson(
   await fs.writeFile(path.join(agentDir, "auth.json"), JSON.stringify(authEntries, null, 2));
 }
 
-async function writeAuthProfilesJson(agentDir: string, store: AuthProfileStore): Promise<void> {
-  await fs.writeFile(path.join(agentDir, "auth-profiles.json"), JSON.stringify(store, null, 2));
+function saveAuthProfiles(agentDir: string, store: AuthProfileStore): void {
+  saveAuthProfileStore(store, agentDir);
 }
 
 describe("discoverAuthStorage", () => {
@@ -163,7 +163,7 @@ describe("discoverAuthStorage", () => {
 
   it("marks keyRef-only auth profiles configured for read-only model discovery", async () => {
     await withAgentDir(async (agentDir) => {
-      await writeAuthProfilesJson(agentDir, {
+      saveAuthProfiles(agentDir, {
         version: 1,
         profiles: {
           "fixture-ref-provider:default": {

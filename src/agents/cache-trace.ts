@@ -178,11 +178,10 @@ export function createCacheTrace(params: CacheTraceInit): CacheTrace | null {
       event.error = payload.error;
     }
 
-    const line = safeJsonStringify(event);
-    if (!line) {
+    if (!safeJsonStringify(event)) {
       return;
     }
-    writer.write(`${line}\n`);
+    writer.write(event);
   };
 
   const wrapStreamFn: CacheTrace["wrapStreamFn"] = (streamFn) => {

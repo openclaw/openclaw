@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadCronStore, saveCronStore } from "../../../cron/store.js";
-import type { CronStoreFile } from "../../../cron/types.js";
+import type { CronStoreSnapshot } from "../../../cron/types.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import {
   importLegacyCronStateFileToSqlite,
@@ -40,7 +40,7 @@ afterEach(async () => {
   }
 });
 
-function makeStore(jobId: string, enabled: boolean): CronStoreFile {
+function makeStore(jobId: string, enabled: boolean): CronStoreSnapshot {
   const now = Date.now();
   return {
     version: 1,
@@ -151,7 +151,11 @@ describe("legacy cron store migration", () => {
     await saveCronStore(storePath, {
       version: 1,
       jobs: [
-        { ...job, state: {}, updatedAtMs: undefined } as unknown as CronStoreFile["jobs"][number],
+        {
+          ...job,
+          state: {},
+          updatedAtMs: undefined,
+        } as unknown as CronStoreSnapshot["jobs"][number],
       ],
     });
     await fs.writeFile(

@@ -114,7 +114,6 @@ export async function mirrorCodexAppServerTranscript(params: {
       agentId,
       sessionId,
       message: messageToAppend,
-      config: params.config,
     });
   }
 

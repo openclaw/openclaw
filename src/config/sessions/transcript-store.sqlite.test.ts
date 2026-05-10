@@ -11,7 +11,6 @@ import {
   appendSqliteSessionTranscriptEvent,
   appendSqliteSessionTranscriptMessage,
   deleteSqliteSessionTranscript,
-  exportSqliteSessionTranscriptJsonl,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
   recordSqliteSessionTranscriptSnapshot,
@@ -266,34 +265,5 @@ describe("SQLite session transcript store", () => {
     expect(
       agentDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_snapshots").get(),
     ).toEqual({ count: 0 });
-  });
-
-  it("renders JSONL from SQLite for explicit transcript export", () => {
-    const stateDir = createTempDir();
-
-    replaceSqliteSessionTranscriptEvents({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      agentId: "main",
-      sessionId: "session-1",
-      events: [
-        { type: "session", id: "session-1" },
-        { type: "message", id: "m1", message: { role: "user", content: "hi" } },
-      ],
-      now: () => 300,
-    });
-
-    expect(
-      exportSqliteSessionTranscriptJsonl({
-        env: { OPENCLAW_STATE_DIR: stateDir },
-        agentId: "main",
-        sessionId: "session-1",
-      }),
-    ).toBe(
-      `${JSON.stringify({ type: "session", id: "session-1" })}\n${JSON.stringify({
-        type: "message",
-        id: "m1",
-        message: { role: "user", content: "hi" },
-      })}\n`,
-    );
   });
 });

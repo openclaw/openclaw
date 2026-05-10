@@ -879,7 +879,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedPiSessionMock).not.toHaveBeenCalled();
   });
 
-  it("does not treat raw transcript metadata bytes as token pressure", async () => {
+  it("does not treat non-message transcript payload bytes as token pressure", async () => {
     appendSqliteSessionTranscriptEvent({
       agentId: "main",
       sessionId: "session",

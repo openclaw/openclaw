@@ -28,7 +28,7 @@ function cronTestEnv(home: string): NodeJS.ProcessEnv {
 
 export async function seedMainRouteSession(
   home: string,
-  session: { lastProvider: string; lastTo: string; lastChannel?: string },
+  session: { lastChannel: string; lastTo: string },
 ): Promise<void> {
   await seedCronSessionRows(home, {
     "agent:main:main": {

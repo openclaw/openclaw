@@ -305,10 +305,6 @@ function registerCurrentConversationBindingAdapterForTest(params: {
   });
 }
 
-function dbTranscriptReference(agentId: string, sessionId: string): string {
-  return `agent-db:${agentId}:transcript_events:${sessionId}`;
-}
-
 beforeEach(() => {
   channelSummaryMocks.buildChannelSummary.mockReset().mockResolvedValue([]);
   browserMaintenanceMocks.closeTrackedBrowserTabsForSessions.mockReset().mockResolvedValue(0);
@@ -326,7 +322,6 @@ beforeEach(() => {
       if (!parentEntry.sessionId) {
         return null;
       }
-      const parentTranscriptReference = dbTranscriptReference(agentId, parentEntry.sessionId);
       const sessionId = `forked-session-${++sessionForkMocks.nextSessionId}`;
       replaceSqliteSessionTranscriptEvents({
         agentId,
@@ -334,11 +329,11 @@ beforeEach(() => {
         events: [
           {
             type: "session",
-            version: 3,
+            version: 1,
             id: sessionId,
             timestamp: new Date().toISOString(),
             cwd: process.cwd(),
-            parentSession: parentTranscriptReference,
+            parentTranscriptScope: { agentId, sessionId: parentEntry.sessionId },
           },
         ],
       });
@@ -355,10 +350,9 @@ describe("initSessionState thread forking", () => {
     const root = await makeCaseDir("openclaw-thread-session-");
 
     const parentSessionId = "parent-session";
-    const parentTranscriptReference = dbTranscriptReference("main", parentSessionId);
     const header = {
       type: "session",
-      version: 3,
+      version: 1,
       id: parentSessionId,
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
@@ -421,9 +415,12 @@ describe("initSessionState thread forking", () => {
       throw new Error("Missing session header");
     }
     const parsedHeader = headerEvent.event as {
-      parentSession?: string;
+      parentTranscriptScope?: { agentId: string; sessionId: string };
     };
-    expect(parsedHeader.parentSession).toBe(parentTranscriptReference);
+    expect(parsedHeader.parentTranscriptScope).toEqual({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     warn.mockRestore();
   });
 
@@ -434,7 +431,7 @@ describe("initSessionState thread forking", () => {
     const parentSessionId = "parent-session";
     const header = {
       type: "session",
-      version: 3,
+      version: 1,
       id: parentSessionId,
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
@@ -511,7 +508,7 @@ describe("initSessionState thread forking", () => {
     const parentSessionId = "parent-overflow";
     const header = {
       type: "session",
-      version: 3,
+      version: 1,
       id: parentSessionId,
       timestamp: new Date().toISOString(),
       cwd: process.cwd(),
@@ -578,7 +575,7 @@ describe("initSessionState thread forking", () => {
       events: [
         {
           type: "session",
-          version: 3,
+          version: 1,
           id: parentSessionId,
           timestamp: new Date().toISOString(),
           cwd: process.cwd(),

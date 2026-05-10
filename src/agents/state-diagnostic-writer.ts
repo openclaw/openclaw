@@ -3,8 +3,7 @@ import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 
 export type StateDiagnosticWriter = {
   destination: string;
-  write: (line: string) => unknown;
-  flush: () => Promise<void>;
+  write: (value: unknown) => unknown;
 };
 
 type StateDiagnosticWriterOptions = {
@@ -13,15 +12,11 @@ type StateDiagnosticWriterOptions = {
   scope: string;
 };
 
-function parseLineValue(line: string): unknown {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return { line: "" };
-  }
+function serializeDiagnosticValue(value: unknown): string {
   try {
-    return JSON.parse(trimmed) as unknown;
+    return JSON.stringify(value) ?? String(value);
   } catch {
-    return { line };
+    return String(value);
   }
 }
 
@@ -38,14 +33,16 @@ export function getStateDiagnosticWriter(
   let seq = 0;
   const writer: StateDiagnosticWriter = {
     destination: options.label,
-    write: (line: string) => {
-      const value = parseLineValue(line);
-      const digest = crypto.createHash("sha256").update(line).digest("hex").slice(0, 16);
+    write: (value: unknown) => {
+      const digest = crypto
+        .createHash("sha256")
+        .update(serializeDiagnosticValue(value))
+        .digest("hex")
+        .slice(0, 16);
       const entryKey = `${Date.now().toString(36)}-${(seq += 1).toString(36)}-${digest}`;
       writeOpenClawStateKvJson(options.scope, entryKey, value, { env: options.env });
       return "queued";
     },
-    flush: async () => undefined,
   };
   writers.set(key, writer);
   return writer;

@@ -267,8 +267,6 @@ describe("findLatestIMessageEntryForChat", () => {
   it("never crosses account boundaries", () => {
     // Diagnostic: verify the temp-dir env stub is actually visible.
     expect(process.env.OPENCLAW_STATE_DIR).toBe(tempStateDir);
-    const cachePath = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    expect(fs.existsSync(cachePath)).toBe(false);
 
     rememberIMessageReplyCache({
       accountId: "other-account",
@@ -337,7 +335,7 @@ describe("findLatestIMessageEntryForChat", () => {
 });
 
 describe("reply cache SQLite persistence", () => {
-  it("stores short-id mappings in SQLite without writing reply-cache.jsonl", () => {
+  it("persists short-id mappings across cache instances", () => {
     rememberIMessageReplyCache({
       accountId: "default",
       messageId: "perm-test-guid",
@@ -345,15 +343,16 @@ describe("reply cache SQLite persistence", () => {
       timestamp: Date.now(),
     });
 
-    const cacheFile = path.join(tempStateDir, "imessage", "reply-cache.jsonl");
-    const sqliteFile = path.join(tempStateDir, "state", "openclaw.sqlite");
-    expect(fs.existsSync(cacheFile)).toBe(false);
-    expect(fs.existsSync(sqliteFile)).toBe(true);
+    const found = findLatestIMessageEntryForChat({
+      accountId: "default",
+      chatIdentifier: "+12069106512",
+    });
+    expect(found?.messageId).toBe("perm-test-guid");
   });
 });
 
 describe("hydrate-on-resolve (post-restart short-id persistence)", () => {
-  it("hydrates the on-disk JSONL before resolving a short id whose mapping predates this run", () => {
+  it("hydrates the SQLite reply cache before resolving a short id whose mapping predates this run", () => {
     // Issue-then-restart contract: a shortId we issued before a gateway
     // restart must still resolve afterwards. The first resolve call after
     // process boot would otherwise miss the persisted mapping because the

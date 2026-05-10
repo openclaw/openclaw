@@ -101,18 +101,23 @@ OpenClaw calls two optional subagent lifecycle hooks:
 
 The `assemble` method can return a `systemPromptAddition` string. OpenClaw prepends this to the system prompt for the run. This lets engines inject dynamic recall guidance, retrieval instructions, or context-aware hints without requiring static workspace files.
 
-## The legacy engine
+## The Built-In Engine
 
-The built-in `legacy` engine preserves OpenClaw's original behavior:
+The built-in engine uses the compatibility id `legacy`, but runtime transcript
+persistence is database-owned. It preserves OpenClaw's default context behavior:
 
-- **Ingest**: no-op (the session manager handles message persistence directly).
+- **Ingest**: no-op (the SQLite transcript writer handles message persistence).
 - **Assemble**: pass-through (the existing sanitize → validate → limit pipeline in the runtime handles context assembly).
 - **Compact**: delegates to the built-in summarization compaction, which creates a single summary of older messages and keeps recent messages intact.
 - **After turn**: no-op.
 
-The legacy engine does not register tools or provide a `systemPromptAddition`.
+The built-in engine does not register tools or provide a `systemPromptAddition`.
 
 When no `plugins.slots.contextEngine` is set (or it's set to `"legacy"`), this engine is used automatically.
+
+Context engine method params are the current database-first contract. OpenClaw
+does not retry calls by stripping `sessionKey`, `transcriptScope`, or `prompt`;
+plugin engines should accept the documented params or fail clearly.
 
 ## Plugin engines
 
@@ -239,7 +244,7 @@ Optional members:
 </AccordionGroup>
 
 <Warning>
-`ownsCompaction: false` does **not** mean OpenClaw automatically falls back to the legacy engine's compaction path.
+`ownsCompaction: false` does **not** mean OpenClaw automatically falls back to the built-in compaction path.
 </Warning>
 
 That means there are two valid plugin patterns:
@@ -281,7 +286,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
 
 <AccordionGroup>
   <Accordion title="Compaction">
-    Compaction is one responsibility of the context engine. The legacy engine delegates to OpenClaw's built-in summarization. Plugin engines can implement any compaction strategy (DAG summaries, vector retrieval, etc.).
+    Compaction is one responsibility of the context engine. The built-in engine delegates to OpenClaw's built-in summarization. Plugin engines can implement any compaction strategy (DAG summaries, vector retrieval, etc.).
   </Accordion>
   <Accordion title="Memory plugins">
     Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should prefer `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the active memory prompt sections into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level control, it can still pull raw lines from `openclaw/plugin-sdk/memory-host-core` via `buildActiveMemoryPromptSection(...)`.

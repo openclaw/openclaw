@@ -339,7 +339,7 @@ export function resolveIMessageMessageId(
   if (!trimmed) {
     return trimmed;
   }
-  // Hydrate the on-disk JSONL into the in-memory maps before reading them.
+  // Hydrate the SQLite reply cache into the in-memory maps before reading them.
   // Without this, the first post-restart action that arrives with a short
   // MessageSid would miss `imessageShortIdToUuid` and fall through to the
   // "no longer available" path, breaking the persistence contract — the

@@ -39,25 +39,11 @@ export function getHomeDir(): string {
   return getPlatformAdapter().getTempDir();
 }
 
-/** Return a path under `~/.openclaw/qqbot` without creating it. */
-export function getQQBotDataPath(...subPaths: string[]): string {
-  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
-}
-
-/** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
-export function getQQBotDataDir(...subPaths: string[]): string {
-  const dir = getQQBotDataPath(...subPaths);
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-  return dir;
-}
-
 /**
  * Return a path under `~/.openclaw/media/qqbot` without creating it.
  *
- * Unlike `getQQBotDataPath`, this lives under OpenClaw's core media allowlist so
- * downloaded images and audio can be accessed by framework media tooling.
+ * Runtime QQBot files are media materializations/downloads, not durable state.
+ * Durable QQBot state lives in SQLite plugin state.
  */
 export function getQQBotMediaPath(...subPaths: string[]): string {
   return path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
@@ -205,13 +191,8 @@ export function resolveQQBotLocalMediaPath(p: string): string {
 
   const homeDir = getHomeDir();
   const mediaRoot = getQQBotMediaPath();
-  const dataRoot = getQQBotDataPath();
   const workspaceRoot = path.join(homeDir, ".openclaw", "workspace", "qqbot");
-  const candidateRoots = [
-    { from: workspaceRoot, to: mediaRoot },
-    { from: dataRoot, to: mediaRoot },
-    { from: mediaRoot, to: dataRoot },
-  ];
+  const candidateRoots = [{ from: workspaceRoot, to: mediaRoot }];
 
   for (const { from, to } of candidateRoots) {
     if (!isPathWithinRoot(normalized, from)) {

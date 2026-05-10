@@ -6,7 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { tryCronScheduleIdentity } from "./schedule-identity.js";
-import type { CronJob, CronStoreFile } from "./types.js";
+import type { CronJob, CronStoreSnapshot } from "./types.js";
 
 type CronJobsTable = OpenClawStateKyselyDatabase["cron_jobs"];
 type CronJobsDatabase = Pick<OpenClawStateKyselyDatabase, "cron_jobs">;
@@ -51,7 +51,9 @@ function stripRuntimeOnlyCronJobFields(job: CronJob): Record<string, unknown> {
   return { ...rest, state: {} };
 }
 
-export function extractCronRuntimeStateSnapshot(store: CronStoreFile): CronRuntimeStateSnapshot {
+export function extractCronRuntimeStateSnapshot(
+  store: CronStoreSnapshot,
+): CronRuntimeStateSnapshot {
   const jobs: Record<string, CronRuntimeStateEntry> = {};
   for (const job of store.jobs) {
     jobs[job.id] = {
@@ -67,20 +69,20 @@ export function resolveCronStoreKey(): string {
   return DEFAULT_CRON_STORE_KEY;
 }
 
-function ensureJobStateObject(job: CronStoreFile["jobs"][number]): void {
+function ensureJobStateObject(job: CronStoreSnapshot["jobs"][number]): void {
   if (!job.state || typeof job.state !== "object") {
     job.state = {} as never;
   }
 }
 
-function backfillMissingRuntimeFields(job: CronStoreFile["jobs"][number]): void {
+function backfillMissingRuntimeFields(job: CronStoreSnapshot["jobs"][number]): void {
   ensureJobStateObject(job);
   if (typeof job.updatedAtMs !== "number") {
     job.updatedAtMs = typeof job.createdAtMs === "number" ? job.createdAtMs : Date.now();
   }
 }
 
-function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unknown): number {
+function resolveUpdatedAtMs(job: CronStoreSnapshot["jobs"][number], updatedAtMs: unknown): number {
   if (typeof updatedAtMs === "number" && Number.isFinite(updatedAtMs)) {
     return updatedAtMs;
   }
@@ -93,7 +95,7 @@ function resolveUpdatedAtMs(job: CronStoreFile["jobs"][number], updatedAtMs: unk
 }
 
 function mergeRuntimeStateSnapshotEntry(
-  job: CronStoreFile["jobs"][number],
+  job: CronStoreSnapshot["jobs"][number],
   entry: CronRuntimeStateEntry,
 ): void {
   job.updatedAtMs = resolveUpdatedAtMs(job, entry.updatedAtMs);
@@ -116,7 +118,10 @@ function parseCronStateJson(value: string): Record<string, unknown> {
   }
 }
 
-function mergeCronJobRowRuntimeState(job: CronStoreFile["jobs"][number], row: CronJobRow): void {
+function mergeCronJobRowRuntimeState(
+  job: CronStoreSnapshot["jobs"][number],
+  row: CronJobRow,
+): void {
   mergeRuntimeStateSnapshotEntry(job, {
     updatedAtMs: row.runtime_updated_at_ms ?? undefined,
     scheduleIdentity: row.schedule_identity ?? undefined,
@@ -124,7 +129,7 @@ function mergeCronJobRowRuntimeState(job: CronStoreFile["jobs"][number], row: Cr
   });
 }
 
-function hydrateCronStoreFromSqlite(storeKey: string): CronStoreFile {
+function hydrateCronStoreFromSqlite(storeKey: string): CronStoreSnapshot {
   const database = openOpenClawStateDatabase();
   const rows = executeSqliteQuerySync(
     database.db,
@@ -140,7 +145,7 @@ function hydrateCronStoreFromSqlite(storeKey: string): CronStoreFile {
     try {
       const parsed = JSON.parse(row.job_json) as unknown;
       return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-        ? [parsed as CronStoreFile["jobs"][number]]
+        ? [parsed as CronStoreSnapshot["jobs"][number]]
         : [];
     } catch {
       return [];
@@ -158,11 +163,11 @@ function hydrateCronStoreFromSqlite(storeKey: string): CronStoreFile {
   return { version: 1, jobs };
 }
 
-export async function loadCronStore(storeKey: string): Promise<CronStoreFile> {
+export async function loadCronStore(storeKey: string): Promise<CronStoreSnapshot> {
   return hydrateCronStoreFromSqlite(storeKey);
 }
 
-export function loadCronStoreSync(storeKey: string): CronStoreFile {
+export function loadCronStoreSync(storeKey: string): CronStoreSnapshot {
   return hydrateCronStoreFromSqlite(storeKey);
 }
 
@@ -196,7 +201,7 @@ function cronStateUpdateValues(
   };
 }
 
-function writeCronJobsToSqlite(storeKey: string, store: CronStoreFile): void {
+function writeCronJobsToSqlite(storeKey: string, store: CronStoreSnapshot): void {
   const normalizedStoreKey = cronStoreKey(storeKey);
   runOpenClawStateWriteTransaction((database) => {
     const db = getCronJobsKysely(database.db);
@@ -273,7 +278,7 @@ export function writeCronRuntimeStateSnapshot(
 
 export async function saveCronStore(
   storeKey: string,
-  store: CronStoreFile,
+  store: CronStoreSnapshot,
   opts?: { skipBackup?: boolean; stateOnly?: boolean },
 ) {
   void opts?.skipBackup;

@@ -443,11 +443,8 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="11c. Shell completion">
     Doctor checks whether tab completion is installed for the current shell (zsh, bash, fish, or PowerShell):
 
-    - If the shell profile uses a slow dynamic completion pattern (`source <(openclaw completion ...)`), doctor upgrades it to the faster cached file variant.
-    - If completion is configured in the profile but the cache file is missing, doctor regenerates the cache automatically.
+    - If the shell profile points at the retired completion cache under OpenClaw state, doctor rewrites the profile to generate completions from the CLI directly.
     - If no completion is configured at all, doctor prompts to install it (interactive mode only; skipped with `--non-interactive`).
-
-    Run `openclaw completion --write-state` to regenerate the cache manually.
 
   </Accordion>
   <Accordion title="12. Gateway auth checks (local token)">

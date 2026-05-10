@@ -57,7 +57,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
   }) {
     await seedHeartbeatSession(params.agentId, params.sessionKey, {
       lastChannel: "whatsapp",
-      lastProvider: "whatsapp",
       lastTo: "+1555",
     });
 
@@ -128,7 +127,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
           heartbeatIsolatedBaseSessionKey: baseSessionKey,
         },
@@ -272,7 +270,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
           heartbeatIsolatedBaseSessionKey: baseSessionKey,
         },
@@ -303,7 +300,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
           heartbeatIsolatedBaseSessionKey: baseSessionKey,
         },
@@ -357,7 +353,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
           heartbeatIsolatedBaseSessionKey: realSessionKey,
         },
@@ -412,7 +407,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
           heartbeatTaskState: {
             "daily-check": 1,
@@ -457,7 +451,6 @@ describe("runHeartbeatOnce – isolated session key stability (#59493)", () => {
           sessionId: "sid",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "+1555",
         },
       });

@@ -1334,7 +1334,6 @@ describe("registerTelegramNativeCommands — session metadata", () => {
       expect.objectContaining({
         sessionId: "sess-topic",
         sessionKey: "agent:main:telegram:group:-1001234567890:topic:42",
-        topicId: 42,
       }),
     );
     expectRecordFields(

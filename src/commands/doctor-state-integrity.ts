@@ -17,7 +17,6 @@ import {
 } from "../config/sessions/transcript-store.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
-import { resolveMemoryBackendConfig } from "../memory-host-sdk/engine-storage.js";
 import { resolveOpenClawAgentDir } from "../plugin-sdk/agent-dir-compat.js";
 import { listConfiguredChannelIdsForReadOnlyScope } from "../plugins/channel-plugin-ids.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -29,10 +28,6 @@ import { shortenHomePath } from "../utils.js";
 import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import { describeHeartbeatSessionTargetIssues } from "./doctor-heartbeat-session-target.js";
 import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
-import {
-  isPrimaryLegacySessionTranscriptFileName,
-  resolveLegacySessionTranscriptsDirForAgent,
-} from "./doctor/legacy/session-file-artifacts.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -45,15 +40,6 @@ type DoctorPrompterLike = {
 
 function countLabel(count: number, singular: string, plural = `${singular}s`): string {
   return `${count} ${count === 1 ? singular : plural}`;
-}
-
-function formatFilePreview(paths: string[], limit = 3): string {
-  const names = paths.slice(0, limit).map((filePath) => path.basename(filePath));
-  const remaining = paths.length - names.length;
-  if (remaining > 0) {
-    return `${names.join(", ")}, and ${remaining} more`;
-  }
-  return names.join(", ");
 }
 
 function existsDir(dir: string): boolean {
@@ -203,27 +189,6 @@ function addUserRwx(mode: number): number {
   return perms | 0o700;
 }
 
-function countJsonlLines(filePath: string): number {
-  try {
-    const raw = fs.readFileSync(filePath, "utf-8");
-    if (!raw) {
-      return 0;
-    }
-    let count = 0;
-    for (let i = 0; i < raw.length; i += 1) {
-      if (raw[i] === "\n") {
-        count += 1;
-      }
-    }
-    if (!raw.endsWith("\n")) {
-      count += 1;
-    }
-    return count;
-  } catch {
-    return 0;
-  }
-}
-
 function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: string }): {
   agentId: string;
   sessionId: string;
@@ -234,33 +199,12 @@ function resolveTranscriptSqliteScope(params: { agentId: string; sessionId: stri
   };
 }
 
-function hasSessionTranscript(params: {
-  agentId: string;
-  sessionId: string;
-  legacyTranscriptPath?: string;
-}): boolean {
-  const scope = resolveTranscriptSqliteScope(params);
-  return (
-    hasSqliteSessionTranscriptEvents(scope) ||
-    (params.legacyTranscriptPath ? existsFile(params.legacyTranscriptPath) : false)
-  );
+function hasSessionTranscript(params: { agentId: string; sessionId: string }): boolean {
+  return hasSqliteSessionTranscriptEvents(resolveTranscriptSqliteScope(params));
 }
 
-function countSessionTranscriptEvents(params: {
-  agentId: string;
-  sessionId: string;
-  legacyTranscriptPath?: string;
-}): number {
-  const scope = resolveTranscriptSqliteScope(params);
-  const sqliteEvents = loadSqliteSessionTranscriptEvents(scope);
-  if (sqliteEvents.length > 0) {
-    return sqliteEvents.length;
-  }
-  return params.legacyTranscriptPath ? countJsonlLines(params.legacyTranscriptPath) : 0;
-}
-
-function resolveLegacyTranscriptPathForSession(sessionsDir: string, sessionId: string): string {
-  return path.join(sessionsDir, `${sessionId}.jsonl`);
+function countSessionTranscriptEvents(params: { agentId: string; sessionId: string }): number {
+  return loadSqliteSessionTranscriptEvents(resolveTranscriptSqliteScope(params)).length;
 }
 
 function findOtherStateDirs(stateDir: string): string[] {
@@ -637,11 +581,6 @@ function shouldRequireOAuthDir(cfg: OpenClawConfig, env: NodeJS.ProcessEnv): boo
   return false;
 }
 
-function shouldSuppressOrphanTranscriptWarning(cfg: OpenClawConfig, agentId: string): boolean {
-  const backendConfig = resolveMemoryBackendConfig({ cfg, agentId });
-  return backendConfig?.backend === "qmd" && backendConfig.qmd?.sessions.enabled === true;
-}
-
 export async function noteStateIntegrity(
   cfg: OpenClawConfig,
   prompter: DoctorPrompterLike,
@@ -656,16 +595,12 @@ export async function noteStateIntegrity(
   const defaultStateDir = path.join(homedir(), ".openclaw");
   const oauthDir = resolveOAuthDir(env, stateDir);
   const agentId = resolveDefaultAgentId(cfg);
-  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(agentId, env, homedir);
   const displayStateDir = shortenHomePath(stateDir);
   const displayOauthDir = shortenHomePath(oauthDir);
-  const displaySessionsDir = shortenHomePath(sessionsDir);
   const displayConfigPath = configPath ? shortenHomePath(configPath) : undefined;
   const requireOAuthDir = shouldRequireOAuthDir(cfg, env);
   const cloudSyncedStateDir = detectMacCloudSyncedStateDir(stateDir);
   const linuxSdBackedStateDir = detectLinuxSdBackedStateDir(stateDir);
-  const suppressOrphanTranscriptWarning = shouldSuppressOrphanTranscriptWarning(cfg, agentId);
-
   if (cloudSyncedStateDir) {
     warnings.push(
       [
@@ -793,9 +728,6 @@ export async function noteStateIntegrity(
       );
     }
     const displayDirFor = (dir: string) => {
-      if (dir === sessionsDir) {
-        return displaySessionsDir;
-      }
       if (dir === oauthDir) {
         return displayOauthDir;
       }
@@ -878,7 +810,7 @@ export async function noteStateIntegrity(
   const store = Object.fromEntries(
     listSessionEntries({ agentId, env }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-  const sessionPathOpts = { agentId };
+  const sessionScopeOpts = { agentId };
   const entries = Object.entries(store).filter(([, entry]) => entry && typeof entry === "object");
   if (entries.length > 0) {
     const recent = entries
@@ -898,7 +830,6 @@ export async function noteStateIntegrity(
       return !hasSessionTranscript({
         agentId,
         sessionId,
-        legacyTranscriptPath: resolveLegacyTranscriptPathForSession(sessionsDir, sessionId),
       });
     });
     if (missing.length > 0) {
@@ -977,7 +908,7 @@ export async function noteStateIntegrity(
       cfg,
       store,
       stateDir,
-      sessionPathOpts,
+      sessionScopeOpts,
       prompter,
       warnings,
       changes,
@@ -990,13 +921,7 @@ export async function noteStateIntegrity(
     const mainKey = resolveMainSessionKey(cfg);
     const mainEntry = store[mainKey];
     if (mainEntry?.sessionId) {
-      const legacyTranscriptPath = resolveLegacyTranscriptPathForSession(
-        sessionsDir,
-        mainEntry.sessionId,
-      );
-      if (
-        !hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId, legacyTranscriptPath })
-      ) {
+      if (!hasSessionTranscript({ agentId, sessionId: mainEntry.sessionId })) {
         warnings.push(
           `- Main session transcript missing (${agentId}/${mainEntry.sessionId}). History will appear to reset.`,
         );
@@ -1004,53 +929,10 @@ export async function noteStateIntegrity(
         const eventCount = countSessionTranscriptEvents({
           agentId,
           sessionId: mainEntry.sessionId,
-          legacyTranscriptPath,
         });
         if (eventCount <= 1) {
           warnings.push(
             `- Main session transcript has only ${eventCount} event. Session history may not be appending.`,
-          );
-        }
-      }
-    }
-  }
-
-  if (existsDir(sessionsDir)) {
-    const sessionDirEntries = fs.readdirSync(sessionsDir, { withFileTypes: true });
-    const orphanTranscriptPaths = sessionDirEntries
-      .filter((entry) => entry.isFile() && isPrimaryLegacySessionTranscriptFileName(entry.name))
-      .map((entry) => path.join(sessionsDir, entry.name));
-    if (orphanTranscriptPaths.length > 0 && !suppressOrphanTranscriptWarning) {
-      const orphanCount = countLabel(orphanTranscriptPaths.length, "orphan transcript file");
-      const orphanPreview = formatFilePreview(orphanTranscriptPaths);
-      warnings.push(
-        [
-          `- Found ${orphanCount} in ${displaySessionsDir}.`,
-          "  These legacy .jsonl files are no longer referenced by SQLite session rows, so they are not part of any active session history.",
-          "  Doctor can delete them after the session transcript migration/import has run.",
-          `  Examples: ${orphanPreview}`,
-        ].join("\n"),
-      );
-      const deleteOrphans = await prompter.confirmRuntimeRepair({
-        message: `Delete ${orphanCount} in ${displaySessionsDir}?`,
-        initialValue: false,
-        requiresInteractiveConfirmation: true,
-      });
-      if (deleteOrphans) {
-        let deleted = 0;
-        for (const orphanPath of orphanTranscriptPaths) {
-          try {
-            fs.rmSync(orphanPath, { force: true });
-            deleted += 1;
-          } catch (err) {
-            warnings.push(
-              `- Failed to delete orphan transcript ${shortenHomePath(orphanPath)}: ${String(err)}`,
-            );
-          }
-        }
-        if (deleted > 0) {
-          changes.push(
-            `- Deleted ${countLabel(deleted, "orphan transcript file")} in ${displaySessionsDir}.`,
           );
         }
       }

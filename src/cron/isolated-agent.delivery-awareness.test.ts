@@ -99,7 +99,6 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
         "agent:main:main": {
           sessionId: "main-session",
           updatedAt: Date.now(),
-          lastProvider: "telegram",
           lastChannel: "telegram",
           lastTo: "123",
         },

@@ -1303,7 +1303,6 @@ describe("compactEmbeddedPiSession hooks (ownsCompaction engine)", () => {
     )?.runtimeContext;
     expectRecordFields(mockCallArg(maintain), {
       sessionKey: TEST_SESSION_KEY,
-      sessionFile: TEST_SESSION_FILE,
     });
     expect(runtimeContext?.workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(runtimeContext?.rewriteTranscriptEntries).toBeTypeOf("function");

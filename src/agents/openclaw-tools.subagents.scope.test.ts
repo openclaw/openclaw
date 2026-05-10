@@ -14,15 +14,15 @@ import { addSubagentRunForTests, resetSubagentRegistryForTests } from "./subagen
 import { createPerSenderSessionConfig } from "./test-helpers/session-config.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 
-function writeStore(store: Record<string, SessionEntry>) {
-  for (const [sessionKey, entry] of Object.entries(store)) {
+function writeSessionEntries(entries: Record<string, SessionEntry>) {
+  for (const [sessionKey, entry] of Object.entries(entries)) {
     upsertSessionEntry({ agentId: "main", sessionKey, entry });
   }
 }
 
 async function seedLeafOwnedChildSession(leafKey = "agent:main:subagent:leaf") {
   const childKey = `${leafKey}:subagent:child`;
-  writeStore({
+  writeSessionEntries({
     [leafKey]: {
       sessionId: "leaf-session",
       updatedAt: Date.now(),
@@ -87,7 +87,7 @@ describe("openclaw-tools: subagents scope isolation", () => {
     setSubagentsConfigOverride({
       session: createPerSenderSessionConfig({}),
     });
-    writeStore({});
+    writeSessionEntries({});
   });
 
   afterEach(() => {
@@ -100,7 +100,7 @@ describe("openclaw-tools: subagents scope isolation", () => {
     const leafKey = "agent:main:subagent:leaf";
     const siblingKey = "agent:main:subagent:unsandboxed";
 
-    writeStore({
+    writeSessionEntries({
       [leafKey]: {
         sessionId: "leaf-session",
         updatedAt: Date.now(),
@@ -161,7 +161,7 @@ describe("openclaw-tools: subagents scope isolation", () => {
     const workerKey = `${orchestratorKey}:subagent:worker`;
     const siblingKey = "agent:main:subagent:sibling";
 
-    writeStore({
+    writeSessionEntries({
       [orchestratorKey]: {
         sessionId: "orchestrator-session",
         updatedAt: Date.now(),

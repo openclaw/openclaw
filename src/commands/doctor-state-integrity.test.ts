@@ -22,7 +22,6 @@ import {
   resolveHeartbeatMainSessionRepairCandidate,
 } from "./doctor-heartbeat-main-session-repair.js";
 import { noteStateIntegrity } from "./doctor-state-integrity.js";
-import { resolveLegacySessionTranscriptsDirForAgent } from "./doctor/legacy/session-file-artifacts.js";
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
@@ -65,12 +64,6 @@ function restoreEnv(snapshot: EnvSnapshot) {
       process.env[key] = value;
     }
   }
-}
-
-function setupSessionState(env: NodeJS.ProcessEnv, homeDir: string) {
-  const agentId = "main";
-  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(agentId, env, () => homeDir);
-  fs.mkdirSync(sessionsDir, { recursive: true });
 }
 
 function replaceSessionStoreForTest(store: Record<string, SessionEntry>): void {
@@ -134,7 +127,6 @@ function hasRepairPromptMessage(
 }
 
 async function runStateIntegrity(cfg: OpenClawConfig) {
-  setupSessionState(process.env, process.env.HOME ?? "");
   const confirmRuntimeRepair = vi.fn(async () => false);
   await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
   return confirmRuntimeRepair;
@@ -144,34 +136,12 @@ async function writeSessionStore(
   cfg: OpenClawConfig,
   sessions: Record<string, { sessionId: string; updatedAt: number } & Record<string, unknown>>,
 ) {
-  setupSessionState(process.env, process.env.HOME ?? "");
   replaceSessionStoreForTest(sessions as Record<string, SessionEntry>);
 }
 
 async function runStateIntegrityText(cfg: OpenClawConfig): Promise<string> {
   await noteStateIntegrity(cfg, { confirmRuntimeRepair: vi.fn(async () => false), note: noteMock });
   return stateIntegrityText();
-}
-
-async function runOrphanTranscriptCheckWithQmdSessions(enabled: boolean, homeDir: string) {
-  const cfg: OpenClawConfig = {
-    memory: {
-      backend: "qmd",
-      qmd: {
-        sessions: { enabled },
-      },
-    },
-  };
-  setupSessionState(process.env, homeDir);
-  const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-    "main",
-    process.env,
-    () => homeDir,
-  );
-  fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-  const confirmRuntimeRepair = vi.fn(async () => false);
-  await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-  return confirmRuntimeRepair;
 }
 
 describe("doctor state integrity oauth dir checks", () => {
@@ -449,117 +419,6 @@ describe("doctor state integrity oauth dir checks", () => {
     }
   });
 
-  it("detects orphan transcripts and offers delete remediation", async () => {
-    const cfg: OpenClawConfig = {};
-    setupSessionState(process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-      "main",
-      process.env,
-      () => tempHome,
-    );
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-    const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
-      params.message.includes("Delete 1 orphan transcript file"),
-    );
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-    expect(stateIntegrityText()).toContain(
-      "These legacy .jsonl files are no longer referenced by SQLite session rows",
-    );
-    expect(stateIntegrityText()).toContain("Examples: orphan-session.jsonl");
-    const deletePrompt = repairPromptCalls(confirmRuntimeRepair).find((prompt) =>
-      prompt.message?.includes("Delete 1 orphan transcript file"),
-    );
-    expect(deletePrompt?.requiresInteractiveConfirmation).toBe(true);
-    const files = fs.readdirSync(sessionsDir);
-    expect(files).not.toContain("orphan-session.jsonl");
-  });
-
-  it("does not auto-delete orphan transcripts from non-interactive repair mode", async () => {
-    const cfg: OpenClawConfig = {};
-    setupSessionState(process.env, process.env.HOME ?? "");
-    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-      "main",
-      process.env,
-      () => tempHome,
-    );
-    fs.writeFileSync(path.join(sessionsDir, "orphan-session.jsonl"), '{"type":"session"}\n');
-    const confirmRuntimeRepair = vi.fn(
-      async (params: { initialValue?: boolean; requiresInteractiveConfirmation?: boolean }) =>
-        params.requiresInteractiveConfirmation !== true,
-    );
-    await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-
-    const archivePrompt = repairPromptCalls(confirmRuntimeRepair).find(
-      (prompt) => prompt.requiresInteractiveConfirmation === true,
-    );
-    expect(archivePrompt?.initialValue).toBe(false);
-    const files = fs.readdirSync(sessionsDir);
-    expect(files).toContain("orphan-session.jsonl");
-  });
-
-  it.skipIf(process.platform === "win32")(
-    "treats symlinked legacy transcript files as orphan cleanup candidates",
-    async () => {
-      const cfg: OpenClawConfig = {};
-      const originalHome = tempHome;
-      const symlinkHome = path.join(
-        path.dirname(originalHome),
-        `${path.basename(originalHome)}-link`,
-      );
-      fs.symlinkSync(originalHome, symlinkHome, "dir");
-      try {
-        process.env.HOME = symlinkHome;
-        process.env.OPENCLAW_HOME = symlinkHome;
-        process.env.OPENCLAW_STATE_DIR = path.join(symlinkHome, ".openclaw");
-
-        setupSessionState(process.env, symlinkHome);
-        const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-          "main",
-          process.env,
-          () => symlinkHome,
-        );
-        const transcriptPath = path.join(sessionsDir, "linked-session.jsonl");
-        fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
-        await writeSessionStore(cfg, {
-          "agent:main:main": {
-            sessionId: "linked-session",
-            updatedAt: Date.now(),
-          },
-        });
-
-        const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
-          params.message.includes("Delete 1 orphan transcript file"),
-        );
-        await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-
-        expect(fs.existsSync(transcriptPath)).toBe(false);
-        expect(stateIntegrityText()).toContain(
-          "These legacy .jsonl files are no longer referenced by SQLite session rows",
-        );
-      } finally {
-        fs.rmSync(symlinkHome, { force: true, recursive: true });
-      }
-    },
-  );
-
-  it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
-
-    expect(stateIntegrityText()).not.toContain(
-      "These legacy .jsonl files are no longer referenced by SQLite session rows",
-    );
-    expect(confirmRuntimeRepair).not.toHaveBeenCalled();
-  });
-
-  it("still detects orphan transcripts when QMD sessions are disabled", async () => {
-    const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(false, tempHome);
-
-    expect(stateIntegrityText()).toContain(
-      "These legacy .jsonl files are no longer referenced by SQLite session rows",
-    );
-    expect(confirmRuntimeRepair).toHaveBeenCalled();
-  });
-
   it("prints openclaw-only verification hints when recent sessions are missing transcripts", async () => {
     const cfg: OpenClawConfig = {};
     await writeSessionStore(cfg, {
@@ -579,7 +438,6 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("moves a heartbeat-poisoned main session and clears stale TUI restore pointers", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(process.env, tempHome);
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "heartbeat-session",
@@ -629,13 +487,6 @@ describe("doctor state integrity oauth dir checks", () => {
 
   it("does not move a mixed main transcript that has real user activity", async () => {
     const cfg: OpenClawConfig = {};
-    setupSessionState(process.env, tempHome);
-    const sessionsDir = resolveLegacySessionTranscriptsDirForAgent(
-      "main",
-      process.env,
-      () => tempHome,
-    );
-    const mixedTranscriptPath = path.join(sessionsDir, "mixed-session.jsonl");
     replaceSqliteSessionTranscriptEvents({
       agentId: "main",
       sessionId: "mixed-session",
@@ -733,7 +584,7 @@ describe("doctor state integrity oauth dir checks", () => {
       const entry = {
         sessionId: "session",
         updatedAt: 1,
-        lastProvider: "heartbeat",
+        lastChannel: "heartbeat",
         source: "heartbeat",
         origin: { provider: "heartbeat" },
       } as SessionEntry & Record<string, unknown>;

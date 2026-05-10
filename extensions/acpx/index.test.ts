@@ -46,7 +46,7 @@ describe("acpx plugin", () => {
     createAcpxRuntimeServiceMock.mockReturnValue(service);
 
     const api = {
-      pluginConfig: { stateDir: "/tmp/acpx" },
+      pluginConfig: { timeoutSeconds: 30 },
       registerService: vi.fn(),
       on: vi.fn(),
     };
@@ -71,7 +71,7 @@ describe("acpx plugin", () => {
 
     const on = vi.fn();
     const api = createTestPluginApi({
-      pluginConfig: { stateDir: "/tmp/acpx" },
+      pluginConfig: { timeoutSeconds: 30 },
       registerService: vi.fn(),
       on,
     });

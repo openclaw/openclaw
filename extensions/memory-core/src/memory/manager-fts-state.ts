@@ -1,5 +1,8 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_INDEX_TABLE_NAMES,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export function deleteMemoryFtsRows(params: {
   db: DatabaseSync;
@@ -8,7 +11,7 @@ export function deleteMemoryFtsRows(params: {
   source: MemorySource;
   currentModel?: string;
 }): void {
-  const tableName = params.tableName ?? "chunks_fts";
+  const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.fts;
   if (params.currentModel) {
     params.db
       .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ? AND model = ?`)

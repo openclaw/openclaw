@@ -2,12 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
 import {
   createDoctorRuntime,
   ensureAuthProfileStore,
   mockDoctorConfigSnapshot,
-} from "./doctor.e2e-harness.js";
-import { loadDoctorCommandForTest, terminalNoteMock } from "./doctor.note-test-helpers.js";
+} from "./doctor/e2e-harness.js";
 import "./doctor.fast-path-mocks.js";
 
 let doctorCommand: typeof import("./doctor.js").doctorCommand;

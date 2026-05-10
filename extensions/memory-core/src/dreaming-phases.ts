@@ -4,17 +4,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   buildSessionTranscriptEntry,
-  listSessionTranscriptsForAgent,
-  sessionSourceKeyForTranscript,
+  listSessionTranscriptScopesForAgent,
+  sessionTranscriptKeyForScope,
 } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
+  appendDreamingSessionIngestionLines,
   formatMemoryDreamingDay,
   MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE,
   MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE,
-  appendDreamingSessionCorpusLines,
   readDreamingWorkspaceMap,
+  resolveDreamingSessionIngestionRelativePath,
   resolveMemoryDreamingWorkspaces,
   resolveMemoryLightDreamingConfig,
   resolveMemoryRemDreamingConfig,
@@ -586,7 +587,7 @@ function trimTrackedSessionScopes(
   return next;
 }
 
-function normalizeSessionCorpusSnippet(value: string): string {
+function normalizeSessionIngestionSnippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
@@ -628,17 +629,17 @@ function areStringArraysEqual(a: string[], b: string[]): boolean {
   return true;
 }
 
-function buildSessionStateKey(agentId: string, sessionSourceKey: string): string {
-  return `${agentId}:${sessionSourceKey}`;
+function buildSessionStateKey(agentId: string, transcriptKey: string): string {
+  return `${agentId}:${transcriptKey}`;
 }
 
 function buildSessionRenderedLine(params: {
   agentId: string;
-  sessionSourceKey: string;
+  transcriptKey: string;
   lineNumber: number;
   snippet: string;
 }): string {
-  const source = `${params.agentId}/${params.sessionSourceKey}#L${params.lineNumber}`;
+  const source = `${params.agentId}/${params.transcriptKey}#L${params.lineNumber}`;
   return `[${source}] ${params.snippet}`.slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS + 64);
 }
 
@@ -668,7 +669,7 @@ function resolveSessionAgentsForWorkspace(params: {
     .toSorted();
 }
 
-async function appendSessionCorpusLines(params: {
+async function appendSessionIngestionLines(params: {
   workspaceDir: string;
   day: string;
   lines: SessionIngestionMessage[];
@@ -676,8 +677,8 @@ async function appendSessionCorpusLines(params: {
   if (params.lines.length === 0) {
     return [];
   }
-  const relativePath = path.posix.join("memory", ".dreams", "session-corpus", `${params.day}.txt`);
-  const firstLine = await appendDreamingSessionCorpusLines({
+  const relativePath = resolveDreamingSessionIngestionRelativePath(params.day);
+  const firstLine = await appendDreamingSessionIngestionLines({
     workspaceDir: params.workspaceDir,
     relativePath,
     lines: params.lines.map((entry) => entry.rendered),
@@ -727,15 +728,15 @@ async function collectSessionIngestionBatches(params: {
   const sessionTranscripts: Array<{
     agentId: string;
     scope: { agentId: string; sessionId: string };
-    sessionSourceKey: string;
+    transcriptKey: string;
   }> = [];
   for (const agentId of agentIds) {
-    const scopes = await listSessionTranscriptsForAgent(agentId);
+    const scopes = await listSessionTranscriptScopesForAgent(agentId);
     for (const scope of scopes) {
       sessionTranscripts.push({
         agentId,
         scope,
-        sessionSourceKey: sessionSourceKeyForTranscript(scope),
+        transcriptKey: sessionTranscriptKeyForScope(scope),
       });
     }
   }
@@ -744,7 +745,7 @@ async function collectSessionIngestionBatches(params: {
     if (a.agentId !== b.agentId) {
       return a.agentId.localeCompare(b.agentId);
     }
-    return a.sessionSourceKey.localeCompare(b.sessionSourceKey);
+    return a.transcriptKey.localeCompare(b.transcriptKey);
   });
 
   const totalCap = SESSION_INGESTION_MAX_MESSAGES_PER_SWEEP;
@@ -761,7 +762,7 @@ async function collectSessionIngestionBatches(params: {
     if (remaining <= 0) {
       break;
     }
-    const stateKey = buildSessionStateKey(file.agentId, file.sessionSourceKey);
+    const stateKey = buildSessionStateKey(file.agentId, file.transcriptKey);
     const previous = params.state.files[stateKey];
     const entry = await buildSessionTranscriptEntry(file.scope);
     if (!entry) {
@@ -819,7 +820,7 @@ async function collectSessionIngestionBatches(params: {
       continue;
     }
 
-    const sessionScope = buildSessionScopeKey(file.agentId, file.sessionSourceKey);
+    const sessionScope = buildSessionScopeKey(file.agentId, file.transcriptKey);
     const previousSeen = nextSeenMessages[sessionScope] ?? [];
     let seenSet = new Set(previousSeen);
     const newSeenHashes: string[] = [];
@@ -844,7 +845,7 @@ async function collectSessionIngestionBatches(params: {
       }
       lastScannedContentLine = index + 1;
       const rawSnippet = lines[index] ?? "";
-      const snippet = normalizeSessionCorpusSnippet(rawSnippet);
+      const snippet = normalizeSessionIngestionSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
         continue;
       }
@@ -865,7 +866,7 @@ async function collectSessionIngestionBatches(params: {
       }
       const rendered = buildSessionRenderedLine({
         agentId: file.agentId,
-        sessionSourceKey: file.sessionSourceKey,
+        transcriptKey: file.transcriptKey,
         lineNumber,
         snippet,
       });
@@ -952,7 +953,7 @@ async function collectSessionIngestionBatches(params: {
     if (lines.length === 0) {
       continue;
     }
-    const results = await appendSessionCorpusLines({
+    const results = await appendSessionIngestionLines({
       workspaceDir: params.workspaceDir,
       day,
       lines,

@@ -19,14 +19,14 @@ import type {
   CommitmentRecord,
   CommitmentScope,
   CommitmentStatus,
-  CommitmentStoreFile,
+  CommitmentStoreSnapshot,
 } from "./types.js";
 
 const STORE_VERSION = 1 as const;
 const ROLLING_DAY_MS = 24 * 60 * 60 * 1000;
 
 type LoadedCommitmentStore = {
-  store: CommitmentStoreFile;
+  store: CommitmentStoreSnapshot;
   hadLegacySourceText: boolean;
 };
 
@@ -34,7 +34,7 @@ export function resolveCommitmentDatabasePath(): string {
   return resolveOpenClawStateSqlitePath();
 }
 
-function emptyStore(): CommitmentStoreFile {
+function emptyStore(): CommitmentStoreSnapshot {
   return { version: STORE_VERSION, commitments: [] };
 }
 
@@ -105,7 +105,7 @@ function stripLegacySourceText(commitment: CommitmentRecord): CommitmentRecord {
   return stripped;
 }
 
-function sanitizeStoreForWrite(store: CommitmentStoreFile): CommitmentStoreFile {
+function sanitizeStoreForWrite(store: CommitmentStoreSnapshot): CommitmentStoreSnapshot {
   return {
     ...store,
     commitments: store.commitments.map(stripLegacySourceText),
@@ -163,12 +163,12 @@ function loadCommitmentStoreInternal(): LoadedCommitmentStore {
 
 export async function loadCommitmentStore(
   options: { env?: NodeJS.ProcessEnv } = {},
-): Promise<CommitmentStoreFile> {
+): Promise<CommitmentStoreSnapshot> {
   return loadCommitmentStoreFromSqlite(options.env ?? process.env).store;
 }
 
 function replaceCommitmentRows(
-  store: CommitmentStoreFile,
+  store: CommitmentStoreSnapshot,
   env: NodeJS.ProcessEnv = process.env,
 ): void {
   const sanitized = sanitizeStoreForWrite(store);
@@ -194,7 +194,7 @@ function replaceCommitmentRows(
 }
 
 export async function saveCommitmentStore(
-  store: CommitmentStoreFile,
+  store: CommitmentStoreSnapshot,
   options: { env?: NodeJS.ProcessEnv } = {},
 ): Promise<void> {
   replaceCommitmentRows(store, options.env ?? process.env);
@@ -266,7 +266,7 @@ function expireAfterMs(): number {
   return DEFAULT_COMMITMENT_EXPIRE_AFTER_HOURS * 60 * 60 * 1000;
 }
 
-function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number): boolean {
+function expireStaleCommitmentsInStore(store: CommitmentStoreSnapshot, nowMs: number): boolean {
   const staleAfterMs = expireAfterMs();
   let changed = false;
   store.commitments = store.commitments.map((commitment) => {
@@ -287,7 +287,9 @@ function expireStaleCommitmentsInStore(store: CommitmentStoreFile, nowMs: number
   return changed;
 }
 
-async function loadCommitmentStoreWithExpiredMarked(nowMs: number): Promise<CommitmentStoreFile> {
+async function loadCommitmentStoreWithExpiredMarked(
+  nowMs: number,
+): Promise<CommitmentStoreSnapshot> {
   const { store, hadLegacySourceText } = loadCommitmentStoreInternal();
   if (expireStaleCommitmentsInStore(store, nowMs) || hadLegacySourceText) {
     await saveCommitmentStore(store);
@@ -377,7 +379,7 @@ export async function upsertInferredCommitments(params: {
 }
 
 function countSentCommitmentsForSession(params: {
-  store: CommitmentStoreFile;
+  store: CommitmentStoreSnapshot;
   agentId: string;
   sessionKey: string;
   nowMs: number;

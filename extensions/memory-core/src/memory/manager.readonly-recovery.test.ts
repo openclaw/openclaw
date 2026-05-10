@@ -217,13 +217,21 @@ describe("memory manager readonly recovery", () => {
     expect(harness.vector.dims).toBe(768);
   });
 
-  it("sets busy_timeout on memory sqlite connections", () => {
+  it("sets expected pragmas on memory sqlite connections", () => {
     const db = openMemoryDatabaseAtPath(indexPath, false);
-    const row = db.prepare("PRAGMA busy_timeout").get() as
+    const busyTimeoutRow = db.prepare("PRAGMA busy_timeout").get() as
       | { busy_timeout?: number; timeout?: number }
       | undefined;
-    const busyTimeout = row?.busy_timeout ?? row?.timeout;
+    const busyTimeout = busyTimeoutRow?.busy_timeout ?? busyTimeoutRow?.timeout;
+    const foreignKeysRow = db.prepare("PRAGMA foreign_keys").get() as
+      | { foreign_keys?: number }
+      | undefined;
+    const synchronousRow = db.prepare("PRAGMA synchronous").get() as
+      | { synchronous?: number }
+      | undefined;
     expect(busyTimeout).toBe(MEMORY_SQLITE_BUSY_TIMEOUT_MS);
+    expect(foreignKeysRow?.foreign_keys).toBe(1);
+    expect(synchronousRow?.synchronous).toBe(1);
     db.close();
   });
 

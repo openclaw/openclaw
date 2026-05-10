@@ -7,7 +7,7 @@ import {
   type CronRuntimeStateSnapshot,
   writeCronRuntimeStateSnapshot,
 } from "../../../cron/store.js";
-import type { CronStoreFile } from "../../../cron/types.js";
+import type { CronStoreSnapshot } from "../../../cron/types.js";
 import { expandHomePrefix } from "../../../infra/home-dir.js";
 import { resolveConfigDir } from "../../../utils.js";
 import { parseJsonWithJson5Fallback } from "../../../utils/parse-json-compat.js";
@@ -106,7 +106,7 @@ async function loadStateFile(statePath: string): Promise<CronRuntimeStateSnapsho
 
 export async function loadLegacyCronStoreForMigration(
   storePath: string,
-): Promise<CronStoreFile | null> {
+): Promise<CronStoreSnapshot | null> {
   let raw: string;
   try {
     raw = await fs.promises.readFile(storePath, "utf-8");
@@ -130,7 +130,7 @@ export async function loadLegacyCronStoreForMigration(
   const jobs = Array.isArray(parsedRecord.jobs) ? (parsedRecord.jobs as never[]) : [];
   return {
     version: 1,
-    jobs: jobs.filter(Boolean) as never as CronStoreFile["jobs"],
+    jobs: jobs.filter(Boolean) as never as CronStoreSnapshot["jobs"],
   };
 }
 

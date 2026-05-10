@@ -637,40 +637,6 @@ describe("memory cli", () => {
     });
   });
 
-  it("repairs contaminated dreaming artifacts during status --fix", async () => {
-    await withTempWorkspace(async (workspaceDir) => {
-      const sessionCorpusDir = path.join(workspaceDir, "memory", ".dreams", "session-corpus");
-      await fs.mkdir(sessionCorpusDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionCorpusDir, "2026-04-11.txt"),
-        [
-          "[main/dreaming-main.jsonl#L3] ordinary session line",
-          "[main/dreaming-narrative-light.jsonl#L1] Write a dream diary entry from these memory fragments:",
-        ].join("\n"),
-        "utf-8",
-      );
-      await fs.writeFile(path.join(workspaceDir, "DREAMS.md"), "# Dream Diary\n", "utf-8");
-
-      const close = vi.fn(async () => {});
-      mockManager({
-        probeVectorAvailability: vi.fn(async () => true),
-        status: () => makeMemoryStatus({ workspaceDir }),
-        close,
-      });
-
-      const log = spyRuntimeLogs(defaultRuntime);
-      await runMemoryCli(["status", "--fix"]);
-
-      expectLogged(log, "Dream repair: archived session corpus");
-      expectLogged(log, "Dream archive:");
-      await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
-      await expect(fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).resolves.toContain(
-        "# Dream Diary",
-      );
-      expect(close).toHaveBeenCalled();
-    });
-  });
-
   it("enables verbose logging with --verbose", async () => {
     const close = vi.fn(async () => {});
     mockManager({
@@ -763,7 +729,7 @@ describe("memory cli", () => {
 
     expectCliSync(sync);
     expect(error).toHaveBeenCalledWith(
-      "Memory index WARNING (main): chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
+      "Memory index WARNING (main): memory_index_chunks_vec not updated — sqlite-vec unavailable: load failed. Vector recall degraded.",
     );
     expect(close).toHaveBeenCalled();
     expect(process.exitCode).toBeUndefined();

@@ -18,9 +18,9 @@ describe("searchKeyword trigram fallback", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
-        embeddingCacheTable: "embedding_cache",
+        embeddingCacheTable: "memory_embedding_cache",
         cacheEnabled: false,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         ftsEnabled: true,
         ftsTokenizer: "trigram",
       });
@@ -34,9 +34,9 @@ describe("searchKeyword trigram fallback", () => {
     const db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({
       db,
-      embeddingCacheTable: "embedding_cache",
+      embeddingCacheTable: "memory_embedding_cache",
       cacheEnabled: false,
-      ftsTable: "chunks_fts",
+      ftsTable: "memory_index_chunks_fts",
       ftsEnabled: true,
       ftsTokenizer: "trigram",
     });
@@ -55,14 +55,14 @@ describe("searchKeyword trigram fallback", () => {
     const db = createTrigramDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       for (const row of params.rows) {
         insert.run(row.text, row.id, row.path, "memory", "mock-embed", 1, 1);
       }
       return await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: params.query,
         ftsTokenizer: "trigram",
@@ -187,9 +187,9 @@ describe("searchKeyword FTS MATCH fallback", () => {
     try {
       const result = ensureMemoryIndexSchema({
         db,
-        embeddingCacheTable: "embedding_cache",
+        embeddingCacheTable: "memory_embedding_cache",
         cacheEnabled: false,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         ftsEnabled: true,
       });
       return result.ftsAvailable;
@@ -202,9 +202,9 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = new DatabaseSync(":memory:");
     const result = ensureMemoryIndexSchema({
       db,
-      embeddingCacheTable: "embedding_cache",
+      embeddingCacheTable: "memory_embedding_cache",
       cacheEnabled: false,
-      ftsTable: "chunks_fts",
+      ftsTable: "memory_index_chunks_fts",
       ftsEnabled: true,
     });
     if (!result.ftsAvailable) {
@@ -220,7 +220,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = createFtsDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       insert.run(
         "The Agent framework handles API calls and cron jobs",
@@ -246,7 +246,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: "Agent",
         ftsTokenizer: "unicode61",
@@ -271,7 +271,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = createFtsDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       insert.run(
         "The Transformer architecture powers modern LLMs",
@@ -285,7 +285,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
 
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: "Transformer",
         ftsTokenizer: "unicode61",
@@ -310,7 +310,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = createFtsDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       insert.run("Agent handles API calls", "1", "doc.md", "sessions", "mock-embed", 1, 3);
       insert.run("Agent design patterns", "2", "notes.md", "memory", "mock-embed", 1, 3);
@@ -318,7 +318,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const brokenBuildFtsQuery = () => "BROKEN <<<";
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: "Agent",
         ftsTokenizer: "unicode61",
@@ -341,7 +341,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const db = createFtsDb();
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       // "Agent" and "cron" appear in this row but not adjacent
       insert.run(
@@ -369,7 +369,7 @@ describe("searchKeyword FTS MATCH fallback", () => {
       const brokenBuildFtsQuery = () => "BROKEN <<<";
       const results = await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: "Agent cron",
         ftsTokenizer: "unicode61",
@@ -393,13 +393,13 @@ describe("searchKeyword FTS MATCH fallback", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const insert = db.prepare(
-        "INSERT INTO chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks_fts (text, id, path, source, model, start_line, end_line) VALUES (?, ?, ?, ?, ?, ?, ?)",
       );
       insert.run("test content", "1", "doc.md", "sessions", "mock-embed", 1, 1);
 
       await searchKeyword({
         db,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         providerModel: "mock-embed",
         query: "test",
         ftsTokenizer: "unicode61",
@@ -446,14 +446,14 @@ describe("searchVector sqlite-vec KNN", () => {
     try {
       ensureMemoryIndexSchema({
         db,
-        embeddingCacheTable: "embedding_cache",
+        embeddingCacheTable: "memory_embedding_cache",
         cacheEnabled: false,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         ftsEnabled: false,
       });
 
       const insertChunk = db.prepare(
-        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
       const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
         insertChunk.run(
@@ -479,14 +479,14 @@ describe("searchVector sqlite-vec KNN", () => {
       const chunkRows = (
         originalPrepare(
           "SELECT id, path, start_line, end_line, text, embedding, source\n" +
-            "  FROM chunks\n" +
+            "  FROM memory_index_chunks\n" +
             " WHERE model = ?",
         ) as StatementWithAll
       ).all("target-model");
       const prepareSpy = vi.spyOn(prepareTarget, "prepare").mockImplementation((sql: string) => {
         if (
           sql.includes("SELECT id, path, start_line, end_line, text, embedding, source") &&
-          sql.includes("FROM chunks")
+          sql.includes("FROM memory_index_chunks")
         ) {
           return {
             all: () => {
@@ -501,7 +501,8 @@ describe("searchVector sqlite-vec KNN", () => {
       try {
         const results = await searchVector({
           db,
-          vectorTable: "chunks_vec",
+          vectorTable: "memory_index_chunks_vec",
+          chunksTable: "memory_index_chunks",
           providerModel: "target-model",
           queryVec: [1, 0],
           limit: 2,
@@ -527,22 +528,24 @@ describe("searchVector sqlite-vec KNN", () => {
       expect(loaded.ok, loaded.error).toBe(true);
       ensureMemoryIndexSchema({
         db,
-        embeddingCacheTable: "embedding_cache",
+        embeddingCacheTable: "memory_embedding_cache",
         cacheEnabled: false,
-        ftsTable: "chunks_fts",
+        ftsTable: "memory_index_chunks_fts",
         ftsEnabled: false,
       });
       db.exec(`
-        CREATE VIRTUAL TABLE chunks_vec USING vec0(
+        CREATE VIRTUAL TABLE memory_index_chunks_vec USING vec0(
           id TEXT PRIMARY KEY,
           embedding FLOAT[2]
         );
       `);
 
       const insertChunk = db.prepare(
-        "INSERT INTO chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO memory_index_chunks (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
       );
-      const insertVector = db.prepare("INSERT INTO chunks_vec (id, embedding) VALUES (?, ?)");
+      const insertVector = db.prepare(
+        "INSERT INTO memory_index_chunks_vec (id, embedding) VALUES (?, ?)",
+      );
       const addChunk = (params: { id: string; model: string; vector: [number, number] }) => {
         insertChunk.run(
           params.id,
@@ -567,7 +570,8 @@ describe("searchVector sqlite-vec KNN", () => {
 
       const results = await searchVector({
         db,
-        vectorTable: "chunks_vec",
+        vectorTable: "memory_index_chunks_vec",
+        chunksTable: "memory_index_chunks",
         providerModel: "target-model",
         queryVec: [1, 0],
         limit: 2,

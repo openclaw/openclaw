@@ -74,13 +74,6 @@ function loadScopedTranscriptEvents(params: {
   }
 }
 
-function loadScopedTranscriptJsonLines(params: {
-  agentId?: string;
-  sessionId: string;
-}): string[] | undefined {
-  return loadScopedTranscriptEvents(params)?.map((event) => JSON.stringify(event));
-}
-
 function sqliteTranscriptEventToRecord(event: unknown): TailTranscriptRecord | null {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     return null;
@@ -325,22 +318,22 @@ export async function readRecentSessionMessagesWithStatsAsync(
   return readRecentSessionMessagesWithStats(scope, opts);
 }
 
-export function readRecentSessionTranscriptLines(params: {
+export function readRecentSessionTranscriptEvents(params: {
   sessionId: string;
   agentId?: string;
-  maxLines: number;
-}): { lines: string[]; totalLines: number } | null {
-  const lines = loadScopedTranscriptJsonLines({
+  maxEvents: number;
+}): { events: unknown[]; totalEvents: number } | null {
+  const events = loadScopedTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
   });
-  if (!lines) {
+  if (!events) {
     return null;
   }
-  const maxLines = Math.max(1, Math.floor(params.maxLines));
+  const maxEvents = Math.max(1, Math.floor(params.maxEvents));
   return {
-    lines: lines.slice(-maxLines),
-    totalLines: lines.length,
+    events: events.slice(-maxEvents),
+    totalEvents: events.length,
   };
 }
 

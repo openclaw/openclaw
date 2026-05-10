@@ -136,9 +136,6 @@ describe("generic current-conversation bindings", () => {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
-    await expect(
-      fs.stat(path.join(testStateDir, "bindings", "current-conversations.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
 
     __testing.resetCurrentConversationBindingsForTests();
 

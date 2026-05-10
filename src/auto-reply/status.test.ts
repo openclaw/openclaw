@@ -1515,7 +1515,7 @@ describe("buildStatusMessage", () => {
     });
   }
 
-  it("prefers cached prompt tokens from the session log", async () => {
+  it("prefers cached prompt tokens from the SQLite session transcript", async () => {
     await withTempHome(
       async () => {
         const sessionId = "sess-1";

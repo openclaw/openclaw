@@ -20,10 +20,6 @@ function createIntentEnv(): NodeJS.ProcessEnv {
   };
 }
 
-function intentPath(env: NodeJS.ProcessEnv): string {
-  return path.join(env.OPENCLAW_STATE_DIR ?? "", "gateway-restart-intent.json");
-}
-
 describe("gateway restart intent", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -38,7 +34,6 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(true);
-    expect(fs.existsSync(intentPath(env))).toBe(false);
   });
 
   it("rejects an intent for a different process", () => {
@@ -47,16 +42,6 @@ describe("gateway restart intent", () => {
     expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid + 1 })).toBe(true);
 
     expect(consumeGatewayRestartIntentSync(env)).toBe(false);
-    expect(fs.existsSync(intentPath(env))).toBe(false);
-  });
-
-  it("stores intents in SQLite instead of a legacy JSON file", () => {
-    const env = createIntentEnv();
-
-    expect(writeGatewayRestartIntentSync({ env, targetPid: process.pid })).toBe(true);
-
-    expect(fs.existsSync(intentPath(env))).toBe(false);
-    expect(consumeGatewayRestartIntentSync(env)).toBe(true);
   });
 
   it("round-trips restart force and wait options", () => {
@@ -74,6 +59,5 @@ describe("gateway restart intent", () => {
       force: true,
       waitMs: 12_345,
     });
-    expect(fs.existsSync(intentPath(env))).toBe(false);
   });
 });

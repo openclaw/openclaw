@@ -45,14 +45,12 @@ describe("runHeartbeatOnce", () => {
           sessionId: "sid-main",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "120363401234567890@g.us",
         },
         "agent:main:subagent:demo": {
           sessionId: "sid-subagent",
           updatedAt: Date.now(),
           lastChannel: "whatsapp",
-          lastProvider: "whatsapp",
           lastTo: "120363409999999999@g.us",
         },
       });

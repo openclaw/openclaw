@@ -21,7 +21,8 @@ private struct DeviceAuthStoreFile: Codable {
 }
 
 public enum DeviceAuthStore {
-    private static let fileName = "device-auth.json"
+    private static let stateScope = "identity.device-auth"
+    private static let stateKey = "default"
 
     public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
         guard let store = readStore(), store.deviceId == deviceId else { return nil }
@@ -74,15 +75,10 @@ public enum DeviceAuthStore {
         return Array(Set(trimmed)).sorted()
     }
 
-    private static func fileURL() -> URL {
-        DeviceIdentityPaths.stateDirURL()
-            .appendingPathComponent("identity", isDirectory: true)
-            .appendingPathComponent(self.fileName, isDirectory: false)
-    }
-
     private static func readStore() -> DeviceAuthStoreFile? {
-        let url = self.fileURL()
-        guard let data = try? Data(contentsOf: url) else { return nil }
+        guard let data = OpenClawSQLiteKVStore.readJSONData(scope: self.stateScope, key: self.stateKey) else {
+            return nil
+        }
         guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
             return nil
         }
@@ -91,14 +87,9 @@ public enum DeviceAuthStore {
     }
 
     private static func writeStore(_ store: DeviceAuthStoreFile) {
-        let url = self.fileURL()
         do {
-            try FileManager.default.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true)
             let data = try JSONEncoder().encode(store)
-            try data.write(to: url, options: [.atomic])
-            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try OpenClawSQLiteKVStore.writeJSONData(scope: self.stateScope, key: self.stateKey, data: data)
         } catch {
             // best-effort only
         }

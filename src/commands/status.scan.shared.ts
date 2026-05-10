@@ -286,7 +286,10 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
   cfg: OpenClawConfig;
   agentStatus: { defaultId?: string | null };
   memoryPlugin: MemoryPluginStatus;
-  resolveMemoryConfig: (cfg: OpenClawConfig, agentId: string) => { store: { path: string } } | null;
+  resolveMemoryConfig: (
+    cfg: OpenClawConfig,
+    agentId: string,
+  ) => { store: { databasePath: string } } | null;
   getMemorySearchManager: StatusMemorySearchManagerResolver;
   requireDefaultDatabasePath?: (agentId: string) => string | null;
 }): Promise<MemoryStatusSnapshot | null> {
@@ -313,7 +316,7 @@ export async function resolveSharedMemoryStatusSnapshot(params: {
     return null;
   }
   const shouldInspectStore =
-    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.path);
+    hasExplicitMemorySearchConfig(cfg, agentId) || existsSync(resolvedMemory.store.databasePath);
   if (!shouldInspectStore) {
     return null;
   }

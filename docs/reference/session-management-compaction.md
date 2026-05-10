@@ -50,8 +50,9 @@ OpenClaw persists sessions in two layers:
    - SQLite-backed transcript event stream with tree structure (entries have `id` + `parentId`)
    - Stores the actual conversation + tool calls + compaction summaries
    - Used to rebuild the model context for future turns
-   - Stored in SQLite for OpenClaw-owned runtime paths; JSONL is legacy
-     import/export/debug compatibility, not a runtime sidecar
+   - Stored in SQLite for OpenClaw-owned runtime paths; JSONL files are legacy
+     doctor-import inputs or explicit support artifacts, not runtime
+     compatibility sidecars
    - Runtime code passes structured agent/session scope. There is no active
      transcript file and no canonical transcript URI.
    - Scoped latest/tail assistant-text lookups, session exports, `before_reset`
@@ -86,8 +87,8 @@ Per agent, on the Gateway host:
 - Transcripts: runtime transcript events live in the per-agent database
   (`transcript_events` and `transcript_event_identities`). The canonical
   identity is structured scope: `agentId` plus `sessionId`. Legacy JSONL files
-  are doctor migration inputs or explicit export/debug artifacts, never runtime
-  sidecars.
+  are doctor migration inputs or explicit support artifacts, never runtime
+  sidecars or compatibility handles.
 
 OpenClaw resolves these via `src/config/sessions/*`.
 
@@ -207,7 +208,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure
 
-Transcripts are managed by OpenClaw's SQLite-backed `SessionManager`.
+Transcripts are stored as SQLite rows and opened by `{agentId, sessionId}`.
 
 The event stream is stored in the per-agent `transcript_events` table:
 
@@ -215,7 +216,9 @@ The event stream is stored in the per-agent `transcript_events` table:
   `timestamp`, optional `parentSession`)
 - Then: session entries with `id` + `parentId` (tree)
 
-JSONL import/export uses the same event shape, one JSON object per line.
+Doctor JSONL import uses the same event shape, one JSON object per line.
+User-facing exports may materialize support-bundle JSONL from SQLite rows, but
+runtime code does not read or write transcript JSONL files.
 
 Notable entry types:
 
@@ -225,7 +228,9 @@ Notable entry types:
 - `compaction`: persisted compaction summary with `firstKeptEntryId` and `tokensBefore`
 - `branch_summary`: persisted summary when navigating a tree branch
 
-OpenClaw intentionally does **not** "fix up" transcripts; the Gateway uses `SessionManager` to read/write them.
+Runtime transcript repair and compaction mutate SQLite rows through scoped
+transcript APIs. Legacy JSONL shape upgrades happen only in doctor import before
+rows are written.
 
 ---
 

@@ -20,6 +20,7 @@ import {
   type MemorySessionTranscriptScope,
   type MemorySource,
   type MemorySyncProgressUpdate,
+  MEMORY_INDEX_TABLE_NAMES,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   createEmbeddingProvider,
@@ -57,9 +58,10 @@ import {
 } from "./manager-sync-control.js";
 import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 const SNIPPET_MAX_CHARS = 700;
-const VECTOR_TABLE = "chunks_vec";
-const FTS_TABLE = "chunks_fts";
-const EMBEDDING_CACHE_TABLE = "embedding_cache";
+const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
+const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
+const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
+const EMBEDDING_CACHE_TABLE = MEMORY_INDEX_TABLE_NAMES.embeddingCache;
 const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCache");
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const log = createSubsystemLogger("memory");
@@ -505,7 +507,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
   }
 
   private hasIndexedContent(): boolean {
-    const chunkRow = this.db.prepare(`SELECT 1 as found FROM chunks LIMIT 1`).get() as
+    const chunkRow = this.db.prepare(`SELECT 1 as found FROM ${CHUNKS_TABLE} LIMIT 1`).get() as
       | {
           found?: number;
         }
@@ -536,6 +538,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     const results = await searchVector({
       db: this.db,
       vectorTable: VECTOR_TABLE,
+      chunksTable: CHUNKS_TABLE,
       providerModel: this.provider.model,
       queryVec,
       limit,
@@ -786,7 +789,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       chunks: aggregateState.chunks,
       dirty: this.dirty || this.sessionsDirty,
       workspaceDir: this.workspaceDir,
-      dbPath: this.settings.store.path,
+      dbPath: this.settings.store.databasePath,
       provider: providerInfo.provider,
       model: providerInfo.model,
       requestedProvider: this.requestedProvider,

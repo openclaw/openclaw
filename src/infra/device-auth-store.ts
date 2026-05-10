@@ -25,7 +25,7 @@ function sqliteOptions(env: NodeJS.ProcessEnv | undefined): OpenClawStateDatabas
   return env ? { env } : {};
 }
 
-function readStore(env?: NodeJS.ProcessEnv): DeviceAuthStore | null {
+function readDeviceAuthState(env?: NodeJS.ProcessEnv): DeviceAuthStore | null {
   try {
     const parsed = readOpenClawStateKvJson(DEVICE_AUTH_SCOPE, DEVICE_AUTH_KEY, sqliteOptions(env));
     const store = DeviceAuthStoreSchema.safeParse(parsed);
@@ -35,7 +35,7 @@ function readStore(env?: NodeJS.ProcessEnv): DeviceAuthStore | null {
   }
 }
 
-function writeStore(env: NodeJS.ProcessEnv | undefined, store: DeviceAuthStore): void {
+function writeDeviceAuthState(env: NodeJS.ProcessEnv | undefined, store: DeviceAuthStore): void {
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     DEVICE_AUTH_SCOPE,
     DEVICE_AUTH_KEY,
@@ -47,14 +47,14 @@ function writeStore(env: NodeJS.ProcessEnv | undefined, store: DeviceAuthStore):
 export function loadDeviceAuthStore(
   params: { env?: NodeJS.ProcessEnv } = {},
 ): DeviceAuthStore | null {
-  return readStore(params.env);
+  return readDeviceAuthState(params.env);
 }
 
 export function storeDeviceAuthStore(params: {
   store: DeviceAuthStore;
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthStore {
-  writeStore(params.env, params.store);
+  writeDeviceAuthState(params.env, params.store);
   return params.store;
 }
 
@@ -67,7 +67,7 @@ export function writeDeviceAuthStoreSnapshot(
   env: NodeJS.ProcessEnv | undefined,
   store: DeviceAuthStore,
 ): void {
-  writeStore(env, store);
+  writeDeviceAuthState(env, store);
 }
 
 export function loadDeviceAuthToken(params: {
@@ -76,7 +76,7 @@ export function loadDeviceAuthToken(params: {
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry | null {
   return loadDeviceAuthTokenFromStore({
-    adapter: { readStore: () => readStore(params.env), writeStore: (_store) => {} },
+    adapter: { readStore: () => readDeviceAuthState(params.env), writeStore: (_store) => {} },
     deviceId: params.deviceId,
     role: params.role,
   });
@@ -91,8 +91,8 @@ export function storeDeviceAuthToken(params: {
 }): DeviceAuthEntry {
   return storeDeviceAuthTokenInStore({
     adapter: {
-      readStore: () => readStore(params.env),
-      writeStore: (store) => writeStore(params.env, store),
+      readStore: () => readDeviceAuthState(params.env),
+      writeStore: (store) => writeDeviceAuthState(params.env, store),
     },
     deviceId: params.deviceId,
     role: params.role,
@@ -108,8 +108,8 @@ export function clearDeviceAuthToken(params: {
 }): void {
   clearDeviceAuthTokenFromStore({
     adapter: {
-      readStore: () => readStore(params.env),
-      writeStore: (store) => writeStore(params.env, store),
+      readStore: () => readDeviceAuthState(params.env),
+      writeStore: (store) => writeDeviceAuthState(params.env, store),
     },
     deviceId: params.deviceId,
     role: params.role,

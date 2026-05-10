@@ -20,7 +20,7 @@ type TrajectoryRuntimeInit = {
   agentId?: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  maxRuntimeFileBytes?: number;
+  maxRuntimeCaptureBytes?: number;
   runId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -33,7 +33,7 @@ type TrajectoryRuntimeInit = {
 
 type TrajectoryRuntimeRecorder = {
   enabled: true;
-  runtimeLocator: string;
+  runtimeScope: string;
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
   flush: () => Promise<void>;
 };
@@ -171,30 +171,30 @@ export function createTrajectoryRuntimeRecorder(
   }
 
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
-  const runtimeLocator = `sqlite:${agentId}:trajectory:${params.sessionId}`;
-  const maxRuntimeFileBytes = Math.max(
+  const runtimeScope = `sqlite:${agentId}:trajectory:${params.sessionId}`;
+  const maxRuntimeCaptureBytes = Math.max(
     1,
-    Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
+    Math.floor(params.maxRuntimeCaptureBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
   let seq = 0;
   const traceId = params.sessionId;
   const sentinelReserveBytes = Math.min(
     TRAJECTORY_RUNTIME_TRUNCATION_SENTINEL_RESERVE_BYTES,
-    Math.floor(maxRuntimeFileBytes / 2),
+    Math.floor(maxRuntimeCaptureBytes / 2),
   );
-  const normalEventLimitBytes = Math.max(1, maxRuntimeFileBytes - sentinelReserveBytes);
+  const normalEventLimitBytes = Math.max(1, maxRuntimeCaptureBytes - sentinelReserveBytes);
   let acceptedRuntimeBytes = 0;
   let droppedEvents = 0;
   let droppedEventBytes = 0;
   let captureStopped = false;
-  const artifactLines: string[] = [];
+  const artifactPayloadLines: string[] = [];
   let artifactEventCount = 0;
   let artifactWriteFailed = false;
 
   const writeBoundedLine = (line: string, options: { reserveSentinel: boolean }): boolean => {
-    const jsonlLine = `${line}\n`;
-    const lineBytes = Buffer.byteLength(jsonlLine, "utf8");
-    const limitBytes = options.reserveSentinel ? normalEventLimitBytes : maxRuntimeFileBytes;
+    const payloadLine = `${line}\n`;
+    const lineBytes = Buffer.byteLength(payloadLine, "utf8");
+    const limitBytes = options.reserveSentinel ? normalEventLimitBytes : maxRuntimeCaptureBytes;
     if (acceptedRuntimeBytes + lineBytes > limitBytes) {
       captureStopped = true;
       droppedEvents += 1;
@@ -214,19 +214,19 @@ export function createTrajectoryRuntimeRecorder(
       return false;
     }
     acceptedRuntimeBytes += lineBytes;
-    artifactLines.push(jsonlLine);
+    artifactPayloadLines.push(payloadLine);
     artifactEventCount += 1;
     return true;
   };
 
   const writeArtifactMirror = (): void => {
-    if (!params.artifactStore || artifactLines.length === 0 || artifactWriteFailed) {
+    if (!params.artifactStore || artifactPayloadLines.length === 0 || artifactWriteFailed) {
       return;
     }
     try {
       params.artifactStore.write({
         artifactId: "trajectory-runtime",
-        kind: "trajectory/runtime-jsonl",
+        kind: "trajectory/runtime-events",
         metadata: {
           traceSchema: "openclaw-trajectory-artifact",
           schemaVersion: 1,
@@ -238,11 +238,11 @@ export function createTrajectoryRuntimeRecorder(
           ...(params.modelId ? { modelId: params.modelId } : {}),
           ...(params.modelApi ? { modelApi: params.modelApi } : {}),
           ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-          runtimeLocator,
+          runtimeScope,
           eventCount: artifactEventCount,
-          bytes: Buffer.byteLength(artifactLines.join(""), "utf8"),
+          bytes: Buffer.byteLength(artifactPayloadLines.join(""), "utf8"),
         },
-        blob: artifactLines.join(""),
+        blob: artifactPayloadLines.join(""),
       });
     } catch {
       artifactWriteFailed = true;
@@ -283,7 +283,7 @@ export function createTrajectoryRuntimeRecorder(
 
   return {
     enabled: true,
-    runtimeLocator,
+    runtimeScope,
     recordEvent: (type, data) => {
       if (captureStopped) {
         droppedEvents += 1;
@@ -301,7 +301,7 @@ export function createTrajectoryRuntimeRecorder(
           reason: "trajectory-runtime-size-limit",
           droppedEvents,
           droppedEventBytes,
-          limitBytes: maxRuntimeFileBytes,
+          limitBytes: maxRuntimeCaptureBytes,
         });
         if (line) {
           writeBoundedLine(line, { reserveSentinel: false });

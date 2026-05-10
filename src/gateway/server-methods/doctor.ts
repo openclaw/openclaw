@@ -24,7 +24,6 @@ import {
   previewRemHarness,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
-  repairDreamingArtifacts,
   writeBackfillDiaryEntries,
 } from "./doctor.memory-core-runtime.js";
 import { asRecord, normalizeTrimmedString } from "./record-shared.js";
@@ -138,12 +137,7 @@ export type DoctorMemoryDreamDiaryPayload = {
 
 export type DoctorMemoryDreamActionPayload = {
   agentId: string;
-  action:
-    | "backfill"
-    | "reset"
-    | "resetGroundedShortTerm"
-    | "repairDreamingArtifacts"
-    | "dedupeDreamDiary";
+  action: "backfill" | "reset" | "resetGroundedShortTerm" | "dedupeDreamDiary";
   path?: string;
   found?: boolean;
   scannedFiles?: number;
@@ -151,12 +145,6 @@ export type DoctorMemoryDreamActionPayload = {
   replaced?: number;
   removedEntries?: number;
   removedShortTermEntries?: number;
-  changed?: boolean;
-  archiveDir?: string;
-  archivedDreamsDiary?: boolean;
-  archivedSessionCorpus?: boolean;
-  archivedSessionIngestion?: boolean;
-  warnings?: string[];
   dedupedEntries?: number;
   keptEntries?: number;
 };
@@ -352,11 +340,7 @@ function isShortTermMemoryPath(filePath: string): boolean {
   if (/(?:^|\/)memory\/(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized)) {
     return true;
   }
-  if (
-    /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/.test(
-      normalized,
-    )
-  ) {
+  if (/(?:^|\/)memory\/session-ingestion\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/.test(normalized)) {
     return true;
   }
   return /^(\d{4})-(\d{2})-(\d{2})\.md$/.test(normalized);
@@ -1068,23 +1052,6 @@ export const doctorHandlers: GatewayRequestHandlers = {
       agentId,
       action: "resetGroundedShortTerm",
       removedShortTermEntries: removed.removed,
-    };
-    respond(true, payload, undefined);
-  },
-  "doctor.memory.repairDreamingArtifacts": async ({ respond, context }) => {
-    const cfg = context.getRuntimeConfig();
-    const agentId = resolveDefaultAgentId(cfg);
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    const repair = await repairDreamingArtifacts({ workspaceDir });
-    const payload: DoctorMemoryDreamActionPayload = {
-      agentId,
-      action: "repairDreamingArtifacts",
-      changed: repair.changed,
-      archiveDir: repair.archiveDir,
-      archivedDreamsDiary: repair.archivedDreamsDiary,
-      archivedSessionCorpus: repair.archivedSessionCorpus,
-      archivedSessionIngestion: repair.archivedSessionIngestion,
-      warnings: repair.warnings,
     };
     respond(true, payload, undefined);
   },

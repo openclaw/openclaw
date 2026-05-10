@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,7 +6,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
-import { SessionManager } from "../transcript/session-transcript-contract.js";
+import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
+import type { SessionManager } from "../transcript/session-transcript-contract.js";
 import { readTranscriptStateForSession } from "../transcript/transcript-state.js";
 import {
   rotateTranscriptAfterCompaction,
@@ -43,6 +45,14 @@ async function loadState(scope: { agentId: string; sessionId: string }) {
   return await readTranscriptStateForSession(scope);
 }
 
+function createScopedSessionManager(cwd: string) {
+  return openTranscriptSessionManagerForSession({
+    agentId: "main",
+    sessionId: randomUUID(),
+    cwd,
+  });
+}
+
 type TranscriptEntry = ReturnType<SessionManager["getEntries"]>[number];
 
 function requireEntryByIdAndType<T extends TranscriptEntry["type"]>(
@@ -73,17 +83,13 @@ function requireEntryByType<T extends TranscriptEntry["type"]>(
   return entry as Extract<TranscriptEntry, { type: T }>;
 }
 
-function transcriptParentReference(scope: { agentId: string; sessionId: string }): string {
-  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
-}
-
 function createCompactedSession(sessionDir: string): {
   manager: SessionManager;
   scope: { agentId: string; sessionId: string };
   firstKeptId: string;
   oldUserId: string;
 } {
-  const manager = SessionManager.create(sessionDir);
+  const manager = createScopedSessionManager(sessionDir);
   manager.appendModelChange("openai", "gpt-5.2");
   manager.appendThinkingLevelChange("medium");
   manager.appendCustomEntry("test-extension", { cursor: "before-compaction" });
@@ -108,14 +114,10 @@ describe("rotateTranscriptAfterCompaction", () => {
     const dir = await createTmpDir();
     const { scope: sourceScope } = createCompactedSession(dir);
 
-    const openSpy = vi.spyOn(SessionManager, "openForSession").mockImplementation(() => {
-      throw new Error("SessionManager.openForSession should not be used for SQLite rotation");
-    });
     const result = await rotateSqliteTranscriptAfterCompaction({
       ...sourceScope,
       now: () => new Date("2026-04-27T12:00:00.000Z"),
     });
-    openSpy.mockRestore();
 
     expect(result.rotated).toBe(true);
     expect(result.sessionId).toBeTruthy();
@@ -125,7 +127,7 @@ describe("rotateTranscriptAfterCompaction", () => {
       sessionId: result.sessionId!,
     });
     expect(successor.getHeader()).toMatchObject({
-      parentSession: transcriptParentReference(sourceScope),
+      parentTranscriptScope: sourceScope,
       cwd: dir,
     });
     expect(successor.buildSessionContext().messages.length).toBeGreaterThan(0);
@@ -154,7 +156,7 @@ describe("rotateTranscriptAfterCompaction", () => {
     });
     expect(successor.getHeader()).toMatchObject({
       id: result.sessionId,
-      parentSession: transcriptParentReference(sourceScope),
+      parentTranscriptScope: sourceScope,
       cwd: dir,
     });
     expect(successor.getEntries().length).toBeLessThan(originalEntryCount);
@@ -183,7 +185,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("deduplicates stale pre-compaction session state", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
 
     const staleModelId = manager.appendModelChange("anthropic", "claude-sonnet-4-5");
     const staleThinkingId = manager.appendThinkingLevelChange("low");
@@ -234,7 +236,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("drops duplicate user messages from the rotated active branch tail", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "old user", timestamp: 1 });
     const firstKeptId = manager.appendMessage(makeAssistant("old assistant", 2));
     manager.appendCompaction("Summary of old work.", firstKeptId, 5000);
@@ -270,7 +272,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("skips sessions with no compaction entry", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     manager.appendMessage(makeAssistant("hi", 2));
 
@@ -285,7 +287,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("uses a refreshed manager after manual boundary hardening", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
     manager.appendMessage({ role: "user", content: "old question", timestamp: 1 });
     manager.appendMessage(makeAssistant("old answer", 2));
     const recentTailId = manager.appendMessage({
@@ -335,7 +337,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("preserves unsummarized sibling branches and branch summaries", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));
@@ -392,7 +394,7 @@ describe("rotateTranscriptAfterCompaction", () => {
 
   it("orders preserved sibling branches after their surviving parents", async () => {
     const dir = await createTmpDir();
-    const manager = SessionManager.create(dir);
+    const manager = createScopedSessionManager(dir);
 
     manager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
     const branchFromId = manager.appendMessage(makeAssistant("hi there", 2));

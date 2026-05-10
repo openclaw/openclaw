@@ -21,7 +21,7 @@ function buildContextEngine(params: {
   return {
     info: {
       id: "legacy",
-      name: "Legacy Context Engine",
+      name: "Built-in Context Engine",
     },
     async ingest() {
       return { ingested: false };
@@ -171,13 +171,11 @@ describe("runCliTurnCompactionLifecycle", () => {
   it("initializes built-in context engines before resolving CLI compaction engine", async () => {
     const sessionKey = "agent:main:cli";
     const sessionId = "session-cli-init";
-    const sessionFile = path.join(tmpDir, "session-init.jsonl");
-    await writeSessionFile({ sessionFile, sessionId });
+    seedSqliteTranscript({ sessionId, cwd: tmpDir });
 
     const sessionEntry: SessionEntry = {
       sessionId,
       updatedAt: Date.now(),
-      sessionFile,
       contextTokens: 1_000,
       totalTokens: 100,
       totalTokensFresh: true,

@@ -21,7 +21,9 @@ const hoisted = await vi.hoisted(async () => {
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
     hasSqliteSessionTranscriptEventsMock: vi.fn(() => false),
-    exportSqliteSessionTranscriptJsonlMock: vi.fn(() => ""),
+    loadSqliteSessionTranscriptEventsMock: vi.fn<
+      () => Array<{ seq: number; event: unknown; createdAt: number }>
+    >(() => []),
     exportHtmlTemplateContents: new Map<string, string>(),
   };
 });
@@ -48,7 +50,7 @@ vi.mock("../../infra/fs-safe.js", () => ({
 
 vi.mock("../../config/sessions/transcript-store.sqlite.js", () => ({
   hasSqliteSessionTranscriptEvents: hoisted.hasSqliteSessionTranscriptEventsMock,
-  exportSqliteSessionTranscriptJsonl: hoisted.exportSqliteSessionTranscriptJsonlMock,
+  loadSqliteSessionTranscriptEvents: hoisted.loadSqliteSessionTranscriptEventsMock,
 }));
 
 vi.mock("node:fs", async () => {
@@ -167,9 +169,9 @@ describe("buildExportSessionReply", () => {
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
-    hoisted.exportSqliteSessionTranscriptJsonlMock.mockReturnValue(
-      `${JSON.stringify({ type: "session", id: "session-1" })}\n`,
-    );
+    hoisted.loadSqliteSessionTranscriptEventsMock.mockReturnValue([
+      { seq: 0, event: { type: "session", id: "session-1" }, createdAt: 1 },
+    ]);
     hoisted.exportHtmlTemplateContents.clear();
   });
 
@@ -203,7 +205,7 @@ describe("buildExportSessionReply", () => {
       agentId: "explicit",
       sessionId: "session-from-explicit-agent",
     });
-    expect(hoisted.exportSqliteSessionTranscriptJsonlMock).toHaveBeenCalledWith({
+    expect(hoisted.loadSqliteSessionTranscriptEventsMock).toHaveBeenCalledWith({
       agentId: "explicit",
       sessionId: "session-from-explicit-agent",
     });
@@ -268,27 +270,28 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
   });
 
-  it("exports from scoped SQLite transcript events without a legacy JSONL file", async () => {
+  it("exports from scoped SQLite transcript events", async () => {
     const { buildExportSessionReply } = await import("./commands-export-session.js");
     hoisted.pathExistsMock.mockResolvedValue(false);
     hoisted.hasSqliteSessionTranscriptEventsMock.mockReturnValue(true);
-    hoisted.exportSqliteSessionTranscriptJsonlMock.mockReturnValue(
-      [
-        JSON.stringify({ type: "session", id: "session-1" }),
-        JSON.stringify({
+    hoisted.loadSqliteSessionTranscriptEventsMock.mockReturnValue([
+      { seq: 0, event: { type: "session", id: "session-1" }, createdAt: 1 },
+      {
+        seq: 1,
+        event: {
           type: "message",
           id: "m1",
           parentId: null,
           message: { role: "assistant", content: "sqlite export" },
-        }),
-        "",
-      ].join("\n"),
-    );
+        },
+        createdAt: 2,
+      },
+    ]);
 
     const reply = await buildExportSessionReply(makeParams());
 
     expect(reply.text).toContain("✅ Session exported!");
-    expect(hoisted.exportSqliteSessionTranscriptJsonlMock).toHaveBeenCalledWith({
+    expect(hoisted.loadSqliteSessionTranscriptEventsMock).toHaveBeenCalledWith({
       agentId: "target",
       sessionId: "session-1",
     });

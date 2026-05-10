@@ -24,7 +24,6 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionId: string;
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
-  sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   config?: OpenClawConfig;
@@ -50,7 +49,6 @@ export async function bootstrapHarnessContextEngine(params: {
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
       reason: "bootstrap",
-      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
     });
@@ -105,7 +103,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
   tokenBudget?: number;
   runtimeContext?: ContextEngineRuntimeContext;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  sessionManager?: unknown;
   config?: OpenClawConfig;
   warn: (message: string) => void;
 }) {
@@ -179,7 +176,6 @@ export async function finalizeHarnessContextEngineTurn(params: {
       sessionKey: params.sessionKey,
       transcriptScope: params.transcriptScope,
       reason: "turn",
-      sessionManager: params.sessionManager,
       runtimeContext: params.runtimeContext,
       config: params.config,
     });
@@ -231,7 +227,6 @@ export async function runHarnessContextEngineMaintenance(params: {
   sessionKey?: string;
   transcriptScope?: ContextEngineTranscriptScope;
   reason: "bootstrap" | "compaction" | "turn";
-  sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
   executionMode?: "foreground" | "background";
   config?: OpenClawConfig;
@@ -242,9 +237,6 @@ export async function runHarnessContextEngineMaintenance(params: {
     sessionKey: params.sessionKey,
     transcriptScope: params.transcriptScope,
     reason: params.reason,
-    sessionManager: params.sessionManager as Parameters<
-      typeof runContextEngineMaintenance
-    >[0]["sessionManager"],
     runtimeContext: params.runtimeContext,
     executionMode: params.executionMode,
     config: params.config,

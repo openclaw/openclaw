@@ -150,7 +150,6 @@ describe("Crestodian assistant", () => {
     expect(firstCliCall.model).toBe("claude-opus-4-7");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(firstCliCall.sessionId).toMatch(/^crestodian-planner-.*-session$/);
-    expect(firstCliCall).not.toHaveProperty("transcriptLocator");
     const firstCliConfig = requireRecord(firstCliCall.config);
     const firstCliAgents = requireRecord(firstCliConfig.agents);
     const firstCliDefaults = requireRecord(firstCliAgents.defaults);
@@ -287,6 +286,5 @@ describe("Crestodian assistant", () => {
     expect(firstCliCall.model).toBe("gpt-5.5");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     expect(firstCliCall.sessionId).toMatch(/^crestodian-planner-.*-session$/);
-    expect(firstCliCall).not.toHaveProperty("transcriptLocator");
   });
 });

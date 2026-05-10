@@ -267,7 +267,6 @@ type WorkspaceBootstrapCompletionReconcileResult = {
 async function reconcileWorkspaceBootstrapCompletionState(params: {
   dir: string;
   bootstrapPath: string;
-  statePath: string;
   state: WorkspaceSetupState;
   bootstrapExists?: boolean;
 }): Promise<WorkspaceBootstrapCompletionReconcileResult> {
@@ -284,7 +283,7 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
       ...params.state,
       setupCompletedAt: new Date().toISOString(),
     };
-    await writeWorkspaceSetupState(params.statePath, completedState);
+    await writeWorkspaceSetupStateForDir(params.dir, completedState);
     return { repaired: true, bootstrapExists: false, state: completedState };
   }
 
@@ -304,12 +303,8 @@ async function reconcileWorkspaceBootstrapCompletionState(params: {
     setupCompletedAt: now,
   };
   await fs.rm(params.bootstrapPath, { force: true });
-  await writeWorkspaceSetupState(params.statePath, repairedState);
+  await writeWorkspaceSetupStateForDir(params.dir, repairedState);
   return { repaired: true, bootstrapExists: false, state: repairedState };
-}
-
-function resolveWorkspaceStatePath(dir: string): string {
-  return path.join(dir, ".openclaw", "setup-state");
 }
 
 function resolveWorkspaceStateKey(dir: string): string {
@@ -333,8 +328,7 @@ function parseWorkspaceSetupStateValue(value: unknown): WorkspaceSetupState | nu
   };
 }
 
-async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
-  const dir = path.dirname(path.dirname(statePath));
+async function readWorkspaceSetupStateForResolvedDir(dir: string): Promise<WorkspaceSetupState> {
   const key = resolveWorkspaceStateKey(dir);
   const sqliteState = parseWorkspaceSetupStateValue(
     readOpenClawStateKvJson(WORKSPACE_SETUP_STATE_SCOPE, key),
@@ -348,8 +342,7 @@ async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetu
 }
 
 async function readWorkspaceSetupStateForDir(dir: string): Promise<WorkspaceSetupState> {
-  const statePath = resolveWorkspaceStatePath(resolveUserPath(dir));
-  return await readWorkspaceSetupState(statePath);
+  return await readWorkspaceSetupStateForResolvedDir(resolveUserPath(dir));
 }
 
 export async function isWorkspaceSetupCompleted(dir: string): Promise<boolean> {
@@ -361,8 +354,7 @@ export async function resolveWorkspaceBootstrapStatus(
   dir: string,
 ): Promise<"pending" | "complete"> {
   const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
-  const state = await readWorkspaceSetupState(statePath);
+  const state = await readWorkspaceSetupStateForResolvedDir(resolvedDir);
   if (typeof state.setupCompletedAt === "string" && state.setupCompletedAt.trim().length > 0) {
     return "complete";
   }
@@ -382,22 +374,19 @@ export async function reconcileWorkspaceBootstrapCompletion(
   dir: string,
 ): Promise<WorkspaceBootstrapCompletionReconcileResult> {
   const resolvedDir = resolveUserPath(dir);
-  const statePath = resolveWorkspaceStatePath(resolvedDir);
   const bootstrapPath = path.join(resolvedDir, DEFAULT_BOOTSTRAP_FILENAME);
-  const state = await readWorkspaceSetupState(statePath);
+  const state = await readWorkspaceSetupStateForResolvedDir(resolvedDir);
   return await reconcileWorkspaceBootstrapCompletionState({
     dir: resolvedDir,
     bootstrapPath,
-    statePath,
     state,
   });
 }
 
-async function writeWorkspaceSetupState(
-  statePath: string,
+async function writeWorkspaceSetupStateForDir(
+  dir: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  const dir = path.dirname(path.dirname(statePath));
   writeOpenClawStateKvJson<OpenClawStateJsonValue>(
     WORKSPACE_SETUP_STATE_SCOPE,
     resolveWorkspaceStateKey(dir),
@@ -406,7 +395,7 @@ async function writeWorkspaceSetupState(
 }
 
 export async function readWorkspaceSetupStateForTests(dir: string): Promise<WorkspaceSetupState> {
-  return await readWorkspaceSetupState(resolveWorkspaceStatePath(resolveUserPath(dir)));
+  return await readWorkspaceSetupStateForResolvedDir(resolveUserPath(dir));
 }
 
 async function hasGitRepo(dir: string): Promise<boolean> {
@@ -487,7 +476,6 @@ export async function ensureAgentWorkspace(params?: {
   const userPath = path.join(dir, DEFAULT_USER_FILENAME);
   const heartbeatPath = path.join(dir, DEFAULT_HEARTBEAT_FILENAME);
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
-  const statePath = resolveWorkspaceStatePath(dir);
 
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
@@ -532,7 +520,7 @@ export async function ensureAgentWorkspace(params?: {
     await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
   }
 
-  let state = await readWorkspaceSetupState(statePath);
+  let state = await readWorkspaceSetupStateForResolvedDir(dir);
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -549,7 +537,6 @@ export async function ensureAgentWorkspace(params?: {
     const repair = await reconcileWorkspaceBootstrapCompletionState({
       dir,
       bootstrapPath,
-      statePath,
       state,
       bootstrapExists,
     });
@@ -586,7 +573,7 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
-    await writeWorkspaceSetupState(statePath, state);
+    await writeWorkspaceSetupStateForDir(dir, state);
   }
   await ensureGitRepo(dir, isBrandNewWorkspace);
 

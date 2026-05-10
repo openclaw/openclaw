@@ -1,6 +1,4 @@
 import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import readline from "node:readline";
 import {
   isSilentReplyPrefixText,
@@ -13,11 +11,11 @@ import { loadSqliteSessionTranscriptEvents } from "../../config/sessions/transcr
 import {
   type ClaudeCliFallbackSeed,
   readClaudeCliFallbackSeed,
+  resolveClaudeCliHistoryJsonlPath,
 } from "../../gateway/cli-session-history.js";
 
 /** Maximum number of external Claude CLI JSONL records to inspect before giving up. */
 const CLAUDE_CLI_HISTORY_MAX_RECORDS = 500;
-const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
 
 function normalizeClaudeCliSessionId(sessionId: string | undefined): string | undefined {
   const trimmed = sessionId?.trim();
@@ -100,24 +98,11 @@ export async function claudeCliSessionTranscriptHasContent(params: {
   if (!sessionId) {
     return false;
   }
-  const homeDir = params.homeDir?.trim() || process.env.HOME || os.homedir();
-  const projectsDir = path.join(homeDir, CLAUDE_PROJECTS_RELATIVE_DIR);
-  let projectEntries: import("node:fs").Dirent[];
-  try {
-    projectEntries = await fs.readdir(projectsDir, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  for (const entry of projectEntries) {
-    if (!entry.isDirectory()) {
-      continue;
-    }
-    const candidate = path.join(projectsDir, entry.name, `${sessionId}.jsonl`);
-    if (await claudeCliHistoryJsonlHasAssistantMessage(candidate)) {
-      return true;
-    }
-  }
-  return false;
+  const filePath = resolveClaudeCliHistoryJsonlPath({
+    cliSessionId: sessionId,
+    homeDir: params.homeDir,
+  });
+  return await claudeCliHistoryJsonlHasAssistantMessage(filePath);
 }
 
 export function resolveFallbackRetryPrompt(params: {

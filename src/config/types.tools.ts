@@ -481,7 +481,7 @@ export type MemorySearchConfig = {
     sessions?: {
       /** Minimum appended bytes before session transcripts are reindexed. */
       deltaBytes?: number;
-      /** Minimum appended JSONL lines before session transcripts are reindexed. */
+      /** Minimum appended transcript messages before session transcripts are reindexed. */
       deltaMessages?: number;
       /** Force session reindex after compaction-triggered transcript updates (default: true). */
       postCompactionForce?: boolean;

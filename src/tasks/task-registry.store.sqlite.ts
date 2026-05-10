@@ -365,6 +365,6 @@ export function deleteTaskDeliveryStateFromSqlite(taskId: string) {
   });
 }
 
-export function closeTaskRegistrySqliteStore() {
+export function closeTaskRegistryDatabase() {
   cachedDatabase = null;
 }

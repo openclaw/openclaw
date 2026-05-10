@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import {
-  appendSqliteSessionTranscriptEvent,
+  replaceSqliteSessionTranscriptEvents,
   resetAgentEventsForTest,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
@@ -60,24 +60,18 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-projector-"));
   tempDirs.add(tempDir);
   const sessionId = "session-1";
-  const transcriptSessionId = `${sessionId}-${path
-    .basename(tempDir)
-    .replace(/[^a-z0-9]/giu, "")
-    .toLowerCase()}`;
-  appendSqliteSessionTranscriptEvent({
+  replaceSqliteSessionTranscriptEvents({
     agentId: "main",
-    sessionId: transcriptSessionId,
-    event: { type: "session", version: 1, id: sessionId },
-  });
-  appendSqliteSessionTranscriptEvent({
-    agentId: "main",
-    sessionId: transcriptSessionId,
-    event: {
-      type: "message",
-      id: "history",
-      parentId: null,
-      message: assistantMessage("history", Date.now()),
-    },
+    sessionId,
+    events: [
+      { type: "session", version: 1, id: sessionId },
+      {
+        type: "message",
+        id: "history",
+        parentId: null,
+        message: assistantMessage("history", Date.now()),
+      },
+    ],
   });
   return {
     prompt: "hello",

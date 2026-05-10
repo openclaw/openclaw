@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +63,7 @@ let onAgentEvent: typeof import("../../infra/agent-events.js").onAgentEvent;
 let runReplyAgentPromise:
   | Promise<(typeof import("./agent-runner.js"))["runReplyAgent"]>
   | undefined;
+const tempStateDirs: string[] = [];
 
 async function getRunReplyAgent() {
   if (!runReplyAgentPromise) {
@@ -129,10 +130,26 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
-afterEach(() => {
+afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   vi.unstubAllEnvs();
+  await Promise.all(
+    tempStateDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })),
+  );
 });
+
+async function createSessionRows(entry: SessionEntry) {
+  const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
+  tempStateDirs.push(dir);
+  vi.stubEnv("OPENCLAW_STATE_DIR", dir);
+  upsertSessionEntry({ agentId: "main", sessionKey: "main", entry });
+}
+
+function readStoredMainSession(): SessionEntry {
+  return Object.fromEntries(
+    listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  ).main;
+}
 
 function createMinimalRun(params?: {
   opts?: GetReplyOptions;
@@ -312,18 +329,6 @@ describe("runReplyAgent heartbeat followup guard", () => {
 });
 
 describe("runReplyAgent pending final delivery capture", () => {
-  async function createSessionRows(entry: SessionEntry) {
-    const dir = await mkdtemp(join(tmpdir(), "openclaw-agent-runner-pending-"));
-    vi.stubEnv("OPENCLAW_STATE_DIR", dir);
-    upsertSessionEntry({ agentId: "main", sessionKey: "main", entry });
-  }
-
-  function readStoredMainSession(): SessionEntry {
-    return Object.fromEntries(
-      listSessionEntries({ agentId: "main" }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-    ).main;
-  }
-
   it("does not persist message-tool-only final replies for heartbeat replay", async () => {
     const sessionEntry: SessionEntry = {
       sessionId: "session",

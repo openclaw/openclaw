@@ -7,7 +7,13 @@ type IntegrityCheckRow = {
 export function readSqliteIntegrityCheck(db: DatabaseSync): string {
   const row = db.prepare("PRAGMA integrity_check").get() as IntegrityCheckRow | undefined;
   const value = row?.integrity_check;
-  return typeof value === "string" ? value : String(value ?? "");
+  if (typeof value === "string") {
+    return value;
+  }
+  if (typeof value === "number" || typeof value === "bigint" || typeof value === "boolean") {
+    return String(value);
+  }
+  return "";
 }
 
 export function assertSqliteIntegrityOk(db: DatabaseSync, message: string): void {

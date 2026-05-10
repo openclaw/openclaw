@@ -8,10 +8,7 @@ import {
   limitAgentHookHistoryMessages,
   MAX_AGENT_HOOK_HISTORY_MESSAGES,
 } from "../harness/hook-history.js";
-import {
-  migrateSessionEntries,
-  type TranscriptEntry,
-} from "../transcript/session-transcript-contract.js";
+import { type TranscriptEntry } from "../transcript/session-transcript-contract.js";
 
 export const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
 export const MAX_CLI_SESSION_HISTORY_MESSAGES = MAX_AGENT_HOOK_HISTORY_MESSAGES;
@@ -150,7 +147,6 @@ async function loadCliSessionEntries(params: {
     if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_BYTES) {
       return [];
     }
-    migrateSessionEntries(entries);
     return entries.filter((entry) => entry.type !== "session");
   } catch {
     return [];

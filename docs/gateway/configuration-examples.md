@@ -75,7 +75,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     },
   },
 
-  // Auth profile metadata (secrets live in auth-profiles.json)
+  // Auth profile metadata (secrets live in SQLite auth-profile rows)
   auth: {
     profiles: {
       "anthropic:default": { provider: "anthropic", mode: "api_key" },
@@ -373,7 +373,6 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
   // Cron jobs
   cron: {
     enabled: true,
-    store: "~/.openclaw/cron/cron.json",
     maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
     runLog: {
       maxBytes: "2mb",

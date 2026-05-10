@@ -1234,9 +1234,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("drops ambiguous thread replies instead of treating them as root messages", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const cfg = {
-      session: { store: storePath },
       channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
     } as OpenClawConfig;
     const replies = vi.fn();
@@ -1324,10 +1322,9 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("records non-main DM last-route metadata on the prepared thread session", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath, dmScope: "per-channel-peer" },
+        session: { dmScope: "per-channel-peer" },
         channels: { slack: { enabled: true, replyToMode: "all" } },
       } as OpenClawConfig,
       replyToMode: "all",
@@ -1588,10 +1585,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("preserves explicit Slack mention targets when an implicit thread wake mentions someone else", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
       } as OpenClawConfig,
       defaultRequireMention: true,
@@ -1627,10 +1622,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
   });
 
   it("marks authorized implicit thread control-command wakes as command bypass source", async () => {
-    const { storePath } = storeFixture.makeTmpStorePath();
     const slackCtx = createInboundSlackCtx({
       cfg: {
-        session: { store: storePath },
         channels: {
           slack: {
             enabled: true,

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { readTranscriptStateForSession } from "../agents/transcript/transcript-state.js";
 import { getSessionEntry, upsertSessionEntry } from "../config/sessions.js";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
@@ -14,7 +14,6 @@ import {
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
-  getSessionManagerModule,
   getGatewayConfigModule,
   sessionStoreEntry,
   createCheckpointFixture,
@@ -26,7 +25,6 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   const { dir } = await createSessionFixtureDir();
   const fixture = await createCheckpointFixture(dir);
   const checkpointCreatedAt = Date.now();
-  const { SessionManager } = await getSessionManagerModule();
   upsertSessionEntry({
     agentId: "main",
     sessionKey: "agent:main:main",
@@ -131,34 +129,15 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
     fixture.preCompactionSessionId,
   );
 
-  const sessionManagerOpenSpy = vi.spyOn(SessionManager, "openForSession");
-  const sessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFromSession");
-  let branched: Awaited<
-    ReturnType<
-      typeof rpcReq<{
-        ok: true;
-        sourceKey: string;
-        key: string;
-        entry: { sessionId: string; parentSessionKey?: string };
-      }>
-    >
-  >;
-  try {
-    branched = await rpcReq<{
-      ok: true;
-      sourceKey: string;
-      key: string;
-      entry: { sessionId: string; parentSessionKey?: string };
-    }>(ws, "sessions.compaction.branch", {
-      key: "main",
-      checkpointId: "checkpoint-1",
-    });
-    expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(sessionManagerForkFromSpy).not.toHaveBeenCalled();
-  } finally {
-    sessionManagerOpenSpy.mockRestore();
-    sessionManagerForkFromSpy.mockRestore();
-  }
+  const branched = await rpcReq<{
+    ok: true;
+    sourceKey: string;
+    key: string;
+    entry: { sessionId: string; parentSessionKey?: string };
+  }>(ws, "sessions.compaction.branch", {
+    key: "main",
+    checkpointId: "checkpoint-1",
+  });
   expect(branched.ok).toBe(true);
   expect(branched.payload?.sourceKey).toBe("agent:main:main");
   expect(branched.payload?.entry.parentSessionKey).toBe("agent:main:main");
@@ -177,34 +156,15 @@ test("sessions.compaction.* lists checkpoints and branches or restores from pre-
   expect(branchedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(branchedEntry?.compactionCheckpoints).toBeUndefined();
 
-  const restoreSessionManagerOpenSpy = vi.spyOn(SessionManager, "openForSession");
-  const restoreSessionManagerForkFromSpy = vi.spyOn(SessionManager, "forkFromSession");
-  let restored: Awaited<
-    ReturnType<
-      typeof rpcReq<{
-        ok: true;
-        key: string;
-        sessionId: string;
-        entry: { sessionId: string; compactionCheckpoints?: unknown[] };
-      }>
-    >
-  >;
-  try {
-    restored = await rpcReq<{
-      ok: true;
-      key: string;
-      sessionId: string;
-      entry: { sessionId: string; compactionCheckpoints?: unknown[] };
-    }>(ws, "sessions.compaction.restore", {
-      key: "main",
-      checkpointId: "checkpoint-1",
-    });
-    expect(restoreSessionManagerOpenSpy).not.toHaveBeenCalled();
-    expect(restoreSessionManagerForkFromSpy).not.toHaveBeenCalled();
-  } finally {
-    restoreSessionManagerOpenSpy.mockRestore();
-    restoreSessionManagerForkFromSpy.mockRestore();
-  }
+  const restored = await rpcReq<{
+    ok: true;
+    key: string;
+    sessionId: string;
+    entry: { sessionId: string; compactionCheckpoints?: unknown[] };
+  }>(ws, "sessions.compaction.restore", {
+    key: "main",
+    checkpointId: "checkpoint-1",
+  });
   expect(restored.ok).toBe(true);
   expect(restored.payload?.key).toBe("agent:main:main");
   expect(restored.payload?.sessionId).not.toBe(fixture.sessionId);

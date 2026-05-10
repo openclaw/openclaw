@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import {
   CURRENT_SESSION_VERSION,
-  migrateSessionEntries,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
   type TranscriptEntry,
@@ -27,10 +26,6 @@ type ForkSourceTranscript = {
 };
 
 const FALLBACK_TRANSCRIPT_BYTES_PER_TOKEN = 4;
-
-function formatTranscriptParentReference(scope: { agentId: string; sessionId: string }): string {
-  return `agent-db:${scope.agentId}:transcript_events:${scope.sessionId}`;
-}
 
 function resolvePositiveTokenCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value > 0
@@ -184,7 +179,6 @@ async function readForkSourceTranscript(params: {
   if (transcriptEntries.length === 0) {
     return null;
   }
-  migrateSessionEntries(transcriptEntries);
   const header =
     transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = transcriptEntries.filter(isSessionEntry);
@@ -227,7 +221,7 @@ function buildBranchLabelEntries(params: {
 }
 
 async function writeForkHeaderOnly(params: {
-  parentTranscriptReference: string;
+  parentTranscriptScope: { agentId: string; sessionId: string };
   agentId: string;
   cwd: string;
 }): Promise<{ sessionId: string }> {
@@ -239,7 +233,7 @@ async function writeForkHeaderOnly(params: {
     id: sessionId,
     timestamp,
     cwd: params.cwd,
-    parentSession: params.parentTranscriptReference,
+    parentTranscriptScope: { ...params.parentTranscriptScope },
   } satisfies SessionHeader;
   replaceSqliteSessionTranscriptEvents({
     agentId: params.agentId,
@@ -250,7 +244,7 @@ async function writeForkHeaderOnly(params: {
 }
 
 async function writeBranchedSession(params: {
-  parentTranscriptReference: string;
+  parentTranscriptScope: { agentId: string; sessionId: string };
   source: ForkSourceTranscript;
 }): Promise<{ sessionId: string }> {
   const sessionId = crypto.randomUUID();
@@ -268,7 +262,7 @@ async function writeBranchedSession(params: {
     id: sessionId,
     timestamp,
     cwd: params.source.cwd,
-    parentSession: params.parentTranscriptReference,
+    parentTranscriptScope: { ...params.parentTranscriptScope },
   } satisfies SessionHeader;
   const entries = [header, ...pathWithoutLabels, ...labelEntries];
   const hasAssistant = entries.some(
@@ -288,10 +282,10 @@ export async function forkSessionFromParentRuntime(params: {
   parentEntry: StoreSessionEntry;
   agentId: string;
 }): Promise<{ sessionId: string } | null> {
-  const parentTranscriptReference = formatTranscriptParentReference({
+  const parentTranscriptScope = {
     agentId: params.agentId,
     sessionId: params.parentEntry.sessionId,
-  });
+  };
   try {
     const source = await readForkSourceTranscript({
       agentId: params.agentId,
@@ -301,9 +295,9 @@ export async function forkSessionFromParentRuntime(params: {
       return null;
     }
     return source.leafId
-      ? await writeBranchedSession({ parentTranscriptReference, source })
+      ? await writeBranchedSession({ parentTranscriptScope, source })
       : await writeForkHeaderOnly({
-          parentTranscriptReference,
+          parentTranscriptScope,
           agentId: source.agentId,
           cwd: source.cwd,
         });

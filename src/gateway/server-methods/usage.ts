@@ -1,4 +1,4 @@
-import { validateSessionId } from "../../config/sessions/paths.js";
+import { validateSessionId } from "../../config/sessions/session-id.js";
 import {
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,

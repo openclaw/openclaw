@@ -108,7 +108,7 @@ Scope intent:
 - `channels.googlechat.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
 - `channels.googlechat.accounts.*.serviceAccount` via sibling `serviceAccountRef` (compatibility exception)
 
-### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
+### SQLite auth-profile targets (`secrets configure` + `secrets apply` + `secrets audit`)
 
 - `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)

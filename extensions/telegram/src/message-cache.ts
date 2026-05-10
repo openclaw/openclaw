@@ -279,6 +279,13 @@ export function importTelegramMessageCacheEntries(scopeKey: string, entries: unk
   return imported;
 }
 
+export function resetTelegramMessageCacheForTests(): void {
+  persistedMessageCacheBuckets.clear();
+  for (const entry of MESSAGE_CACHE_STORE.entries()) {
+    MESSAGE_CACHE_STORE.delete(entry.key);
+  }
+}
+
 function resolveMessageCacheBucket(params: {
   scopeKey?: string;
   maxMessages: number;

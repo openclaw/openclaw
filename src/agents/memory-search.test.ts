@@ -197,8 +197,9 @@ describe("memory search config", () => {
     const resolved = resolveMemorySearchConfig(cfg, "main");
     expect(resolved?.provider).toBe("auto");
     expect(resolved?.fallback).toBe("none");
-    expect(resolved?.store.path).toMatch(/agents[/\\]main[/\\]agent[/\\]openclaw-agent\.sqlite$/);
-    expect(resolved?.store.managedAgentDatabase).toBe(true);
+    expect(resolved?.store.databasePath).toMatch(
+      /agents[/\\]main[/\\]agent[/\\]openclaw-agent\.sqlite$/,
+    );
   });
 
   it("resolves custom provider ids through their configured api owner", () => {

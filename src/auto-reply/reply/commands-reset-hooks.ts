@@ -1,6 +1,7 @@
 import {
-  exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
+  type SqliteSessionTranscriptEvent,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import { logVerbose } from "../../globals.js";
 import { createInternalHookEvent, triggerInternalHook } from "../../hooks/internal-hooks.js";
@@ -17,19 +18,15 @@ function loadRouteReplyRuntime() {
 
 export type ResetCommandAction = "new" | "reset";
 
-function parseTranscriptMessages(content: string): unknown[] {
+function collectTranscriptMessages(events: readonly SqliteSessionTranscriptEvent[]): unknown[] {
   const messages: unknown[] = [];
-  for (const line of content.split("\n")) {
-    if (!line.trim()) {
+  for (const { event } of events) {
+    if (!event || typeof event !== "object") {
       continue;
     }
-    try {
-      const entry = JSON.parse(line);
-      if (entry.type === "message" && entry.message) {
-        messages.push(entry.message);
-      }
-    } catch {
-      // Skip malformed lines from partially-written transcripts.
+    const entry = event as { type?: unknown; message?: unknown };
+    if (entry.type === "message" && entry.message) {
+      messages.push(entry.message);
     }
   }
   return messages;
@@ -64,8 +61,8 @@ function loadScopedBeforeResetTranscript(
   }
   try {
     return {
-      messages: parseTranscriptMessages(
-        exportSqliteSessionTranscriptJsonl({
+      messages: collectTranscriptMessages(
+        loadSqliteSessionTranscriptEvents({
           agentId: params.agentId,
           sessionId: params.sessionId,
         }),

@@ -149,7 +149,6 @@ describe("runHeartbeatOnce ack handling", () => {
 
     await seedMainHeartbeatSession(params.agentId, cfg, {
       lastChannel: "telegram",
-      lastProvider: "telegram",
       lastTo: TELEGRAM_GROUP,
     });
 
@@ -197,7 +196,6 @@ describe("runHeartbeatOnce ack handling", () => {
     const cfg = createWhatsAppHeartbeatConfig(params);
     await seedMainHeartbeatSession(params.agentId, cfg, {
       lastChannel: "whatsapp",
-      lastProvider: "whatsapp",
       lastTo: WHATSAPP_GROUP,
     });
     return cfg;
@@ -213,7 +211,6 @@ describe("runHeartbeatOnce ack handling", () => {
 
       await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
         lastTo: WHATSAPP_GROUP,
       });
 
@@ -242,7 +239,6 @@ describe("runHeartbeatOnce ack handling", () => {
 
       await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
         lastTo: WHATSAPP_GROUP,
       });
 
@@ -315,7 +311,6 @@ describe("runHeartbeatOnce ack handling", () => {
 
       await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
         lastTo: WHATSAPP_GROUP,
       });
 
@@ -369,7 +364,6 @@ describe("runHeartbeatOnce ack handling", () => {
       const sessionKey = await seedMainHeartbeatSession(agentId, cfg, {
         updatedAt: originalUpdatedAt,
         lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
         lastTo: WHATSAPP_GROUP,
       });
 
@@ -447,7 +441,6 @@ describe("runHeartbeatOnce ack handling", () => {
       });
       await seedMainHeartbeatSession(agentId, cfg, {
         lastChannel: "telegram",
-        lastProvider: "telegram",
         lastTo: TELEGRAM_GROUP,
       });
 

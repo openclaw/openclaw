@@ -117,7 +117,6 @@ describe("sessions_spawn context modes", () => {
     const childEntry = requireStoreEntry(store, childSessionKey);
     expect(childEntry.sessionId).toBe("forked-session-id");
     expect(childEntry.forkedFromParent).toBe(true);
-    expect(childEntry).not.toHaveProperty("transcriptLocator");
 
     const prepareContext = requireFirstMockArg(prepareSubagentSpawn);
     expect(prepareContext.parentSessionKey).toBe("main");
@@ -213,7 +212,6 @@ describe("sessions_spawn context modes", () => {
     });
     const cleanupRequest = requireGatewayRequest("sessions.delete");
     expect(cleanupRequest.params?.key).toBe(result.childSessionKey);
-    expect(cleanupRequest.params?.deleteTranscript).toBe(true);
     expect(cleanupRequest.params?.emitLifecycleHooks).toBe(false);
     expect(prepareSubagentSpawn).not.toHaveBeenCalled();
   });

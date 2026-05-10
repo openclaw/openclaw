@@ -68,7 +68,6 @@ export type TuiSessionList = {
         surface?: string;
       };
       lastChannel?: string;
-      lastProvider?: string;
       lastTo?: string;
       lastAccountId?: string;
       derivedTitle?: string;

@@ -25,7 +25,7 @@ import {
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
+const DREAMS_UPDATE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.updateLocks");
 const EXPECTS_POSIX_PRIVATE_FILE_MODE = process.platform !== "win32";
 
 type MockCallSource = { mock: { calls: Array<Array<unknown>> } };
@@ -76,7 +76,7 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
+  resolveGlobalMap<string, unknown>(DREAMS_UPDATE_LOCKS_KEY).clear();
 });
 
 describe("buildNarrativePrompt", () => {
@@ -577,9 +577,9 @@ describe("appendNarrativeEntry", () => {
     expect(after.mtimeMs).toBe(before.mtimeMs);
   });
 
-  it("cleans up the per-file lock entry after diary updates finish", async () => {
+  it("cleans up the diary update lock entry after writes finish", async () => {
     const workspaceDir = await createTempWorkspace("openclaw-dreaming-dedupe-");
-    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY);
+    const dreamsLocks = resolveGlobalMap<string, unknown>(DREAMS_UPDATE_LOCKS_KEY);
 
     expect(dreamsLocks.size).toBe(0);
 

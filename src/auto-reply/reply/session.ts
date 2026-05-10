@@ -24,7 +24,6 @@ import {
   listSessionEntries,
   upsertSessionEntry,
 } from "../../config/sessions/store.js";
-import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import { deleteSqliteSessionTranscript } from "../../config/sessions/transcript-store.sqlite.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -703,15 +702,11 @@ export async function initSessionState(params: {
       }
     }
   }
-  const threadIdFromSessionKey = parseSessionThreadInfoFast(
-    sessionCtxForState.SessionKey ?? sessionKey,
-  ).threadId;
   const resolvedTranscript = await resolveAndPersistSessionTranscriptScope({
     sessionId: sessionEntry.sessionId,
     sessionKey,
     sessionEntry,
     agentId,
-    topicId: ctx.MessageThreadId ?? threadIdFromSessionKey,
   });
   sessionEntry = resolvedTranscript.sessionEntry;
   if (isNewSession) {

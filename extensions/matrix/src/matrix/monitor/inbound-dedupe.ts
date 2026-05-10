@@ -86,7 +86,7 @@ export async function createMatrixInboundEventDeduper(params: {
   auth: MatrixAuth;
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
-  storagePath?: string;
+  stateRootDir?: string;
   ttlMs?: number;
   maxEntries?: number;
   nowMs?: () => number;

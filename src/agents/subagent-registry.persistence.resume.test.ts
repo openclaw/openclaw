@@ -94,7 +94,6 @@ describe("subagent registry persistence resume", () => {
   it("persists runs to SQLite and resumes after restart", async () => {
     tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
     process.env.OPENCLAW_STATE_DIR = tempStateDir;
-    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
 
     saveSubagentRegistryToState(
       new Map([
@@ -113,7 +112,6 @@ describe("subagent registry persistence resume", () => {
         ],
       ]),
     );
-    await expect(fs.access(registryPath)).rejects.toMatchObject({ code: "ENOENT" });
     await writeChildSessionEntry({
       sessionKey: "agent:main:subagent:test",
       sessionId: "sess-test",

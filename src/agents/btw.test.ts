@@ -2,9 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
 
 const streamSimpleMock = vi.fn();
-const readFileMock = vi.fn();
-const parseSessionEntriesMock = vi.fn();
-const migrateSessionEntriesMock = vi.fn();
+const transcriptEventsMock = vi.fn();
 const buildSessionContextMock = vi.fn();
 const ensureOpenClawModelCatalogMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
@@ -31,17 +29,10 @@ vi.mock("./pi-ai-contract.js", async () => {
   };
 });
 
-vi.mock("node:fs/promises", () => ({
-  default: {
-    readFile: (...args: unknown[]) => readFileMock(...args),
-  },
-  readFile: (...args: unknown[]) => readFileMock(...args),
-}));
-
 vi.mock("../config/sessions/transcript-store.sqlite.js", () => ({
   resolveSqliteSessionTranscriptScope: () => ({ agentId: "main", sessionId: "session-1" }),
   loadSqliteSessionTranscriptEvents: () =>
-    (parseSessionEntriesMock() as unknown[]).map((event, seq) => ({
+    (transcriptEventsMock() as unknown[]).map((event, seq) => ({
       seq,
       event,
       createdAt: seq + 1,
@@ -51,8 +42,6 @@ vi.mock("../config/sessions/transcript-store.sqlite.js", () => ({
 vi.mock("./transcript/session-transcript-contract.js", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   CURRENT_SESSION_VERSION: 3,
-  migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
-  parseSessionEntries: (...args: unknown[]) => parseSessionEntriesMock(...args),
 }));
 
 vi.mock("./models-config.js", () => ({
@@ -241,7 +230,7 @@ function createTranscriptEntry(params: { id: string; parentId?: string | null; m
 }
 
 function mockTranscriptEntries(entries: unknown[]) {
-  parseSessionEntriesMock.mockReturnValue(entries);
+  transcriptEventsMock.mockReturnValue(entries);
 }
 
 function mockActiveTranscript(messages: unknown[]) {
@@ -360,9 +349,7 @@ function expectSeedOnlyUserContext(context: unknown) {
 describe("runBtwSideQuestion", () => {
   beforeEach(() => {
     streamSimpleMock.mockReset();
-    readFileMock.mockReset();
-    parseSessionEntriesMock.mockReset();
-    migrateSessionEntriesMock.mockReset();
+    transcriptEventsMock.mockReset();
     buildSessionContextMock.mockReset();
     ensureOpenClawModelCatalogMock.mockReset();
     discoverAuthStorageMock.mockReset();
@@ -381,8 +368,7 @@ describe("runBtwSideQuestion", () => {
     diagDebugMock.mockReset();
     clearAgentHarnesses();
 
-    readFileMock.mockResolvedValue("mock transcript");
-    parseSessionEntriesMock.mockReturnValue([
+    transcriptEventsMock.mockReturnValue([
       createTranscriptEntry({
         id: "user-1",
         message: { role: "user", content: [{ type: "text", text: "hi" }], timestamp: 1 },

@@ -7,11 +7,12 @@ import {
   resolveAgentWorkspaceDir,
   resolveDefaultAgentId,
 } from "../../agents/agent-scope.js";
+import type { TranscriptEntry } from "../../agents/transcript/session-transcript-types.js";
 import {
   listBundledChannelLegacySessionSurfaces,
-  listBundledChannelLegacyStateMigrationDetectors,
+  listBundledChannelDoctorLegacyStateDetectors,
 } from "../../channels/plugins/bundled.js";
-import type { ChannelLegacyStateMigrationPlan } from "../../channels/plugins/types.core.js";
+import type { ChannelDoctorLegacyStateMigrationPlan } from "../../channels/plugins/types.core.js";
 import { CONFIG_AUDIT_NAMESPACE, CONFIG_AUDIT_OWNER_ID } from "../../config/io.audit.js";
 import {
   normalizeEnvPathOverride,
@@ -54,6 +55,7 @@ import {
   recordOpenClawStateMigrationRun,
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
+import { migrateLegacyTranscriptEntries } from "./legacy/session-transcript.js";
 import {
   ensureDir,
   existsDir,
@@ -74,8 +76,8 @@ export type LegacyStateDetection = {
   sessions: {
     legacyDir: string;
     legacyStorePath: string;
-    targetDir: string;
-    targetStorePath: string;
+    agentLegacyDir: string;
+    agentLegacyStorePath: string;
     hasLegacy: boolean;
     legacyKeys: string[];
   };
@@ -86,7 +88,7 @@ export type LegacyStateDetection = {
   };
   channelPlans: {
     hasLegacy: boolean;
-    plans: ChannelLegacyStateMigrationPlan[];
+    plans: ChannelDoctorLegacyStateMigrationPlan[];
   };
   preview: string[];
 };
@@ -292,11 +294,11 @@ function resolveSessionIdFromTranscriptEvents(events: unknown[]): string | null 
 
 function importLegacyTranscriptFileToSqlite(params: {
   sourcePath: string;
-  transcriptPath: string;
   agentId: string;
   env?: NodeJS.ProcessEnv;
 }): { imported: number; sessionId: string } {
-  const events = parseJsonlEvents(params.sourcePath);
+  const events = parseJsonlEvents(params.sourcePath) as TranscriptEntry[];
+  migrateLegacyTranscriptEntries(events);
   const sessionId = resolveSessionIdFromTranscriptEvents(events);
   if (!sessionId) {
     throw new Error(`Transcript missing session header: ${params.sourcePath}`);
@@ -338,7 +340,7 @@ function isLegacyGroupKey(key: string): boolean {
   return false;
 }
 
-function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): string {
+function buildLegacyMigrationPreview(plan: ChannelDoctorLegacyStateMigrationPlan): string {
   return plan.targetPath
     ? `- ${plan.label}: ${plan.sourcePath} → ${plan.targetPath}`
     : `- ${plan.label}: ${plan.sourcePath} → SQLite`;
@@ -346,7 +348,7 @@ function buildLegacyMigrationPreview(plan: ChannelLegacyStateMigrationPlan): str
 
 async function runLegacyMigrationPlans(
   detected: LegacyStateDetection,
-  plans: ChannelLegacyStateMigrationPlan[],
+  plans: ChannelDoctorLegacyStateMigrationPlan[],
 ): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
@@ -1276,7 +1278,7 @@ function collectCoreLegacyStateMigrationPlans(params: {
   stateDir: string;
   env: NodeJS.ProcessEnv;
   cfg: OpenClawConfig;
-}): ChannelLegacyStateMigrationPlan[] {
+}): ChannelDoctorLegacyStateMigrationPlan[] {
   const specs: LegacyDeliveryQueueSpec[] = [
     {
       label: "Outbound delivery queue",
@@ -1289,7 +1291,7 @@ function collectCoreLegacyStateMigrationPlans(params: {
       sourcePath: path.join(params.stateDir, "session-delivery-queue"),
     },
   ];
-  const plans: ChannelLegacyStateMigrationPlan[] = specs.flatMap((spec) => {
+  const plans: ChannelDoctorLegacyStateMigrationPlan[] = specs.flatMap((spec) => {
     if (!hasLegacyDeliveryQueueArtifacts(spec.sourcePath)) {
       return [];
     }
@@ -1818,15 +1820,15 @@ function collectLegacyMigrationSources(detected: LegacyStateDetection): Migratio
   add(
     statFileSource({
       kind: "session-index",
-      sourcePath: detected.sessions.targetStorePath,
+      sourcePath: detected.sessions.agentLegacyStorePath,
       targetTable: "agent.session_entries",
-      recordCount: fileExists(detected.sessions.targetStorePath)
-        ? countSessionStoreRecords(detected.sessions.targetStorePath)
+      recordCount: fileExists(detected.sessions.agentLegacyStorePath)
+        ? countSessionStoreRecords(detected.sessions.agentLegacyStorePath)
         : undefined,
     }),
   );
 
-  for (const dir of [detected.sessions.legacyDir, detected.sessions.targetDir]) {
+  for (const dir of [detected.sessions.legacyDir, detected.sessions.agentLegacyDir]) {
     for (const entry of safeReadDir(dir)) {
       if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
         continue;
@@ -2111,20 +2113,20 @@ export async function autoMigrateLegacyStateDir(params: {
   return { migrated: changes.length > 0, skipped: false, changes, warnings };
 }
 
-async function collectChannelLegacyStateMigrationPlans(params: {
+async function collectChannelDoctorLegacyStateMigrationPlans(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   oauthDir: string;
-}): Promise<ChannelLegacyStateMigrationPlan[]> {
-  const plans: ChannelLegacyStateMigrationPlan[] = collectCoreLegacyStateMigrationPlans({
+}): Promise<ChannelDoctorLegacyStateMigrationPlan[]> {
+  const plans: ChannelDoctorLegacyStateMigrationPlan[] = collectCoreLegacyStateMigrationPlans({
     stateDir: params.stateDir,
     env: params.env,
     cfg: params.cfg,
   });
   // Legacy state detection belongs on a narrow setup-entry surface so doctor
   // does not cold-load unrelated runtime channel code.
-  const detectors = listBundledChannelLegacyStateMigrationDetectors({ config: params.cfg });
+  const detectors = listBundledChannelDoctorLegacyStateDetectors({ config: params.cfg });
   for (const detectLegacyStateMigrations of detectors) {
     const detected = await detectLegacyStateMigrations({
       cfg: params.cfg,
@@ -2163,16 +2165,17 @@ export async function detectLegacyStateMigrations(params: {
 
   const sessionsLegacyDir = path.join(stateDir, "sessions");
   const sessionsLegacyStorePath = path.join(sessionsLegacyDir, "sessions.json");
-  const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
-  const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
-  const hasTargetJsonSessionStore = includeSessions && fileExists(sessionsTargetStorePath);
+  const sessionsAgentLegacyDir = path.join(stateDir, "agents", targetAgentId, "sessions");
+  const sessionsAgentLegacyStorePath = path.join(sessionsAgentLegacyDir, "sessions.json");
+  const hasAgentLegacyJsonSessionStore =
+    includeSessions && fileExists(sessionsAgentLegacyStorePath);
   const legacySessionEntries = includeSessions ? safeReadDir(sessionsLegacyDir) : [];
   const hasLegacySessions =
     (includeSessions && fileExists(sessionsLegacyStorePath)) ||
     legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
 
-  const targetSessionParsed = hasTargetJsonSessionStore
-    ? readSessionStoreJson5(sessionsTargetStorePath)
+  const targetSessionParsed = hasAgentLegacyJsonSessionStore
+    ? readSessionStoreJson5(sessionsAgentLegacyStorePath)
     : { store: {}, ok: true };
   const legacyKeys =
     includeSessions && targetSessionParsed.ok
@@ -2188,7 +2191,7 @@ export async function detectLegacyStateMigrations(params: {
   const targetAgentDir = path.join(stateDir, "agents", targetAgentId, "agent");
   const hasLegacyAgentDir = existsDir(legacyAgentDir);
   const channelPlans = includeChannelPlans
-    ? await collectChannelLegacyStateMigrationPlans({
+    ? await collectChannelDoctorLegacyStateMigrationPlans({
         cfg: params.cfg,
         env,
         stateDir,
@@ -2198,13 +2201,13 @@ export async function detectLegacyStateMigrations(params: {
 
   const preview: string[] = [];
   if (hasLegacySessions) {
-    preview.push(`- Sessions: ${sessionsLegacyDir} → ${sessionsTargetDir}`);
+    preview.push(`- Sessions: import ${sessionsLegacyDir} into SQLite`);
   }
   if (legacyKeys.length > 0) {
-    preview.push(`- Sessions: canonicalize legacy keys in ${sessionsTargetStorePath}`);
+    preview.push(`- Sessions: canonicalize legacy keys in ${sessionsAgentLegacyStorePath}`);
   }
-  if (hasTargetJsonSessionStore) {
-    preview.push(`- Sessions: import ${sessionsTargetStorePath} into SQLite`);
+  if (hasAgentLegacyJsonSessionStore) {
+    preview.push(`- Sessions: import ${sessionsAgentLegacyStorePath} into SQLite`);
   }
   if (hasLegacyAgentDir) {
     preview.push(`- Agent dir: ${legacyAgentDir} → ${targetAgentDir}`);
@@ -2224,9 +2227,9 @@ export async function detectLegacyStateMigrations(params: {
     sessions: {
       legacyDir: sessionsLegacyDir,
       legacyStorePath: sessionsLegacyStorePath,
-      targetDir: sessionsTargetDir,
-      targetStorePath: sessionsTargetStorePath,
-      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasTargetJsonSessionStore,
+      agentLegacyDir: sessionsAgentLegacyDir,
+      agentLegacyStorePath: sessionsAgentLegacyStorePath,
+      hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasAgentLegacyJsonSessionStore,
       legacyKeys,
     },
     agentDir: {
@@ -2251,20 +2254,18 @@ async function migrateLegacySessions(
     return { changes, warnings };
   }
 
-  ensureDir(detected.sessions.targetDir);
-
   const legacyParsed = fileExists(detected.sessions.legacyStorePath)
     ? readSessionStoreJson5(detected.sessions.legacyStorePath)
     : { store: {}, ok: true };
-  const targetParsed = fileExists(detected.sessions.targetStorePath)
-    ? readSessionStoreJson5(detected.sessions.targetStorePath)
+  const agentLegacyParsed = fileExists(detected.sessions.agentLegacyStorePath)
+    ? readSessionStoreJson5(detected.sessions.agentLegacyStorePath)
     : { store: {}, ok: true };
-  const hasTargetSessionStoreFile = fileExists(detected.sessions.targetStorePath);
+  const hasAgentLegacySessionStoreFile = fileExists(detected.sessions.agentLegacyStorePath);
   const legacyStore = legacyParsed.store;
-  const targetStore = targetParsed.store;
+  const agentLegacyStore = agentLegacyParsed.store;
 
-  const canonicalizedTarget = canonicalizeSessionStore({
-    store: targetStore,
+  const canonicalizedAgentLegacy = canonicalizeSessionStore({
+    store: agentLegacyStore,
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
@@ -2276,7 +2277,7 @@ async function migrateLegacySessions(
     scope: detected.targetScope,
   });
 
-  const merged: Record<string, SessionEntryLike> = { ...canonicalizedTarget.store };
+  const merged: Record<string, SessionEntryLike> = { ...canonicalizedAgentLegacy.store };
   for (const [key, entry] of Object.entries(canonicalizedLegacy.store)) {
     merged[key] = mergeSessionEntry({
       existing: merged[key],
@@ -2304,10 +2305,10 @@ async function migrateLegacySessions(
   }
 
   if (
-    (legacyParsed.ok || targetParsed.ok) &&
+    (legacyParsed.ok || agentLegacyParsed.ok) &&
     (Object.keys(legacyStore).length > 0 ||
-      Object.keys(targetStore).length > 0 ||
-      (hasTargetSessionStoreFile && targetParsed.ok))
+      Object.keys(agentLegacyStore).length > 0 ||
+      (hasAgentLegacySessionStoreFile && agentLegacyParsed.ok))
   ) {
     const normalized: Record<string, SessionEntry> = {};
     for (const [key, entry] of Object.entries(merged)) {
@@ -2327,15 +2328,17 @@ async function migrateLegacySessions(
     changes.push(
       `Imported ${imported.imported} session index row(s) into SQLite for agent ${detected.targetAgentId}`,
     );
-    if (targetParsed.ok && fileExists(detected.sessions.targetStorePath)) {
+    if (agentLegacyParsed.ok && fileExists(detected.sessions.agentLegacyStorePath)) {
       try {
-        fs.rmSync(detected.sessions.targetStorePath, { force: true });
+        fs.rmSync(detected.sessions.agentLegacyStorePath, { force: true });
       } catch {
         // ignore
       }
     }
-    if (canonicalizedTarget.legacyKeys.length > 0) {
-      changes.push(`Canonicalized ${canonicalizedTarget.legacyKeys.length} legacy session key(s)`);
+    if (canonicalizedAgentLegacy.legacyKeys.length > 0) {
+      changes.push(
+        `Canonicalized ${canonicalizedAgentLegacy.legacyKeys.length} legacy session key(s)`,
+      );
     }
   }
 
@@ -2351,11 +2354,9 @@ async function migrateLegacySessions(
       continue;
     }
     const from = path.join(detected.sessions.legacyDir, entry.name);
-    const to = path.join(detected.sessions.targetDir, entry.name);
     try {
       const imported = importLegacyTranscriptFileToSqlite({
         sourcePath: from,
-        transcriptPath: to,
         agentId: detected.targetAgentId,
         env: detected.env,
       });
@@ -2368,16 +2369,15 @@ async function migrateLegacySessions(
     }
   }
 
-  const targetEntries = safeReadDir(detected.sessions.targetDir);
-  for (const entry of targetEntries) {
+  const agentLegacyEntries = safeReadDir(detected.sessions.agentLegacyDir);
+  for (const entry of agentLegacyEntries) {
     if (!entry.isFile() || !entry.name.endsWith(".jsonl")) {
       continue;
     }
-    const transcriptPath = path.join(detected.sessions.targetDir, entry.name);
+    const transcriptPath = path.join(detected.sessions.agentLegacyDir, entry.name);
     try {
       const imported = importLegacyTranscriptFileToSqlite({
         sourcePath: transcriptPath,
-        transcriptPath,
         agentId: detected.targetAgentId,
         env: detected.env,
       });

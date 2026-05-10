@@ -2,15 +2,14 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
-  resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { buildSessionEntryMock } = vi.hoisted(() => ({
-  buildSessionEntryMock: vi.fn(),
+const { buildSessionTranscriptEntryMock } = vi.hoisted(() => ({
+  buildSessionTranscriptEntryMock: vi.fn(),
 }));
 
 vi.mock("undici", () => ({
@@ -23,13 +22,11 @@ vi.mock("undici", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
-  const basename = (filePath: string) => filePath.split(/[\\/]/).pop() ?? filePath;
   return {
-    buildSessionEntry: buildSessionEntryMock,
-    isSessionArchiveArtifactName: (fileName: string) => /\.jsonl\.(reset|deleted)\./.test(fileName),
-    isUsageCountedSessionTranscriptFileName: (fileName: string) => fileName.endsWith(".jsonl"),
-    listSessionFilesForAgent: vi.fn(async () => []),
-    sessionPathForFile: (filePath: string) => `sessions/${basename(filePath)}`,
+    buildSessionTranscriptEntry: buildSessionTranscriptEntryMock,
+    listSessionTranscriptScopesForAgent: vi.fn(async () => []),
+    sessionTranscriptKeyForScope: (scope: { agentId: string; sessionId: string }) =>
+      `transcript:${scope.agentId}:${scope.sessionId}`,
   };
 });
 
@@ -41,11 +38,11 @@ import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
   path: string;
-  absPath: string;
   mtimeMs: number;
   size: number;
   hash: string;
   content?: string;
+  messageCount?: number;
 };
 
 function createDbMock(): DatabaseSync {
@@ -88,17 +85,19 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
     super();
   }
 
-  async syncTargetSessionFiles(files: string[]): Promise<void> {
+  async syncTargetSessionTranscripts(
+    scopes: Array<{ agentId: string; sessionId: string }>,
+  ): Promise<void> {
     await (
       this as unknown as {
-        syncSessionFiles: (params: {
+        syncSessionTranscripts: (params: {
           needsFullReindex: boolean;
-          targetSessionFiles: string[];
+          targetSessionTranscriptKeys: string[];
         }) => Promise<void>;
       }
-    ).syncSessionFiles({
+    ).syncSessionTranscripts({
       needsFullReindex: false,
-      targetSessionFiles: files,
+      targetSessionTranscriptKeys: scopes.map((scope) => `${scope.agentId}\0${scope.sessionId}`),
     });
   }
 
@@ -134,17 +133,21 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
 describe("session sync responsiveness", () => {
   beforeEach(() => {
     vi.stubEnv("OPENCLAW_STATE_DIR", path.join(os.tmpdir(), "openclaw-session-sync-yield"));
-    buildSessionEntryMock.mockImplementation(async (absPath: string) => {
-      const name = path.basename(absPath);
-      return {
-        path: `sessions/${name}`,
-        absPath,
-        mtimeMs: 1,
-        size: 1,
-        hash: `hash-${name}`,
-        content: `user message for ${name}`,
-      };
-    });
+    buildSessionTranscriptEntryMock.mockImplementation(
+      async (scope: { agentId: string; sessionId: string }) => {
+        return {
+          scope,
+          path: `transcript:${scope.agentId}:${scope.sessionId}`,
+          mtimeMs: 1,
+          size: 1,
+          hash: `hash-${scope.sessionId}`,
+          content: `user message for ${scope.sessionId}`,
+          messageCount: 1,
+          lineMap: [1],
+          messageTimestampsMs: [1],
+        };
+      },
+    );
   });
 
   afterEach(() => {
@@ -152,11 +155,11 @@ describe("session sync responsiveness", () => {
     vi.clearAllMocks();
   });
 
-  it("yields to the event loop between session file batches", async () => {
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    const files = Array.from({ length: 11 }, (_value, index) =>
-      path.join(sessionsDir, `session-${index}.jsonl`),
-    );
+  it("yields to the event loop between session transcript batches", async () => {
+    const scopes = Array.from({ length: 11 }, (_value, index) => ({
+      agentId: "main",
+      sessionId: `session-${index}`,
+    }));
     let immediateRan = false;
     const immediate = new Promise<void>((resolve) => {
       setImmediate(() => {
@@ -171,9 +174,9 @@ describe("session sync responsiveness", () => {
       }
     });
 
-    await harness.syncTargetSessionFiles(files);
+    await harness.syncTargetSessionTranscripts(scopes);
 
-    expect(harness.indexedPaths).toHaveLength(files.length);
+    expect(harness.indexedPaths).toHaveLength(scopes.length);
     expect(observedBeforeLastFile).toEqual([true]);
     await immediate;
   });

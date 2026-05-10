@@ -225,7 +225,7 @@ describe("skills-clawhub", () => {
       return { workspaceDir, skillDir };
     }
 
-    function expectLegacyUpdateSuccess(results: unknown, workspaceDir: string, slug: string) {
+    function expectTrackedUpdateSuccess(results: unknown, workspaceDir: string, slug: string) {
       expect(Array.isArray(results)).toBe(true);
       const first = (results as Array<Record<string, unknown>>)[0];
       expect(first?.ok).toBe(true);
@@ -257,7 +257,7 @@ describe("skills-clawhub", () => {
           version: "1.0.0",
           baseUrl: "https://legacy.clawhub.ai",
         });
-        expectLegacyUpdateSuccess(results, workspaceDir, slug);
+        expectTrackedUpdateSuccess(results, workspaceDir, slug);
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }
@@ -277,7 +277,7 @@ describe("skills-clawhub", () => {
           slug,
         });
 
-        expectLegacyUpdateSuccess(results, workspaceDir, slug);
+        expectTrackedUpdateSuccess(results, workspaceDir, slug);
       } finally {
         await fs.rm(workspaceDir, { recursive: true, force: true });
       }

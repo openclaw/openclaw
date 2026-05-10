@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import os from "node:os";
-import path from "node:path";
 import { describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import { ConnectErrorDetailCodes } from "../gateway/protocol/connect-error-details.js";
@@ -57,13 +55,13 @@ async function createSignedDevice(params: {
   scopes: string[];
   clientId: string;
   clientMode: string;
-  identityPath?: string;
+  identityKey?: string;
   nonce: string;
   signedAtMs?: number;
 }) {
-  const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
-    : loadOrCreateDeviceIdentity();
+  const identity = loadOrCreateDeviceIdentity(
+    params.identityKey ? { key: params.identityKey } : undefined,
+  );
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -367,7 +365,7 @@ describe("gateway auth browser hardening", () => {
           scopes: ["operator.admin"],
           clientId: TEST_OPERATOR_CLIENT.id,
           clientMode: TEST_OPERATOR_CLIENT.mode,
-          identityPath: path.join(os.tmpdir(), `openclaw-browser-device-${randomUUID()}.json`),
+          identityKey: `test:browser-device:${randomUUID()}`,
           nonce: nonce ?? "",
         });
         const res = await connectReq(browserWs, {

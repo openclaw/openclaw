@@ -67,7 +67,7 @@ describe("command logger hook", () => {
       sender_id: "user-123",
       source: "telegram",
     });
-    expect(JSON.parse(rows[0]!.entry_json)).toEqual({
+    expect(JSON.parse(rows[0].entry_json)).toEqual({
       timestamp: "2026-01-02T03:04:05.000Z",
       action: "new",
       sessionKey: "agent:main:dm:user",

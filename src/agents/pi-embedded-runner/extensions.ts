@@ -14,7 +14,7 @@ import { computeEffectiveSettings } from "../pi-hooks/context-pruning/settings.j
 import { makeToolPrunablePredicate } from "../pi-hooks/context-pruning/tools.js";
 import { ensurePiCompactionReserveTokens, resolveEffectiveCompactionMode } from "../pi-settings.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
-import type { SessionManager } from "../transcript/session-manager-contract.js";
+import type { SessionManager } from "../transcript/session-transcript-contract.js";
 import { isCacheTtlEligibleProvider, readLastCacheTtlTimestamp } from "./cache-ttl.js";
 
 type PiToolResultEvent = {

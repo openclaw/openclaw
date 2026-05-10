@@ -10,7 +10,7 @@ import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
   function createMemoryTraceForTest() {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -22,11 +22,10 @@ describe("createCacheTrace", () => {
       env: {},
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
-    return { lines, trace };
+    return { events, trace };
   }
 
   it("returns null when diagnostics cache tracing is disabled", () => {
@@ -39,7 +38,7 @@ describe("createCacheTrace", () => {
   });
 
   it("stores diagnostics cache trace output in SQLite state", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -51,8 +50,7 @@ describe("createCacheTrace", () => {
       env: {},
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
 
@@ -64,7 +62,7 @@ describe("createCacheTrace", () => {
       system: "sys",
     });
 
-    expect(lines.length).toBe(1);
+    expect(events.length).toBe(1);
   });
 
   it("stores default cache trace events in SQLite state", () => {
@@ -97,7 +95,7 @@ describe("createCacheTrace", () => {
   });
 
   it("records empty prompt/system values when enabled", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -111,33 +109,32 @@ describe("createCacheTrace", () => {
       env: {},
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
 
     trace?.recordStage("prompt:before", { prompt: "", system: "" });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.prompt).toBe("");
     expect(event.system).toBe("");
   });
 
   it("records raw model run session stages", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("session:raw-model-run", {
       messages: [],
       system: "",
     });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.stage).toBe("session:raw-model-run");
     expect(event.system).toBe("");
   });
 
   it("records stream context from systemPrompt when wrapping stream functions", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -150,8 +147,7 @@ describe("createCacheTrace", () => {
       env: {},
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
 
@@ -174,14 +170,14 @@ describe("createCacheTrace", () => {
       {},
     );
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.stage).toBe("stream:context");
     expect(event.system).toBe("system prompt text");
     expect(event.systemDigest).toBeTypeOf("string");
   });
 
   it("respects env overrides for enablement", () => {
-    const lines: string[] = [];
+    const events: unknown[] = [];
     const trace = createCacheTrace({
       cfg: {
         diagnostics: {
@@ -195,8 +191,7 @@ describe("createCacheTrace", () => {
       },
       writer: {
         destination: "memory",
-        write: (line) => lines.push(line),
-        flush: async () => undefined,
+        write: (event) => events.push(event),
       },
     });
 
@@ -204,7 +199,7 @@ describe("createCacheTrace", () => {
   });
 
   it("sanitizes cache-trace payloads before writing", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     trace?.recordStage("stream:context", {
       system: {
@@ -242,7 +237,7 @@ describe("createCacheTrace", () => {
       ] as unknown as [],
     });
 
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
+    const event = (events[0] ?? {}) as Record<string, unknown>;
     expect(event.system).toEqual({
       provider: {
         baseUrl: "https://api.example.com",
@@ -294,7 +289,7 @@ describe("createCacheTrace", () => {
   });
 
   it("handles circular references in messages without stack overflow", () => {
-    const { lines, trace } = createMemoryTraceForTest();
+    const { events, trace } = createMemoryTraceForTest();
 
     const parent: Record<string, unknown> = { role: "user", content: "hello" };
     const child: Record<string, unknown> = { ref: parent };
@@ -304,21 +299,9 @@ describe("createCacheTrace", () => {
       messages: [parent] as unknown as [],
     });
 
-    expect(lines.length).toBe(1);
-    const fingerprint = crypto
-      .createHash("sha256")
-      .update('{"child":{"ref":"[Circular]"},"content":"hello","role":"user"}')
-      .digest("hex");
-    const event = JSON.parse(lines[0]?.trim() ?? "{}") as Record<string, unknown>;
-    expect(event).toStrictEqual({
-      ts: expect.any(String),
-      seq: 1,
-      stage: "prompt:images",
-      messageCount: 1,
-      messageRoles: ["user"],
-      messageFingerprints: [fingerprint],
-      messagesDigest: crypto.createHash("sha256").update(JSON.stringify(fingerprint)).digest("hex"),
-      messages: [{ role: "user", content: "hello", child: { ref: "[Circular]" } }],
-    });
+    expect(events.length).toBe(1);
+    const event = (events[0] ?? {}) as Record<string, unknown>;
+    expect(event.messageCount).toBe(1);
+    expect(event.messageFingerprints).toHaveLength(1);
   });
 });

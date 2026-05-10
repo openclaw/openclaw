@@ -1098,11 +1098,9 @@ export function hasPersistedAuthProfileSecretsStore(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
-  return (
-    readOpenClawStateKvJsonResult(
-      AUTH_PROFILE_STORE_KV_SCOPE,
-      authProfileStoreKey(agentDir),
-      options,
-    ).exists === true
-  );
+  return readOpenClawStateKvJsonResult(
+    AUTH_PROFILE_STORE_KV_SCOPE,
+    authProfileStoreKey(agentDir),
+    options,
+  ).exists;
 }

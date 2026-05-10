@@ -30,7 +30,7 @@ export function createMSTeamsConversationStoreState(params?: {
 
   const isExpired = (reference: StoredConversationReference): boolean => {
     const lastSeenAt = parseStoredConversationTimestamp(reference.lastSeenAt);
-    // Preserve migrated legacy entries that have no lastSeenAt until they're seen again.
+    // Preserve migrated entries that have no lastSeenAt until they're seen again.
     return lastSeenAt != null && Date.now() - lastSeenAt > ttlMs;
   };
 

@@ -242,7 +242,7 @@ Use this when auditing access or deciding what to back up:
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
 - **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite` (`kv` scope `pairing.channel`)
-- **Model auth profiles**: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
+- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
 - **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
@@ -406,7 +406,7 @@ proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
 - `gateway.controlUi.dangerouslyAllowHostHeaderOriginFallback=true` enables Host-header origin fallback mode; treat it as a dangerous operator-selected policy.
 - Treat DNS rebinding and proxy-host header behavior as deployment hardening concerns; keep `trustedProxies` tight and avoid exposing the gateway directly to the public internet.
 
-## Local session logs live in SQLite
+## Local session transcripts live in SQLite
 
 OpenClaw stores session rows and transcript events in SQLite under
 `~/.openclaw/state/openclaw.sqlite` and
@@ -977,7 +977,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
-- `agents/<agentId>/agent/auth-profiles.json`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `state/openclaw.sqlite#kv/auth-profiles/<agentDir>`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
 - `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.
@@ -1292,7 +1292,7 @@ If your AI does something bad:
 
 1. Rotate Gateway auth (`gateway.auth.token` / `OPENCLAW_GATEWAY_PASSWORD`) and restart.
 2. Rotate remote client secrets (`gateway.remote.token` / `.password`) on any machine that can call the Gateway.
-3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in `auth-profiles.json`, and encrypted secrets payload values when used).
+3. Rotate provider/API credentials (WhatsApp creds, Slack/Discord tokens, model/API keys in SQLite auth-profile rows, and encrypted secrets payload values when used).
 
 ### Audit
 

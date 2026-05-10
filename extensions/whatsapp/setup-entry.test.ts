@@ -15,17 +15,17 @@ describe("whatsapp setup entry", () => {
     expect(setupEntry.kind).toBe("bundled-channel-setup-entry");
     expect(setupEntry.features).toEqual({
       legacySessionSurfaces: true,
-      legacyStateMigrations: true,
+      doctorLegacyState: true,
     });
 
     const whatsappSetupPlugin = setupEntry.loadSetupPlugin();
     expect(whatsappSetupPlugin.id).toBe("whatsapp");
-    const detectLegacyStateMigrations = setupEntry.loadLegacyStateMigrationDetector?.();
-    if (!detectLegacyStateMigrations) {
+    const detectDoctorLegacyState = setupEntry.loadDoctorLegacyStateDetector?.();
+    if (!detectDoctorLegacyState) {
       throw new Error("expected WhatsApp legacy state migration detector");
     }
     expect(
-      detectLegacyStateMigrations({
+      detectDoctorLegacyState({
         cfg: {},
         env: {},
         oauthDir: "/tmp/openclaw-whatsapp-empty",

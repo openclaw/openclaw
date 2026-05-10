@@ -30,12 +30,12 @@ OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway 
 }
 ```
 
-| Package           | Purpose                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------ |
-| `pi-ai`           | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs                           |
-| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                                       |
-| `pi-coding-agent` | High-level SDK: `createAgentSession`, `SessionManager`, `AuthStorage`, `ModelRegistry`, built-in tools |
-| `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                                             |
+| Package           | Purpose                                                                              |
+| ----------------- | ------------------------------------------------------------------------------------ |
+| `pi-ai`           | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs         |
+| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                     |
+| `pi-coding-agent` | High-level SDK: `createAgentSession`, `AuthStorage`, `ModelRegistry`, built-in tools |
+| `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                           |
 
 ## File structure
 
@@ -68,7 +68,7 @@ src/agents/
 │   └── utils.ts                   # ThinkLevel mapping, error description
 ├── transcript/
 │   ├── session-transcript-contract.ts # OpenClaw-owned transcript/session types
-│   ├── session-manager.ts         # OpenClaw-owned SQLite-backed SessionManager
+│   ├── session-manager.ts         # OpenClaw-owned SQLite transcript writer
 │   └── transcript-state.ts        # SQLite-backed transcript state adapter
 ├── pi-embedded-subscribe.ts       # Session event subscription/dispatch
 ├── pi-embedded-subscribe.types.ts # SubscribeEmbeddedPiSessionParams
@@ -171,7 +171,6 @@ Inside `runEmbeddedAttempt()` (called by `runEmbeddedPiAgent()`), the pi SDK is 
 import {
   createAgentSession,
   DefaultResourceLoader,
-  SessionManager,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
@@ -182,6 +181,12 @@ const resourceLoader = new DefaultResourceLoader({
   additionalExtensionPaths,
 });
 await resourceLoader.reload();
+
+const sessionManager = openTranscriptSessionManagerForSession({
+  agentId: params.agentId,
+  sessionId: params.sessionId,
+  cwd: resolvedWorkspace,
+});
 
 const { session } = await createAgentSession({
   cwd: resolvedWorkspace,
@@ -302,10 +307,10 @@ applySystemPromptOverrideToSession(session, systemPromptOverride);
 
 ### Session transcripts
 
-Sessions are SQLite-backed event streams with tree structure (id/parentId linking). JSONL is legacy doctor-import/export/debug shape. OpenClaw owns the PI-compatible `SessionManager` shape behind `src/agents/transcript/session-transcript-contract.ts`:
+Sessions are SQLite-backed event streams with tree structure (id/parentId linking). JSONL is legacy doctor-import input only; OpenClaw runtime code does not create, select, or bridge through transcript files or locators. OpenClaw owns the transcript writer behind `src/agents/transcript/session-transcript-contract.ts`:
 
 ```typescript
-const sessionManager = openTranscriptSessionManager({
+const sessionManager = openTranscriptSessionManagerForSession({
   agentId: params.agentId,
   sessionId: params.sessionId,
 });
@@ -535,7 +540,7 @@ This provides the interactive terminal experience similar to pi's native mode.
 Areas for potential rework:
 
 1. **Tool signature alignment**: Currently adapting between pi-agent-core and pi-coding-agent signatures
-2. **Session manager wrapping**: `guardSessionManager` adds safety but increases complexity
+2. **Transcript writer wrapping**: `guardSessionManager` adds tool-result safety around the SQLite writer but increases complexity
 3. **Extension loading**: Could use pi's `ResourceLoader` more directly
 4. **Streaming handler complexity**: `subscribeEmbeddedPiSession` has grown large
 5. **Provider quirks**: Many provider-specific codepaths that pi could potentially handle

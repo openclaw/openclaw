@@ -36,13 +36,6 @@ export interface AgentDatabases {
   size_bytes: number | null;
 }
 
-export interface Agents {
-  agent_id: string;
-  config_json: string;
-  created_at: number;
-  updated_at: number;
-}
-
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -86,8 +79,6 @@ export interface CaptureEvents {
 }
 
 export interface CaptureSessions {
-  blob_dir: string;
-  db_path: string;
   ended_at: number | null;
   id: string;
   mode: string;
@@ -363,7 +354,6 @@ export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
   agent_databases: AgentDatabases;
-  agents: Agents;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;

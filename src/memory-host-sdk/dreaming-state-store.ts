@@ -12,7 +12,7 @@ export const MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE = "dreaming.daily-inges
 export const MEMORY_CORE_SESSION_INGESTION_FILES_NAMESPACE = "dreaming.session-ingestion.files";
 export const MEMORY_CORE_SESSION_INGESTION_MESSAGES_NAMESPACE =
   "dreaming.session-ingestion.messages";
-export const MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE = "dreaming.session-corpus.lines";
+export const MEMORY_CORE_SESSION_INGESTION_LINES_NAMESPACE = "dreaming.session-ingestion.lines";
 export const MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE = "dreaming.short-term-recall";
 export const MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE = "dreaming.phase-signals";
 export const MEMORY_CORE_SHORT_TERM_META_NAMESPACE = "dreaming.short-term-meta";
@@ -28,7 +28,7 @@ type WorkspaceValueRow<T> = {
   value: T;
 };
 
-type SessionCorpusLineRow = {
+type SessionIngestionLineRow = {
   workspaceKey: string;
   path: string;
   lineNumber: number;
@@ -77,7 +77,11 @@ function valueEntryKey(workspaceDir: string, key: string): string {
   return `${prefix}:${key}`;
 }
 
-function sessionCorpusPathKey(
+export function resolveDreamingSessionIngestionRelativePath(day: string): string {
+  return path.posix.join("memory", "session-ingestion", `${day}.txt`);
+}
+
+function sessionIngestionPathKey(
   workspaceDir: string,
   relativePath: string,
   lineNumber: number,
@@ -86,25 +90,25 @@ function sessionCorpusPathKey(
   return `${prefix}:${hashValue(relativePath, 24)}:${lineNumber.toString().padStart(12, "0")}`;
 }
 
-function getSessionCorpusStore(
+function getSessionIngestionStore(
   env?: NodeJS.ProcessEnv,
-): PluginStateKeyedStore<SessionCorpusLineRow> {
-  return createPluginStateKeyedStore<SessionCorpusLineRow>(MEMORY_CORE_PLUGIN_ID, {
-    namespace: MEMORY_CORE_SESSION_CORPUS_LINES_NAMESPACE,
+): PluginStateKeyedStore<SessionIngestionLineRow> {
+  return createPluginStateKeyedStore<SessionIngestionLineRow>(MEMORY_CORE_PLUGIN_ID, {
+    namespace: MEMORY_CORE_SESSION_INGESTION_LINES_NAMESPACE,
     maxEntries: MAX_DREAMING_STATE_ROWS,
     ...(env ? { env } : {}),
   });
 }
 
-export function createDreamingSessionCorpusLineStorageEntry(params: {
+export function createDreamingSessionIngestionLineStorageEntry(params: {
   workspaceDir: string;
   relativePath: string;
   lineNumber: number;
   text: string;
-}): { key: string; value: SessionCorpusLineRow } {
+}): { key: string; value: SessionIngestionLineRow } {
   const { workspaceKey } = workspacePrefix(params.workspaceDir);
   return {
-    key: sessionCorpusPathKey(params.workspaceDir, params.relativePath, params.lineNumber),
+    key: sessionIngestionPathKey(params.workspaceDir, params.relativePath, params.lineNumber),
     value: {
       workspaceKey,
       path: params.relativePath,
@@ -201,13 +205,13 @@ export async function writeDreamingWorkspaceValue(
   await getStore<WorkspaceValueRow<unknown>>(namespace).register(entry.key, entry.value);
 }
 
-export async function readDreamingSessionCorpusLines(params: {
+export async function readDreamingSessionIngestionLines(params: {
   workspaceDir: string;
   relativePath: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
   const { prefix, workspaceKey } = workspacePrefix(params.workspaceDir);
-  return (await getSessionCorpusStore(params.env).entries())
+  return (await getSessionIngestionStore(params.env).entries())
     .filter(
       (entry) =>
         entry.key.startsWith(`${prefix}:`) &&
@@ -223,22 +227,22 @@ export async function readDreamingSessionCorpusLines(params: {
     .map((entry) => entry.value.text);
 }
 
-export async function readDreamingSessionCorpusText(params: {
+export async function readDreamingSessionIngestionText(params: {
   workspaceDir: string;
   relativePath: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<string> {
-  const lines = await readDreamingSessionCorpusLines(params);
+  const lines = await readDreamingSessionIngestionLines(params);
   return lines.length === 0 ? "" : `${lines.join("\n")}\n`;
 }
 
-export async function writeDreamingSessionCorpusText(params: {
+export async function writeDreamingSessionIngestionText(params: {
   workspaceDir: string;
   relativePath: string;
   text: string;
   env?: NodeJS.ProcessEnv;
 }): Promise<number> {
-  const store = getSessionCorpusStore(params.env);
+  const store = getSessionIngestionStore(params.env);
   const { prefix, workspaceKey } = workspacePrefix(params.workspaceDir);
   const existing = await store.entries();
   await Promise.all(
@@ -255,7 +259,7 @@ export async function writeDreamingSessionCorpusText(params: {
   const nonEmptyLines = params.text.length === 0 ? [] : lines;
   await Promise.all(
     nonEmptyLines.map((line, index) => {
-      const entry = createDreamingSessionCorpusLineStorageEntry({
+      const entry = createDreamingSessionIngestionLineStorageEntry({
         workspaceDir: params.workspaceDir,
         relativePath: params.relativePath,
         lineNumber: index + 1,
@@ -267,22 +271,22 @@ export async function writeDreamingSessionCorpusText(params: {
   return nonEmptyLines.length;
 }
 
-export async function appendDreamingSessionCorpusLines(params: {
+export async function appendDreamingSessionIngestionLines(params: {
   workspaceDir: string;
   relativePath: string;
   lines: string[];
   env?: NodeJS.ProcessEnv;
 }): Promise<number> {
   if (params.lines.length === 0) {
-    return (await readDreamingSessionCorpusLines(params)).length + 1;
+    return (await readDreamingSessionIngestionLines(params)).length + 1;
   }
-  const store = getSessionCorpusStore(params.env);
-  const existingCount = (await readDreamingSessionCorpusLines(params)).length;
+  const store = getSessionIngestionStore(params.env);
+  const existingCount = (await readDreamingSessionIngestionLines(params)).length;
   const firstLine = existingCount + 1;
   await Promise.all(
     params.lines.map((line, index) => {
       const lineNumber = firstLine + index;
-      const entry = createDreamingSessionCorpusLineStorageEntry({
+      const entry = createDreamingSessionIngestionLineStorageEntry({
         workspaceDir: params.workspaceDir,
         relativePath: params.relativePath,
         lineNumber,

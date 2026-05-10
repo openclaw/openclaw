@@ -7,7 +7,6 @@ export async function resolveAndPersistSessionTranscriptScope(params: {
   sessionKey: string;
   sessionEntry?: SessionEntry;
   agentId?: string;
-  topicId?: string | number;
 }): Promise<{ agentId: string; sessionId: string; sessionEntry: SessionEntry }> {
   const { sessionId, sessionKey } = params;
   const now = Date.now();

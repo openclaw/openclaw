@@ -1183,6 +1183,43 @@ describe("clearCliSessionEntry", () => {
     });
   });
 
+  it("clears CLI bindings from SQLite without a caller-owned session snapshot", async () => {
+    await withMockSessionRows(async ({ agentId }) => {
+      const sessionKey = "agent:main:explicit:test-clear-without-cache";
+      await replaceMockSessionEntries(agentId, {
+        [sessionKey]: {
+          sessionId: "openclaw-session-1",
+          updatedAt: 1,
+          cliSessionBindings: {
+            "claude-cli": {
+              sessionId: "claude-session-1",
+              authEpoch: "epoch-1",
+            },
+            "codex-cli": {
+              sessionId: "codex-session-1",
+            },
+          },
+        },
+      });
+
+      const cleared = await clearCliSessionEntry({
+        provider: "claude-cli",
+        sessionKey,
+      });
+
+      expect(cleared?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(cleared?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+
+      const persisted = readMockSessionEntries(agentId)[sessionKey];
+      expect(persisted?.cliSessionBindings?.["claude-cli"]).toBeUndefined();
+      expect(persisted?.cliSessionBindings?.["codex-cli"]).toEqual({
+        sessionId: "codex-session-1",
+      });
+    });
+  });
+
   it("leaves the caller snapshot intact when the session entry is missing", async () => {
     await withMockSessionRows(async ({ agentId }) => {
       const existingKey = "agent:main:explicit:existing";

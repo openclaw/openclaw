@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
@@ -17,31 +15,31 @@ async function withIdentity(
   run: (identity: ReturnType<typeof loadOrCreateDeviceIdentity>) => void,
 ) {
   await withTempDir("openclaw-device-identity-", async (dir) => {
-    const identity = loadOrCreateDeviceIdentity(path.join(dir, "device.json"));
+    const identity = loadOrCreateDeviceIdentity({
+      env: { ...process.env, OPENCLAW_STATE_DIR: dir },
+      key: "crypto-helper",
+    });
     run(identity);
   });
 }
 
 describe("device identity crypto helpers", () => {
-  it("loads an existing identity without creating a missing file", async () => {
+  it("loads an existing identity from SQLite", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
-      const identityPath = path.join(dir, "identity", "device.json");
+      const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "readonly" };
 
-      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
-      expect(fs.existsSync(identityPath)).toBe(false);
+      expect(loadDeviceIdentityIfPresent(store)).toBeNull();
 
-      const created = loadOrCreateDeviceIdentity(identityPath);
+      const created = loadOrCreateDeviceIdentity(store);
 
-      expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(created);
-      expect(fs.existsSync(identityPath)).toBe(false);
-      expect(fs.existsSync(`${identityPath}.sqlite`)).toBe(false);
+      expect(loadDeviceIdentityIfPresent(store)).toEqual(created);
     });
   });
 
   it("does not repair mismatched stored device ids in read-only mode", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
-      const identityPath = path.join(dir, "identity", "device.json");
-      const created = loadOrCreateDeviceIdentity(identityPath);
+      const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "mismatched" };
+      const created = loadOrCreateDeviceIdentity(store);
       const stored = {
         version: 1,
         deviceId: created.deviceId,
@@ -49,9 +47,9 @@ describe("device identity crypto helpers", () => {
         privateKeyPem: created.privateKeyPem,
         createdAtMs: Date.now(),
       } as const;
-      writeStoredDeviceIdentitySnapshot(identityPath, { ...stored, deviceId: "mismatched" });
+      writeStoredDeviceIdentitySnapshot({ ...stored, deviceId: "mismatched" }, store);
 
-      expect(loadDeviceIdentityIfPresent(identityPath)).toBeNull();
+      expect(loadDeviceIdentityIfPresent(store)).toBeNull();
     });
   });
 

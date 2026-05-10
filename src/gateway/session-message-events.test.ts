@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import {
-  exportSqliteSessionTranscriptJsonl,
+  loadSqliteSessionTranscriptEvents,
   replaceSqliteSessionTranscriptEvents,
 } from "../config/sessions/transcript-store.sqlite.js";
 import { appendAssistantMessageToSessionTranscript } from "../config/sessions/transcript.js";
@@ -313,11 +313,17 @@ describe("session.message websocket events", () => {
           }),
         }),
       );
-      const transcript = exportSqliteSessionTranscriptJsonl({
+      const transcript = loadSqliteSessionTranscriptEvents({
         agentId: "main",
         sessionId: "sess-main",
-      });
-      expect(transcript).toContain('"live websocket message"');
+      }).map((entry) => entry.event);
+      expect(transcript).toContainEqual(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "live websocket message" }],
+          }),
+        }),
+      );
     } finally {
       emitSpy.mockRestore();
     }

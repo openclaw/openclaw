@@ -68,7 +68,7 @@ describe("resolveSessionDatabaseTargets", () => {
     });
   });
 
-  it("keeps per-agent database targets when legacy store paths are shared", async () => {
+  it("keeps per-agent database targets when session settings are shared", async () => {
     await withTempHome(async (home) => {
       const env = createEnv(home);
       const cfg: OpenClawConfig = {
@@ -140,7 +140,7 @@ describe("resolveAgentSessionDatabaseTargetsSync", () => {
     });
   });
 
-  it("includes a SQLite-registered target without probing sessions.json", async () => {
+  it("includes a SQLite-registered target", async () => {
     await withTempHome(async (home) => {
       const env = createEnv(home);
       const cfg: OpenClawConfig = {

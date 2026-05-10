@@ -10,7 +10,6 @@ import {
   type CompactionEntry,
   type SessionEntry,
   type SessionHeader,
-  migrateSessionEntries,
 } from "../transcript/session-transcript-contract.js";
 import { TranscriptState } from "../transcript/transcript-state.js";
 import { collectDuplicateUserMessageEntryIdsForCompaction } from "./compaction-duplicate-user-messages.js";
@@ -68,7 +67,7 @@ export async function rotateTranscriptAfterCompaction(params: {
     sessionId,
     timestamp,
     cwd: params.sessionManager.getCwd(),
-    parentSession: formatTranscriptParentReference({ agentId, sessionId: sourceSessionId }),
+    parentTranscriptScope: { agentId, sessionId: sourceSessionId },
   });
   replaceSqliteSessionTranscriptEvents({
     agentId,
@@ -121,7 +120,6 @@ function loadTranscriptStateFromSqlite(params: {
   const transcriptEntries = events.filter((event): event is SessionHeader | SessionEntry =>
     Boolean(event && typeof event === "object"),
   );
-  migrateSessionEntries(transcriptEntries);
   const header = transcriptEntries.find(
     (entry): entry is SessionHeader => entry.type === "session",
   );
@@ -300,7 +298,7 @@ function buildSuccessorHeader(params: {
   sessionId: string;
   timestamp: string;
   cwd: string;
-  parentSession: string;
+  parentTranscriptScope: { agentId: string; sessionId: string };
 }): SessionHeader {
   return {
     type: "session",
@@ -308,10 +306,6 @@ function buildSuccessorHeader(params: {
     id: params.sessionId,
     timestamp: params.timestamp,
     cwd: params.previousHeader?.cwd || params.cwd,
-    parentSession: params.parentSession,
+    parentTranscriptScope: { ...params.parentTranscriptScope },
   };
-}
-
-function formatTranscriptParentReference(params: { agentId: string; sessionId: string }): string {
-  return `agent-db:${params.agentId}:transcript_events:${params.sessionId}`;
 }

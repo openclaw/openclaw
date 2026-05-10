@@ -669,7 +669,7 @@ describe("agentCommand", () => {
     });
   });
 
-  it("passes resolved session-id resume files to embedded runs", async () => {
+  it("passes resolved session ids to embedded runs", async () => {
     await withTempHome(async (home) => {
       await writeSessionRowsSeed("main", {
         foo: {

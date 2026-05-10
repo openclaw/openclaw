@@ -5,6 +5,10 @@ import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
 
+function stateDatabasePath(dir: string): string {
+  return path.join(dir, "state", "openclaw.sqlite");
+}
+
 describe("ACP event ledger", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
@@ -80,7 +84,7 @@ describe("ACP event ledger", () => {
 
   it("persists SQLite replay state across ledger instances", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const dbPath = stateDatabasePath(dir);
       const first = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
       await first.startSession({
         sessionId: "session-1",
@@ -115,7 +119,7 @@ describe("ACP event ledger", () => {
 
   it("stores SQLite replay state in relational tables instead of legacy kv blobs", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const dbPath = stateDatabasePath(dir);
       const ledger = createSqliteAcpEventLedger({ path: dbPath, now: () => 1000 });
       await ledger.startSession({
         sessionId: "session-1",
@@ -333,7 +337,7 @@ describe("ACP event ledger", () => {
 
   it("keeps SQLite replay state under the serialized byte budget", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const dbPath = stateDatabasePath(dir);
       const ledger = createSqliteAcpEventLedger({ path: dbPath, maxSerializedBytes: 1024 });
       await ledger.startSession({
         sessionId: "session-1",
@@ -360,7 +364,7 @@ describe("ACP event ledger", () => {
 
   it("reloads SQLite state inside the write transaction before persisting", async () => {
     await withTempDir({ prefix: "openclaw-acp-ledger-" }, async (dir) => {
-      const dbPath = path.join(dir, "openclaw-state.sqlite");
+      const dbPath = stateDatabasePath(dir);
       const first = createSqliteAcpEventLedger({ path: dbPath });
       const second = createSqliteAcpEventLedger({ path: dbPath });
 

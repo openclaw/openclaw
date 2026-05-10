@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  closePluginStateSqliteStore,
+  closePluginStateDatabase,
   createPluginStateKeyedStore,
   probePluginStateStore,
   resetPluginStateStoreForTests,
@@ -207,7 +207,7 @@ describe("failure safety", () => {
     await withOpenClawTestState({ label: "e2e-fail-probe" }, async () => {
       const result = probePluginStateStore();
       expect(result.ok).toBe(true);
-      expect(result.dbPath).toContain("openclaw.sqlite");
+      expect(result.databasePath).toContain("openclaw.sqlite");
       expect(result.steps.length).toBeGreaterThanOrEqual(4);
       const failedSteps = result.steps.filter((step) => !step.ok);
       expect(failedSteps).toEqual([]);
@@ -227,11 +227,11 @@ describe("failure safety", () => {
       await store.register("k", { v: 1 });
 
       // First close.
-      closePluginStateSqliteStore();
+      closePluginStateDatabase();
       await expect(store.lookup("k")).resolves.toEqual({ v: 1 });
 
       // Second close (idempotent).
-      closePluginStateSqliteStore();
+      closePluginStateDatabase();
       await expect(store.lookup("k")).resolves.toEqual({ v: 1 });
 
       // Write after reopen.

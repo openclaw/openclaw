@@ -29,17 +29,14 @@ function resolveCachedPreferredTmpDir(): string {
 
 export function buildMediaLocalRoots(
   stateDir: string,
-  configDir: string,
+  _configDir: string,
   options: BuildMediaLocalRootsOptions = {},
 ): string[] {
   const resolvedStateDir = path.resolve(stateDir);
-  const resolvedConfigDir = path.resolve(configDir);
   const preferredTmpDir = options.preferredTmpDir ?? resolveCachedPreferredTmpDir();
   return Array.from(
     new Set([
       preferredTmpDir,
-      path.join(resolvedConfigDir, "media"),
-      path.join(resolvedStateDir, "media"),
       path.join(resolvedStateDir, "canvas"),
       path.join(resolvedStateDir, "workspace"),
       path.join(resolvedStateDir, "sandboxes"),

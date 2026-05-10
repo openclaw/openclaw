@@ -7,14 +7,14 @@ import {
   MEMORY_CORE_SHORT_TERM_META_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_PHASE_SIGNAL_NAMESPACE,
   MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
-  readDreamingSessionCorpusText,
+  readDreamingSessionIngestionText,
   readDreamingWorkspaceMap,
   readDreamingWorkspaceValue,
   writeDreamingWorkspaceMap,
   writeDreamingWorkspaceValue,
 } from "openclaw/plugin-sdk/memory-core-host-status";
 import { appendMemoryHostEvent } from "openclaw/plugin-sdk/memory-host-events";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   deriveConceptTags,
   MAX_CONCEPT_TAGS,
@@ -26,8 +26,8 @@ import { compactMemoryForBudget, DEFAULT_MEMORY_FILE_MAX_CHARS } from "./memory-
 
 const SHORT_TERM_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DREAMING_MEMORY_PATH_RE = /(?:^|\/)memory\/dreaming\//;
-const SHORT_TERM_SESSION_CORPUS_RE =
-  /(?:^|\/)memory\/\.dreams\/session-corpus\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
+const SHORT_TERM_SESSION_INGESTION_RE =
+  /(?:^|\/)memory\/session-ingestion\/(\d{4})-(\d{2})-(\d{2})\.(?:md|txt)$/;
 const SHORT_TERM_BASENAME_RE = /^(\d{4})-(\d{2})-(\d{2})\.md$/;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_RECENCY_HALF_LIFE_DAYS = 14;
@@ -309,9 +309,7 @@ function isContaminatedDreamingSnippet(raw: string): boolean {
 
   const hasNarrativeLead = hasDreamingNarrativeLead(snippet);
   const hasConfidence = /\bconfidence:\s*\d/i.test(snippet);
-  const hasEvidence = /\bevidence:\s*(?:memory\/\.dreams\/session-corpus\/|memory\/)/i.test(
-    snippet,
-  );
+  const hasEvidence = /\bevidence:\s*memory\//i.test(snippet);
   const hasStatus = /\bstatus:\s*staged\b/i.test(snippet);
   const hasRecalls = /\brecalls:\s*\d+\b/i.test(snippet);
   return hasNarrativeLead && hasConfidence && hasEvidence && hasStatus && hasRecalls;
@@ -667,7 +665,10 @@ async function withShortTermLock<T>(workspaceDir: string, task: () => Promise<T>
   return withInProcessShortTermLock(workspaceDir, task);
 }
 
-async function readStore(workspaceDir: string, nowIso: string): Promise<ShortTermRecallStore> {
+async function readShortTermRecallState(
+  workspaceDir: string,
+  nowIso: string,
+): Promise<ShortTermRecallStore> {
   const entries = await readDreamingWorkspaceMap<ShortTermRecallEntry>(
     MEMORY_CORE_SHORT_TERM_RECALL_NAMESPACE,
     workspaceDir,
@@ -776,7 +777,10 @@ async function writePhaseSignalStore(
   ]);
 }
 
-async function writeStore(workspaceDir: string, store: ShortTermRecallStore): Promise<void> {
+async function writeShortTermRecallState(
+  workspaceDir: string,
+  store: ShortTermRecallStore,
+): Promise<void> {
   const normalized = normalizeStore(store, store.updatedAt);
   await Promise.all([
     writeDreamingWorkspaceMap(
@@ -798,14 +802,14 @@ export function isShortTermMemoryPath(filePath: string): boolean {
   if (SHORT_TERM_PATH_RE.test(normalized)) {
     return true;
   }
-  if (SHORT_TERM_SESSION_CORPUS_RE.test(normalized)) {
+  if (SHORT_TERM_SESSION_INGESTION_RE.test(normalized)) {
     return true;
   }
   return SHORT_TERM_BASENAME_RE.test(normalized);
 }
 
-function isShortTermSessionCorpusPath(filePath: string): boolean {
-  return SHORT_TERM_SESSION_CORPUS_RE.test(normalizeMemoryPath(filePath));
+function isShortTermSessionIngestionPath(filePath: string): boolean {
+  return SHORT_TERM_SESSION_INGESTION_RE.test(normalizeMemoryPath(filePath));
 }
 
 async function shortTermRecallSourceExists(params: {
@@ -816,9 +820,9 @@ async function shortTermRecallSourceExists(params: {
   if (!workspaceDir) {
     return false;
   }
-  if (isShortTermSessionCorpusPath(params.entry.path)) {
+  if (isShortTermSessionIngestionPath(params.entry.path)) {
     return (
-      (await readDreamingSessionCorpusText({
+      (await readDreamingSessionIngestionText({
         workspaceDir,
         relativePath: normalizeMemoryPath(params.entry.path),
       })) !== ""
@@ -885,7 +889,7 @@ export async function recordShortTermRecalls(params: {
   const todayBucket =
     normalizeIsoDay(params.dayBucket ?? "") ?? formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
+    const store = await readShortTermRecallState(workspaceDir, nowIso);
 
     for (const result of relevant) {
       const normalizedPath = normalizeMemoryPath(result.path);
@@ -950,7 +954,7 @@ export async function recordShortTermRecalls(params: {
     }
 
     store.updatedAt = nowIso;
-    await writeStore(workspaceDir, store);
+    await writeShortTermRecallState(workspaceDir, store);
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.recall.recorded",
       timestamp: nowIso,
@@ -1026,7 +1030,7 @@ export async function recordGroundedShortTermCandidates(params: {
   const nowIso = new Date(nowMs).toISOString();
   const fallbackDayBucket = formatMemoryDreamingDay(nowMs, params.timezone);
   await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
+    const store = await readShortTermRecallState(workspaceDir, nowIso);
 
     for (const item of relevant) {
       const dayBucket = item.dayBucket ?? fallbackDayBucket;
@@ -1086,7 +1090,7 @@ export async function recordGroundedShortTermCandidates(params: {
     }
 
     store.updatedAt = nowIso;
-    await writeStore(workspaceDir, store);
+    await writeShortTermRecallState(workspaceDir, store);
   });
 }
 
@@ -1109,7 +1113,7 @@ export async function recordDreamingPhaseSignals(params: {
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
-      readStore(workspaceDir, nowIso),
+      readShortTermRecallState(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),
     ]);
     const knownKeys = new Set(Object.keys(store.entries));
@@ -1172,7 +1176,7 @@ export async function rankShortTermPromotionCandidates(
   const weights = normalizeWeights(options.weights);
 
   const [store, phaseSignals] = await Promise.all([
-    readStore(workspaceDir, nowIso),
+    readShortTermRecallState(workspaceDir, nowIso),
     readPhaseSignalStore(workspaceDir, nowIso),
   ]);
   const candidates: PromotionCandidate[] = [];
@@ -1295,7 +1299,7 @@ export async function readShortTermRecallEntries(params: {
   }
   const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
   const nowIso = new Date(nowMs).toISOString();
-  const store = await readStore(workspaceDir, nowIso);
+  const store = await readShortTermRecallState(workspaceDir, nowIso);
   return Object.values(store.entries).filter(
     (entry): entry is ShortTermRecallEntry =>
       Boolean(entry) && entry.source === "memory" && isShortTermMemoryPath(entry.path),
@@ -1459,8 +1463,8 @@ async function rehydratePromotionCandidate(
   workspaceDir: string,
   candidate: PromotionCandidate,
 ): Promise<PromotionCandidate | null> {
-  if (isShortTermSessionCorpusPath(candidate.path)) {
-    const rawSource = await readDreamingSessionCorpusText({
+  if (isShortTermSessionIngestionPath(candidate.path)) {
+    const rawSource = await readDreamingSessionIngestionText({
       workspaceDir,
       relativePath: normalizeMemoryPath(candidate.path),
     });
@@ -1574,7 +1578,7 @@ export async function applyShortTermPromotions(
   const memoryPath = path.join(workspaceDir, "MEMORY.md");
 
   return await withShortTermLock(workspaceDir, async () => {
-    const store = await readStore(workspaceDir, nowIso);
+    const store = await readShortTermRecallState(workspaceDir, nowIso);
     const selected = options.candidates
       .filter((candidate) => {
         if (isContaminatedDreamingSnippet(candidate.snippet)) {
@@ -1678,7 +1682,7 @@ export async function applyShortTermPromotions(
       entry.promotedAt = nowIso;
     }
     store.updatedAt = nowIso;
-    await writeStore(workspaceDir, store);
+    await writeShortTermRecallState(workspaceDir, store);
     await appendMemoryHostEvent(workspaceDir, {
       type: "memory.promotion.applied",
       timestamp: nowIso,
@@ -1727,7 +1731,7 @@ export async function auditShortTermPromotionArtifacts(params: {
   const storeLabel = resolveShortTermRecallStoreLabel(workspaceDir);
   const issues: ShortTermAuditIssue[] = [];
   const nowIso = new Date().toISOString();
-  const store = await readStore(workspaceDir, nowIso);
+  const store = await readShortTermRecallState(workspaceDir, nowIso);
   const entries = Object.values(store.entries);
   const entryCount = entries.length;
   const exists = entryCount > 0;
@@ -1814,7 +1818,7 @@ export async function repairShortTermPromotionArtifacts(params: {
   const removedInvalidEntries = 0;
 
   await withShortTermLock(workspaceDir, async () => {
-    const normalized = await readStore(workspaceDir, nowIso);
+    const normalized = await readShortTermRecallState(workspaceDir, nowIso);
     const nextEntries = Object.fromEntries(
       Object.entries(normalized.entries).map(([key, entry]) => {
         const conceptTags = deriveConceptTags({ path: entry.path, snippet: entry.snippet });
@@ -1841,7 +1845,7 @@ export async function repairShortTermPromotionArtifacts(params: {
       entries: nextEntries,
     };
     if (JSON.stringify(comparableStore.entries) !== JSON.stringify(normalized.entries)) {
-      await writeStore(workspaceDir, {
+      await writeShortTermRecallState(workspaceDir, {
         ...comparableStore,
         updatedAt: nowIso,
       });
@@ -1866,7 +1870,7 @@ export async function removeGroundedShortTermCandidates(params: {
 
   await withShortTermLock(workspaceDir, async () => {
     const [store, phaseSignals] = await Promise.all([
-      readStore(workspaceDir, nowIso),
+      readShortTermRecallState(workspaceDir, nowIso),
       readPhaseSignalStore(workspaceDir, nowIso),
     ]);
 
@@ -1891,7 +1895,7 @@ export async function removeGroundedShortTermCandidates(params: {
       store.updatedAt = nowIso;
       phaseSignals.updatedAt = nowIso;
       await Promise.all([
-        writeStore(workspaceDir, store),
+        writeShortTermRecallState(workspaceDir, store),
         writePhaseSignalStore(workspaceDir, phaseSignals),
       ]);
     }
@@ -1901,8 +1905,8 @@ export async function removeGroundedShortTermCandidates(params: {
 }
 
 export const __testing = {
-  readStore,
-  writeStore,
+  readShortTermRecallState,
+  writeShortTermRecallState,
   readPhaseSignalStore,
   writePhaseSignalStore,
   deriveConceptTags,

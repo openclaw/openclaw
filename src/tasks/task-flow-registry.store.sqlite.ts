@@ -58,7 +58,9 @@ function parseJsonValue<T>(raw: string | null): T | undefined {
 
 function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
   const syncMode = parseOptionalTaskFlowSyncMode(row.sync_mode);
-  if (syncMode) return syncMode;
+  if (syncMode) {
+    return syncMode;
+  }
   return row.shape === "single_task" ? "task_mirrored" : "managed";
 }
 
@@ -229,6 +231,6 @@ export function deleteTaskFlowRegistryRecordFromSqlite(flowId: string) {
   });
 }
 
-export function closeTaskFlowRegistrySqliteStore() {
+export function closeTaskFlowRegistryDatabase() {
   cachedDatabase = null;
 }

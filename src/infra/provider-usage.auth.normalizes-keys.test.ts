@@ -32,7 +32,7 @@ vi.mock("../agents/auth-profiles.js", () => {
     ...process.env,
     OPENCLAW_STATE_DIR: path.dirname(path.dirname(path.dirname(agentDir))),
   });
-  const readStore = (agentDir?: string): AuthProfileStore => {
+  const readAuthProfileState = (agentDir?: string): AuthProfileStore => {
     if (!agentDir) {
       return { version: 1, profiles: {} };
     }
@@ -118,8 +118,9 @@ vi.mock("../agents/auth-profiles.js", () => {
 
   return {
     clearRuntimeAuthProfileStoreSnapshots: () => {},
-    ensureAuthProfileStore: (agentDir?: string) => readStore(agentDir),
-    ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) => readStore(agentDir),
+    ensureAuthProfileStore: (agentDir?: string) => readAuthProfileState(agentDir),
+    ensureAuthProfileStoreWithoutExternalProfiles: (agentDir?: string) =>
+      readAuthProfileState(agentDir),
     hasAnyAuthProfileStoreSource: (agentDir?: string) =>
       Boolean(
         agentDir && loadPersistedAuthProfileStore(agentDir, { env: stateEnvForAgentDir(agentDir) }),
@@ -339,7 +340,7 @@ describe("resolveProviderAuths key normalization", () => {
       version: 1,
       profiles: {},
     };
-    const order = { ...(parsed.order ?? {}) };
+    const order = { ...parsed.order };
     order[provider] = profileIds;
     savePersistedAuthProfileSecretsStore(
       {

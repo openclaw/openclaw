@@ -100,8 +100,8 @@ import {
 } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { repairTranscriptSessionStateIfNeeded } from "../transcript-state-repair.js";
-import type { SessionManager as TranscriptSessionManager } from "../transcript/session-manager-contract.js";
 import { openTranscriptSessionManagerForSession } from "../transcript/session-manager.js";
+import type { SessionManager as TranscriptSessionManager } from "../transcript/session-transcript-contract.js";
 import {
   classifyCompactionReason,
   formatUnknownCompactionReasonDetail,
@@ -973,7 +973,6 @@ async function compactEmbeddedPiSessionDirectOnce(
       checkpointSnapshot = await captureCompactionCheckpointSnapshotAsync({
         agentId: sessionAgentId,
         sessionId: params.sessionId,
-        sessionManager,
       });
       compactionSessionManager = sessionManager;
       const settingsManager = createPreparedEmbeddedPiSettingsManager({

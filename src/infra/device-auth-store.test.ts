@@ -1,6 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
   clearDeviceAuthToken,
@@ -14,10 +13,6 @@ function createEnv(stateDir: string): NodeJS.ProcessEnv {
     OPENCLAW_STATE_DIR: stateDir,
     OPENCLAW_TEST_FAST: "1",
   };
-}
-
-function deviceAuthFile(stateDir: string): string {
-  return path.join(stateDir, "identity", "device-auth.json");
 }
 
 describe("infra/device-auth-store", () => {
@@ -63,14 +58,30 @@ describe("infra/device-auth-store", () => {
 
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
 
-      await fs.mkdir(path.dirname(deviceAuthFile(stateDir)), { recursive: true });
-      await fs.writeFile(deviceAuthFile(stateDir), '{"version":2,"deviceId":"device-1"}\n', "utf8");
+      writeOpenClawStateKvJson(
+        "identity.device-auth",
+        "default",
+        { version: 2, deviceId: "device-1" },
+        { env },
+      );
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
 
-      await fs.writeFile(
-        deviceAuthFile(stateDir),
-        '{"version":1,"deviceId":"device-2","tokens":{"operator":{"token":"x","role":"operator","scopes":[],"updatedAtMs":1}}}\n',
-        "utf8",
+      writeOpenClawStateKvJson(
+        "identity.device-auth",
+        "default",
+        {
+          version: 1,
+          deviceId: "device-2",
+          tokens: {
+            operator: {
+              token: "x",
+              role: "operator",
+              scopes: [],
+              updatedAtMs: 1,
+            },
+          },
+        },
+        { env },
       );
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
     });

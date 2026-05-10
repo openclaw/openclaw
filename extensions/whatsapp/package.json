@@ -33,7 +33,7 @@
     ],
     "setupEntry": "./setup-entry.ts",
     "setupFeatures": {
-      "legacyStateMigrations": true,
+      "doctorLegacyState": true,
       "legacySessionSurfaces": true
     },
     "channel": {

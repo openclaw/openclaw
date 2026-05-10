@@ -7,7 +7,7 @@ import { commitmentsDismissCommand, commitmentsListCommand } from "./commitments
 const mocks = vi.hoisted(() => ({
   listCommitments: vi.fn(),
   markCommitmentsStatus: vi.fn(),
-  resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw-state.sqlite"),
+  resolveCommitmentDatabasePath: vi.fn(() => "/tmp/openclaw/state/openclaw.sqlite"),
   getRuntimeConfig: vi.fn(() => ({
     commitments: {
       enabled: true,

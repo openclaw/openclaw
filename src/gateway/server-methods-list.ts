@@ -13,7 +13,6 @@ const BASE_METHODS = [
   "doctor.memory.backfillDreamDiary",
   "doctor.memory.resetDreamDiary",
   "doctor.memory.resetGroundedShortTerm",
-  "doctor.memory.repairDreamingArtifacts",
   "doctor.memory.dedupeDreamDiary",
   "doctor.memory.remHarness",
   "logs.tail",

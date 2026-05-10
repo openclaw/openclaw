@@ -198,41 +198,6 @@ describe("agents delete command", () => {
     });
   });
 
-  it("purges legacy main-alias entries owned by the deleted default agent", async () => {
-    await withStateDirEnv("openclaw-agents-delete-main-alias-", async ({ stateDir }) => {
-      const now = Date.now();
-      const cfg: OpenClawConfig = {
-        agents: {
-          list: [{ id: "ops", default: true, workspace: path.join(stateDir, "workspace-ops") }],
-        },
-      };
-      const deletedAgentId = await arrangeAgentsDeleteTest({
-        stateDir,
-        cfg,
-        sessions: {
-          "agent:main:main": { sessionId: "sess-default-alias", updatedAt: now + 1 },
-          "agent:ops:quietchat:direct:u1": { sessionId: "sess-ops-direct", updatedAt: now + 2 },
-          "agent:main:quietchat:direct:u2": {
-            sessionId: "sess-stale-main",
-            updatedAt: now + 3,
-          },
-          global: { sessionId: "sess-global", updatedAt: now + 4 },
-        },
-      });
-
-      await agentsDeleteCommand({ id: "ops", force: true, json: true }, runtime);
-
-      expect(runtime.exit).not.toHaveBeenCalled();
-      expectSessionRows(deletedAgentId, {
-        "agent:main:quietchat:direct:u2": {
-          sessionId: "sess-stale-main",
-          updatedAt: now + 3,
-        },
-        global: { sessionId: "sess-global", updatedAt: now + 4 },
-      });
-    });
-  });
-
   it("skips workspace removal when another agent shares the same workspace (#70890)", async () => {
     await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
       const sharedWorkspace = path.join(stateDir, "workspace-shared");

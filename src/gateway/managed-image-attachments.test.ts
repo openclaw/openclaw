@@ -313,12 +313,9 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
     expect(result.body.toString("utf-8")).toBe("original-image");
-    await expect(
-      fs.access(path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
   });
 
-  it("serves records from SQLite without legacy JSON", async () => {
+  it("serves managed image records for the owning session", async () => {
     const blocks = await createManagedOutgoingImageBlocks({
       sessionKey: "agent:main:main",
       mediaUrls: [`data:image/png;base64,${TINY_PNG_BASE64}`],
@@ -328,9 +325,6 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     const pathName = String(blocks[0]?.url);
     const attachmentId = pathName.split("/").at(-2) ?? "";
     expect(attachmentId).toBeTruthy();
-    await expect(
-      fs.access(path.join(stateDir, "media", "outgoing", "records", `${attachmentId}.json`)),
-    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const { result } = await requestManagedImage({
       stateDir,

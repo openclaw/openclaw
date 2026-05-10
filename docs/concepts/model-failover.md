@@ -69,12 +69,11 @@ OpenClaw separates the selected provider/model from why it was selected. That so
 
 OpenClaw uses **auth profiles** for both API keys and OAuth tokens.
 
-- Secrets live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (legacy: `~/.openclaw/agent/auth-profiles.json`).
+- Secrets live in `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`.
 - Runtime auth-routing state is SQLite-primary. Legacy per-agent
-  `auth-state.json` files are imported into SQLite on first read and removed
-  after import.
+  `auth-state.json` files are doctor-import inputs only.
 - Config `auth.profiles` / `auth.order` are **metadata + routing only** (no secrets).
-- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported into `auth-profiles.json` on first use).
+- Legacy import-only OAuth file: `~/.openclaw/credentials/oauth.json` (imported by doctor into SQLite).
 
 More detail: [OAuth](/concepts/oauth)
 
@@ -90,7 +89,7 @@ OAuth logins create distinct profiles so multiple accounts can coexist.
 - Default: `provider:default` when no email is available.
 - OAuth with email: `provider:<email>` (for example `google-antigravity:user@gmail.com`).
 
-Profiles live in `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` under `profiles`.
+Profiles live in `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>` under `profiles`.
 
 ## Rotation order
 
@@ -104,7 +103,7 @@ When a provider has multiple profiles, OpenClaw chooses an order like this:
     `auth.profiles` filtered by provider.
   </Step>
   <Step title="Stored profiles">
-    Entries in `auth-profiles.json` for the provider.
+    Entries in the SQLite auth-profile row for the provider.
   </Step>
 </Steps>
 

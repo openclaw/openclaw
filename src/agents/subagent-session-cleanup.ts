@@ -14,7 +14,6 @@ export async function deleteSubagentSessionForCleanup(params: {
       method: "sessions.delete",
       params: {
         key: params.childSessionKey,
-        deleteTranscript: true,
         emitLifecycleHooks: params.spawnMode === "session",
       },
       timeoutMs: 10_000,

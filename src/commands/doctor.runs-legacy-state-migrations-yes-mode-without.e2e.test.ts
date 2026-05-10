@@ -9,7 +9,7 @@ import {
   serviceIsLoaded,
   serviceRestart,
   writeConfigFile,
-} from "./doctor.e2e-harness.js";
+} from "./doctor/e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
   resolvePluginProviders: vi.fn((_params?: unknown): ProviderPlugin[] => []),

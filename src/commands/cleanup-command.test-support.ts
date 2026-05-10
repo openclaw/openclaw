@@ -39,7 +39,6 @@ export function resetCleanupCommandMocks() {
   });
   removePath.mockResolvedValue({ ok: true });
   listAgentRuntimeStatePaths.mockResolvedValue([
-    "/tmp/.openclaw/agents/main/sessions",
     "/tmp/.openclaw/agents/main/agent/openclaw-agent.sqlite",
   ]);
   removeStateAndLinkedPaths.mockResolvedValue(undefined);

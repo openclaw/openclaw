@@ -56,7 +56,6 @@ export class OAuthManagerRefreshError extends Error {
   readonly profileId: string;
   readonly provider: string;
   readonly code?: string;
-  readonly lockPath?: string;
   readonly #refreshedStore: AuthProfileStore;
   readonly #credential: OAuthCredential;
 
@@ -68,7 +67,7 @@ export class OAuthManagerRefreshError extends Error {
   }) {
     const structuredCause =
       typeof params.cause === "object" && params.cause !== null
-        ? (params.cause as { code?: unknown; lockPath?: unknown; cause?: unknown })
+        ? (params.cause as { code?: unknown; cause?: unknown })
         : undefined;
     const delegatedCause =
       structuredCause?.code === "refresh_contention" && structuredCause.cause
@@ -85,16 +84,6 @@ export class OAuthManagerRefreshError extends Error {
     this.#refreshedStore = params.refreshedStore;
     if (structuredCause) {
       this.code = typeof structuredCause.code === "string" ? structuredCause.code : undefined;
-      if (typeof structuredCause.lockPath === "string") {
-        this.lockPath = structuredCause.lockPath;
-      } else if (
-        typeof structuredCause.cause === "object" &&
-        structuredCause.cause !== null &&
-        "lockPath" in structuredCause.cause &&
-        typeof structuredCause.cause.lockPath === "string"
-      ) {
-        this.lockPath = structuredCause.cause.lockPath;
-      }
     }
   }
 

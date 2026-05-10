@@ -58,6 +58,11 @@ export const SessionsListParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     spawnedBy: Type.Optional(NonEmptyString),
     agentId: Type.Optional(NonEmptyString),
+    /**
+     * When true, list only configured agent databases and skip registered-but-not-configured
+     * agent databases discovered from state.
+     */
+    configuredAgentsOnly: Type.Optional(Type.Boolean()),
     search: Type.Optional(Type.String()),
   },
   { additionalProperties: false },
@@ -219,7 +224,6 @@ export const SessionsResetParamsSchema = Type.Object(
 export const SessionsDeleteParamsSchema = Type.Object(
   {
     key: NonEmptyString,
-    deleteTranscript: Type.Optional(Type.Boolean()),
     // Internal control: when false, still unbind thread bindings but skip hook emission.
     emitLifecycleHooks: Type.Optional(Type.Boolean()),
   },

@@ -20,29 +20,26 @@ import {
 
 describe("device identity state dir defaults", () => {
   it("stores the default identity under OPENCLAW_STATE_DIR", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-identity-state-", async () => {
       const identity = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
-      expect(loadDeviceIdentityIfPresent(identityPath)?.deviceId).toBe(identity.deviceId);
+      expect(loadDeviceIdentityIfPresent()?.deviceId).toBe(identity.deviceId);
       expect(loadDeviceIdentityIfPresentForEnv(process.env)?.deviceId).toBe(identity.deviceId);
     });
   });
 
   it("reuses the stored identity on subsequent loads", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-identity-state-", async () => {
       const first = loadOrCreateDeviceIdentity();
       const second = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
 
       expect(second).toEqual(first);
-      expect(loadDeviceIdentityIfPresent(identityPath)).toEqual(first);
+      expect(loadDeviceIdentityIfPresent()).toEqual(first);
     });
   });
 
   it("repairs stored device IDs that no longer match the public key", async () => {
-    await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
+    await withStateDirEnv("openclaw-identity-state-", async () => {
       const original = loadOrCreateDeviceIdentity();
-      const identityPath = path.join(stateDir, "identity", "device.json");
       const raw = {
         version: 1,
         deviceId: original.deviceId,
@@ -51,18 +48,18 @@ describe("device identity state dir defaults", () => {
         createdAtMs: Date.now(),
       } as const;
 
-      writeStoredDeviceIdentitySnapshot(identityPath, { ...raw, deviceId: "stale-device-id" });
+      writeStoredDeviceIdentitySnapshot({ ...raw, deviceId: "stale-device-id" });
 
       const repaired = loadOrCreateDeviceIdentity();
 
       expect(repaired.deviceId).toBe(original.deviceId);
-      expect(loadDeviceIdentityIfPresent(identityPath)?.deviceId).toBe(original.deviceId);
+      expect(loadDeviceIdentityIfPresent()?.deviceId).toBe(original.deviceId);
     });
   });
 
   it("fails closed when a legacy identity file exists before doctor import", async () => {
     await withStateDirEnv("openclaw-identity-state-", async ({ stateDir }) => {
-      const original = loadOrCreateDeviceIdentity(path.join(stateDir, "seed-device.json"));
+      const original = loadOrCreateDeviceIdentity({ key: "seed" });
       const identityPath = path.join(stateDir, "identity", "device.json");
       const legacy = {
         version: 1,
@@ -75,10 +72,8 @@ describe("device identity state dir defaults", () => {
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(identityPath, `${JSON.stringify(legacy, null, 2)}\n`, "utf8");
 
-      await expect(() => loadOrCreateDeviceIdentity()).toThrow(
-        DeviceIdentityMigrationRequiredError,
-      );
-      await expect(() => loadOrCreateDeviceIdentity()).toThrow(/openclaw doctor --fix/u);
+      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityMigrationRequiredError);
+      expect(() => loadOrCreateDeviceIdentity()).toThrow(/openclaw doctor --fix/u);
     });
   });
 
@@ -88,9 +83,7 @@ describe("device identity state dir defaults", () => {
       await fs.mkdir(path.dirname(identityPath), { recursive: true });
       await fs.writeFile(identityPath, '{"version":1,"deviceId":"broken"}\n', "utf8");
 
-      await expect(() => loadOrCreateDeviceIdentity()).toThrow(
-        DeviceIdentityMigrationRequiredError,
-      );
+      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityMigrationRequiredError);
     });
   });
 
@@ -101,7 +94,7 @@ describe("device identity state dir defaults", () => {
         deviceId: "broken",
       });
 
-      await expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityStorageError);
+      expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityStorageError);
     });
   });
 

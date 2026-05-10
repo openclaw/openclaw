@@ -404,14 +404,12 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   });
 
   it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
+    const sessionId = testSessionId();
     const workspaceDir = path.join(tempDir, "workspace");
-    SessionManager.open(sessionFile).appendMessage(
-      assistantMessage("older context", Date.now()) as never,
-    );
+    seedSessionTranscript(sessionId, [assistantMessage("older context", Date.now())]);
     const contextEngine = createContextEngine();
     const harness = createStartedThreadHarness();
-    const params = createParams(sessionFile, workspaceDir);
+    const params = createParams(sessionId, workspaceDir);
     params.contextEngine = contextEngine;
     params.currentTurnContext = {
       text: [

@@ -359,7 +359,6 @@ describe("subagent registry lifecycle hardening", () => {
         method: "sessions.delete",
         params: {
           key: entry.childSessionKey,
-          deleteTranscript: true,
           emitLifecycleHooks: true,
         },
         timeoutMs: 10_000,

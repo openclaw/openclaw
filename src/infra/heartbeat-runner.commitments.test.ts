@@ -3,7 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
-import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
+import type { CommitmentRecord, CommitmentStoreSnapshot } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   runHeartbeatOnce,
@@ -100,10 +100,9 @@ describe("runHeartbeatOnce commitments", () => {
       };
       await seedHeartbeatSession(agentId, sessionKey, {
         lastChannel: "telegram",
-        lastProvider: "telegram",
         lastTo: "stale-target",
       });
-      const storePayload: CommitmentStoreFile = {
+      const storePayload: CommitmentStoreSnapshot = {
         version: 1,
         commitments: [
           buildCommitment({
@@ -192,7 +191,6 @@ describe("runHeartbeatOnce commitments", () => {
         );
         await seedHeartbeatSession(agentId, sessionKey, {
           lastChannel: "telegram",
-          lastProvider: "telegram",
           lastTo: "stale-target",
         });
         await saveCommitmentStore({
@@ -270,7 +268,6 @@ describe("runHeartbeatOnce commitments", () => {
         };
         await seedHeartbeatSession(agentId, sessionKey, {
           lastChannel: "telegram",
-          lastProvider: "telegram",
           lastTo: "155462274",
         });
         await saveCommitmentStore({

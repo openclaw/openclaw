@@ -4,35 +4,37 @@ import {
   collectVoiceCallLegacyConfigIssues,
   formatVoiceCallLegacyConfigWarnings,
   migrateVoiceCallLegacyConfigInput,
-  normalizeVoiceCallLegacyConfigInput,
-  parseVoiceCallPluginConfig,
 } from "./config-compat.js";
 
 describe("voice-call config compatibility", () => {
-  it("maps deprecated provider and twilio.from fields into canonical config", () => {
-    const parsed = parseVoiceCallPluginConfig({
-      enabled: true,
-      provider: "log",
-      twilio: {
-        from: "+15550001234",
+  it("doctor migration maps deprecated provider and twilio.from fields", () => {
+    const migration = migrateVoiceCallLegacyConfigInput({
+      value: {
+        enabled: true,
+        provider: "log",
+        twilio: {
+          from: "+15550001234",
+        },
       },
     });
 
-    expect(parsed.provider).toBe("mock");
-    expect(parsed.fromNumber).toBe("+15550001234");
+    expect(migration.config.provider).toBe("mock");
+    expect(migration.config.fromNumber).toBe("+15550001234");
   });
 
-  it("moves legacy streaming OpenAI fields into streaming.providers.openai", () => {
-    const normalized = normalizeVoiceCallLegacyConfigInput({
-      streaming: {
-        enabled: true,
-        sttProvider: "openai",
-        openaiApiKey: "sk-test", // pragma: allowlist secret
-        sttModel: "gpt-4o-transcribe",
-        silenceDurationMs: 700,
-        vadThreshold: 0.4,
+  it("doctor migration moves legacy streaming OpenAI fields into streaming.providers.openai", () => {
+    const normalized = migrateVoiceCallLegacyConfigInput({
+      value: {
+        streaming: {
+          enabled: true,
+          sttProvider: "openai",
+          openaiApiKey: "sk-test", // pragma: allowlist secret
+          sttModel: "gpt-4o-transcribe",
+          silenceDurationMs: 700,
+          vadThreshold: 0.4,
+        },
       },
-    });
+    }).config;
 
     const streaming = normalized.streaming as
       | {
@@ -72,6 +74,7 @@ describe("voice-call config compatibility", () => {
         sttProvider: "openai",
         openaiApiKey: "sk-test", // pragma: allowlist secret
       },
+      store: "~/.openclaw/voice-calls",
     };
 
     expect(collectVoiceCallLegacyConfigIssues(raw)).toEqual([
@@ -95,6 +98,11 @@ describe("voice-call config compatibility", () => {
         replacement: "streaming.providers.openai.apiKey",
         message: "Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
       },
+      {
+        path: "store",
+        replacement: "SQLite plugin state",
+        message: "Remove store; call records are stored in SQLite plugin state.",
+      },
     ]);
     expect(
       formatVoiceCallLegacyConfigWarnings({
@@ -108,6 +116,7 @@ describe("voice-call config compatibility", () => {
       "[voice-call] plugins.entries.voice-call.config.twilio.from: Move twilio.from to fromNumber.",
       "[voice-call] plugins.entries.voice-call.config.streaming.sttProvider: Move streaming.sttProvider to streaming.provider.",
       "[voice-call] plugins.entries.voice-call.config.streaming.openaiApiKey: Move streaming.openaiApiKey to streaming.providers.openai.apiKey.",
+      "[voice-call] plugins.entries.voice-call.config.store: Remove store; call records are stored in SQLite plugin state.",
     ]);
   });
 
@@ -118,6 +127,7 @@ describe("voice-call config compatibility", () => {
         streaming: {
           sttProvider: "openai",
         },
+        store: "~/.openclaw/voice-calls",
       },
       configPathPrefix: "plugins.entries.voice-call.config",
     });
@@ -125,6 +135,8 @@ describe("voice-call config compatibility", () => {
     expect(migration.changes).toEqual([
       'Moved plugins.entries.voice-call.config.provider "log" → "mock".',
       "Moved plugins.entries.voice-call.config.streaming.sttProvider → plugins.entries.voice-call.config.streaming.provider.",
+      "Removed plugins.entries.voice-call.config.store; call records use SQLite plugin state.",
     ]);
+    expect(migration.config.store).toBeUndefined();
   });
 });

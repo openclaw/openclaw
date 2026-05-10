@@ -3,7 +3,7 @@ import {
   loadCommitmentStore,
   replaceSqliteSessionTranscriptEvents,
   saveCommitmentStore,
-  type CommitmentStoreFile,
+  type CommitmentStoreSnapshot,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createCorePluginStateKeyedStore,
@@ -79,7 +79,6 @@ async function seedQaSessionTranscript(
     now?: number;
     originLabel?: string;
     lastChannel?: string;
-    lastProvider?: string;
     lastTo?: string;
     spawnedBy?: string;
     parentSessionKey?: string;
@@ -139,7 +138,6 @@ async function seedQaSessionTranscript(
       sessionId,
       updatedAt: now,
       ...(params.lastChannel ? { lastChannel: params.lastChannel } : {}),
-      ...(params.lastProvider ? { lastProvider: params.lastProvider } : {}),
       ...(params.lastTo ? { lastTo: params.lastTo } : {}),
       ...(params.spawnedBy ? { spawnedBy: params.spawnedBy } : {}),
       ...(params.parentSessionKey ? { parentSessionKey: params.parentSessionKey } : {}),
@@ -181,7 +179,7 @@ async function readQaCrestodianAuditEntries(env: Pick<QaSuiteRuntimeEnv, "gatewa
 
 async function seedQaCommitmentStore(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
-  store: CommitmentStoreFile,
+  store: CommitmentStoreSnapshot,
 ) {
   await saveCommitmentStore(store, { env: env.gateway.runtimeEnv });
   return { count: store.commitments.length };

@@ -10,10 +10,6 @@ export function resolveDebugProxyDbPath(env: NodeJS.ProcessEnv = process.env): s
   return resolveOpenClawStateSqlitePath(env);
 }
 
-export function resolveDebugProxyBlobDir(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveDebugProxyRootDir(env), "blobs");
-}
-
 export function resolveDebugProxyCertDir(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveDebugProxyRootDir(env), "certs");
 }

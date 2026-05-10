@@ -30,6 +30,11 @@ export type SessionTranscriptScope = {
 
 export type SessionTranscriptEntry = {
   scope: SessionTranscriptScope;
+  /**
+   * Memory-index source key. For SQLite session transcripts this is
+   * `transcript:<agentId>:<sessionId>`, not a filesystem path or transcript
+   * locator.
+   */
   path: string;
   mtimeMs: number;
   size: number;
@@ -147,7 +152,7 @@ function isCronRunGeneratedRecord(record: unknown): boolean {
   return hasCronRunSessionKey(nested.sessionKey);
 }
 
-export async function listSessionTranscriptsForAgent(
+export async function listSessionTranscriptScopesForAgent(
   agentId: string,
 ): Promise<SessionTranscriptScope[]> {
   return listSqliteSessionTranscripts({ agentId }).map((transcript) => ({
@@ -156,8 +161,8 @@ export async function listSessionTranscriptsForAgent(
   }));
 }
 
-export function sessionSourceKeyForTranscript(scope: SessionTranscriptScope): string {
-  return `sessions/${scope.agentId}/${scope.sessionId}`;
+export function sessionTranscriptKeyForScope(scope: SessionTranscriptScope): string {
+  return `transcript:${scope.agentId}:${scope.sessionId}`;
 }
 
 export function readSessionTranscriptDeltaStats(
@@ -492,7 +497,7 @@ export async function buildSessionTranscriptEntry(
     const content = collected.join("\n");
     return {
       scope,
-      path: sessionSourceKeyForTranscript(scope),
+      path: sessionTranscriptKeyForScope(scope),
       mtimeMs,
       size,
       messageCount,

@@ -21,7 +21,6 @@ const dedupeDreamDiaryEntries = vi.hoisted(() => vi.fn());
 const writeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeBackfillDiaryEntries = vi.hoisted(() => vi.fn());
 const removeGroundedShortTermCandidates = vi.hoisted(() => vi.fn());
-const repairDreamingArtifacts = vi.hoisted(() => vi.fn());
 const readDreamingWorkspaceMap = vi.hoisted(() =>
   vi.fn(async (_namespace: string, _workspaceDir: string) => ({})),
 );
@@ -50,7 +49,6 @@ vi.mock("./doctor.memory-core-runtime.js", () => ({
   writeBackfillDiaryEntries,
   removeBackfillDiaryEntries,
   removeGroundedShortTermCandidates,
-  repairDreamingArtifacts,
 }));
 
 vi.mock("../../memory-host-sdk/dreaming-state-store.js", async () => {
@@ -129,17 +127,6 @@ const invokeDoctorMemoryResetDreamDiary = async (respond: ReturnType<typeof vi.f
 
 const invokeDoctorMemoryResetGroundedShortTerm = async (respond: ReturnType<typeof vi.fn>) => {
   await doctorHandlers["doctor.memory.resetGroundedShortTerm"]({
-    req: {} as never,
-    params: {} as never,
-    respond: respond as never,
-    context: makeRuntimeContext() as never,
-    client: null,
-    isWebchatConnect: () => false,
-  });
-};
-
-const invokeDoctorMemoryRepairDreamingArtifacts = async (respond: ReturnType<typeof vi.fn>) => {
-  await doctorHandlers["doctor.memory.repairDreamingArtifacts"]({
     req: {} as never,
     params: {} as never,
     respond: respond as never,
@@ -231,7 +218,6 @@ describe("doctor.memory.status", () => {
     writeBackfillDiaryEntries.mockReset();
     removeBackfillDiaryEntries.mockReset();
     removeGroundedShortTermCandidates.mockReset();
-    repairDreamingArtifacts.mockReset();
     readDreamingWorkspaceMap.mockReset().mockResolvedValue({});
   });
 
@@ -745,40 +731,6 @@ describe("doctor.memory dream actions", () => {
         agentId: "main",
         action: "resetGroundedShortTerm",
         removedShortTermEntries: 3,
-      },
-      undefined,
-    );
-  });
-
-  it("repairs contaminated dreaming artifacts for control-ui callers", async () => {
-    resolveAgentWorkspaceDir.mockReturnValue("/tmp/openclaw");
-    repairDreamingArtifacts.mockResolvedValue({
-      changed: true,
-      archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
-      archivedDreamsDiary: false,
-      archivedSessionCorpus: true,
-      archivedSessionIngestion: true,
-      archivedPaths: [],
-      warnings: [],
-    });
-    const respond = vi.fn();
-
-    await invokeDoctorMemoryRepairDreamingArtifacts(respond);
-
-    expect(repairDreamingArtifacts).toHaveBeenCalledWith({
-      workspaceDir: "/tmp/openclaw",
-    });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      {
-        agentId: "main",
-        action: "repairDreamingArtifacts",
-        changed: true,
-        archiveDir: "/tmp/openclaw/.openclaw-repair/dreaming/2026-04-11T22-00-00-000Z",
-        archivedDreamsDiary: false,
-        archivedSessionCorpus: true,
-        archivedSessionIngestion: true,
-        warnings: [],
       },
       undefined,
     );

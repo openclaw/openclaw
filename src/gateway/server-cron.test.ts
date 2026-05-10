@@ -97,14 +97,11 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
 import { buildGatewayCronService } from "./server-cron.js";
 
 function createCronConfig(name: string): OpenClawConfig {
-  const tmpDir = path.join(os.tmpdir(), `${name}-${Date.now()}`);
   return {
     session: {
       mainKey: "main",
     },
-    cron: {
-      store: path.join(tmpDir, "cron.json"),
-    },
+    cron: {},
   } as OpenClawConfig;
 }
 
@@ -936,14 +933,11 @@ describe("buildGatewayCronService", () => {
   });
 
   it("passes custom session targets through to isolated cron runs", async () => {
-    const tmpDir = path.join(os.tmpdir(), `server-cron-custom-session-${Date.now()}`);
     const cfg = {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
     } as OpenClawConfig;
     loadConfigMock.mockReturnValue(cfg);
 
@@ -1019,9 +1013,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1036,9 +1028,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1086,9 +1076,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),
@@ -1114,9 +1102,7 @@ describe("buildGatewayCronService", () => {
       session: {
         mainKey: "main",
       },
-      cron: {
-        store: path.join(tmpDir, "cron.json"),
-      },
+      cron: {},
       agents: {
         defaults: {
           workspace: path.join(tmpDir, "workspace"),

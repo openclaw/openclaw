@@ -1,6 +1,8 @@
 import { rmSync, statSync } from "node:fs";
+import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestState,
   withOpenClawTestState,
@@ -8,7 +10,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   clearPluginStateStoreForTests,
-  closePluginStateSqliteStore,
+  closePluginStateDatabase,
   createCorePluginStateKeyedStore,
   createPluginStateKeyedStore,
   PluginStateStoreError,
@@ -16,14 +18,13 @@ import {
   resetPluginStateStoreForTests,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.js";
-import { resolvePluginStateDir, resolvePluginStateSqlitePath } from "./plugin-state-store.paths.js";
 import { seedPluginStateEntriesForTests } from "./plugin-state-store.test-helpers.js";
 
 let testState: OpenClawTestState | undefined;
 
 beforeAll(async () => {
   testState = await createOpenClawTestState({ label: "plugin-state-store" });
-  rmSync(resolvePluginStateDir(), { recursive: true, force: true });
+  rmSync(path.dirname(resolveOpenClawStateSqlitePath()), { recursive: true, force: true });
 });
 
 beforeEach(() => {
@@ -102,8 +103,8 @@ describe("plugin state keyed store", () => {
 
             await expect(storeA.lookup("shared")).resolves.toEqual({ owner: "a" });
             await expect(storeB.lookup("shared")).resolves.toEqual({ owner: "b" });
-            expect(resolvePluginStateSqlitePath(stateA.env)).not.toBe(
-              resolvePluginStateSqlitePath(stateB.env),
+            expect(resolveOpenClawStateSqlitePath(stateA.env)).not.toBe(
+              resolveOpenClawStateSqlitePath(stateB.env),
             );
           },
         );
@@ -514,7 +515,7 @@ describe("plugin state keyed store", () => {
     await withPluginStateTestState(async () => {
       const store = createPluginStateKeyedStore("discord", { namespace: "close", maxEntries: 10 });
       await store.register("k", { ok: true });
-      closePluginStateSqliteStore();
+      closePluginStateDatabase();
       await expect(store.lookup("k")).resolves.toEqual({ ok: true });
     });
   });
@@ -546,8 +547,9 @@ describe("plugin state keyed store", () => {
       const store = createPluginStateKeyedStore("discord", { namespace: "perms", maxEntries: 10 });
       await store.register("k", { ok: true });
 
-      expect(statSync(resolvePluginStateDir()).mode & 0o777).toBe(0o700);
-      expect(statSync(resolvePluginStateSqlitePath()).mode & 0o777).toBe(0o600);
+      const databasePath = resolveOpenClawStateSqlitePath();
+      expect(statSync(path.dirname(databasePath)).mode & 0o777).toBe(0o700);
+      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
     });
   });
 

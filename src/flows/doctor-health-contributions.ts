@@ -118,7 +118,7 @@ async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void>
   const { maybeRepairLegacyFlatAuthProfileStores } =
     await import("../commands/doctor-auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
-    await import("../commands/doctor-auth-legacy-oauth.js");
+    await import("../commands/doctor/legacy/oauth-profile-ids.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =
     await import("../commands/doctor-auth.js");
   const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
@@ -223,7 +223,7 @@ async function runClaudeCliHealth(ctx: DoctorHealthFlowContext): Promise<void> {
 
 async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { detectLegacyStateMigrations, runLegacyStateMigrations } =
-    await import("../commands/doctor-state-migrations.js");
+    await import("../commands/doctor/state-migrations.js");
   const { createPreMigrationBackup } = await import("../commands/migrate/apply.js");
   const { note } = await import("../terminal/note.js");
   const legacyState = await detectLegacyStateMigrations({ cfg: ctx.cfg });
@@ -337,7 +337,8 @@ async function runCodexSessionRouteHealth(ctx: DoctorHealthFlowContext): Promise
 }
 
 async function runSessionTranscriptsHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { noteSessionTranscriptHealth } = await import("../commands/doctor-session-transcripts.js");
+  const { noteSessionTranscriptHealth } =
+    await import("../commands/doctor/legacy/session-transcript-health.js");
   await noteSessionTranscriptHealth({ shouldRepair: ctx.prompter.shouldRepair });
 }
 
@@ -348,7 +349,7 @@ async function runConfigAuditScrubHealth(ctx: DoctorHealthFlowContext): Promise<
 
 async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyCronStore, noteLegacyWhatsAppCrontabHealthCheck } =
-    await import("../commands/doctor-cron.js");
+    await import("../commands/doctor/legacy/cron.js");
   await noteLegacyWhatsAppCrontabHealthCheck();
   await maybeRepairLegacyCronStore({
     cfg: ctx.cfg,
@@ -358,7 +359,8 @@ async function runLegacyCronHealth(ctx: DoctorHealthFlowContext): Promise<void> 
 }
 
 async function runSqliteStateMigrationHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRepairLegacyRuntimeStateFiles } = await import("../commands/doctor-sqlite-state.js");
+  const { maybeRepairLegacyRuntimeStateFiles } =
+    await import("../commands/doctor/legacy/runtime-state.js");
   await maybeRepairLegacyRuntimeStateFiles({
     prompter: ctx.prompter,
     env: ctx.env ?? process.env,
@@ -388,17 +390,6 @@ async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Promise<v
   );
   await noteMacLaunchAgentOverrides();
   await noteMacLaunchctlGatewayEnvOverrides(ctx.cfg);
-}
-
-async function runStartupChannelMaintenanceHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  const { maybeRunDoctorStartupChannelMaintenance } =
-    await import("./doctor-startup-channel-maintenance.js");
-  await maybeRunDoctorStartupChannelMaintenance({
-    cfg: ctx.cfg,
-    env: process.env,
-    runtime: ctx.runtime,
-    shouldRepair: ctx.prompter.shouldRepair,
-  });
 }
 
 async function runSecurityHealth(ctx: DoctorHealthFlowContext): Promise<void> {
@@ -736,11 +727,6 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       id: "doctor:gateway-services",
       label: "Gateway services",
       run: runGatewayServicesHealth,
-    }),
-    createDoctorHealthContribution({
-      id: "doctor:startup-channel-maintenance",
-      label: "Startup channel maintenance",
-      run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:security",

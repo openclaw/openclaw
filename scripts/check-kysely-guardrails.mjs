@@ -44,10 +44,9 @@ const rawSqliteAllowPathGroups = {
     "src/state/sqlite-schema-shape.test-support.ts",
   ],
   "backup snapshot maintenance": ["src/commands/backup-verify.ts", "src/infra/backup-create.ts"],
-  "legacy feature stores awaiting Kysely owner cleanup": [
+  "Kysely-backed stores that own a DatabaseSync boundary": [
     "src/acp/event-ledger.ts",
     "src/agents/subagent-registry.store.ts",
-    "src/config/sessions/transcript-store.sqlite.ts",
     "src/cron/run-log.ts",
     "src/cron/store.ts",
     "src/infra/outbound/current-conversation-bindings.ts",

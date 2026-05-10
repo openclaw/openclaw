@@ -2,6 +2,7 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   createManagedTaskFlow,
@@ -10,10 +11,6 @@ import {
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import {
-  resolveTaskFlowRegistryDir,
-  resolveTaskFlowRegistrySqlitePath,
-} from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "./task-flow-registry.store.sqlite.js";
 import {
@@ -253,11 +250,11 @@ describe("task-flow-registry store runtime", () => {
         waitJson: { kind: "task", taskId: "task-secured" },
       });
 
-      const registryDir = resolveTaskFlowRegistryDir(process.env);
-      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
-      expect(sqlitePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      const registryDir = path.dirname(databasePath);
+      expect(databasePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-      expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
     });
   });
 });

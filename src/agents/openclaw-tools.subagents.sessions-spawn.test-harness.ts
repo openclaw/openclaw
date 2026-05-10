@@ -76,7 +76,6 @@ const hoisted = vi.hoisted(() => {
         method: "sessions.delete",
         params: {
           key: params.childSessionKey,
-          deleteTranscript: true,
           emitLifecycleHooks: params.spawnMode === "session",
         },
       });

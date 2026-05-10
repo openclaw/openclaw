@@ -9,13 +9,14 @@ import {
   legacyConfigRules as MATRIX_LEGACY_CONFIG_RULES,
   normalizeCompatibilityConfig as normalizeMatrixCompatibilityConfig,
 } from "./doctor-contract.js";
-import { autoMigrateLegacyMatrixCredentials } from "./legacy-credentials.js";
-import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./legacy-crypto.js";
-import { autoMigrateLegacyMatrixState, detectLegacyMatrixState } from "./legacy-state.js";
+import { autoMigrateLegacyMatrixCredentials } from "./doctor-legacy-credentials.js";
+import { autoPrepareLegacyMatrixCrypto, detectLegacyMatrixCrypto } from "./doctor-legacy-crypto.js";
+import { detectLegacyMatrixState } from "./doctor-legacy-state-detection.js";
+import { autoMigrateLegacyMatrixState } from "./doctor-legacy-state.js";
 import {
   maybeCreateMatrixMigrationSnapshot,
   resolveMatrixMigrationStatus,
-} from "./migration-snapshot.js";
+} from "./doctor-migration-snapshot.js";
 import { isRecord } from "./record-shared.js";
 
 function hasConfiguredMatrixChannel(cfg: OpenClawConfig): boolean {
@@ -51,7 +52,7 @@ export function formatMatrixLegacyStatePreview(
 ): string {
   return [
     "- Matrix plugin upgraded in place.",
-    `- Legacy sync store: ${detection.legacyStoragePath} -> ${detection.targetStoragePath}`,
+    `- Legacy sync store: ${detection.legacyStoragePath} -> SQLite plugin state (${detection.targetRootDir})`,
     `- Legacy crypto store: ${detection.legacyCryptoPath} -> ${detection.targetCryptoPath}`,
     ...(detection.selectionNote ? [`- ${detection.selectionNote}`] : []),
     '- Run "openclaw doctor --fix" to migrate this Matrix state now.',
@@ -70,7 +71,7 @@ export function formatMatrixLegacyCryptoPreview(
       [
         `- Matrix encrypted-state migration is pending for account "${plan.accountId}".`,
         `- Legacy crypto store: ${plan.legacyCryptoPath}`,
-        `- New recovery key file: ${plan.recoveryKeyPath}`,
+        `- Recovery key target: SQLite plugin state (${plan.recoveryKeyStorageKey})`,
         `- Migration state file: ${plan.statePath}`,
         '- Run "openclaw doctor --fix" to extract any saved backup key now. Backed-up room keys will restore automatically on next gateway start.',
       ].join("\n"),

@@ -1088,13 +1088,13 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.extraPaths":
     "Adds extra directories or .md files to the memory index beyond default memory files. Use this when key reference docs live elsewhere in your repo; when multimodal memory is enabled, matching image/audio files under these paths are also eligible for indexing.",
   "agents.defaults.memorySearch.qmd":
-    "Use this when one agent should query another agent's transcript collections; QMD-specific extra collections let you opt into cross-agent memory search without flattening everything into one shared namespace.",
+    "Use this when one agent should query another agent's QMD-indexed memory collections without flattening everything into one shared namespace.",
   "agents.defaults.memorySearch.qmd.extraCollections":
-    "Use this when you need directional transcript search across agents; add collections here to scope QMD recalls without creating a shared global transcript namespace.",
+    "Adds directional QMD memory collections for cross-agent recall without creating a shared global memory namespace.",
   "agents.defaults.memorySearch.qmd.extraCollections.path":
-    "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the transcript directory or note folder you actually want this agent to search.",
+    "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the memory note folder you actually want this agent to search.",
   "agents.defaults.memorySearch.qmd.extraCollections.name":
-    "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent transcript roots that live outside the workspace.",
+    "Preserves the configured collection label only when the path points outside the agent workspace; paths inside the workspace stay agent-scoped even if a name is provided. Use this for shared cross-agent memory roots that live outside the workspace.",
   "agents.defaults.memorySearch.qmd.extraCollections.pattern":
     "Use a glob pattern to restrict which files inside the collection are indexed; keep the default `**/*.md` unless you need a narrower subset.",
   "agents.defaults.memorySearch.multimodal":
@@ -1202,12 +1202,6 @@ export const FIELD_HELP: Record<string, string> = {
     "Filters files under each indexed root using a glob pattern, with default `**/*.md`. Use narrower patterns to reduce noise and indexing cost when directories contain mixed file types.",
   "memory.qmd.paths.name":
     "Sets a stable collection name for an indexed path instead of deriving it from filesystem location. Use this when paths vary across machines but you want consistent collection identity.",
-  "memory.qmd.sessions.enabled":
-    "Indexes session transcripts into QMD so recall can include prior conversation content (experimental, default: false). Enable only when transcript memory is required and you accept larger index churn.",
-  "memory.qmd.sessions.exportDir":
-    "Overrides where the optional QMD markdown export cache is written before QMD indexing. Use this only for QMD adapter storage; it is not canonical session storage and sessions remain SQLite-backed.",
-  "memory.qmd.sessions.retentionDays":
-    "Defines how long optional QMD markdown export-cache files are kept, in days (default: unlimited). Session retention itself is SQLite-backed and not controlled by this setting.",
   "memory.qmd.update.interval":
     "Sets how often QMD refreshes indexes from source content (duration string, default: 5m). Shorter intervals improve freshness but increase background CPU and I/O.",
   "memory.qmd.update.debounceMs":

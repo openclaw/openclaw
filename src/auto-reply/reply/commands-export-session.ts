@@ -2,14 +2,13 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  migrateSessionEntries,
-  parseSessionEntries,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
+  type TranscriptEntry,
 } from "../../agents/transcript/session-transcript-contract.js";
 import {
-  exportSqliteSessionTranscriptJsonl,
   hasSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptEvents,
 } from "../../config/sessions/transcript-store.sqlite.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -168,9 +167,9 @@ async function readSessionDataFromTranscript(params: {
       `Transcript is not in SQLite for agent ${params.agentId} session ${params.sessionId}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
     );
   }
-  const raw = exportSqliteSessionTranscriptJsonl(params);
-  const transcriptEntries = parseSessionEntries(raw);
-  migrateSessionEntries(transcriptEntries);
+  const transcriptEntries = loadSqliteSessionTranscriptEvents(params).map(
+    (row) => row.event as TranscriptEntry,
+  );
   const header =
     transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const entries = transcriptEntries.filter(

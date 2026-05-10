@@ -17,7 +17,7 @@ import type {
   OAuthCredentials,
 } from "../agents/auth-profiles/types.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOAuthPath, resolveStateDir } from "../config/paths.js";
+import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
 import type { AuthProfileConfig } from "../config/types.auth.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadJsonFile } from "../infra/json-file.js";
@@ -78,6 +78,7 @@ export type LegacyFlatAuthProfileRepairResult = {
 };
 
 const UNSAFE_LEGACY_AUTH_PROFILE_KEYS = new Set(["__proto__", "constructor", "prototype"]);
+const LEGACY_OAUTH_FILENAME = "oauth.json";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
@@ -332,7 +333,7 @@ function coerceLegacyOAuthJsonStore(raw: unknown): AuthProfileStore | null {
 }
 
 function resolveLegacyOAuthJsonStore(cfg: OpenClawConfig): LegacyOAuthJsonStore | null {
-  const legacyPath = resolveOAuthPath();
+  const legacyPath = path.join(resolveOAuthDir(), LEGACY_OAUTH_FILENAME);
   if (!fs.existsSync(legacyPath)) {
     return null;
   }

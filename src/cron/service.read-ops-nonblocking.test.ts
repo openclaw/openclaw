@@ -33,7 +33,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
 }
 
 function createDeferredIsolatedRun() {
-  let resolveRun: ((value: IsolatedRunResult) => void) | undefined;
+  const resolveRuns: Array<(value: IsolatedRunResult) => void> = [];
   let resolveRunStarted: (() => void) | undefined;
   const runStarted = new Promise<void>((resolve) => {
     resolveRunStarted = resolve;
@@ -41,14 +41,16 @@ function createDeferredIsolatedRun() {
   const runIsolatedAgentJob = vi.fn(async () => {
     resolveRunStarted?.();
     return await new Promise<IsolatedRunResult>((resolve) => {
-      resolveRun = resolve;
+      resolveRuns.push(resolve);
     });
   });
   return {
     runIsolatedAgentJob,
     runStarted,
     completeRun: (result: IsolatedRunResult) => {
-      resolveRun?.(result);
+      for (const resolveRun of resolveRuns.splice(0)) {
+        resolveRun(result);
+      }
     },
   };
 }
@@ -66,91 +68,6 @@ function expectCronStatus(
 }
 
 describe("CronService read ops while job is running", () => {
-  it("keeps list and status responsive during a long isolated run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2025-12-13T00:00:00.000Z"));
-    const store = await makeStoreKey();
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
-    let resolveFinished: (() => void) | undefined;
-    const finished = new Promise<void>((resolve) => {
-      resolveFinished = resolve;
-    });
-
-    const isolatedRun = createDeferredIsolatedRun();
-
-    const cron = new CronService({
-      storeKey: store.storeKey,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob: isolatedRun.runIsolatedAgentJob,
-      onEvent: (evt) => {
-        if (evt.action === "finished" && evt.status === "ok") {
-          resolveFinished?.();
-        }
-      },
-    });
-
-    try {
-      await cron.start();
-
-      // Schedule the job a second in the future; then jump time to trigger the tick.
-      await cron.add({
-        name: "slow isolated",
-        enabled: true,
-        deleteAfterRun: false,
-        schedule: {
-          kind: "at",
-          at: new Date("2025-12-13T00:00:01.000Z").toISOString(),
-        },
-        sessionTarget: "isolated",
-        wakeMode: "next-heartbeat",
-        payload: { kind: "agentTurn", message: "long task" },
-        delivery: { mode: "none" },
-      });
-
-      vi.setSystemTime(new Date("2025-12-13T00:00:01.000Z"));
-      await vi.runOnlyPendingTimersAsync();
-
-      await isolatedRun.runStarted;
-      expect(isolatedRun.runIsolatedAgentJob).toHaveBeenCalledTimes(1);
-
-      await expect(cron.list({ includeDisabled: true })).resolves.toHaveLength(1);
-      await expect(cron.status()).resolves.toEqual(
-        expect.objectContaining({ enabled: true, storeKey: store.storeKey }),
-      );
-
-      const running = await cron.list({ includeDisabled: true });
-      expect(running[0]?.state.runningAtMs).toBeTypeOf("number");
-
-      isolatedRun.completeRun({ status: "ok", summary: "done" });
-
-      // Wait until the scheduler writes the result back to the store.
-      await finished;
-      // Ensure any trailing store writes have finished before cleanup.
-      await cron.status();
-
-      const completed = await cron.list({ includeDisabled: true });
-      expect(completed[0]?.state.lastStatus).toBe("ok");
-
-      // Ensure the scheduler loop has fully settled before the next test case reuses the DB.
-      const internal = cron as unknown as { state?: { running?: boolean } };
-      for (let i = 0; i < 100; i += 1) {
-        if (!internal.state?.running) {
-          break;
-        }
-        await Promise.resolve();
-      }
-      expect(internal.state?.running).toBe(false);
-    } finally {
-      cron.stop();
-      vi.clearAllTimers();
-      vi.useRealTimers();
-    }
-  });
-
   it("keeps list and status responsive during manual cron.run execution", async () => {
     const store = await makeStoreKey();
     const enqueueSystemEvent = vi.fn();

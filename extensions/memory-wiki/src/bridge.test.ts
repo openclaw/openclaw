@@ -9,7 +9,6 @@ import {
 import {
   appendMemoryHostEvent,
   readMemoryHostEvents,
-  renderMemoryHostEventsJsonl,
 } from "openclaw/plugin-sdk/memory-host-events";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
@@ -135,9 +134,6 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(
       sourcePages.reduce((count, name) => count + (name.startsWith("bridge-") ? 1 : 0), 0),
     ).toBe(3);
-    await expect(
-      fs.stat(path.join(vaultDir, ".openclaw-wiki", "source-sync.json")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
 
     const memoryPage = await fs.readFile(path.join(vaultDir, first.pagePaths[0] ?? ""), "utf8");
     expect(memoryPage).toContain("sourceType: memory-bridge");
@@ -227,12 +223,12 @@ describe("syncMemoryWikiBridgeSources", () => {
         },
       ],
     });
-    const eventContent = renderMemoryHostEventsJsonl(await readMemoryHostEvents({ workspaceDir }));
+    const eventContent = JSON.stringify(await readMemoryHostEvents({ workspaceDir }), null, 2);
     registerBridgeArtifacts([
       {
         kind: "event-log",
         workspaceDir,
-        relativePath: "memory/.dreams/events.jsonl",
+        relativePath: "memory/events/memory-host-events.json",
         absolutePath: "sqlite:plugin_state_entries/memory-core/memory-host.events",
         agentIds: ["main"],
         contentType: "json",
@@ -255,7 +251,7 @@ describe("syncMemoryWikiBridgeSources", () => {
     expect(result.removedCount).toBe(0);
     const page = await fs.readFile(path.join(vaultDir, result.pagePaths[0] ?? ""), "utf8");
     expect(page).toContain("sourceType: memory-bridge-events");
-    expect(page).toContain('"type":"memory.recall.recorded"');
+    expect(page).toContain('"type": "memory.recall.recorded"');
   });
 
   it("prunes stale bridge pages when the source artifact disappears", async () => {

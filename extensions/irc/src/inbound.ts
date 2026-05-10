@@ -355,7 +355,6 @@ export async function handleIrcInbound(params: {
       id: peerId,
     },
     runtime: core.channel,
-    sessionStore: config.session?.store,
   });
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;

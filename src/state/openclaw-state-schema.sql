@@ -36,13 +36,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
 CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
   ON acp_replay_events(session_id, seq);
 
-CREATE TABLE IF NOT EXISTS agents (
-  agent_id TEXT NOT NULL PRIMARY KEY,
-  config_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-);
-
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL PRIMARY KEY,
   path TEXT NOT NULL,
@@ -131,9 +124,7 @@ CREATE TABLE IF NOT EXISTS capture_sessions (
   mode TEXT NOT NULL,
   source_scope TEXT NOT NULL,
   source_process TEXT NOT NULL,
-  proxy_url TEXT,
-  db_path TEXT NOT NULL,
-  blob_dir TEXT NOT NULL
+  proxy_url TEXT
 );
 
 CREATE TABLE IF NOT EXISTS capture_blobs (

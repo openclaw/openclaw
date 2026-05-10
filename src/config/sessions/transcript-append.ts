@@ -31,7 +31,6 @@ export async function appendSessionTranscriptMessage(params: {
   now?: number;
   sessionId: string;
   cwd?: string;
-  useRawWhenLinear?: boolean;
   config?: OpenClawConfig;
 }): Promise<{ messageId: string; message: unknown }> {
   const scope = normalizeRequiredScope(params);

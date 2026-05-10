@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-import { upsertSessionEntry } from "../../config/sessions/store.js";
+import { getSessionEntry, upsertSessionEntry } from "../../config/sessions/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   buildFastReplyCommandContext,
@@ -196,23 +196,21 @@ describe("getReplyFromConfig fast test bootstrap", () => {
 
   it("clears stale ack-only heartbeat pending delivery before replay", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-clear-"));
-    const storePath = path.join(home, "sessions.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", home);
     const sessionKey = "agent:main:telegram:123";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "pending-ack",
-          updatedAt: Date.now(),
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: "HEARTBEAT_OK",
-          pendingFinalDeliveryCreatedAt: 1,
-          pendingFinalDeliveryAttemptCount: 4,
-          pendingFinalDeliveryLastError: null,
-        },
-      }),
-      "utf8",
-    );
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
+        sessionId: "pending-ack",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "HEARTBEAT_OK",
+        pendingFinalDeliveryCreatedAt: 1,
+        pendingFinalDeliveryAttemptCount: 4,
+        pendingFinalDeliveryLastError: null,
+      },
+    });
     const cfg = withFastReplyConfig({
       agents: {
         defaults: {
@@ -221,35 +219,33 @@ describe("getReplyFromConfig fast test bootstrap", () => {
           heartbeat: { ackMaxChars: 300 },
         },
       },
-      session: { store: storePath },
+      session: {},
     } as OpenClawConfig);
 
     await expect(
       getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
     ).resolves.toEqual({ text: "ok" });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
-    expect(stored.pendingFinalDelivery).toBeUndefined();
-    expect(stored.pendingFinalDeliveryText).toBeUndefined();
-    expect(stored.pendingFinalDeliveryAttemptCount).toBeUndefined();
+    const stored = getSessionEntry({ agentId: "main", sessionKey });
+    expect(stored?.pendingFinalDelivery).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryText).toBeUndefined();
+    expect(stored?.pendingFinalDeliveryAttemptCount).toBeUndefined();
   });
 
   it("uses ackMaxChars when replaying stale heartbeat pending delivery", async () => {
     const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-heartbeat-pending-replay-"));
-    const storePath = path.join(home, "sessions.json");
+    vi.stubEnv("OPENCLAW_STATE_DIR", home);
     const sessionKey = "agent:main:telegram:123";
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId: "pending-ack-with-remainder",
-          updatedAt: Date.now(),
-          pendingFinalDelivery: true,
-          pendingFinalDeliveryText: "HEARTBEAT_OK short",
-        },
-      }),
-      "utf8",
-    );
+    upsertSessionEntry({
+      agentId: "main",
+      sessionKey,
+      entry: {
+        sessionId: "pending-ack-with-remainder",
+        updatedAt: Date.now(),
+        pendingFinalDelivery: true,
+        pendingFinalDeliveryText: "HEARTBEAT_OK short",
+      },
+    });
     const cfg = withFastReplyConfig({
       agents: {
         defaults: {
@@ -258,17 +254,17 @@ describe("getReplyFromConfig fast test bootstrap", () => {
           heartbeat: { ackMaxChars: 0 },
         },
       },
-      session: { store: storePath },
+      session: {},
     } as OpenClawConfig);
 
     await expect(
       getReplyFromConfig(buildGetReplyCtx(), { isHeartbeat: true }, cfg),
     ).resolves.toEqual({ text: "short" });
 
-    const stored = JSON.parse(await fs.readFile(storePath, "utf8"))[sessionKey];
-    expect(stored.pendingFinalDelivery).toBe(true);
-    expect(stored.pendingFinalDeliveryText).toBe("short");
-    expect(stored.pendingFinalDeliveryAttemptCount).toBe(1);
+    const stored = getSessionEntry({ agentId: "main", sessionKey });
+    expect(stored?.pendingFinalDelivery).toBe(true);
+    expect(stored?.pendingFinalDeliveryText).toBe("short");
+    expect(stored?.pendingFinalDeliveryAttemptCount).toBe(1);
   });
 
   it("handles native /status before workspace bootstrap", async () => {

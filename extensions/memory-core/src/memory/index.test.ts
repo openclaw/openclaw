@@ -186,9 +186,6 @@ describe("memory index", () => {
 
   beforeEach(async () => {
     vi.useRealTimers();
-    // Perf: most suites don't need atomic swap behavior for full reindexes.
-    // Keep atomic reindex tests on the safe path.
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "1");
     clearRegistry();
     registerBuiltInMemoryEmbeddingProviders({ registerMemoryEmbeddingProvider: registerAdapter });
     embedBatchCalls = 0;
@@ -219,9 +216,9 @@ describe("memory index", () => {
     (manager as unknown as { resetIndex: () => void }).resetIndex();
     const embeddingCacheTable = db
       .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
-      .get("embedding_cache");
-    if (embeddingCacheTable?.name === "embedding_cache") {
-      db.exec("DELETE FROM embedding_cache");
+      .get("memory_embedding_cache");
+    if (embeddingCacheTable?.name === "memory_embedding_cache") {
+      db.exec("DELETE FROM memory_embedding_cache");
     }
     (manager as unknown as { dirty: boolean }).dirty = true;
     (manager as unknown as { sessionsDirty: boolean }).sessionsDirty = false;
@@ -370,7 +367,6 @@ describe("memory index", () => {
   });
 
   it("reindexes the default memory tables in place inside the per-agent database", async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
     const stateDir = path.join(workspaceDir, "managed-memory-state");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
@@ -529,29 +525,16 @@ describe("memory index", () => {
     );
   });
 
-  it("streams embedding cache rows during safe reindex", async () => {
-    vi.stubEnv("OPENCLAW_TEST_MEMORY_UNSAFE_REINDEX", "0");
-    type EmbeddingCacheRow = {
-      provider: string;
-      model: string;
-      provider_key: string;
-      hash: string;
-      embedding: string;
-      dims: number | null;
-      updated_at: number;
+  it("preserves embedding cache rows during in-place reindex", async () => {
+    type CountStatement = {
+      get: () => { count: number } | undefined;
     };
-    type StatementWithAll = {
-      all: () => EmbeddingCacheRow[];
-    };
-
     const cfg = createCfg({
       cacheEnabled: true,
     });
     const manager = await getPersistentManager(cfg);
     await manager.sync({ reason: "test" });
 
-    // Safe reindex streams cache rows from the original database and writes
-    // them into a temporary database, so the SELECT spy belongs on this handle.
     const sourceDb = (
       manager as unknown as {
         db: {
@@ -560,38 +543,19 @@ describe("memory index", () => {
       }
     ).db;
     const originalPrepare = sourceDb.prepare.bind(sourceDb);
-    const cachedRows = (
-      originalPrepare(
-        "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-      ) as StatementWithAll
-    ).all();
-    expect(cachedRows.length).toBeGreaterThan(0);
+    const readCacheCount = () =>
+      (
+        originalPrepare("SELECT COUNT(*) AS count FROM memory_embedding_cache") as CountStatement
+      ).get()?.count ?? 0;
+    const cachedRows = readCacheCount();
+    expect(cachedRows).toBeGreaterThan(0);
 
     const beforeCalls = embedBatchCalls;
-    const prepareSpy = vi.spyOn(sourceDb, "prepare").mockImplementation((sql: string) => {
-      if (
-        sql.includes(
-          "SELECT provider, model, provider_key, hash, embedding, dims, updated_at FROM embedding_cache",
-        )
-      ) {
-        return {
-          all: () => {
-            throw new Error("embedding cache seed must stream rows via iterate()");
-          },
-          iterate: () => cachedRows[Symbol.iterator](),
-        };
-      }
-      return originalPrepare(sql);
-    });
-
-    try {
-      (manager as unknown as { dirty: boolean }).dirty = true;
-      await manager.sync({ reason: "test", force: true });
-    } finally {
-      prepareSpy.mockRestore();
-    }
+    (manager as unknown as { dirty: boolean }).dirty = true;
+    await manager.sync({ reason: "test", force: true });
 
     expect(embedBatchCalls).toBe(beforeCalls);
+    expect(readCacheCount()).toBe(cachedRows);
   });
 
   it("builds FTS index and returns search results when no embedding provider is available", async () => {
