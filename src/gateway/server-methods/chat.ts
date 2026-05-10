@@ -239,10 +239,15 @@ async function resolveAttachmentLooksLikeImage(
   const fileNameMime = normalizeAttachmentMime(
     mimeTypeFromFilePath(normalizeOptionalText(attachment.fileName)),
   );
+  // When content sniffing detects a generic/non-image type, the file name is
+  // untrusted — a DOCX/ZIP uploaded as "report.png" would otherwise pass as
+  // an image through fileNameMime.
+  const trustedFileNameMime =
+    sniffedMime && isGenericAttachmentMime(sniffedMime) ? undefined : fileNameMime;
   const finalMime =
     (sniffedMime && !isGenericAttachmentMime(sniffedMime) && sniffedMime) ||
     (trustedProvidedMime && !isGenericAttachmentMime(trustedProvidedMime) && trustedProvidedMime) ||
-    (fileNameMime && !isGenericAttachmentMime(fileNameMime) && fileNameMime) ||
+    (trustedFileNameMime && !isGenericAttachmentMime(trustedFileNameMime) && trustedFileNameMime) ||
     sniffedMime ||
     trustedProvidedMime ||
     fileNameMime;

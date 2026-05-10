@@ -498,6 +498,61 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send rejects image filename when sniffed content is generic (ZIP/DOCX as .png)", async () => {
+    await withMainSessionStore(async () => {
+      testState.agentConfig = {
+        model: { primary: "anthropic/claude-3-5-haiku" },
+        imageModel: { primary: "openai/gpt-4o" },
+      };
+      let observed:
+        | {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+          }
+        | undefined;
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            ctx: { MediaPaths?: string[] | undefined };
+            replyOptions: { modelOverride?: string; images?: unknown[] };
+            dispatcher: { markComplete: () => void; waitForIdle: () => Promise<void> };
+          },
+        ];
+        observed = {
+          ctx: params.ctx,
+          replyOptions: params.replyOptions,
+        };
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return undefined;
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "read disguised doc",
+          idempotencyKey: "idem-fake-image-filename",
+          attachments: [
+            {
+              type: "file",
+              mimeType: "image/png",
+              fileName: "report.png",
+              content: DOCX_LIKE_BASE64,
+            },
+          ],
+        });
+
+        expect(res.ok).toBe(true);
+        await vi.waitFor(() => expect(observed).toBeDefined());
+        expect(observed?.replyOptions.modelOverride).toBeUndefined();
+        expect(observed?.replyOptions.images).toBeUndefined();
+        expect(observed?.ctx.MediaPaths).toHaveLength(1);
+      } finally {
+        testState.agentConfig = undefined;
+      }
+    });
+  });
+
   test("sessions.send accepts dashboard messages for existing sessions", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-"));
     testState.sessionStorePath = path.join(dir, "sessions.json");
