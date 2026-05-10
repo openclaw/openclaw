@@ -416,8 +416,6 @@ export function createOpenClawCodingTools(options?: {
   forceHeartbeatTool?: boolean;
   /** If false, build plugin tools only while preserving the shared policy pipeline. */
   includeCoreTools?: boolean;
-  /** PI-only: expose OpenClaw Tool Search controls for catalog compaction. */
-  includeToolSearchControls?: boolean;
   /** Executes cataloged tools through the active PI run lifecycle. */
   toolSearchCatalogExecutor?: ToolSearchCatalogToolExecutor;
   /** Runtime-local Tool Search catalog ref shared with PI attempt compaction. */
