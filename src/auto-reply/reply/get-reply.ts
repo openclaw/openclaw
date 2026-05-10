@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -19,7 +20,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
-import { stripHeartbeatToken } from "../heartbeat.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -52,8 +53,25 @@ import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
 
-function isHeartbeatPendingFinalDeliveryEffectivelyEmpty(text: string): boolean {
-  return stripHeartbeatToken(text, { mode: "heartbeat" }).shouldSkip;
+function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+  });
+  return {
+    shouldClear: stripped.shouldSkip,
+    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
+  };
+}
+
+function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
+  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
+  return Math.max(
+    0,
+    agentHeartbeat?.ackMaxChars ??
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
 }
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
@@ -376,7 +394,11 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      if (isHeartbeatPendingFinalDeliveryEffectivelyEmpty(text)) {
+      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+        text,
+        resolveHeartbeatAckMaxChars(cfg, agentId),
+      );
+      if (heartbeatPending.shouldClear) {
         sessionEntry.pendingFinalDelivery = undefined;
         sessionEntry.pendingFinalDeliveryText = undefined;
         sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
@@ -409,6 +431,7 @@ export async function getReplyFromConfig(
         sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
         sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
         sessionEntry.pendingFinalDeliveryLastError = null;
+        sessionEntry.pendingFinalDeliveryText = heartbeatPending.replayText;
         sessionEntry.updatedAt = updatedAt;
         if (sessionKey && sessionStore) {
           sessionStore[sessionKey] = sessionEntry;
@@ -419,6 +442,7 @@ export async function getReplyFromConfig(
             storePath,
             sessionKey,
             update: async () => ({
+              pendingFinalDeliveryText: heartbeatPending.replayText,
               pendingFinalDeliveryLastAttemptAt: updatedAt,
               pendingFinalDeliveryAttemptCount: attemptCount,
               pendingFinalDeliveryLastError: null,
@@ -426,7 +450,7 @@ export async function getReplyFromConfig(
             }),
           });
         }
-        return { text };
+        return { text: heartbeatPending.replayText };
       }
     }
   }
