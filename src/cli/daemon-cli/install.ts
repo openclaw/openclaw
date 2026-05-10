@@ -94,12 +94,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
-    fail("Invalid port");
+    fail("Invalid --port. Use a port number from 1 to 65535, for example 18789.");
     return;
   }
   const port = portOverride ?? resolveGatewayPort(cfg);
-  if (!Number.isFinite(port) || port <= 0) {
-    fail("Invalid port");
+  if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
+    fail("Invalid Gateway port in config. Set gateway.port to a number from 1 to 65535.");
     return;
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;

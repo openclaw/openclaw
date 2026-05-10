@@ -79,7 +79,7 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
       ],
       { cap: 0 },
     );
-    expect(steps.filter((step) => step.tripped)).toEqual([]);
+    expect(steps.some((step) => step.tripped)).toBe(false);
     expect(steps.at(-1)?.consecutive).toBe(7);
   });
 
@@ -94,7 +94,7 @@ describe("stepIdleTimeoutBreaker (#76293)", () => {
         outputTokens: 220,
       })),
     );
-    expect(steps.filter((step) => step.tripped)).toEqual([]);
+    expect(steps.some((step) => step.tripped)).toBe(false);
     expect(steps.at(-1)?.consecutive).toBe(0);
   });
 

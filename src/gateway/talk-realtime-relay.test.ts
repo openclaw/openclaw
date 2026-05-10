@@ -236,6 +236,13 @@ describe("talk realtime gateway relay", () => {
       relaySessionId: session.relaySessionId,
       connId: "conn-1",
       callId: "call-1",
+      result: { status: "working" },
+      options: { willContinue: true },
+    });
+    submitTalkRealtimeRelayToolResult({
+      relaySessionId: session.relaySessionId,
+      connId: "conn-1",
+      callId: "call-1",
       result: { ok: true },
     });
     cancelTalkRealtimeRelayTurn({
@@ -247,7 +254,13 @@ describe("talk realtime gateway relay", () => {
 
     expect(bridge.sendAudio).toHaveBeenCalledWith(Buffer.from("audio-in"));
     expect(bridge.setMediaTimestamp).toHaveBeenCalledWith(123);
-    expect(bridge.submitToolResult).toHaveBeenCalledWith("call-1", { ok: true }, undefined);
+    expect(bridge.submitToolResult).toHaveBeenNthCalledWith(
+      1,
+      "call-1",
+      { status: "working" },
+      { willContinue: true },
+    );
+    expect(bridge.submitToolResult).toHaveBeenNthCalledWith(2, "call-1", { ok: true }, undefined);
     expect(bridge.handleBargeIn).toHaveBeenCalledWith({ audioPlaybackActive: true });
     expect(bridge.close).toHaveBeenCalled();
     expect(events).toEqual(
@@ -268,6 +281,18 @@ describe("talk realtime gateway relay", () => {
               type: "turn.cancelled",
               payload: { reason: "barge-in" },
               final: true,
+            }),
+          }),
+        }),
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            relaySessionId: session.relaySessionId,
+            type: "toolResult",
+            callId: "call-1",
+            talkEvent: expect.objectContaining({
+              type: "tool.result",
+              callId: "call-1",
+              final: false,
             }),
           }),
         }),

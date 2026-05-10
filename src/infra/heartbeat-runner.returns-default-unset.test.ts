@@ -119,14 +119,22 @@ function resolveWhatsAppTargetForTest(params: {
   allowFrom: Array<string | number> | null | undefined;
 }) {
   const trimmed = params.to?.trim() ?? "";
-  const allowListRaw = (params.allowFrom ?? [])
-    .map((entry) => String(entry).trim())
-    .filter(Boolean);
-  const hasWildcard = allowListRaw.includes("*");
-  const allowList = allowListRaw
-    .filter((entry) => entry !== "*")
-    .map((entry) => normalizeWhatsAppTargetForTest(entry))
-    .filter((entry): entry is string => Boolean(entry));
+  const allowList: string[] = [];
+  let hasWildcard = false;
+  for (const entry of params.allowFrom ?? []) {
+    const raw = String(entry).trim();
+    if (!raw) {
+      continue;
+    }
+    if (raw === "*") {
+      hasWildcard = true;
+      continue;
+    }
+    const normalized = normalizeWhatsAppTargetForTest(raw);
+    if (normalized) {
+      allowList.push(normalized);
+    }
+  }
   const normalizedTarget = normalizeWhatsAppTargetForTest(trimmed);
 
   if (!normalizedTarget) {

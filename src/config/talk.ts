@@ -1,4 +1,5 @@
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeThinkLevel } from "../auto-reply/thinking.js";
+import { normalizeFastMode, normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
@@ -157,6 +158,20 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   if (typeof source.interruptOnSpeech === "boolean") {
     normalized.interruptOnSpeech = source.interruptOnSpeech;
   }
+  const consultThinkingLevel = normalizeThinkLevel(
+    normalizeOptionalString(source.consultThinkingLevel),
+  );
+  if (consultThinkingLevel) {
+    normalized.consultThinkingLevel = consultThinkingLevel;
+  }
+  const rawConsultFastMode = source.consultFastMode;
+  const consultFastMode =
+    typeof rawConsultFastMode === "boolean" || typeof rawConsultFastMode === "string"
+      ? normalizeFastMode(rawConsultFastMode)
+      : undefined;
+  if (consultFastMode !== undefined) {
+    normalized.consultFastMode = consultFastMode;
+  }
   const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
   if (silenceTimeoutMs !== undefined) {
     normalized.silenceTimeoutMs = silenceTimeoutMs;
@@ -224,6 +239,12 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
   }
   if (typeof normalized?.silenceTimeoutMs === "number") {
     payload.silenceTimeoutMs = normalized.silenceTimeoutMs;
+  }
+  if (typeof normalized?.consultThinkingLevel === "string") {
+    payload.consultThinkingLevel = normalized.consultThinkingLevel;
+  }
+  if (typeof normalized?.consultFastMode === "boolean") {
+    payload.consultFastMode = normalized.consultFastMode;
   }
   if (typeof normalized?.speechLocale === "string") {
     payload.speechLocale = normalized.speechLocale;

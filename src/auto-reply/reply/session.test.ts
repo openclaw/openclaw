@@ -821,7 +821,7 @@ describe("initSessionState RawBody", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
@@ -1397,7 +1397,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("treats sessions as stale before the daily reset when updated before yesterday's boundary", async () => {
@@ -1496,7 +1496,7 @@ describe("initSessionState reset policy", () => {
         isNewSession: true,
       }),
     ).resolves.toBeUndefined();
-    expect(peekSystemEvents(existingSessionId)).toEqual([]);
+    expect(peekSystemEvents(existingSessionId)).toStrictEqual([]);
   });
 
   it("keeps the existing stale session for /reset soft", async () => {
@@ -2693,7 +2693,10 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.isNewSession).toBe(false);
       expect(result.sessionId).toBe(existingSessionId);
       expect(result.sessionEntry.cliSessionBindings?.["claude-cli"]).toEqual(cliBinding);
-      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const transcriptStat = await fs.stat(transcriptPath).catch(() => null);
+      if (!transcriptStat) {
+        throw new Error("expected transcript file to remain after stale reset");
+      }
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );

@@ -54,10 +54,13 @@ type Deferred<T> = {
 };
 
 function createDeferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
+  let resolve: ((value: T) => void) | undefined;
   const promise = new Promise<T>((promiseResolve) => {
     resolve = promiseResolve;
   });
+  if (!resolve) {
+    throw new Error("Expected compaction deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -246,7 +249,6 @@ describe("compactEmbeddedPiSessionDirect hooks", () => {
     compactTesting.prepareCompactionSessionAgent({
       session: session as never,
       providerStreamFn: vi.fn(),
-      shouldUseWebSocketTransport: false,
       sessionId: "session-1",
       signal: new AbortController().signal,
       effectiveModel: { provider: "openai", id: "fake", api: "responses", input: [] } as never,

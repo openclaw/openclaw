@@ -474,6 +474,32 @@ describe("capability cli", () => {
     expect(call.context).not.toHaveProperty("systemPrompt");
   });
 
+  it("opts explicit local provider/model probes into bundled static catalog fallback", async () => {
+    await runModelRunWithModel("mistral/mistral-medium-3-5", "local");
+
+    expect(mocks.prepareSimpleCompletionModelForAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        modelRef: "mistral/mistral-medium-3-5",
+        allowBundledStaticCatalogFallback: true,
+        skipPiDiscovery: true,
+      }),
+    );
+  });
+
+  it("does not enable bundled static catalog fallback without an explicit provider/model override", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--json"],
+    });
+
+    const calls = mocks.prepareSimpleCompletionModelForAgent.mock.calls as unknown as Array<
+      [Record<string, unknown>]
+    >;
+    const params = calls[0]?.[0];
+    expect(params).toBeDefined();
+    expect(params).not.toHaveProperty("allowBundledStaticCatalogFallback");
+  });
+
   it("passes image files to local model probes", async () => {
     const tempInput = path.join(os.tmpdir(), `openclaw-model-run-image-${Date.now()}.png`);
     await fs.writeFile(tempInput, Buffer.from(PNG_1X1_BASE64, "base64"));
@@ -568,6 +594,21 @@ describe("capability cli", () => {
               content: "hello",
             }),
           ],
+        }),
+      }),
+    );
+  });
+
+  it("passes thinking overrides to local model probes", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: ["capability", "model", "run", "--prompt", "hello", "--thinking", "high", "--json"],
+    });
+
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          reasoning: "high",
         }),
       }),
     );
@@ -922,6 +963,60 @@ describe("capability cli", () => {
     await runModelRunWithModel("custom/MyModel@work", "local");
 
     expectModelRunDispatch("local", "custom/MyModel@work");
+  });
+
+  it("passes thinking overrides to gateway model probes", async () => {
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--thinking",
+        "high",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          thinking: "high",
+          modelRun: true,
+          promptMode: "none",
+        }),
+      }),
+    );
+  });
+
+  it("rejects invalid model run thinking overrides before dispatch", async () => {
+    await expect(
+      runRegisteredCli({
+        register: registerCapabilityCli as (program: Command) => void,
+        argv: [
+          "capability",
+          "model",
+          "run",
+          "--prompt",
+          "hello",
+          "--thinking",
+          "turbo-mode",
+          "--json",
+        ],
+      }),
+    ).rejects.toThrow("exit 1");
+
+    expect(mocks.runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("Invalid thinking level."),
+    );
+    expect(mocks.prepareSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+    expect(mocks.callGateway).not.toHaveBeenCalled();
+    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
   it("rejects empty model run prompts before gateway dispatch", async () => {

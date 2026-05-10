@@ -64,6 +64,10 @@ import {
 } from "./api.js";
 import registerDevicePair from "./index.js";
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 afterAll(() => {
   vi.doUnmock("./api.js");
   vi.doUnmock("./notify.js");
@@ -491,7 +495,7 @@ describe("device-pair /pair qr", () => {
     expect(opts.mediaLocalRoots).toEqual([path.dirname(mediaUrl)]);
     expect(opts).toMatchObject(testCase.expectedOpts);
     expect(sentPng).toBe("fakepng");
-    await expect(fs.access(mediaUrl)).rejects.toThrow();
+    await expectPathMissing(mediaUrl);
     expect(text).toContain("QR code sent above.");
     expect(text).toContain("IMPORTANT: Run /pair cleanup after pairing finishes.");
   });

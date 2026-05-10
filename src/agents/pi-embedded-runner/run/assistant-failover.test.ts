@@ -60,7 +60,7 @@ describe("handleAssistantFailover", () => {
   describe("rotate_profile branch", () => {
     it("rotates before waiting on auth profile failure marking", async () => {
       const events: string[] = [];
-      let releaseMark!: () => void;
+      let releaseMark: (() => void) | undefined;
       const markFinished = new Promise<void>((resolve) => {
         releaseMark = resolve;
       });
@@ -91,6 +91,9 @@ describe("handleAssistantFailover", () => {
 
       expect(outcome.action).toBe("retry");
       expect(events).toEqual(["advance", "mark-start"]);
+      if (!releaseMark) {
+        throw new Error("Expected auth profile failure mark release callback to be initialized");
+      }
       releaseMark();
       await markSettled;
       await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));

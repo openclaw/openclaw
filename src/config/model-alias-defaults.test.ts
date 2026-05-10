@@ -127,6 +127,44 @@ describe("applyModelDefaults", () => {
     );
   });
 
+  it("normalizes retired Gemini model keys before applying aliases", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {},
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": { alias: "gemini" },
+    });
+  });
+
+  it("normalizes retired Gemini primary and fallback refs", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 

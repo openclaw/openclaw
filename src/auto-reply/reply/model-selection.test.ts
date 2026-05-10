@@ -17,6 +17,10 @@ vi.mock("../../agents/model-catalog.runtime.js", () => ({
   ]),
 }));
 
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
+
 vi.mock("../../channels/plugins/session-conversation.js", () => ({
   resolveSessionParentSessionKey: (sessionKey?: string) =>
     sessionKey?.replace(/:thread:[^:]+$/, "").replace(/:topic:[^:]+$/, "") ?? null,

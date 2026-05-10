@@ -130,7 +130,6 @@ export function resolveExtraParams(params: {
 type CacheRetentionStreamOptions = Partial<SimpleStreamOptions> & {
   cacheRetention?: "none" | "short" | "long";
   cachedContent?: string;
-  openaiWsWarmup?: boolean;
 };
 export type SupportedTransport = "sse" | "websocket" | "auto";
 
@@ -334,9 +333,6 @@ function applyDefaultOpenAIGptRuntimeParams(
   if (!Object.hasOwn(merged, "text_verbosity") && !Object.hasOwn(merged, "textVerbosity")) {
     merged.text_verbosity = "low";
   }
-  if (!Object.hasOwn(merged, "openaiWsWarmup")) {
-    merged.openaiWsWarmup = false;
-  }
 }
 
 export function resolveAgentTransportOverride(params: {
@@ -392,9 +388,6 @@ function createStreamFnWithExtraParams(
         ? extraParams.transport
         : typeof extraParams.transport;
     log.warn(`ignoring invalid transport param: ${transportSummary}`);
-  }
-  if (typeof extraParams.openaiWsWarmup === "boolean") {
-    streamParams.openaiWsWarmup = extraParams.openaiWsWarmup;
   }
   const cachedContent =
     typeof extraParams.cachedContent === "string"
@@ -836,8 +829,8 @@ export function applyExtraParamsToAgent(
     },
   });
   agent.streamFn = pluginWrappedStreamFn ?? providerStreamBase;
-  // Apply caller/config extra params outside provider defaults so explicit values
-  // like `openaiWsWarmup=false` can override provider-added defaults.
+  // Apply caller/config extra params outside provider defaults so explicit runtime
+  // transport values can override provider-added defaults.
   applyPrePluginStreamWrappers(wrapperContext);
   const providerWrapperHandled =
     pluginWrappedStreamFn !== undefined && pluginWrappedStreamFn !== providerStreamBase;

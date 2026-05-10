@@ -1477,6 +1477,68 @@ describe("updateNpmInstalledPlugins", () => {
     );
   });
 
+  it("uses exact npm spec selectors as dry-run target versions when probes omit metadata", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.4",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "updated",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.4",
+      message: "Would update demo: 1.2.3 -> 1.2.4.",
+    });
+  });
+
+  it("keeps exact npm dry-runs unchanged when probe metadata is absent but spec matches", async () => {
+    const installPath = createInstalledPackageDir({
+      name: "@acme/demo",
+      version: "1.2.3",
+    });
+    installPluginFromNpmSpecMock.mockResolvedValue({
+      ok: true,
+      pluginId: "demo",
+      targetDir: installPath,
+      extensions: ["index.ts"],
+    });
+
+    const result = await updateNpmInstalledPlugins({
+      config: createNpmInstallConfig({
+        pluginId: "demo",
+        spec: "@acme/demo@1.2.3",
+        installPath,
+      }),
+      pluginIds: ["demo"],
+      dryRun: true,
+    });
+
+    expect(result.outcomes[0]).toMatchObject({
+      pluginId: "demo",
+      status: "unchanged",
+      currentVersion: "1.2.3",
+      nextVersion: "1.2.3",
+      message: "demo is up to date (1.2.3).",
+    });
+  });
+
   it("updates disabled trusted official ClawHub installs through the catalog spec", async () => {
     installPluginFromClawHubMock.mockResolvedValue(
       createSuccessfulClawHubUpdateResult({
@@ -2752,7 +2814,7 @@ describe("syncPluginsForUpdateChannel", () => {
 
       expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
       expect(result.changed).toBe(expectedChanged);
-      expect(result.summary.switchedToNpm).toEqual([]);
+      expect(result.summary.switchedToNpm).toStrictEqual([]);
       expect(result.config.plugins?.load?.paths).toEqual(expectedLoadPaths);
       expectBundledPathInstall({
         install: result.config.plugins?.installs?.feishu,
@@ -2886,8 +2948,8 @@ describe("syncPluginsForUpdateChannel", () => {
     );
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",
@@ -2999,9 +3061,9 @@ describe("syncPluginsForUpdateChannel", () => {
     expect(installPluginFromNpmSpecMock).not.toHaveBeenCalled();
     expect(result.changed).toBe(true);
     expect(result.summary.switchedToClawHub).toEqual(["legacy-chat"]);
-    expect(result.summary.switchedToNpm).toEqual([]);
-    expect(result.summary.errors).toEqual([]);
-    expect(result.config.plugins?.load?.paths).toEqual([]);
+    expect(result.summary.switchedToNpm).toStrictEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
+    expect(result.config.plugins?.load?.paths).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "clawhub",
       spec: "clawhub:legacy-chat@2026.5.1-beta.2",
@@ -3082,12 +3144,12 @@ describe("syncPluginsForUpdateChannel", () => {
       }),
     );
     expect(result.changed).toBe(true);
-    expect(result.summary.switchedToClawHub).toEqual([]);
+    expect(result.summary.switchedToClawHub).toStrictEqual([]);
     expect(result.summary.switchedToNpm).toEqual(["legacy-chat"]);
     expect(result.summary.warnings).toEqual([
       "ClawHub clawhub:legacy-chat@2026.5.1-beta.2 unavailable for legacy-chat; falling back to npm @openclaw/legacy-chat.",
     ]);
-    expect(result.summary.errors).toEqual([]);
+    expect(result.summary.errors).toStrictEqual([]);
     expect(result.config.plugins?.installs?.["legacy-chat"]).toMatchObject({
       source: "npm",
       spec: "@openclaw/legacy-chat",

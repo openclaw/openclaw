@@ -31,6 +31,16 @@ vi.mock("../../commands/status.js", () => ({
   getStatusSummary: vi.fn().mockResolvedValue({ ok: true }),
 }));
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 describe("waitForAgentJob", () => {
   async function runLifecycleScenario(params: {
     runIdPrefix: string;
@@ -1212,7 +1222,7 @@ describe("exec approval handlers", () => {
 
     expect(firstResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
     expect(repeatResolveRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(broadcasts.filter((entry) => entry.event === "exec.approval.resolved")).toHaveLength(
+    expect(countMatching(broadcasts, (entry) => entry.event === "exec.approval.resolved")).toBe(
       resolvedBroadcastCount,
     );
     expect(conflictingResolveRespond).toHaveBeenCalledWith(

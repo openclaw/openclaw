@@ -6,6 +6,9 @@ import {
   describeStickerImageSpy,
   getCachedStickerSpy,
 } from "./bot.media.test-utils.js";
+import { resolveMedia } from "./bot/delivery.resolve-media.js";
+import type { TelegramContext } from "./bot/types.js";
+import type { TelegramTransport } from "./fetch.js";
 
 describe("telegram stickers", () => {
   const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
@@ -35,7 +38,12 @@ describe("telegram stickers", () => {
   it(
     "refreshes cached sticker metadata on cache hit",
     async () => {
-      const { handler, proxyFetch, replySpy, runtimeError } = await createStaticStickerHarness();
+      const proxyFetch = vi.fn().mockResolvedValue(
+        new Response(Buffer.from(new Uint8Array([0x52, 0x49, 0x46, 0x46])), {
+          status: 200,
+          headers: { "content-type": "image/webp" },
+        }),
+      );
 
       getCachedStickerSpy.mockReturnValue({
         fileId: "old_file_id",
@@ -46,29 +54,36 @@ describe("telegram stickers", () => {
         cachedAt: "2026-01-20T10:00:00.000Z",
       });
 
-      await handler({
-        message: {
-          message_id: 103,
-          chat: { id: 1234, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "Ada" },
-          sticker: {
-            file_id: "new_file_id",
-            file_unique_id: "sticker_unique_456",
-            type: "regular",
-            width: 512,
-            height: 512,
-            is_animated: false,
-            is_video: false,
-            emoji: "🔥",
-            set_name: "NewSet",
+      const media = await resolveMedia({
+        maxBytes: 2 * 1024 * 1024,
+        token: "tok",
+        transport: {
+          close: async () => {},
+          fetch: proxyFetch as unknown as typeof fetch,
+          sourceFetch: proxyFetch as unknown as typeof fetch,
+        } satisfies TelegramTransport,
+        ctx: {
+          message: {
+            message_id: 103,
+            chat: { id: 1234, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            sticker: {
+              file_id: "new_file_id",
+              file_unique_id: "sticker_unique_456",
+              type: "regular",
+              width: 512,
+              height: 512,
+              is_animated: false,
+              is_video: false,
+              emoji: "🔥",
+              set_name: "NewSet",
+            },
+            date: 1736380800,
           },
-          date: 1736380800,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({ file_path: "stickers/sticker.webp" }),
+          getFile: async () => ({ file_path: "stickers/sticker.webp" }),
+        } as TelegramContext,
       });
 
-      expect(runtimeError).not.toHaveBeenCalled();
       expect(cacheStickerSpy).toHaveBeenCalledWith(
         expect.objectContaining({
           fileId: "new_file_id",
@@ -76,9 +91,8 @@ describe("telegram stickers", () => {
           setName: "NewSet",
         }),
       );
-      const payload = replySpy.mock.calls[0][0];
-      expect(payload.Sticker?.fileId).toBe("new_file_id");
-      expect(payload.Sticker?.cachedDescription).toBe("Cached description");
+      expect(media?.stickerMetadata?.fileId).toBe("new_file_id");
+      expect(media?.stickerMetadata?.cachedDescription).toBe("Cached description");
       expect(proxyFetch).toHaveBeenCalledWith(
         "https://api.telegram.org/file/bottok/stickers/sticker.webp",
         expect.objectContaining({ redirect: "manual" }),

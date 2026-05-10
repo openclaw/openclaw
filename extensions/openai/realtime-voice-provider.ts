@@ -19,6 +19,7 @@ import type {
   RealtimeVoiceProviderConfig,
   RealtimeVoiceProviderPlugin,
   RealtimeVoiceTool,
+  RealtimeVoiceToolResultOptions,
 } from "openclaw/plugin-sdk/realtime-voice";
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
@@ -58,6 +59,8 @@ type OpenAIRealtimeVoiceProviderConfig = {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
@@ -71,12 +74,20 @@ type OpenAIRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
+  interruptResponseOnInputAudio?: boolean;
+  minBargeInAudioEndMs?: number;
   azureEndpoint?: string;
   azureDeployment?: string;
   azureApiVersion?: string;
 };
 
 const OPENAI_REALTIME_DEFAULT_MODEL = "gpt-realtime-2";
+const OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL = "gpt-4o-mini-transcribe";
+const OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX =
+  "Conversation already has an active response in progress:";
+const OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR =
+  "Cancellation failed: no active response found";
+const OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS = 250;
 
 type RealtimeEvent = {
   type: string;
@@ -85,6 +96,14 @@ type RealtimeEvent = {
   item_id?: string;
   call_id?: string;
   name?: string;
+  arguments?: string;
+  item?: {
+    id?: string;
+    type?: string;
+    name?: string;
+    call_id?: string;
+    arguments?: string;
+  };
   response?: {
     id?: string;
     status?: string;
@@ -111,6 +130,7 @@ type RealtimeSessionUpdateGaPayload = {
     input: {
       format: RealtimeAudioFormatConfig;
       transcription: { model: string };
+      noise_reduction?: { type: "near_field" };
       turn_detection: {
         type: "server_vad";
         threshold: number;
@@ -165,10 +185,20 @@ function normalizeProviderConfig(
     vadThreshold: asFiniteNumber(raw?.vadThreshold),
     silenceDurationMs: asFiniteNumber(raw?.silenceDurationMs),
     prefixPaddingMs: asFiniteNumber(raw?.prefixPaddingMs),
+    interruptResponseOnInputAudio:
+      typeof raw?.interruptResponseOnInputAudio === "boolean"
+        ? raw.interruptResponseOnInputAudio
+        : undefined,
+    minBargeInAudioEndMs: asNonNegativeInteger(raw?.minBargeInAudioEndMs),
     azureEndpoint: trimToUndefined(raw?.azureEndpoint),
     azureDeployment: trimToUndefined(raw?.azureDeployment),
     azureApiVersion: trimToUndefined(raw?.azureApiVersion),
   };
+}
+
+function asNonNegativeInteger(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number === undefined || number < 0 ? undefined : Math.floor(number);
 }
 
 type OpenAIRealtimeApiKeyResolution =
@@ -251,6 +281,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private static readonly MAX_RECONNECT_ATTEMPTS = 5;
   private static readonly BASE_RECONNECT_DELAY_MS = 1000;
   private static readonly CONNECT_TIMEOUT_MS = 10_000;
+  readonly supportsToolResultContinuation = true;
 
   private ws: WebSocket | null = null;
   private connected = false;
@@ -261,9 +292,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private markQueue: string[] = [];
   private responseStartTimestamp: number | null = null;
   private responseActive = false;
+  private responseCreateInFlight = false;
+  private responseCancelInFlight = false;
+  private responseCreatePending = false;
+  private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
+  private deliveredToolCallKeys = new Set<string>();
   private readonly flowId = randomUUID();
   private sessionReadyFired = false;
   private readonly audioFormat: RealtimeVoiceAudioFormat;
@@ -304,7 +340,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         content: [{ type: "input_text", text }],
       },
     });
-    this.sendEvent({ type: "response.create" });
+    this.requestResponseCreate();
   }
 
   triggerGreeting(instructions?: string): void {
@@ -314,7 +350,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.sendUserMessage(instructions ?? this.config.instructions ?? "Greet the meeting.");
   }
 
-  submitToolResult(callId: string, result: unknown): void {
+  submitToolResult(
+    callId: string,
+    result: unknown,
+    options?: RealtimeVoiceToolResultOptions,
+  ): void {
     this.sendEvent({
       type: "conversation.item.create",
       item: {
@@ -323,7 +363,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
-    this.sendEvent({ type: "response.create" });
+    if (options?.willContinue === true) {
+      this.continuingToolCallIds.add(callId);
+      return;
+    }
+    this.continuingToolCallIds.delete(callId);
+    this.requestResponseCreate();
   }
 
   acknowledgeMark(): void {
@@ -383,6 +428,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       }, OpenAIRealtimeVoiceBridge.CONNECT_TIMEOUT_MS);
 
       this.ws.on("open", () => {
+        this.resetRealtimeSessionState();
         this.connected = true;
         this.sessionConfigured = false;
         this.reconnectAttempts = 0;
@@ -571,6 +617,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private resolveGaSessionUpdatePayload(): RealtimeSessionUpdateGaPayload {
     const cfg = this.config;
     const autoRespondToAudio = cfg.autoRespondToAudio ?? true;
+    const interruptResponseOnInputAudio = cfg.interruptResponseOnInputAudio ?? autoRespondToAudio;
     return {
       type: "realtime",
       model: cfg.model ?? OpenAIRealtimeVoiceBridge.DEFAULT_MODEL,
@@ -579,8 +626,11 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       audio: {
         input: {
           format: this.resolveRealtimeAudioFormatConfig(),
+          noise_reduction: {
+            type: "near_field",
+          },
           transcription: {
-            model: "whisper-1",
+            model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
           },
           turn_detection: {
             type: "server_vad",
@@ -588,7 +638,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
             prefix_padding_ms: cfg.prefixPaddingMs ?? 300,
             silence_duration_ms: cfg.silenceDurationMs ?? 500,
             create_response: autoRespondToAudio,
-            interrupt_response: autoRespondToAudio,
+            interrupt_response: interruptResponseOnInputAudio,
           },
         },
         output: {
@@ -614,7 +664,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       input_audio_format: this.resolveRealtimeAudioFormat(),
       output_audio_format: this.resolveRealtimeAudioFormat(),
       input_audio_transcription: {
-        model: "whisper-1",
+        model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL,
       },
       turn_detection: {
         type: "server_vad",
@@ -666,6 +716,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
 
       case "response.created":
         this.responseActive = true;
+        this.responseCreateInFlight = false;
         return;
 
       case "response.audio.delta":
@@ -718,8 +769,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         }
         return;
 
+      case "response.cancelled":
       case "response.done":
         this.responseActive = false;
+        this.responseCreateInFlight = false;
+        this.responseCancelInFlight = false;
+        this.flushPendingResponseCreate();
         return;
 
       case "response.function_call_arguments.delta": {
@@ -740,28 +795,43 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       case "response.function_call_arguments.done": {
         const key = event.item_id ?? "unknown";
         const buffered = this.toolCallBuffers.get(key);
-        if (this.config.onToolCall) {
-          const rawArgs =
-            buffered?.args ||
-            ((event as unknown as Record<string, unknown>).arguments as string) ||
-            "{}";
-          let args: unknown = {};
-          try {
-            args = JSON.parse(rawArgs);
-          } catch {}
-          this.config.onToolCall({
-            itemId: key,
-            callId: buffered?.callId || event.call_id || "",
-            name: buffered?.name || event.name || "",
-            args,
-          });
-        }
+        this.emitToolCallOnce({
+          itemId: event.item_id,
+          callId: buffered?.callId || event.call_id,
+          name: buffered?.name || event.name,
+          rawArgs: buffered?.args || event.arguments,
+        });
         this.toolCallBuffers.delete(key);
+        return;
+      }
+
+      case "conversation.item.done": {
+        if (event.item?.type !== "function_call") {
+          return;
+        }
+        this.emitToolCallOnce({
+          itemId: event.item.id ?? event.item_id,
+          callId: event.item.call_id ?? event.call_id ?? event.item.id ?? event.item_id,
+          name: event.item.name ?? event.name,
+          rawArgs: event.item.arguments ?? event.arguments,
+        });
         return;
       }
 
       case "error": {
         const detail = readRealtimeErrorDetail(event.error);
+        if (detail.startsWith(OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX)) {
+          this.responseActive = true;
+          this.responseCreateInFlight = false;
+          this.responseCreatePending = true;
+          return;
+        }
+        if (detail === OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR) {
+          this.responseActive = false;
+          this.responseCancelInFlight = false;
+          this.flushPendingResponseCreate();
+          return;
+        }
         this.config.onError?.(new Error(detail));
         return;
       }
@@ -774,29 +844,120 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
     const assistantItemId = this.lastAssistantItemId;
     const responseStartTimestamp = this.responseStartTimestamp;
+    const force = options?.force === true;
     const shouldInterruptProvider =
-      responseStartTimestamp !== null &&
       assistantItemId !== null &&
-      (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
-    if (options?.audioPlaybackActive === true && this.responseActive) {
-      this.sendEvent({ type: "response.cancel" });
+      ((responseStartTimestamp !== null &&
+        (this.markQueue.length > 0 || options?.audioPlaybackActive === true)) ||
+        force);
+    const audioEndMs = shouldInterruptProvider
+      ? Math.max(
+          0,
+          responseStartTimestamp === null
+            ? this.latestMediaTimestamp
+            : this.latestMediaTimestamp - responseStartTimestamp,
+        )
+      : null;
+    const minBargeInAudioEndMs =
+      this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
+    if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+      this.config.onEvent?.({
+        direction: "client",
+        type: "conversation.item.truncate.skipped",
+        detail: `reason=barge-in audioEndMs=${audioEndMs} minAudioEndMs=${minBargeInAudioEndMs}`,
+      });
+      return;
+    }
+    if (
+      options?.audioPlaybackActive === true &&
+      this.responseActive &&
+      !this.responseCancelInFlight
+    ) {
+      this.sendEvent({ type: "response.cancel" }, "reason=barge-in");
+      this.responseCancelInFlight = true;
     }
     if (shouldInterruptProvider) {
-      const elapsedMs = this.latestMediaTimestamp - responseStartTimestamp;
-      this.sendEvent({
-        type: "conversation.item.truncate",
-        item_id: assistantItemId,
-        content_index: 0,
-        audio_end_ms: Math.max(0, elapsedMs),
-      });
+      this.sendEvent(
+        {
+          type: "conversation.item.truncate",
+          item_id: assistantItemId,
+          content_index: 0,
+          audio_end_ms: audioEndMs,
+        },
+        `reason=barge-in audioEndMs=${audioEndMs}`,
+      );
       this.config.onClearAudio();
       this.markQueue = [];
       this.lastAssistantItemId = null;
       this.responseStartTimestamp = null;
-      this.responseActive = false;
       return;
     }
     this.config.onClearAudio();
+  }
+
+  private emitToolCallOnce(fields: {
+    itemId?: string;
+    callId?: string;
+    name?: string;
+    rawArgs?: string;
+  }): void {
+    if (!this.config.onToolCall) {
+      return;
+    }
+    const itemId = fields.itemId || fields.callId || "unknown";
+    const callId = fields.callId || itemId;
+    const name = fields.name || "";
+    const dedupeKey = fields.itemId || fields.callId || `${name}:${fields.rawArgs ?? ""}`;
+    if (this.deliveredToolCallKeys.has(dedupeKey)) {
+      return;
+    }
+    this.deliveredToolCallKeys.add(dedupeKey);
+    let args: unknown = {};
+    try {
+      args = JSON.parse(fields.rawArgs || "{}");
+    } catch {}
+    this.config.onToolCall({
+      itemId,
+      callId,
+      name,
+      args,
+    });
+  }
+
+  private requestResponseCreate(): void {
+    if (
+      this.responseActive ||
+      this.responseCreateInFlight ||
+      this.responseCancelInFlight ||
+      this.continuingToolCallIds.size > 0
+    ) {
+      this.responseCreatePending = true;
+      return;
+    }
+    this.responseCreatePending = false;
+    this.responseCreateInFlight = true;
+    this.sendEvent({ type: "response.create" });
+  }
+
+  private flushPendingResponseCreate(): void {
+    if (!this.responseCreatePending) {
+      return;
+    }
+    this.responseCreatePending = false;
+    this.requestResponseCreate();
+  }
+
+  private resetRealtimeSessionState(): void {
+    this.markQueue = [];
+    this.responseStartTimestamp = null;
+    this.responseActive = false;
+    this.responseCreateInFlight = false;
+    this.responseCancelInFlight = false;
+    this.responseCreatePending = false;
+    this.continuingToolCallIds.clear();
+    this.lastAssistantItemId = null;
+    this.toolCallBuffers.clear();
+    this.deliveredToolCallKeys.clear();
   }
 
   private sendMark(): void {
@@ -805,13 +966,13 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.config.onMark?.(markName);
   }
 
-  private sendEvent(event: unknown): void {
+  private sendEvent(event: unknown, detail?: string): void {
     if (this.ws?.readyState === WebSocket.OPEN) {
       const type =
         event && typeof event === "object" && typeof (event as { type?: unknown }).type === "string"
           ? (event as { type: string }).type
           : "unknown";
-      this.config.onEvent?.({ direction: "client", type });
+      this.config.onEvent?.({ direction: "client", type, ...(detail ? { detail } : {}) });
       const payload = JSON.stringify(event);
       captureWsEvent({
         url: this.resolveConnectionParams().url,
@@ -841,6 +1002,14 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
       return (
         [status ? `status=${status}` : undefined, details].filter(Boolean).join(" ") || undefined
       );
+    }
+    if (event.type === "response.cancelled") {
+      return "cancelled";
+    }
+    if (event.type === "conversation.item.done" && event.item?.type) {
+      return [event.item.type, event.item.name ? `name=${event.item.name}` : undefined]
+        .filter(Boolean)
+        .join(" ");
     }
     return undefined;
   }
@@ -889,12 +1058,13 @@ async function createOpenAIRealtimeBrowserSession(
     instructions: req.instructions,
     audio: {
       input: {
+        noise_reduction: { type: "near_field" },
         turn_detection: {
           type: "server_vad",
           create_response: true,
           interrupt_response: true,
         },
-        transcription: { model: "whisper-1" },
+        transcription: { model: OPENAI_REALTIME_INPUT_TRANSCRIPTION_MODEL },
       },
       output: { voice },
     },
@@ -995,6 +1165,9 @@ export function buildOpenAIRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
         vadThreshold: config.vadThreshold,
         silenceDurationMs: config.silenceDurationMs,
         prefixPaddingMs: config.prefixPaddingMs,
+        interruptResponseOnInputAudio:
+          req.interruptResponseOnInputAudio ?? config.interruptResponseOnInputAudio,
+        minBargeInAudioEndMs: config.minBargeInAudioEndMs,
         azureEndpoint: config.azureEndpoint,
         azureDeployment: config.azureDeployment,
         azureApiVersion: config.azureApiVersion,

@@ -51,12 +51,15 @@ const sendReq = (
 };
 
 function createDeferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
 }
 
@@ -1045,7 +1048,7 @@ describe("gateway server chat", () => {
       ]);
 
       const messages = await fetchHistoryMessages(ws, { maxChars: 3 });
-      expect(messages).toEqual([]);
+      expect(messages).toStrictEqual([]);
     });
   });
 

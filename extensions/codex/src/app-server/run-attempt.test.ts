@@ -726,6 +726,108 @@ describe("runCodexAppServerAttempt", () => {
     });
   });
 
+  it("keeps explicit dynamic tool timeouts above the default bridge deadline", () => {
+    const timeoutMs = __testing.CODEX_DYNAMIC_TOOL_TIMEOUT_MS + 1_000;
+
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat", timeoutMs },
+        },
+        config: undefined,
+      }),
+    ).toBe(timeoutMs);
+  });
+
+  it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-generate-default",
+          namespace: null,
+          tool: "image_generate",
+          arguments: { prompt: "cat" },
+        },
+        config: {
+          agents: {
+            defaults: {
+              imageGenerationModel: {
+                primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("uses the media image timeout for Codex image dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-default",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: {
+          tools: {
+            media: {
+              image: {
+                timeoutSeconds: 180,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("keeps Codex image dynamic tool calls above the default bridge deadline", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-image-default",
+          namespace: null,
+          tool: "image",
+          arguments: { prompt: "describe", images: ["/tmp/one.jpg"] },
+        },
+        config: undefined,
+      }),
+    ).toBe(__testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("caps dynamic tool timeouts at the bridge maximum", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-too-long",
+          namespace: null,
+          tool: "image_generate",
+          arguments: {
+            prompt: "cat",
+            timeoutMs: __testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + 1_000,
+          },
+        },
+        config: undefined,
+      }),
+    ).toBe(__testing.CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS);
+  });
+
   it("returns a failed dynamic tool response when an app-server tool call exceeds the deadline", async () => {
     vi.useFakeTimers();
     let capturedSignal: AbortSignal | undefined;
@@ -977,6 +1079,83 @@ describe("runCodexAppServerAttempt", () => {
       { interval: 1 },
     );
     expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+  });
+
+  it("does not count account rate-limit updates as turn completion activity", async () => {
+    let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
+    let handleRequest:
+      | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
+      | undefined;
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const request = vi.fn(async (method: string) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-1");
+      }
+      if (method === "turn/start") {
+        return turnStartResult("turn-1", "inProgress");
+      }
+      return {};
+    });
+    __testing.setCodexAppServerClientFactoryForTests(
+      async () =>
+        ({
+          request,
+          addNotificationHandler: (handler: typeof notify) => {
+            notify = handler;
+            return () => undefined;
+          },
+          addRequestHandler: (
+            handler: (request: {
+              id: string;
+              method: string;
+              params?: unknown;
+            }) => Promise<unknown>,
+          ) => {
+            handleRequest = handler;
+            return () => undefined;
+          },
+        }) as never,
+    );
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 60_000;
+
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 60_000,
+    });
+    await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), { interval: 1 });
+
+    await expect(
+      handleRequest?.({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      }),
+    ).resolves.toMatchObject({ success: false });
+    await notify(rateLimitsUpdated(Math.ceil(Date.now() / 1000) + 120));
+
+    await expect(run).resolves.toMatchObject({
+      aborted: true,
+      timedOut: true,
+      promptError: "codex app-server turn idle timed out waiting for turn/completed",
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server turn idle timed out waiting for completion",
+      expect.objectContaining({
+        timeoutMs: 5,
+        lastActivityReason: "request:item/tool/call:response",
+      }),
+    );
   });
 
   it("keeps waiting when Codex emits a raw assistant item after a dynamic tool response", async () => {
@@ -1554,6 +1733,61 @@ describe("runCodexAppServerAttempt", () => {
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
   });
 
+  it("keeps the native hook relay default floor for short Codex turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const relayFloorMs = 30 * 60_000;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("preserves an explicit native hook relay ttl", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const explicitTtlMs = 123_456;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir), {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+        ttlMs: explicitTtlMs,
+      },
+    });
+    await harness.waitForMethod("turn/start");
+
+    const startRequest = harness.requests.find((request) => request.method === "thread/start");
+    const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+    const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+    expect(registration).toBeDefined();
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(explicitTtlMs);
+    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(explicitTtlMs + 10_000);
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+    expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
   it("lets Codex app-server approval modes own native permission requests by default", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -1631,6 +1865,56 @@ describe("runCodexAppServerAttempt", () => {
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("keeps native hook relays alive across startup and long Codex turn timeouts", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    const abortController = new AbortController();
+    const attemptTimeoutMs = 45 * 60_000;
+    const startupTimeoutMs = attemptTimeoutMs;
+    const turnStartTimeoutMs = attemptTimeoutMs;
+    const cleanupGraceMs = 5 * 60_000;
+    const expectedRelayTtlMs =
+      attemptTimeoutMs + startupTimeoutMs + turnStartTimeoutMs + cleanupGraceMs;
+    params.timeoutMs = attemptTimeoutMs;
+    params.abortSignal = abortController.signal;
+
+    const startedAtMs = Date.now();
+    const run = runCodexAppServerAttempt(params, {
+      nativeHookRelay: {
+        enabled: true,
+        events: ["pre_tool_use"],
+      },
+    });
+    let completed = false;
+    let relayId: string | undefined;
+    try {
+      await harness.waitForMethod("turn/start");
+
+      const startRequest = harness.requests.find((request) => request.method === "thread/start");
+      relayId = extractRelayIdFromThreadRequest(startRequest?.params);
+      const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
+      expect(registration).toBeDefined();
+      expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(
+        expectedRelayTtlMs,
+      );
+
+      await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+      completed = true;
+      await run;
+      expect(
+        nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId),
+      ).toBeUndefined();
+    } finally {
+      if (!completed) {
+        await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" }).catch(() => {});
+        abortController.abort(new Error("test cleanup"));
+        await run.catch(() => {});
+      }
+    }
   });
 
   it("reuses the Codex native hook relay id across runs for the same session", async () => {
@@ -1749,16 +2033,20 @@ describe("runCodexAppServerAttempt", () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
-    let harness!: ReturnType<typeof createStartedThreadHarness>;
-    harness = createStartedThreadHarness(async (method) => {
+    const harnessRef: { current?: ReturnType<typeof createStartedThreadHarness> } = {};
+    const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
-        await harness.notify(rateLimitsUpdated(resetsAt));
+        if (!harnessRef.current) {
+          throw new Error("Expected Codex app-server harness to be initialized");
+        }
+        await harnessRef.current.notify(rateLimitsUpdated(resetsAt));
         throw Object.assign(new Error("You've reached your usage limit."), {
           data: { codexErrorInfo: "usageLimitExceeded" },
         });
       }
       return undefined;
     });
+    harnessRef.current = harness;
 
     const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
       (error: unknown) => error,
@@ -1878,7 +2166,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       ]),
     );
-    expect(agentEvents.filter((event) => event.stream === "assistant")).toEqual([]);
+    expect(agentEvents.some((event) => event.stream === "assistant")).toBe(false);
     expect(agentEnd).toHaveBeenCalledWith(
       expect.objectContaining({
         success: false,
@@ -2237,7 +2525,7 @@ describe("runCodexAppServerAttempt", () => {
 
       await expect(run).resolves.toMatchObject({ aborted: true });
       await new Promise((resolve) => setImmediate(resolve));
-      expect(unhandledRejections).toEqual([]);
+      expect(unhandledRejections).toStrictEqual([]);
     } finally {
       process.off("unhandledRejection", onUnhandledRejection);
     }

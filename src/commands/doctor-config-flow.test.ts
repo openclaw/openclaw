@@ -1352,7 +1352,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -2024,8 +2030,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2649,7 +2655,7 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }

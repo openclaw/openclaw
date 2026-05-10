@@ -190,6 +190,16 @@ function requireCommand<T extends { name: string }>(commands: T[], name: string)
   return command;
 }
 
+function collectBuiltinNames(commands: readonly { name: string; source: string }[]): string[] {
+  const names: string[] = [];
+  for (const command of commands) {
+    if (command.source !== "plugin") {
+      names.push(command.name);
+    }
+  }
+  return names;
+}
+
 describe("commands.list handler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -286,7 +296,7 @@ describe("commands.list handler", () => {
   it("filters built-in commands by scope=native (excludes text-only)", () => {
     const { payload } = callHandler({ scope: "native" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    const builtinNames = commands.filter((c) => c.source !== "plugin").map((c) => c.name);
+    const builtinNames = collectBuiltinNames(commands);
     expect(builtinNames).not.toContain("commands");
     expect(builtinNames).toContain("model");
     expect(builtinNames).toContain("debug_prompt");
@@ -295,7 +305,7 @@ describe("commands.list handler", () => {
   it("filters built-in commands by scope=text (excludes native-only)", () => {
     const { payload } = callHandler({ scope: "text" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    const builtinNames = commands.filter((c) => c.source !== "plugin").map((c) => c.name);
+    const builtinNames = collectBuiltinNames(commands);
     expect(builtinNames).toContain("commands");
     expect(builtinNames).not.toContain("debug_prompt");
   });
@@ -325,7 +335,7 @@ describe("commands.list handler", () => {
   it("omits plugin commands when provider lacks nativeCommandsAutoEnabled", () => {
     const { payload } = callHandler({ provider: "whatsapp" });
     const { commands } = payload as { commands: Array<{ name: string; source: string }> };
-    expect(commands.filter((c) => c.source === "plugin")).toEqual([]);
+    expect(commands.some((c) => c.source === "plugin")).toBe(false);
   });
 
   it("uses text-surface names when scope=text even with provider-native aliases", () => {
@@ -474,6 +484,6 @@ describe("buildCommandsListResult", () => {
     const invalidScopes = result.commands
       .map((command) => command.scope)
       .filter((scope) => typeof scope !== "string");
-    expect(invalidScopes).toEqual([]);
+    expect(invalidScopes).toStrictEqual([]);
   });
 });

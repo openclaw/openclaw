@@ -1,5 +1,8 @@
 import { normalizeProviderId } from "../agents/model-selection.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -109,33 +112,11 @@ function normalizeAgentModelConfigForWrite(value: unknown): unknown {
   return next;
 }
 
-function mergeModelEntryConfig(existing: unknown, incoming: unknown): unknown {
-  if (!isPlainRecord(existing) || !isPlainRecord(incoming)) {
-    return incoming;
-  }
-
-  const existingParams = isPlainRecord(existing.params) ? existing.params : undefined;
-  const incomingParams = isPlainRecord(incoming.params) ? incoming.params : undefined;
-  return {
-    ...existing,
-    ...incoming,
-    ...(existingParams || incomingParams
-      ? { params: { ...existingParams, ...incomingParams } }
-      : undefined),
-  };
-}
-
 function normalizeAgentModelMapForWrite(value: unknown): unknown {
   if (!isPlainRecord(value)) {
     return value;
   }
-
-  const next: Record<string, unknown> = {};
-  for (const [key, entry] of Object.entries(value)) {
-    const normalizedKey = normalizeAgentModelRefForConfig(key);
-    next[normalizedKey] = mergeModelEntryConfig(next[normalizedKey], entry);
-  }
-  return next;
+  return normalizeAgentModelMapForConfig(value);
 }
 
 function normalizeConfigModelRefsForWrite(cfg: OpenClawConfig): OpenClawConfig {
@@ -200,7 +181,9 @@ export function applyDefaultModel(
   opts?: { preserveExistingPrimary?: boolean },
 ): OpenClawConfig {
   const normalizedModel = normalizeAgentModelRefForConfig(model);
-  const models = { ...cfg.agents?.defaults?.models };
+  const models = {
+    ...normalizeAgentModelMapForConfig(cfg.agents?.defaults?.models ?? {}),
+  };
   models[normalizedModel] = models[normalizedModel] ?? {};
 
   const existingModel = cfg.agents?.defaults?.model;

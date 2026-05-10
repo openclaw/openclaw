@@ -9,10 +9,6 @@ import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TtsAutoMode } from "../config/types.tts.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
-import {
-  PLUGIN_PROMPT_MUTATION_RESULT_FIELDS,
-  stripPromptMutationFieldsFromLegacyHookResult,
-} from "./hook-before-agent-start.types.js";
 import type {
   PluginHookBeforeAgentStartEvent,
   PluginHookBeforeAgentStartResult,
@@ -412,10 +408,7 @@ export type PluginHookToolContext = {
   trace?: DiagnosticTraceContext;
   toolName: string;
   toolCallId?: string;
-  // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Plugin callers type JSON reads by namespace.
-  getSessionExtension?: <T extends PluginJsonValue = PluginJsonValue>(
-    namespace: string,
-  ) => T | undefined;
+  getSessionExtension?: (namespace: string) => PluginJsonValue | undefined;
   channelId?: string;
 };
 
@@ -424,6 +417,18 @@ export type PluginHookBeforeToolCallEvent = {
   params: Record<string, unknown>;
   runId?: string;
   toolCallId?: string;
+  /**
+   * Optional best-effort destination path hints the host derived from `params`
+   * for well-known tool envelopes (e.g. `apply_patch`).
+   *
+   * This is a convenience hint, not an authoritative parse result: the host's
+   * extractor may be intentionally lenient and can return paths for malformed
+   * or partial envelopes. Plugins may use `derivedPaths` as a fast path, but
+   * should parse and validate `params` themselves when correctness or policy
+   * decisions depend on the exact set of affected paths. Absent for tools the
+   * host does not know how to derive paths for.
+   */
+  derivedPaths?: readonly string[];
 };
 
 export const PluginApprovalResolutions = {

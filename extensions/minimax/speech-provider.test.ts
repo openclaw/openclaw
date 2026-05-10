@@ -349,7 +349,10 @@ describe("buildMinimaxSpeechProvider", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.minimaxi.com/v1/t2a_v2");
-      const body = JSON.parse(init!.body as string);
+      if (!init?.body) {
+        throw new Error("Expected MiniMax TTS fetch init body");
+      }
+      const body = JSON.parse(init.body as string);
       expect(body.model).toBe("speech-2.8-hd");
       expect(body.text).toBe("Hello world");
       expect(body.voice_setting.voice_id).toBe("English_expressive_narrator");
@@ -505,7 +508,11 @@ describe("buildMinimaxSpeechProvider", () => {
 
   describe("listVoices", () => {
     it("returns known voices", async () => {
-      const voices = await provider.listVoices!({} as never);
+      const listVoices = provider.listVoices;
+      if (!listVoices) {
+        throw new Error("Expected MiniMax provider listVoices");
+      }
+      const voices = await listVoices({} as never);
       expect(voices.length).toBeGreaterThan(0);
       expect(voices[0].id).toBe("English_expressive_narrator");
     });

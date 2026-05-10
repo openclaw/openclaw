@@ -19,7 +19,7 @@ import {
 
 type DetectZaiEndpoint = typeof import("../plugins/provider-zai-endpoint.js").detectZaiEndpoint;
 
-const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-3.1-pro-preview";
+const GOOGLE_GEMINI_DEFAULT_MODEL = "google/gemini-2.5-flash";
 const ZAI_CODING_GLOBAL_BASE_URL = "https://api.z.ai/api/coding/paas/v4";
 const ZAI_CODING_CN_BASE_URL = "https://open.bigmodel.cn/api/coding/paas/v4";
 
@@ -716,7 +716,7 @@ describe("applyAuthChoice", () => {
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead.',
+        'Auth choice "openai-codex-import" is no longer supported. Use "openai-codex" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();
@@ -739,7 +739,7 @@ describe("applyAuthChoice", () => {
           setDefaultModel: true,
         }),
       ).rejects.toThrow(
-        'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead.',
+        'Auth choice "legacy\\u001b[31mchoice" is no longer supported. Use "modern\\nchoice" instead, or run openclaw onboard to choose interactively.',
       );
     } finally {
       spy.mockRestore();
@@ -1034,7 +1034,7 @@ describe("applyAuthChoice", () => {
     expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
       existingPrimary,
     );
-    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toEqual({});
+    expect(result.config.agents?.defaults?.models?.["openrouter/auto"]).toStrictEqual({});
     expect(runProviderModelSelectedHook).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
       "Kept existing default model anthropic/claude-opus-4-6; openrouter/auto is available.",

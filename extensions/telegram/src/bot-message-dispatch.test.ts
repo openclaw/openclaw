@@ -52,8 +52,16 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
+const appendSessionTranscriptMessage = vi.hoisted(() => vi.fn(async () => ({ messageId: "m1" })));
+const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
+const resolveAndPersistSessionFile = vi.hoisted(() =>
+  vi.fn(async () => ({
+    sessionFile: "/tmp/session.jsonl",
+    sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
+  })),
+);
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
@@ -86,6 +94,15 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
   };
 });
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+  return {
+    ...actual,
+    appendSessionTranscriptMessage,
+    emitSessionTranscriptUpdate,
+  };
+});
+
 vi.mock("./bot/delivery.js", () => ({
   deliverReplies,
   emitInternalMessageSentHook,
@@ -111,6 +128,7 @@ vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
   getAgentScopedMediaLocalRoots,
   loadSessionStore,
+  resolveAndPersistSessionFile,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
   resolveMarkdownTableMode,
@@ -196,8 +214,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
     listSkillCommandsForAgents.mockReset();
     createChannelMessageReplyPipeline.mockReset();
     wasSentByBot.mockReset();
+    appendSessionTranscriptMessage.mockReset();
+    emitSessionTranscriptUpdate.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
+    resolveAndPersistSessionFile.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
@@ -248,6 +269,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
+    resolveAndPersistSessionFile.mockResolvedValue({
+      sessionFile: "/tmp/session.jsonl",
+      sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
+    });
     loadSessionStore.mockReturnValue({});
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
@@ -906,6 +931,40 @@ describe("dispatchTelegramMessage draft streaming", () => {
     );
   });
 
+  it("mirrors preview-finalized finals into the session transcript", async () => {
+    setupDraftStreams({ answerMessageId: 2001 });
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context });
+
+    expect(appendSessionTranscriptMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transcriptPath: "/tmp/session.jsonl",
+        message: expect.objectContaining({
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "Final answer" }],
+        }),
+      }),
+    );
+    expect(emitSessionTranscriptUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionFile: "/tmp/session.jsonl",
+        sessionKey: "agent:default:telegram:direct:123",
+        messageId: "m1",
+      }),
+    );
+  });
+
   it("streams block and final text through the same answer message", async () => {
     const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
@@ -1304,11 +1363,11 @@ describe("dispatchTelegramMessage draft streaming", () => {
   });
 
   it("does not supersede the same session for unauthorized abort-looking commands", async () => {
-    let releaseFirstFinal!: () => void;
+    let releaseFirstFinal: (() => void) | undefined;
     const firstFinalGate = new Promise<void>((resolve) => {
       releaseFirstFinal = resolve;
     });
-    let resolveStreamVisible!: () => void;
+    let resolveStreamVisible: (() => void) | undefined;
     const streamVisible = new Promise<void>((resolve) => {
       resolveStreamVisible = resolve;
     });
@@ -1317,6 +1376,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: 1001,
       onUpdate: (text) => {
         if (text === "Old reply partial") {
+          if (!resolveStreamVisible) {
+            throw new Error("Expected Telegram stream-visible resolver to be initialized");
+          }
           resolveStreamVisible();
         }
       },
@@ -1367,6 +1429,9 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await unauthorizedReplyDelivered;
 
+    if (!releaseFirstFinal) {
+      throw new Error("Expected first Telegram final release callback to be initialized");
+    }
     releaseFirstFinal();
     await Promise.all([firstPromise, unauthorizedPromise]);
 

@@ -738,7 +738,9 @@ describe("config io write", () => {
       ]);
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(cleanRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(entries.filter((entry) => entry.includes(".clobbered."))).toHaveLength(1);
+      expect(
+        entries.reduce((count, entry) => count + (entry.includes(".clobbered.") ? 1 : 0), 0),
+      ).toBe(1);
       expect(warn).toHaveBeenCalledWith(
         expect.stringContaining("Config auto-stripped non-JSON prefix:"),
       );
@@ -827,7 +829,9 @@ describe("config io write", () => {
 
       await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(originalRaw);
       const entries = await fs.readdir(path.dirname(configPath));
-      expect(entries.filter((entry) => entry.includes(".rejected."))).toHaveLength(1);
+      expect(
+        entries.reduce((count, entry) => count + (entry.includes(".rejected.") ? 1 : 0), 0),
+      ).toBe(1);
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("Config write rejected:"));
     });
   });
@@ -1331,7 +1335,7 @@ describe("config io write", () => {
         expect(postWriteSnapshot.sourceConfig.meta?.lastTouchedAt).toMatch(
           /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u,
         );
-        expect(postWriteSnapshot.sourceConfig.plugins?.entries?.demo?.config).toEqual({});
+        expect(postWriteSnapshot.sourceConfig.plugins?.entries?.demo?.config).toStrictEqual({});
       } finally {
         unsubscribe();
         mockLoadPluginManifestRegistry.mockReturnValue({

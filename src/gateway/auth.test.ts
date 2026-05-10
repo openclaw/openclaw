@@ -384,7 +384,7 @@ describe("gateway auth", () => {
       lockoutMs: 60_000,
       exemptLoopback: false,
     });
-    let releaseWhois!: () => void;
+    let releaseWhois: (() => void) | undefined;
     const whoisGate = new Promise<void>((resolve) => {
       releaseWhois = resolve;
     });
@@ -408,6 +408,9 @@ describe("gateway auth", () => {
     const first = authorizeGatewayConnect(baseParams);
     const second = authorizeGatewayConnect(baseParams);
 
+    if (!releaseWhois) {
+      throw new Error("Expected Tailscale whois release callback to be initialized");
+    }
     releaseWhois();
 
     const [firstResult, secondResult] = await Promise.all([first, second]);

@@ -151,7 +151,7 @@ describe("msteams messenger", () => {
         textChunkLimit: 4000,
         tableMode: "code",
       });
-      expect(messages).toEqual([]);
+      expect(messages).toStrictEqual([]);
     });
 
     it("does not filter non-exact silent reply prefixes", () => {

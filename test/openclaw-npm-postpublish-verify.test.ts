@@ -139,7 +139,7 @@ describe("collectInstalledContextEngineRuntimeErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledContextEngineRuntimeErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -220,7 +220,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -237,7 +237,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
       mkdirSync(join(packageRoot, "dist"), { recursive: true });
       writeFileSync(
         join(packageRoot, "dist", "optional-runtime.js"),
-        'await import("@lancedb/lancedb");\n',
+        ['await import("@a2ui/markdown-it");', 'await import("@lancedb/lancedb");', ""].join("\n"),
         "utf8",
       );
       writeFileSync(
@@ -245,8 +245,13 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         'const OpusScript = require("opusscript");\nexport { OpusScript };\n',
         "utf8",
       );
+      writeFileSync(
+        join(packageRoot, "dist", "externalized-plugin-runtime.js"),
+        'import * as lark from "@larksuiteoapi/node-sdk";\nexport { lark };\n',
+        "utf8",
+      );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -301,7 +306,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
@@ -326,7 +331,7 @@ describe("collectInstalledRootDependencyManifestErrors", () => {
         "utf8",
       );
 
-      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toEqual([]);
+      expect(collectInstalledRootDependencyManifestErrors(packageRoot)).toStrictEqual([]);
     } finally {
       rmSync(packageRoot, { recursive: true, force: true });
     }
