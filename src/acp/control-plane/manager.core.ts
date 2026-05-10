@@ -1996,11 +1996,15 @@ export class AcpSessionManager {
     this.throwIfAborted(signal);
 
     let actorStarted = false;
-    const queued = this.actorQueue.run(actorKey, async () => {
-      actorStarted = true;
-      this.throwIfAborted(signal);
-      return await op();
-    });
+    const queued = this.actorQueue.run(
+      actorKey,
+      async () => {
+        actorStarted = true;
+        this.throwIfAborted(signal);
+        return await op();
+      },
+      { signal },
+    );
     if (!signal) {
       return await queued;
     }
@@ -2030,6 +2034,9 @@ export class AcpSessionManager {
         if (actorStarted) {
           return;
         }
+        logVerbose(
+          `acp-manager: actor queue abort-before-start actorKey=${actorKey} pending=${this.actorQueue.getPendingCountForSession(actorKey)}`,
+        );
         try {
           this.throwIfAborted(signal);
         } catch (error) {
