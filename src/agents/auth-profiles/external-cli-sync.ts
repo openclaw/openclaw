@@ -30,6 +30,9 @@ export {
 export type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
+  // true when the external credential is fresher than the stored local profile
+  // and the provider is not bootstrapOnly — caller should persist to disk
+  shouldPersist?: boolean;
 };
 
 export type ExternalCliAuthProfileOptions = {
@@ -303,6 +306,7 @@ export function resolveExternalCliAuthProfiles(
     profiles.push({
       profileId: providerConfig.profileId,
       credential: creds,
+      shouldPersist: !providerConfig.bootstrapOnly && existingOAuth !== undefined,
     });
   }
   return profiles;

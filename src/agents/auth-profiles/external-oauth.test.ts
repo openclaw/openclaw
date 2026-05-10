@@ -13,11 +13,21 @@ const resolveExternalAuthProfilesWithPluginsMock = vi.fn<
 const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
   vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
 );
+const readClaudeCliCredentialsCachedMock = vi.hoisted(() =>
+  vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
+);
+const upsertAuthProfileWithLockMock = vi.hoisted(() =>
+  vi.fn<(_params: unknown) => Promise<unknown>>(() => Promise.resolve(null)),
+);
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
+  readClaudeCliCredentialsCached: readClaudeCliCredentialsCachedMock,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
+}));
+
+vi.mock("./upsert-with-lock.js", () => ({
+  upsertAuthProfileWithLock: upsertAuthProfileWithLockMock,
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
@@ -57,6 +67,10 @@ describe("auth external oauth helpers", () => {
     resolveExternalAuthProfilesWithPluginsMock.mockReturnValue([]);
     readCodexCliCredentialsCachedMock.mockReset();
     readCodexCliCredentialsCachedMock.mockReturnValue(null);
+    readClaudeCliCredentialsCachedMock.mockReset();
+    readClaudeCliCredentialsCachedMock.mockReturnValue(null);
+    upsertAuthProfileWithLockMock.mockReset();
+    upsertAuthProfileWithLockMock.mockResolvedValue(null);
     __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
   });
 
@@ -259,5 +273,67 @@ describe("auth external oauth helpers", () => {
     expect(profile.access).toBe("expired-local-access-token");
     expect(profile.refresh).toBe("expired-local-refresh-token");
     expect(profile.accountId).toBe("acct-local");
+  });
+
+  it("persists fresh external claude-cli credential back to the local store when the stored profile is expired", async () => {
+    const freshExpires = createUsableOAuthExpiry();
+    const freshCliCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "claude-cli",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: freshExpires,
+    };
+    readClaudeCliCredentialsCachedMock.mockReturnValue(freshCliCredential);
+
+    overlayExternalOAuthProfiles(
+      createStore({
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "stale-access",
+          refresh: "stale-refresh",
+          expires: Date.now() - 60_000,
+        },
+      }),
+    );
+
+    // Allow the fire-and-forget promise to settle.
+    await Promise.resolve();
+
+    expect(upsertAuthProfileWithLockMock).toHaveBeenCalledOnce();
+    expect(upsertAuthProfileWithLockMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        profileId: "anthropic:claude-cli",
+        credential: expect.objectContaining({ access: "fresh-cli-access", expires: freshExpires }),
+      }),
+    );
+  });
+
+  it("does not persist external claude-cli credential when the stored profile is still usable", async () => {
+    const freshCliCredential: OAuthCredential = {
+      type: "oauth",
+      provider: "claude-cli",
+      access: "fresh-cli-access",
+      refresh: "fresh-cli-refresh",
+      expires: createUsableOAuthExpiry(),
+    };
+    readClaudeCliCredentialsCachedMock.mockReturnValue(freshCliCredential);
+
+    overlayExternalOAuthProfiles(
+      createStore({
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "local-access",
+          refresh: "local-refresh",
+          expires: createUsableOAuthExpiry(),
+        },
+      }),
+    );
+
+    await Promise.resolve();
+
+    expect(upsertAuthProfileWithLockMock).not.toHaveBeenCalled();
   });
 });

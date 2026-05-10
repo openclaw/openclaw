@@ -8,6 +8,7 @@ import {
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
@@ -75,6 +76,16 @@ function resolveExternalAuthProfileMap(params: {
       credential: profile.credential,
       persistence: "runtime-only",
     });
+    if (profile.shouldPersist) {
+      // Fire-and-forget: write the fresh external credential back to the local
+      // auth-profiles store so subsequent calls find a usable local profile and
+      // the bootstrap-fallback (and its DEBUG log) stops firing every poll.
+      upsertAuthProfileWithLock({
+        profileId: profile.profileId,
+        credential: profile.credential,
+        agentDir: params.agentDir,
+      }).catch(() => undefined);
+    }
   }
   for (const rawProfile of profiles) {
     const profile = normalizeExternalAuthProfile(rawProfile);
