@@ -56,7 +56,11 @@ import type { SpawnSubagentMode } from "./subagent-spawn.types.js";
 
 const DEFAULT_SUBAGENT_ANNOUNCE_TIMEOUT_MS = 120_000;
 const MAX_TIMER_SAFE_TIMEOUT_MS = 2_147_000_000;
-const AGENT_MEDIATED_COMPLETION_TOOLS = new Set(["music_generate", "video_generate"]);
+const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
+  "music_generate",
+  "video_generate",
+  "subagent_announce",
+]);
 
 type SubagentAnnounceDeliveryDeps = {
   callGateway: typeof callGateway;
