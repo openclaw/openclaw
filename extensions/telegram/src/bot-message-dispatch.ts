@@ -613,6 +613,7 @@ export const dispatchTelegramMessage = async ({
     Boolean(answerLane.stream) && resolveChannelStreamingPreviewToolProgress(telegramCfg);
   let streamToolProgressSuppressed = false;
   let streamToolProgressLines: string[] = [];
+  let lastAnswerPartialText = "";
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
     if (!answerLane.stream || streamMode !== "progress") {
       return;
@@ -739,6 +740,9 @@ export const dispatchTelegramMessage = async ({
   };
   const resetDraftLaneState = (lane: DraftLaneState) => {
     lane.lastPartialText = "";
+    if (lane === answerLane) {
+      lastAnswerPartialText = "";
+    }
     lane.hasStreamedMessage = false;
     lane.finalized = false;
   };
@@ -762,7 +766,8 @@ export const dispatchTelegramMessage = async ({
     if (!laneStream || !text) {
       return;
     }
-    const nextText = resolveDraftPartialText(lane.lastPartialText, text);
+    const previousText = lane === answerLane ? lastAnswerPartialText : lane.lastPartialText;
+    const nextText = resolveDraftPartialText(previousText, text);
     if (!nextText) {
       return;
     }
@@ -775,6 +780,9 @@ export const dispatchTelegramMessage = async ({
     }
     lane.hasStreamedMessage = true;
     lane.finalized = false;
+    if (lane === answerLane) {
+      lastAnswerPartialText = nextText;
+    }
     lane.lastPartialText = nextText;
     laneStream.update(nextText);
   };
