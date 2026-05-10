@@ -151,7 +151,6 @@ function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value:
   }
   return call[0] as T;
 }
-
 async function makeSkillArchive(params: {
   name?: string;
   description?: string;

@@ -48,16 +48,6 @@ async function expectUploadError(
   throw new Error("expected upload request error");
 }
 
-async function expectMissingPath(targetPath: string): Promise<void> {
-  try {
-    await fs.stat(targetPath);
-  } catch (err) {
-    expect((err as { code?: unknown }).code).toBe("ENOENT");
-    return;
-  }
-  throw new Error(`expected missing path: ${targetPath}`);
-}
-
 describe("skill upload store", () => {
   beforeEach(() => {
     tempDirs = [];
