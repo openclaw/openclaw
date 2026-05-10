@@ -2590,6 +2590,43 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
   });
 
+  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "imageGeneration",
+              id: "ig_123",
+              status: "completed",
+              revisedPrompt: "A tiny blue square",
+              result: "Zm9v",
+              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: [],
+      toolMediaUrls: ["/tmp/codex-home/generated_images/session-1/ig_123.png"],
+    });
+  });
+
   it("does not complete on unscoped turn/completed notifications", async () => {
     const harness = createStartedThreadHarness();
     const run = runCodexAppServerAttempt(

@@ -115,6 +115,7 @@ export class CodexAppServerEventProjector {
   private readonly toolTranscriptMessages: AgentMessage[] = [];
   private readonly toolTranscriptCallIds = new Set<string>();
   private readonly toolTranscriptResultIds = new Set<string>();
+  private readonly nativeGeneratedMediaUrls = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -294,7 +295,7 @@ export class CodexAppServerEventProjector {
       messagingToolSentMediaUrls: toolTelemetry.messagingToolSentMediaUrls,
       messagingToolSentTargets: toolTelemetry.messagingToolSentTargets,
       heartbeatToolResponse: toolTelemetry.heartbeatToolResponse,
-      toolMediaUrls: toolTelemetry.toolMediaUrls,
+      toolMediaUrls: this.buildToolMediaUrls(toolTelemetry),
       toolAudioAsVoice: toolTelemetry.toolAudioAsVoice,
       successfulCronAdds: toolTelemetry.successfulCronAdds,
       cloudCodeAssistFormatError: false,
@@ -462,6 +463,7 @@ export class CodexAppServerEventProjector {
       this.rememberAssistantItem(item.id);
       this.assistantTextByItem.set(item.id, item.text);
     }
+    this.recordNativeGeneratedMedia(item);
     if (item?.type === "plan" && typeof item.text === "string" && item.text) {
       this.planTextByItem.set(item.id, item.text);
       this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -597,6 +599,7 @@ export class CodexAppServerEventProjector {
         this.rememberAssistantItem(item.id);
         this.assistantTextByItem.set(item.id, item.text);
       }
+      this.recordNativeGeneratedMedia(item);
       if (item.type === "plan" && typeof item.text === "string" && item.text) {
         this.planTextByItem.set(item.id, item.text);
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
@@ -670,6 +673,28 @@ export class CodexAppServerEventProjector {
     const itemId = readString(item, "id") ?? `raw-assistant-${this.assistantItemOrder.length + 1}`;
     this.rememberAssistantItem(itemId);
     this.assistantTextByItem.set(itemId, text);
+  }
+
+  private recordNativeGeneratedMedia(item: CodexThreadItem | undefined): void {
+    if (item?.type !== "imageGeneration") {
+      return;
+    }
+    const savedPath = readItemString(item, "savedPath")?.trim();
+    if (savedPath) {
+      this.nativeGeneratedMediaUrls.add(savedPath);
+    }
+  }
+
+  private buildToolMediaUrls(toolTelemetry: CodexAppServerToolTelemetry): string[] | undefined {
+    const mediaUrls = new Set(
+      toolTelemetry.toolMediaUrls?.map((url) => url.trim()).filter(Boolean) ?? [],
+    );
+    if ((toolTelemetry.messagingToolSentMediaUrls?.length ?? 0) === 0) {
+      for (const mediaUrl of this.nativeGeneratedMediaUrls) {
+        mediaUrls.add(mediaUrl);
+      }
+    }
+    return mediaUrls.size > 0 ? [...mediaUrls] : toolTelemetry.toolMediaUrls;
   }
 
   private async maybeEndReasoning(): Promise<void> {

@@ -343,6 +343,55 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
   });
 
+  it("attaches native Codex image-generation saved paths as reply media", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.toolMediaUrls).toEqual([savedPath]);
+  });
+
+  it("does not append native Codex image-generation media after explicit media delivery", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: null,
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      messagingToolSentMediaUrls: [savedPath],
+      toolMediaUrls: [],
+    });
+
+    expect(result.toolMediaUrls).toStrictEqual([]);
+  });
+
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
     const projector = await createProjector();
 
