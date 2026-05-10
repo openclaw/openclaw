@@ -4,6 +4,7 @@ import OpenClawProtocol
 import Testing
 @testable import OpenClaw
 
+@Suite(.serialized)
 struct GatewayChannelConnectTests {
     private final class ConnectParamsRecorder: @unchecked Sendable {
         private let lock = NSLock()
@@ -109,6 +110,23 @@ struct GatewayChannelConnectTests {
             })
     }
 
+    private func withTemporaryStateDir<T>(_ operation: () async throws -> T) async throws -> T {
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        let previousStateDir = ProcessInfo.processInfo.environment["OPENCLAW_STATE_DIR"]
+        setenv("OPENCLAW_STATE_DIR", tempDir.path, 1)
+        defer {
+            if let previousStateDir {
+                setenv("OPENCLAW_STATE_DIR", previousStateDir, 1)
+            } else {
+                unsetenv("OPENCLAW_STATE_DIR")
+            }
+            try? FileManager.default.removeItem(at: tempDir)
+        }
+        return try await operation()
+    }
+
     @Test func `concurrent connect is single flight on success`() async throws {
         let session = self.makeSession(response: .helloOk(delayMs: 200))
         let channel = try GatewayChannelActor(
@@ -169,7 +187,35 @@ struct GatewayChannelConnectTests {
         #expect(session.snapshotMakeCount() == 1)
     }
 
-    @Test func `default operator connect scopes are bootstrap-compatible`() async throws {
+    @Test func `default operator connect scopes preserve pairing and admin`() async throws {
+        try await self.withTemporaryStateDir {
+            let capture = ScopeCapture()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                        if sendIndex == 0 {
+                            capture.set(GatewayWebSocketTestSupport.connectScopes(from: message))
+                        }
+                    })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: nil,
+                session: WebSocketSessionBox(session: session))
+
+            try await channel.connect()
+
+            #expect(capture.snapshot() == [
+                "operator.admin",
+                "operator.read",
+                "operator.write",
+                "operator.approvals",
+                "operator.pairing",
+            ])
+        }
+    }
+
+    @Test func `bootstrap token connect scopes are bootstrap-compatible`() async throws {
         let capture = ScopeCapture()
         let session = GatewayTestWebSocketSession(
             taskFactory: {
@@ -182,15 +228,44 @@ struct GatewayChannelConnectTests {
         let channel = try GatewayChannelActor(
             url: #require(URL(string: "ws://example.invalid")),
             token: nil,
+            bootstrapToken: "setup-bootstrap-token",
             session: WebSocketSessionBox(session: session))
 
         try await channel.connect()
 
         #expect(capture.snapshot() == [
+            "operator.approvals",
             "operator.read",
             "operator.write",
-            "operator.approvals",
         ])
+    }
+
+    @Test func `stored device token connect scopes reuse cached scopes`() async throws {
+        try await self.withTemporaryStateDir {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            let storedEntry = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "bootstrap-device-token",
+                scopes: ["operator.read", "operator.write", "operator.approvals"])
+            let capture = ScopeCapture()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                        if sendIndex == 0 {
+                            capture.set(GatewayWebSocketTestSupport.connectScopes(from: message))
+                        }
+                    })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: nil,
+                session: WebSocketSessionBox(session: session))
+
+            try await channel.connect()
+
+            #expect(capture.snapshot() == storedEntry.scopes)
+        }
     }
 
     @Test func `connect surfaces structured auth failure`() async throws {

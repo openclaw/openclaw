@@ -151,9 +151,11 @@ private enum ConnectChallengeError: Error {
 }
 
 private let defaultOperatorConnectScopes: [String] = [
+    "operator.admin",
     "operator.read",
     "operator.write",
     "operator.approvals",
+    "operator.pairing",
 ]
 
 extension String {
@@ -169,6 +171,7 @@ private struct SelectedConnectAuth {
     let authPassword: String?
     let signatureToken: String?
     let storedToken: String?
+    let storedScopes: [String]?
     let authSource: GatewayAuthSource
 }
 
@@ -408,7 +411,17 @@ public actor GatewayChannelActor {
         let clientId = options.clientId
         let clientMode = options.clientMode
         let role = options.role
-        let scopes = options.scopes
+        let requestedScopes = options.scopes
+        let includeDeviceIdentity = options.includeDeviceIdentity
+        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
+        let selectedAuth = self.selectConnectAuth(
+            role: role,
+            includeDeviceIdentity: includeDeviceIdentity,
+            deviceId: identity?.deviceId)
+        let scopes = self.resolveConnectScopes(
+            role: role,
+            requestedScopes: requestedScopes,
+            selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
@@ -440,12 +453,6 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        let includeDeviceIdentity = options.includeDeviceIdentity
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
-        let selectedAuth = self.selectConnectAuth(
-            role: role,
-            includeDeviceIdentity: includeDeviceIdentity,
-            deviceId: identity?.deviceId)
         if selectedAuth.authDeviceToken != nil, self.pendingDeviceTokenRetry {
             self.pendingDeviceTokenRetry = false
         }
@@ -528,10 +535,11 @@ public actor GatewayChannelActor {
         let explicitBootstrapToken =
             self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let storedToken =
+        let storedEntry =
             (includeDeviceIdentity && deviceId != nil)
-            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)?.token
+            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)
             : nil
+        let storedToken = storedEntry?.token
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
@@ -563,6 +571,7 @@ public actor GatewayChannelActor {
             authPassword: explicitPassword,
             signatureToken: authToken ?? authBootstrapToken,
             storedToken: storedToken,
+            storedScopes: storedEntry?.scopes,
             authSource: authSource)
     }
 
@@ -594,6 +603,25 @@ public actor GatewayChannelActor {
         default:
             return nil
         }
+    }
+
+    private func resolveConnectScopes(
+        role: String,
+        requestedScopes: [String],
+        selectedAuth: SelectedConnectAuth) -> [String]
+    {
+        if selectedAuth.authSource == .bootstrapToken,
+           let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: requestedScopes)
+        {
+            return filteredScopes
+        }
+        if selectedAuth.authSource == .deviceToken,
+           let storedScopes = selectedAuth.storedScopes,
+           !storedScopes.isEmpty
+        {
+            return storedScopes
+        }
+        return requestedScopes
     }
 
     private func persistBootstrapHandoffToken(

@@ -273,7 +273,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("requests bootstrap-compatible control ui operator scopes on connect", async () => {
+  it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -283,6 +283,27 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+    expect(connectFrame.params?.scopes).toContain("operator.admin");
+    expect(connectFrame.params?.scopes).toContain("operator.pairing");
+  });
+
+  it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
+    localStorage.clear();
+    const storedEntry = storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: "bootstrap-device-token",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth?.token).toBe("bootstrap-device-token");
+    expect(connectFrame.params?.scopes).toEqual(storedEntry.scopes);
     expect(connectFrame.params?.scopes).not.toContain("operator.admin");
     expect(connectFrame.params?.scopes).not.toContain("operator.pairing");
   });
