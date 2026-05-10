@@ -106,6 +106,30 @@ describe("normalizeStoredCronJobs", () => {
     });
   });
 
+  it("rewrites legacy OpenAI Codex model refs in cron payloads", () => {
+    const { job, result } = normalizeOneJob(
+      makeLegacyJob({
+        id: "legacy-codex-cron-model",
+        schedule: { kind: "every", everyMs: 60_000 },
+        payload: {
+          kind: "agentTurn",
+          message: "ping",
+          model: " openai-codex/gpt-5.5 ",
+          fallbacks: ["anthropic/claude-opus-4.6", "openai-codex/gpt-5.4-mini"],
+        },
+      }),
+    );
+
+    expect(result.mutated).toBe(true);
+    expect(result.issues.legacyPayloadCodexModel).toBe(1);
+    expect(job.payload).toMatchObject({
+      kind: "agentTurn",
+      message: "ping",
+      model: "openai/gpt-5.5",
+      fallbacks: ["anthropic/claude-opus-4.6", "openai/gpt-5.4-mini"],
+    });
+  });
+
   it("does not report legacyPayloadKind for already-normalized payload kinds", () => {
     const jobs = [
       {

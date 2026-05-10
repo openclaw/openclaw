@@ -122,7 +122,7 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
   });
 
   it("composes provider preparation before transport patch resolution", () => {
-    const resolveProviderExtraParamsForTransport = vi.fn(() => ({
+    const resolveProviderExtraParamsForTransport = vi.fn((_params: unknown) => ({
       patch: {
         parallel_tool_calls: false,
         transportHookApplied: true,
@@ -150,22 +150,20 @@ describe("transport params runtime contract (Pi/OpenAI path)", () => {
       } as Model<"openai-responses">,
     });
 
-    expect(prepared).toMatchObject({
-      transport: "websocket",
-      preparedByProvider: true,
-      parallel_tool_calls: false,
-      transportHookApplied: true,
-    });
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledWith(
-      expect.objectContaining({
-        context: expect.objectContaining({
-          extraParams: expect.objectContaining({
-            preparedByProvider: true,
-          }),
-          transport: "websocket",
-        }),
-      }),
-    );
+    expect(prepared?.transport).toBe("websocket");
+    expect(prepared?.preparedByProvider).toBe(true);
+    expect(prepared?.parallel_tool_calls).toBe(false);
+    expect(prepared?.transportHookApplied).toBe(true);
+    const transportInput = resolveProviderExtraParamsForTransport.mock.calls[0]?.[0] as
+      | {
+          context?: {
+            extraParams?: { preparedByProvider?: boolean };
+            transport?: string;
+          };
+        }
+      | undefined;
+    expect(transportInput?.context?.extraParams?.preparedByProvider).toBe(true);
+    expect(transportInput?.context?.transport).toBe("websocket");
   });
 });
 

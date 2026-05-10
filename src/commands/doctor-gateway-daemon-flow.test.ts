@@ -295,12 +295,12 @@ describe("maybeRepairGatewayDaemon", () => {
       healthOk: false,
     });
 
-    expect(readGatewayRestartHandoffSync).toHaveBeenCalledWith(
-      expect.objectContaining({
-        OPENCLAW_STATE_DIR: "/tmp/openclaw-service",
-        OPENCLAW_CONFIG_PATH: "/tmp/openclaw-service/openclaw.json",
-      }),
-    );
+    expect(readGatewayRestartHandoffSync).toHaveBeenCalledOnce();
+    const [handoffEnv] = readGatewayRestartHandoffSync.mock.calls[0] as unknown as [
+      { OPENCLAW_STATE_DIR?: string; OPENCLAW_CONFIG_PATH?: string },
+    ];
+    expect(handoffEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-service");
+    expect(handoffEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-service/openclaw.json");
     expect(note).toHaveBeenCalledWith(
       expect.stringContaining("Recent restart handoff: full-process via systemd"),
       "Gateway",

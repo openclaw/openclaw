@@ -35,10 +35,7 @@ import type {
 import { isPromiseLike } from "./pi-embedded-subscribe.promise.js";
 import { filterToolResultMediaUrls } from "./pi-embedded-subscribe.tools.js";
 import type { SubscribeEmbeddedPiSessionParams } from "./pi-embedded-subscribe.types.js";
-import {
-  stripDowngradedToolCallText,
-  THINKING_TAG_SCAN_RE,
-} from "./pi-embedded-utils.js";
+import { stripDowngradedToolCallText, THINKING_TAG_SCAN_RE } from "./pi-embedded-utils.js";
 import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 const FINAL_TAG_SCAN_RE = /<\s*(\/?)\s*final\s*>/gi;
@@ -146,6 +143,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     emittedAssistantUpdate: false,
     lastStreamedReasoning: undefined,
     lastBlockReplyText: undefined,
+    lastDeliveredBlockReplyText: undefined,
+    toolExecutionSinceLastBlockReply: false,
     reasoningStreamOpen: false,
     assistantMessageIndex: 0,
     lastAssistantStreamItemId: undefined,
@@ -710,34 +709,80 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     }
     // Strip <think> and <final> blocks across chunk boundaries to avoid leaking reasoning.
     // Also strip downgraded tool call text ([Tool Call: ...], [Historical context: ...], etc.).
-    const chunk = stripDowngradedToolCallText(
+    const blockReplyText = stripDowngradedToolCallText(
       stripBlockTags(text, state.blockState, { final: options?.final === true }),
     ).trimEnd();
-    if (!chunk) {
+    if (!blockReplyText) {
       return;
     }
-    if (chunk === state.lastBlockReplyText) {
+    if (blockReplyText === state.lastBlockReplyText) {
+      return;
+    }
+    const markBlockReplyTextHandled = () => {
+      state.lastBlockReplyText = blockReplyText;
+      state.lastDeliveredBlockReplyText = blockReplyText;
+      state.toolExecutionSinceLastBlockReply = false;
+    };
+    let chunk = blockReplyText;
+    let slicedPrefixReplay = false;
+    const lastDeliveredBlockReplyText = state.lastDeliveredBlockReplyText;
+    const blockReplySuffix = lastDeliveredBlockReplyText
+      ? blockReplyText.slice(lastDeliveredBlockReplyText.length)
+      : "";
+    const prefixReplayCandidate = Boolean(
+      state.blockReplyBreak === "text_end" &&
+      state.toolExecutionSinceLastBlockReply &&
+      lastDeliveredBlockReplyText &&
+      lastDeliveredBlockReplyText.trimEnd().endsWith(":") &&
+      blockReplyText.length > lastDeliveredBlockReplyText.length &&
+      blockReplyText.startsWith(lastDeliveredBlockReplyText),
+    );
+    if (prefixReplayCandidate && !/^\s/.test(blockReplySuffix)) {
+      chunk = blockReplySuffix;
+      slicedPrefixReplay = true;
+    }
+    if (!chunk) {
       return;
     }
 
     // Only check committed (successful) messaging tool texts - checking pending texts
     // is risky because if the tool fails after suppression, the user gets no response
     const normalizedChunk = normalizeTextForComparison(chunk);
-    if (isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized)) {
+    const normalizedReplaySuffix = prefixReplayCandidate
+      ? normalizeTextForComparison(blockReplySuffix.trimStart())
+      : "";
+    const isMessagingDuplicate =
+      isMessagingToolDuplicateNormalized(normalizedChunk, messagingToolSentTextsNormalized) ||
+      (prefixReplayCandidate &&
+        isMessagingToolDuplicateNormalized(
+          normalizedReplaySuffix,
+          messagingToolSentTextsNormalized,
+        ));
+    if (isMessagingDuplicate) {
       log.debug(`Skipping block reply - already sent via messaging tool: ${chunk.slice(0, 50)}...`);
+      if (prefixReplayCandidate) {
+        markBlockReplyTextHandled();
+      }
       return;
     }
 
     if (shouldSkipAssistantText(chunk)) {
+      if (slicedPrefixReplay) {
+        markBlockReplyTextHandled();
+      }
       return;
     }
 
     if (!params.onBlockReply) {
       pushAssistantText(chunk);
+      markBlockReplyTextHandled();
       return;
     }
     const splitResult = replyDirectiveAccumulator.consume(chunk);
     if (!splitResult) {
+      if (slicedPrefixReplay) {
+        markBlockReplyTextHandled();
+      }
       return;
     }
     const {
@@ -749,6 +794,9 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
       replyToCurrent,
     } = splitResult;
     if (!cleanedText && (!mediaUrls || mediaUrls.length === 0) && !audioAsVoice) {
+      if (slicedPrefixReplay) {
+        markBlockReplyTextHandled();
+      }
       return;
     }
     pushAssistantText(chunk);
@@ -767,7 +815,7 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
           options?.final === true || Boolean(mediaUrls?.length || audioAsVoice),
       },
     );
-    state.lastBlockReplyText = chunk;
+    markBlockReplyTextHandled();
   };
 
   const consumeReplyDirectives = (text: string, options?: { final?: boolean }) =>
@@ -888,6 +936,8 @@ export function subscribeEmbeddedPiSession(params: SubscribeEmbeddedPiSessionPar
     state.pendingAssistantReplyDirectives = undefined;
     state.deterministicApprovalPromptPending = false;
     state.deterministicApprovalPromptSent = false;
+    state.lastDeliveredBlockReplyText = undefined;
+    state.toolExecutionSinceLastBlockReply = false;
     state.replayState = mergeEmbeddedRunReplayState(state.replayState, params.initialReplayState);
     state.livenessState = "working";
     resetAssistantMessageState(0);

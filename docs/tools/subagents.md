@@ -143,6 +143,34 @@ session to confirm the effective tool list.
 - **Thinking:** inherits the caller unless you set `agents.defaults.subagents.thinking` (or per-agent `agents.list[].subagents.thinking`); an explicit `sessions_spawn.thinking` still wins.
 - **Run timeout:** if `sessions_spawn.runTimeoutSeconds` is omitted, OpenClaw uses `agents.defaults.subagents.runTimeoutSeconds` when set; otherwise it falls back to `0` (no timeout).
 
+### Delegation prompt mode
+
+`agents.defaults.subagents.delegationMode` controls prompt guidance only; it does not change tool policy or enforce delegation.
+
+- `suggest` (default): keep the standard prompt nudge to use sub-agents for larger or slower work.
+- `prefer`: tell the main agent to stay responsive and delegate anything more involved than a direct reply through `sessions_spawn`.
+
+Per-agent overrides use `agents.list[].subagents.delegationMode`.
+
+```json5
+{
+  agents: {
+    defaults: {
+      subagents: {
+        delegationMode: "prefer",
+        maxConcurrent: 4,
+      },
+    },
+    list: [
+      {
+        id: "coordinator",
+        subagents: { delegationMode: "prefer" },
+      },
+    ],
+  },
+}
+```
+
 ### Tool parameters
 
 <ParamField path="task" type="string" required>

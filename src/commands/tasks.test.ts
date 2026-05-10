@@ -120,11 +120,9 @@ describe("tasks commands", () => {
       };
 
       expect(limitedPayload.findings).toHaveLength(1);
-      expect(limitedPayload.findings[0]).toMatchObject({
-        kind: "task_flow",
-        code: "stale_running",
-        token: runningFlow.flowId,
-      });
+      expect(limitedPayload.findings[0]?.kind).toBe("task_flow");
+      expect(limitedPayload.findings[0]?.code).toBe("stale_running");
+      expect(limitedPayload.findings[0]?.token).toBe(runningFlow.flowId);
     });
   });
 

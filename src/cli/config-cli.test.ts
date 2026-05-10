@@ -282,6 +282,39 @@ describe("config cli", () => {
       });
     });
 
+    it("normalizes retired Google Gemini model refs before writing config mutations", async () => {
+      const resolved: OpenClawConfig = {
+        agents: {
+          defaults: {
+            model: {
+              fallbacks: ["google/gemini-3-pro-preview"],
+            },
+            models: {
+              "google/gemini-3-pro-preview": { alias: "gemini" },
+            },
+          },
+        },
+      };
+      setSnapshot(resolved, resolved);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "agents.defaults.model.primary",
+        "google/gemini-3-pro-preview",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      const written = mockWriteConfigFile.mock.calls[0]?.[0];
+      expect(written.agents?.defaults?.model).toEqual({
+        primary: "google/gemini-3.1-pro-preview",
+        fallbacks: ["google/gemini-3.1-pro-preview"],
+      });
+      expect(written.agents?.defaults?.models).toEqual({
+        "google/gemini-3.1-pro-preview": { alias: "gemini" },
+      });
+    });
+
     it("rejects plugin install record config updates", async () => {
       await expect(
         runConfigCommand([

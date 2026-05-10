@@ -36,6 +36,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -81,6 +82,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -1495,6 +1497,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -1660,6 +1669,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -2042,13 +2058,13 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               if (failedPromptProfileId && promptProfileFailureReason) {
-                maybeMarkAuthProfileFailure({
+                void maybeMarkAuthProfileFailure({
                   profileId: failedPromptProfileId,
                   reason: promptProfileFailureReason,
                   modelId,
-                }).catch((err) =>
-                  log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
-                );
+                }).catch((err) => {
+                  log.warn(`prompt profile failure mark failed: ${String(err)}`);
+                });
               }
               traceAttempts.push({
                 provider,
@@ -2077,13 +2093,15 @@ export async function runEmbeddedPiAgent(
               });
             }
             if (failedPromptProfileId && promptProfileFailureReason) {
-              maybeMarkAuthProfileFailure({
-                profileId: failedPromptProfileId,
-                reason: promptProfileFailureReason,
-                modelId,
-              }).catch((err) =>
-                log.warn(`deferred prompt profile failure mark failed: ${String(err)}`),
-              );
+              try {
+                await maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                });
+              } catch (err) {
+                log.warn(`prompt profile failure mark failed: ${String(err)}`);
+              }
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,

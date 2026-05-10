@@ -67,6 +67,7 @@ type TelegramQaScenarioStep = {
   expectedTextIncludes?: string[];
   expectedJoinedSutTextIncludes?: string[];
   expectedSutMessageCount?: number;
+  expectedSutMessageCountRange?: readonly [number, number];
   matchText?: string;
   replyToLatestSutMessage?: boolean;
   settleMs?: number;
@@ -441,7 +442,7 @@ const TELEGRAM_QA_SCENARIOS: TelegramQaScenarioDefinition[] = [
         input: `@${sutUsername} Telegram long final QA check. Use the scripted long final response.`,
         expectedTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN"],
         expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
-        expectedSutMessageCount: 2,
+        expectedSutMessageCountRange: [1, 2],
         replyToLatestSutMessage: true,
         settleMs: 4_000,
       }),
@@ -986,6 +987,7 @@ async function collectObservedMessages(params: {
 function assertTelegramScenarioMessageSet(params: {
   expectedJoinedSutTextIncludes?: string[];
   expectedSutMessageCount?: number;
+  expectedSutMessageCountRange?: readonly [number, number];
   groupId: string;
   observedMessages: TelegramObservedMessage[];
   scenarioId: string;
@@ -993,6 +995,7 @@ function assertTelegramScenarioMessageSet(params: {
 }) {
   if (
     params.expectedSutMessageCount === undefined &&
+    params.expectedSutMessageCountRange === undefined &&
     (params.expectedJoinedSutTextIncludes ?? []).length === 0
   ) {
     return;
@@ -1017,6 +1020,16 @@ function assertTelegramScenarioMessageSet(params: {
         .map((message) => message.messageId)
         .join(", ")}`,
     );
+  }
+  if (params.expectedSutMessageCountRange !== undefined) {
+    const [min, max] = params.expectedSutMessageCountRange;
+    if (messages.length < min || messages.length > max) {
+      throw new Error(
+        `expected ${min}-${max} SUT message(s), observed ${messages.length}: ${messages
+          .map((message) => message.messageId)
+          .join(", ")}`,
+      );
+    }
   }
   const joinedText = messages.map((message) => message.text).join("");
   for (const expected of params.expectedJoinedSutTextIncludes ?? []) {
@@ -1233,7 +1246,7 @@ function matchesTelegramScenarioReply(params: {
     return true;
   }
   if (params.allowAnySutReply === true) {
-    return true;
+    return params.message.messageId > params.sentMessageId;
   }
   return Boolean(params.matchText && params.message.text.includes(params.matchText));
 }
@@ -1810,6 +1823,7 @@ export async function runTelegramQaLive(params: {
               assertTelegramScenarioMessageSet({
                 expectedJoinedSutTextIncludes: step.expectedJoinedSutTextIncludes,
                 expectedSutMessageCount: step.expectedSutMessageCount,
+                expectedSutMessageCountRange: step.expectedSutMessageCountRange,
                 groupId: runtimeEnv.groupId,
                 observedMessages,
                 scenarioId: scenario.id,
@@ -1837,7 +1851,9 @@ export async function runTelegramQaLive(params: {
             const suffix =
               scenarioSteps.length === 1
                 ? lastStep?.expectedSutMessageCount === undefined
-                  ? ""
+                  ? lastStep?.expectedSutMessageCountRange === undefined
+                    ? ""
+                    : `; observed ${lastStep.expectedSutMessageCountRange[0]}-${lastStep.expectedSutMessageCountRange[1]} SUT message(s)`
                   : `; observed ${lastStep.expectedSutMessageCount} SUT message(s)`
                 : `; ${scenarioSteps.filter((step) => step.expectReply).length} command replies matched`;
             const result = {

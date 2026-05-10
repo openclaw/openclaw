@@ -514,6 +514,8 @@ const TalkConfigSchema = Type.Object(
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     realtime: Type.Optional(TalkRealtimeConfigSchema),
     resolved: Type.Optional(ResolvedTalkConfigSchema),
+    consultThinkingLevel: Type.Optional(Type.String()),
+    consultFastMode: Type.Optional(Type.Boolean()),
     speechLocale: Type.Optional(Type.String()),
     interruptOnSpeech: Type.Optional(Type.Boolean()),
     silenceTimeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),

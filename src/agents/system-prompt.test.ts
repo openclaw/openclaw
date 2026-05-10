@@ -784,6 +784,40 @@ describe("buildAgentSystemPrompt", () => {
     );
   });
 
+  it("adds stronger sub-agent delegation guidance in prefer mode", () => {
+    const defaultPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+    });
+    const preferPrompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["sessions_spawn", "subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(defaultPrompt).not.toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("## Sub-Agent Delegation");
+    expect(preferPrompt).toContain("Mode: prefer");
+    expect(preferPrompt).toContain("responsive coordinator");
+    expect(preferPrompt).toContain(
+      "Anything requiring more work than a direct reply should go through `sessions_spawn`",
+    );
+    expect(preferPrompt).toContain(
+      "Use `subagents(action=list|steer|kill)` only when explicitly asked for status",
+    );
+  });
+
+  it("omits prefer delegation guidance when sessions_spawn is unavailable", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["subagents"],
+      subagentDelegationMode: "prefer",
+    });
+
+    expect(prompt).not.toContain("## Sub-Agent Delegation");
+    expect(prompt).toContain("Sub-agent orchestration");
+  });
+
   it("reapplies provider prompt contributions", () => {
     const prompt = buildAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",

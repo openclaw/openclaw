@@ -1,3 +1,5 @@
+import { Agent, setGlobalDispatcher } from "undici";
+
 const baseUrl = process.env.OPENWEBUI_BASE_URL ?? "";
 const email = process.env.OPENWEBUI_ADMIN_EMAIL ?? "";
 const password = process.env.OPENWEBUI_ADMIN_PASSWORD ?? "";
@@ -5,6 +7,9 @@ const expectedNonce = process.env.OPENWEBUI_EXPECTED_NONCE ?? "";
 const prompt = process.env.OPENWEBUI_PROMPT ?? "";
 const modelAttempts = Number.parseInt(process.env.OPENWEBUI_MODEL_ATTEMPTS ?? "72", 10);
 const modelRetryMs = Number.parseInt(process.env.OPENWEBUI_MODEL_RETRY_MS ?? "5000", 10);
+const fetchTimeoutMs = Number.parseInt(process.env.OPENWEBUI_FETCH_TIMEOUT_MS ?? "720000", 10);
+
+setGlobalDispatcher(new Agent({ bodyTimeout: fetchTimeoutMs, headersTimeout: fetchTimeoutMs }));
 
 if (!baseUrl || !email || !password || !expectedNonce || !prompt) {
   throw new Error("Missing required OPENWEBUI_* environment variables");

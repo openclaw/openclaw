@@ -45,7 +45,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Tokens (ctx %")]));
+    expect(logs.some((line) => line.includes("Tokens (ctx %"))).toBe(true);
 
     const row = logs.find((line) => line.includes("+15555550123")) ?? "";
     expect(row).toContain("2.0k/32k (6%)");
@@ -82,7 +82,7 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
 
-    expect(logs).toEqual(expect.arrayContaining([expect.stringContaining("Runtime")]));
+    expect(logs.some((line) => line.includes("Runtime"))).toBe(true);
 
     const row = logs.find((line) => line.includes("agent:main:main")) ?? "";
     expect(row).toContain("claude-opus-4-7");

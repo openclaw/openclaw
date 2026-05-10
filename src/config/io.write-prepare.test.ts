@@ -169,6 +169,60 @@ describe("config io write prepare", () => {
     });
   });
 
+  it("normalizes retired Google model refs during unrelated config writes", () => {
+    const sourceConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "Gemini",
+            },
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const runtimeConfig: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3.1-pro-preview",
+            fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+          },
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              alias: "Gemini",
+            },
+          },
+        },
+      },
+      gateway: { port: 18789 },
+    };
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: {
+        ...runtimeConfig,
+        gateway: { port: 18888 },
+      },
+    }) as OpenClawConfig;
+
+    expect(persisted.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+    expect(persisted.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "Gemini",
+      },
+    });
+    expect(persisted.gateway?.port).toBe(18888);
+  });
+
   it("allows explicit unsets to remove authored agent provider params", () => {
     const sourceConfig: OpenClawConfig = {
       agents: {

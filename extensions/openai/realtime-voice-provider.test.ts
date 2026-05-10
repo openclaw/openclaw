@@ -1028,6 +1028,65 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       },
       { type: "response.create" },
     ]);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_2" } })),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expect(parseSent(socket).filter((event) => event.type === "response.create")).toHaveLength(1);
+  });
+
+  it("does not flush deferred response.create while a tool result is still continuing", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onError = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+      onError,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+
+    bridge.submitToolResult("call_1", { status: "working" }, { willContinue: true });
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "error",
+          error: {
+            message: "Conversation already has an active response in progress: resp_1",
+          },
+        }),
+      ),
+    );
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "response.done" })));
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(parseSent(socket).some((event) => event.type === "response.create")).toBe(false);
+
+    bridge.submitToolResult("call_1", { text: "done" });
+
+    expect(parseSent(socket).slice(-2)).toEqual([
+      {
+        type: "conversation.item.create",
+        item: {
+          type: "function_call_output",
+          call_id: "call_1",
+          output: JSON.stringify({ text: "done" }),
+        },
+      },
+      { type: "response.create" },
+    ]);
   });
 
   it("drains deferred response.create after response.cancelled", async () => {
@@ -1158,6 +1217,54 @@ describe("buildOpenAIRealtimeVoiceProvider", () => {
       type: "conversation.item.truncate.skipped",
       detail: "reason=barge-in audioEndMs=0 minAudioEndMs=250",
     });
+  });
+
+  it("force-cancels zero-length playback barge-in for agent handoff fallback", async () => {
+    const provider = buildOpenAIRealtimeVoiceProvider();
+    const onClearAudio = vi.fn();
+    const onEvent = vi.fn();
+    const bridge = provider.createBridge({
+      providerConfig: { apiKey: "sk-test" }, // pragma: allowlist secret
+      onAudio: vi.fn(),
+      onClearAudio,
+      onEvent,
+    });
+    const connecting = bridge.connect();
+    const socket = FakeWebSocket.instances[0];
+    if (!socket) {
+      throw new Error("expected bridge to create a websocket");
+    }
+
+    socket.readyState = FakeWebSocket.OPEN;
+    socket.emit("open");
+    socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
+    await connecting;
+    bridge.setMediaTimestamp(1000);
+    socket.emit(
+      "message",
+      Buffer.from(JSON.stringify({ type: "response.created", response: { id: "resp_1" } })),
+    );
+    socket.emit(
+      "message",
+      Buffer.from(
+        JSON.stringify({
+          type: "response.audio.delta",
+          item_id: "item_1",
+          delta: Buffer.from("assistant audio").toString("base64"),
+        }),
+      ),
+    );
+
+    bridge.handleBargeIn?.({ audioPlaybackActive: true, force: true });
+
+    expect(parseSent(socket)).toContainEqual({ type: "response.cancel" });
+    expect(parseSent(socket)).toContainEqual(
+      expect.objectContaining({ type: "conversation.item.truncate" }),
+    );
+    expect(onClearAudio).toHaveBeenCalled();
+    expect(onEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({ type: "conversation.item.truncate.skipped" }),
+    );
   });
 
   it("allows immediate playback barge-in when the minimum audio window is zero", async () => {

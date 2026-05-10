@@ -129,7 +129,7 @@ export type DiscordVoiceAutoJoinConfig = {
   channelId: string;
 };
 
-export type DiscordVoiceMode = "stt-tts" | "talk-buffer" | "bidi";
+export type DiscordVoiceMode = "stt-tts" | "agent-proxy" | "bidi";
 
 export type DiscordVoiceRealtimeConsultPolicy = "auto" | "always";
 
@@ -168,13 +168,13 @@ export type DiscordVoiceAgentSessionConfig = {
 export type DiscordVoiceConfig = {
   /** Enable Discord voice channel conversations (default: true). */
   enabled?: boolean;
-  /** Voice conversation mode. Default: stt-tts. */
+  /** Voice conversation mode. Default: agent-proxy. */
   mode?: DiscordVoiceMode;
   /** Route voice turns through an existing OpenClaw Discord conversation. */
   agentSession?: DiscordVoiceAgentSessionConfig;
   /** Optional LLM model override for Discord voice channel responses. */
   model?: string;
-  /** Realtime provider settings for talk-buffer or bidi modes. */
+  /** Realtime provider settings for agent-proxy or bidi modes. */
   realtime?: DiscordVoiceRealtimeConfig;
   /** Voice channels to auto-join on startup. */
   autoJoin?: DiscordVoiceAutoJoinConfig[];

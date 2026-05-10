@@ -295,6 +295,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   private responseCreateInFlight = false;
   private responseCancelInFlight = false;
   private responseCreatePending = false;
+  private continuingToolCallIds = new Set<string>();
   private latestMediaTimestamp = 0;
   private lastAssistantItemId: string | null = null;
   private toolCallBuffers = new Map<string, { name: string; callId: string; args: string }>();
@@ -362,9 +363,12 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
         output: JSON.stringify(result),
       },
     });
-    if (options?.willContinue !== true) {
-      this.requestResponseCreate();
+    if (options?.willContinue === true) {
+      this.continuingToolCallIds.add(callId);
+      return;
     }
+    this.continuingToolCallIds.delete(callId);
+    this.requestResponseCreate();
   }
 
   acknowledgeMark(): void {
@@ -840,16 +844,23 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   handleBargeIn(options?: RealtimeVoiceBargeInOptions): void {
     const assistantItemId = this.lastAssistantItemId;
     const responseStartTimestamp = this.responseStartTimestamp;
+    const force = options?.force === true;
     const shouldInterruptProvider =
-      responseStartTimestamp !== null &&
       assistantItemId !== null &&
-      (this.markQueue.length > 0 || options?.audioPlaybackActive === true);
+      ((responseStartTimestamp !== null &&
+        (this.markQueue.length > 0 || options?.audioPlaybackActive === true)) ||
+        force);
     const audioEndMs = shouldInterruptProvider
-      ? Math.max(0, this.latestMediaTimestamp - responseStartTimestamp)
+      ? Math.max(
+          0,
+          responseStartTimestamp === null
+            ? this.latestMediaTimestamp
+            : this.latestMediaTimestamp - responseStartTimestamp,
+        )
       : null;
     const minBargeInAudioEndMs =
       this.config.minBargeInAudioEndMs ?? OPENAI_REALTIME_DEFAULT_MIN_BARGE_IN_AUDIO_END_MS;
-    if (audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
+    if (!force && audioEndMs !== null && audioEndMs < minBargeInAudioEndMs) {
       this.config.onEvent?.({
         direction: "client",
         type: "conversation.item.truncate.skipped",
@@ -914,10 +925,16 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
   }
 
   private requestResponseCreate(): void {
-    if (this.responseActive || this.responseCreateInFlight || this.responseCancelInFlight) {
+    if (
+      this.responseActive ||
+      this.responseCreateInFlight ||
+      this.responseCancelInFlight ||
+      this.continuingToolCallIds.size > 0
+    ) {
       this.responseCreatePending = true;
       return;
     }
+    this.responseCreatePending = false;
     this.responseCreateInFlight = true;
     this.sendEvent({ type: "response.create" });
   }
@@ -937,6 +954,7 @@ class OpenAIRealtimeVoiceBridge implements RealtimeVoiceBridge {
     this.responseCreateInFlight = false;
     this.responseCancelInFlight = false;
     this.responseCreatePending = false;
+    this.continuingToolCallIds.clear();
     this.lastAssistantItemId = null;
     this.toolCallBuffers.clear();
     this.deliveredToolCallKeys.clear();

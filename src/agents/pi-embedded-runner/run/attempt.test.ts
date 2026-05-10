@@ -5,6 +5,8 @@ vi.mock("../context-engine-capabilities.js", () => ({
   resolveContextEngineCapabilities: async () => ({ llm: undefined }),
 }));
 import type { OpenClawConfig } from "../../../config/config.js";
+import { addSession, resetProcessRegistryForTests } from "../../bash-process-registry.js";
+import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../system-prompt-cache-boundary.js";
 import { buildAgentSystemPrompt } from "../../system-prompt.js";
 import { resolveBootstrapContextTargets } from "./attempt-bootstrap-routing.js";
@@ -3232,6 +3234,58 @@ describe("prependSystemPromptAddition", () => {
 });
 
 describe("buildAfterTurnRuntimeContext", () => {
+  it("preserves sessionId-scoped active process sessions for after-turn context", () => {
+    resetProcessRegistryForTests();
+    try {
+      const active = createProcessSessionFixture({
+        id: "sess-session-id",
+        command: "sleep 600",
+        backgrounded: true,
+        pid: 1234,
+      });
+      active.scopeKey = "session-123";
+      addSession(active);
+      const other = createProcessSessionFixture({
+        id: "sess-other",
+        command: "sleep 600",
+        backgrounded: true,
+      });
+      other.scopeKey = "agent:main";
+      addSession(other);
+
+      const legacy = buildAfterTurnRuntimeContext({
+        attempt: {
+          sessionId: "session-123",
+          config: {} as OpenClawConfig,
+          skillsSnapshot: undefined,
+          senderIsOwner: true,
+          provider: "openai-codex",
+          modelId: "gpt-5.4",
+          thinkLevel: "off",
+          reasoningLevel: "on",
+          extraSystemPrompt: "extra",
+          ownerNumbers: ["+15555550123"],
+        },
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        activeAgentId: "main",
+      });
+
+      expect(legacy.activeProcessSessions).toEqual([
+        expect.objectContaining({
+          sessionId: "sess-session-id",
+          command: "sleep 600",
+          pid: 1234,
+        }),
+      ]);
+      expect(legacy.activeProcessSessions).not.toEqual(
+        expect.arrayContaining([expect.objectContaining({ sessionId: "sess-other" })]),
+      );
+    } finally {
+      resetProcessRegistryForTests();
+    }
+  });
+
   it("uses primary model when compaction.model is not set", () => {
     const legacy = buildAfterTurnRuntimeContext({
       attempt: {

@@ -419,12 +419,19 @@ when `SKILL.md` files change. Configure under `skills.load`:
 {
   skills: {
     load: {
+      extraDirs: ["~/Projects/agent-scripts/skills"],
+      allowSymlinkTargets: ["~/Projects/manager/skills"],
       watch: true,
       watchDebounceMs: 250,
     },
   },
 }
 ```
+
+Use `allowSymlinkTargets` for intentional sibling-repo layouts where a built-in
+skill root contains a symlink, for example
+`~/.agents/skills/manager -> ~/Projects/manager/skills`. The target list is
+matched after realpath resolution and should stay narrow.
 
 ### Remote macOS nodes (Linux gateway)
 

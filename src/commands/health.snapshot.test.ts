@@ -305,6 +305,8 @@ function createTelegramHealthPlugin(): HealthTestPlugin {
       listAccountIds: (cfg) => listTelegramAccountIdsForTest(cfg as Record<string, unknown>),
       resolveAccount: (cfg, accountId) =>
         resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
+      inspectAccount: (cfg, accountId) =>
+        resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
     status: {

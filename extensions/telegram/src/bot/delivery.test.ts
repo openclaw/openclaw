@@ -213,6 +213,23 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls[0]?.[1]).toBe("hello");
   });
 
+  it("mirrors delivered replies once after successful sends", async () => {
+    const runtime = createRuntime(false);
+    const transcriptMirror = vi.fn();
+    const sendMessage = vi.fn().mockResolvedValue({ message_id: 1, chat: { id: "123" } });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello" }, { text: "world" }],
+      runtime,
+      bot,
+      transcriptMirror,
+    });
+
+    expect(transcriptMirror).toHaveBeenCalledOnce();
+    expect(transcriptMirror).toHaveBeenCalledWith({ text: "hello\n\nworld", mediaUrls: undefined });
+  });
+
   it("renders shared interactive reply buttons as Telegram inline buttons", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 2, chat: { id: "123" } });

@@ -2,8 +2,18 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveRegistryUpdateChannel } from "../infra/update-channels.js";
 import type { PluginEnableResult } from "../plugins/enable.js";
+import { resolveNpmInstallSpecsForUpdateChannel } from "../plugins/install-channel-specs.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { VERSION } from "../version.js";
+
+function expectedNpmInstallSpec(spec: string): string {
+  return resolveNpmInstallSpecsForUpdateChannel({
+    spec,
+    updateChannel: resolveRegistryUpdateChannel({ currentVersion: VERSION }),
+  }).installSpec;
+}
 
 const resolveBundledInstallPlanForCatalogEntry = vi.hoisted(() =>
   vi.fn<(...args: unknown[]) => unknown>(() => undefined),
@@ -480,7 +490,7 @@ describe("ensureOnboardingPluginInstalled", () => {
     });
 
     expect(captured?.options).toEqual([
-      { value: "npm", label: "Download from npm (@demo/plugin)" },
+      { value: "npm", label: `Download from npm (${expectedNpmInstallSpec("@demo/plugin")})` },
       { value: "skip", label: "Skip for now" },
     ]);
     expect(captured?.initialValue).toBe("npm");

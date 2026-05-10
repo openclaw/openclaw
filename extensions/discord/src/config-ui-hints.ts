@@ -183,7 +183,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.mode": {
     label: "Discord Voice Mode",
-    help: "Conversation mode: stt-tts uses batch speech-to-text plus TTS, talk-buffer uses a realtime voice shell with the OpenClaw agent as the brain, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
+    help: "Conversation mode: agent-proxy (default) uses realtime voice as the microphone/speaker for the routed OpenClaw agent, stt-tts uses batch speech-to-text plus TTS, and bidi lets the realtime provider converse directly with the OpenClaw consult tool.",
   },
   "voice.agentSession": {
     label: "Discord Voice Agent Session",
@@ -195,7 +195,7 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.provider": {
     label: "Discord Realtime Provider",
-    help: "Realtime voice provider for talk-buffer or bidi Discord voice modes, such as openai.",
+    help: "Realtime voice provider for agent-proxy or bidi Discord voice modes, such as openai.",
   },
   "voice.realtime.model": {
     label: "Discord Realtime Model",
@@ -207,11 +207,11 @@ export const discordChannelConfigUiHints = {
   },
   "voice.realtime.toolPolicy": {
     label: "Discord Realtime Tool Policy",
-    help: "Tool policy for the OpenClaw agent consult tool in bidi mode: safe-read-only, owner, or none.",
+    help: "Tool policy for the OpenClaw agent consult tool in realtime voice modes: safe-read-only, owner, or none. Default is owner for agent-proxy and safe-read-only for bidi.",
   },
   "voice.realtime.consultPolicy": {
     label: "Discord Realtime Consult Policy",
-    help: "Use always to strongly prefer the OpenClaw agent brain for substantive bidi turns.",
+    help: "Use always to strongly prefer the OpenClaw agent brain for substantive realtime turns. agent-proxy defaults to always.",
   },
   "voice.realtime.bargeIn": {
     label: "Discord Realtime Barge-In",

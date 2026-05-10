@@ -6,6 +6,7 @@ import {
   resolveCommandAuthorization,
   resolveCommandAuthorizedFromAuthorizers,
 } from "openclaw/plugin-sdk/command-auth-native";
+import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
 import {
@@ -778,6 +779,7 @@ function enqueueSlackBlockActionEvent(params: {
     channelId: params.parsed.channelId,
     channelType: params.auth.channelType,
     senderId: params.parsed.userId,
+    threadTs: params.parsed.threadTs,
   });
   const contextParts = [
     "slack:interaction",
@@ -785,10 +787,31 @@ function enqueueSlackBlockActionEvent(params: {
     params.parsed.messageTs,
     params.parsed.actionId,
   ].filter(Boolean);
-  enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
+  const queued = enqueueSystemEvent(params.formatSystemEvent(eventPayload), {
     sessionKey,
     contextKey: contextParts.join(":"),
+    deliveryContext: {
+      channel: "slack",
+      to:
+        params.auth.channelType === "im"
+          ? `user:${params.parsed.userId}`
+          : params.parsed.channelId
+            ? `channel:${params.parsed.channelId}`
+            : undefined,
+      accountId: params.ctx.accountId,
+      threadId: params.parsed.threadTs,
+    },
+    trusted: false,
   });
+  if (queued) {
+    requestHeartbeat({
+      source: "hook",
+      intent: "immediate",
+      reason: "hook:slack-interaction",
+      sessionKey,
+      heartbeat: { target: "last" },
+    });
+  }
 }
 
 function buildSlackConfirmationBlocks(params: {
