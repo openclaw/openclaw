@@ -7,6 +7,7 @@ import type {
 import type { OpenClawConfig } from "../src/config/config.js";
 import type { OutboundSendDeps } from "../src/infra/outbound/deliver.js";
 import type { PluginRegistry } from "../src/plugins/registry.js";
+import { closeOpenClawAgentDatabasesForTest } from "../src/state/openclaw-agent-db.js";
 import { installSharedTestSetup } from "./setup.shared.js";
 
 installSharedTestSetup();
@@ -23,11 +24,8 @@ type WorkerPluginRuntimeHelpers = {
   setActivePluginRegistry: typeof import("../src/plugins/runtime.js").setActivePluginRegistry;
 };
 type WorkerCleanupHelpers = {
-  closeOpenClawAgentDatabasesForTest: typeof import("../src/state/openclaw-agent-db.js").closeOpenClawAgentDatabasesForTest;
-  drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
-  resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
-  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
+  resetModelCatalogReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelCatalogReadyCacheForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -71,16 +69,9 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     vi.importActual<typeof import("../src/agents/models-config-state.js")>(
       "../src/agents/models-config-state.js",
     ),
-    vi.importActual<typeof import("../src/state/openclaw-agent-db.js")>(
-      "../src/state/openclaw-agent-db.js",
-    ),
-    vi.importActual<typeof import("../src/infra/file-lock.js")>("../src/infra/file-lock.js"),
-  ]).then(([contextRuntimeState, modelsConfigState, agentDb, fileLock]) => ({
-    closeOpenClawAgentDatabasesForTest: agentDb.closeOpenClawAgentDatabasesForTest,
-    drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
+  ]).then(([contextRuntimeState, modelsConfigState]) => ({
     resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
-    resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
-    resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
+    resetModelCatalogReadyCacheForTest: modelsConfigState.resetModelCatalogReadyCacheForTest,
   }));
   return globalState[WORKER_CLEANUP_HELPERS];
 }
@@ -369,24 +360,14 @@ beforeAll(async () => {
 });
 
 afterEach(async () => {
-  const {
-    closeOpenClawAgentDatabasesForTest,
-    drainFileLockStateForTest,
-    resetContextWindowCacheForTest,
-    resetFileLockStateForTest,
-    resetModelsJsonReadyCacheForTest,
-  } = await loadWorkerCleanupHelpers();
-  await drainFileLockStateForTest();
-  resetFileLockStateForTest();
+  const { resetContextWindowCacheForTest, resetModelCatalogReadyCacheForTest } =
+    await loadWorkerCleanupHelpers();
   closeOpenClawAgentDatabasesForTest();
   resetContextWindowCacheForTest();
-  resetModelsJsonReadyCacheForTest();
+  resetModelCatalogReadyCacheForTest();
   await installDefaultPluginRegistry();
 });
 
 afterAll(async () => {
-  const { closeOpenClawAgentDatabasesForTest, drainFileLockStateForTest } =
-    await loadWorkerCleanupHelpers();
-  await drainFileLockStateForTest();
   closeOpenClawAgentDatabasesForTest();
 });
