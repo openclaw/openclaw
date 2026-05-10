@@ -45,7 +45,6 @@ import { stripHeartbeatToken } from "../heartbeat.js";
 import type { TemplateContext } from "../templating.js";
 import type { VerboseLevel } from "../thinking.js";
 import {
-  couldBeSilentTokenStart,
   HEARTBEAT_TOKEN,
   isSilentReplyPrefixText,
   isSilentReplyTailFragmentText,
@@ -63,6 +62,7 @@ import type { FollowupRun } from "./queue.js";
 import { createBlockReplyDeliveryHandler } from "./reply-delivery.js";
 import { createReplyMediaPathNormalizer } from "./reply-media-paths.runtime.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { createSilentTokenDeltaBuffer } from "./silent-token-delta-buffer.js";
 import type { TypingSignaler } from "./typing-mode.js";
 
 // Maximum number of LiveSessionModelSwitchError retries before surfacing a
@@ -660,24 +660,13 @@ export async function runAgentTurnWithFallback(params: {
         }
         return { text: sanitized, skip: false };
       };
-      // Buffer potential silent-token prefix from BPE-split streaming chunks (e.g. "NO" + "_REPLY").
-      // Only buffers SILENT_REPLY_TOKEN; HEARTBEAT_TOKEN is handled by normalizeStreamingText
-      // via string includes() which works on partial text without prefix-buffering.
-      let silentPrefixBuf = "";
+      const silentTokenDeltaBuffer = createSilentTokenDeltaBuffer(SILENT_REPLY_TOKEN);
       const handlePartialForTyping = async (payload: ReplyPayload): Promise<string | undefined> => {
-        const combinedText = silentPrefixBuf + (payload.text ?? "");
-        silentPrefixBuf = "";
-        if (isSilentReplyText(combinedText, SILENT_REPLY_TOKEN)) {
+        const buffered = silentTokenDeltaBuffer.consume(payload.text);
+        if (buffered.skip) {
           return undefined;
         }
-        if (isSilentReplyPrefixText(combinedText, SILENT_REPLY_TOKEN)) {
-          return undefined;
-        }
-        if (couldBeSilentTokenStart(combinedText, SILENT_REPLY_TOKEN)) {
-          silentPrefixBuf = combinedText;
-          return undefined;
-        }
-        const { text, skip } = normalizeStreamingText({ ...payload, text: combinedText });
+        const { text, skip } = normalizeStreamingText({ ...payload, text: buffered.text });
         if (skip || !text) {
           return undefined;
         }
@@ -820,14 +809,17 @@ export async function runAgentTurnWithFallback(params: {
                   onAssistantTurn: (text) => {
                     queueAssistantMessageStart();
                     queueReasoningEndIfNeeded();
-                    emitAgentEvent({
-                      runId,
-                      stream: "assistant",
-                      data: { text },
-                    });
                     queueStreamingStep(async () => {
                       const textForTyping = await handlePartialForTyping({ text });
-                      if (!params.opts?.onPartialReply || textForTyping === undefined) {
+                      if (textForTyping === undefined) {
+                        return;
+                      }
+                      emitAgentEvent({
+                        runId,
+                        stream: "assistant",
+                        data: { text: textForTyping, delta: textForTyping },
+                      });
+                      if (!params.opts?.onPartialReply) {
                         return;
                       }
                       await params.opts.onPartialReply({ text: textForTyping });
