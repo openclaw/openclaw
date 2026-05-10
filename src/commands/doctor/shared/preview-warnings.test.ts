@@ -613,4 +613,43 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("commander");
     expect(warnings.join("\n")).not.toContain("discord");
   });
+
+  it("warns for default-routed traffic when a channel only has scoped routes", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        discord: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "commander",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "commander",
+          match: {
+            channel: "discord",
+            accountId: "workspace-1",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "main" is routed from channel "discord"'),
+    ]);
+    expect(warnings.join("\n")).not.toContain("commander");
+  });
 });

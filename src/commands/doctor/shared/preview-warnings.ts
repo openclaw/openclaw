@@ -222,6 +222,14 @@ function formatChannelList(channels: string[]): string {
     .join(", ")}, and ${channels.length - 2} more`;
 }
 
+function isUnscopedChannelRouteBinding(binding: AgentRouteBinding): boolean {
+  const match = binding.match;
+  const accountId = match.accountId?.trim();
+  const hasScopedAccount = Boolean(accountId && accountId !== "*");
+  const hasRoles = Array.isArray(match.roles) && match.roles.length > 0;
+  return !hasScopedAccount && !match.peer && !match.guildId && !match.teamId && !hasRoles;
+}
+
 function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
   agentId: string;
   channels: string[];
@@ -242,18 +250,18 @@ function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
   };
 
   const routeBindings: AgentRouteBinding[] = listRouteBindings(cfg);
-  const explicitlyBoundChannels = new Set<string>();
+  const fullyCoveredChannels = new Set<string>();
   for (const binding of routeBindings) {
     const channel = binding.match.channel.trim();
     add(binding.agentId, channel);
-    if (channel) {
-      explicitlyBoundChannels.add(channel);
+    if (channel && isUnscopedChannelRouteBinding(binding)) {
+      fullyCoveredChannels.add(channel);
     }
   }
 
   const defaultAgentId = resolveDefaultAgentId(cfg);
   for (const channel of listConfiguredChannelIds(cfg)) {
-    if (!explicitlyBoundChannels.has(channel)) {
+    if (!fullyCoveredChannels.has(channel)) {
       add(defaultAgentId, channel);
     }
   }
