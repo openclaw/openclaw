@@ -1372,7 +1372,10 @@ export async function runCodexAppServerAttempt(
     prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
+    nativePostToolUseRelayEnabled:
+      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
