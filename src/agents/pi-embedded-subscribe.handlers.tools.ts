@@ -641,6 +641,14 @@ export function handleToolExecutionStart(
   ctx: ToolHandlerContext,
   evt: AgentEvent & { toolName: string; toolCallId: string; args: unknown },
 ): void | Promise<void> {
+  // Tool execution implies a model call already produced the tool request. Emit
+  // this before any reply-flush work so cron watchdogs are cleared immediately
+  // when a long-running tool starts.
+  ctx.params.onExecutionPhase?.({
+    phase: "model_call_started",
+    firstModelCallStarted: true,
+  });
+
   const continueAfterBlockReplyFlush = (): void | Promise<void> => {
     const onBlockReplyFlushResult = ctx.params.onBlockReplyFlush?.();
     if (isPromiseLike<void>(onBlockReplyFlushResult)) {
@@ -663,7 +671,6 @@ export function handleToolExecutionStart(
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();
     toolStartData.set(buildToolStartKey(runId, toolCallId), { startTime: startedAt, args });
-
     if (toolName === "read") {
       const record = args && typeof args === "object" ? (args as Record<string, unknown>) : {};
       const filePathValue =

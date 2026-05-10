@@ -185,6 +185,7 @@ type ToolHandlerParams = Pick<
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onExecutionPhase"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"

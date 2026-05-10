@@ -44,7 +44,7 @@ Docs: https://docs.openclaw.ai
 - Doctor: stop flagging the live compatibility agent directory as orphaned when the configured default agent is not `main`. Fixes #74313. (#74438) Thanks @carlos4s.
 - Auth/Claude CLI: persist fresher managed external CLI OAuth credentials back to `auth-profiles.json`, preventing stale `anthropic:claude-cli` profiles from repeatedly bootstrapping and flooding debug logs. Fixes #80129. Thanks @Caulderein.
 - Context: render `/context map` only from actual run context and persist Codex app-server run reports without counting deferred tool-search schemas as prompt-loaded tool schemas.
-- Cron/Codex app-server: mark Codex `turn/start` dispatch as model-call startup progress so isolated cron watchdogs do not false-fail runs that have already entered Codex-native tool execution. Thanks @keshavbotagent.
+- Cron/agents: mark Codex `turn/start` dispatch and forwarded embedded prompt/tool execution as model-call startup progress so isolated cron watchdogs do not false-fail runs that have already entered real execution. Thanks @keshavbotagent.
 - Codex app-server: report Codex-native tool execution to diagnostics so long-running native `bash`, web, file, and MCP tools no longer look like stale embedded runs to the watchdog. (#80217)
 - Tasks: route group and channel task completions through the requester session so the parent agent can send the visible summary instead of stopping at a generic task-status line. Fixes #77251. (#77365) Thanks @funmerlin.
 - Telegram: preserve blank lines between manually indented bullet blocks and following numbered sections in rendered replies. Fixes #76998. Thanks @evgyur.

@@ -331,6 +331,53 @@ describe("runEmbeddedPiAgent", () => {
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
+  it("forwards execution phase progress into embedded attempts", async () => {
+    const sessionFile = nextSessionFile();
+    const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);
+    const onExecutionPhase = vi.fn();
+    runEmbeddedAttemptMock.mockImplementationOnce(async (params) => {
+      params.onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "openai",
+        model: "mock-1",
+        firstModelCallStarted: true,
+      });
+      return makeEmbeddedRunnerAttempt({
+        assistantTexts: ["ok"],
+        lastAssistant: buildEmbeddedRunnerAssistant({
+          content: [{ type: "text", text: "ok" }],
+        }),
+      });
+    });
+
+    await runEmbeddedPiAgent({
+      sessionId: "execution-phase-forwarding",
+      sessionFile,
+      workspaceDir,
+      config: cfg,
+      prompt: "hello",
+      provider: "openai",
+      model: "mock-1",
+      timeoutMs: 5_000,
+      agentDir,
+      runId: nextRunId("execution-phase-forwarding"),
+      enqueue: immediateEnqueue,
+      onExecutionPhase,
+    });
+
+    expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(1);
+    const firstCall = runEmbeddedAttemptMock.mock.calls[0]?.[0] as {
+      onExecutionPhase?: unknown;
+    };
+    expect(firstCall.onExecutionPhase).toBe(onExecutionPhase);
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "model_call_started",
+      provider: "openai",
+      model: "mock-1",
+      firstModelCallStarted: true,
+    });
+  });
+
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {
     const sessionFile = nextSessionFile();
     const cfg = createEmbeddedPiRunnerOpenAiConfig(["mock-1"]);

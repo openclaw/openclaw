@@ -41,6 +41,10 @@ export type SubscribeEmbeddedPiSessionParams = {
   blockReplyChunking?: BlockReplyChunking;
   onPartialReply?: (payload: PartialReplyPayload) => void | Promise<void>;
   onAssistantMessageStart?: () => void | Promise<void>;
+  onExecutionPhase?: (info: {
+    phase: "model_call_started";
+    firstModelCallStarted?: boolean;
+  }) => void;
   onAgentEvent?: (evt: {
     stream: string;
     data: Record<string, unknown>;
