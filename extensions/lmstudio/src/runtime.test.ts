@@ -66,7 +66,7 @@ describe("lmstudio-runtime", () => {
 
   it("falls back to configured env marker key when profile resolution fails", async () => {
     resolveApiKeyForProviderMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+      new Error('No API key found for provider "lmstudio". Auth store: SQLite auth profile store.'),
     );
 
     await expect(
@@ -126,7 +126,7 @@ describe("lmstudio-runtime", () => {
 
   it("allows header-only runtime auth when Authorization is configured", async () => {
     resolveApiKeyForProviderMock.mockRejectedValueOnce(
-      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+      new Error('No API key found for provider "lmstudio". Auth store: SQLite auth profile store.'),
     );
 
     await expect(
@@ -196,7 +196,7 @@ describe("lmstudio-runtime", () => {
 
   it("throws when explicit api-key mode cannot resolve any key", async () => {
     resolveApiKeyForProviderMock.mockRejectedValue(
-      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+      new Error('No API key found for provider "lmstudio". Auth store: SQLite auth profile store.'),
     );
 
     await expect(
