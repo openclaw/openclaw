@@ -386,6 +386,7 @@ describe("message tool secret scoping", () => {
       'visible replies to the current source conversation must use action="send"',
     );
     expect(scopedTool.description).toContain("target defaults to the current source conversation");
+    expect(scopedTool.description).toContain("do not put that answer only in normal final text");
     expect(scopedTool.description).toContain("Normal final answers are private");
     expect(explicitTargetTool.description).toContain("Include target when sending");
     expect(explicitTargetTool.description).not.toContain(
