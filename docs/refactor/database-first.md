@@ -335,7 +335,7 @@ The branch already has a real shared SQLite base:
   `src/commands/doctor/legacy/session-transcript-health.ts`; runtime command
   modules no longer carry JSONL transcript parsing or active-branch repair code.
 
-The remaining cleanup is mostly consolidation and deletion:
+Completed consolidation/deletion highlights:
 
 - Plugin state now uses the shared `state/openclaw.sqlite` database. The old
   branch-local `plugin-state/state.sqlite` sidecar importer is removed because

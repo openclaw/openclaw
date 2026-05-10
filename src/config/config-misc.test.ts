@@ -1028,8 +1028,8 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"memorySearch"');
-      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual({
       expect(snap.legacyIssues).toHaveLength(0);
+      expect((snap.sourceConfig as { memorySearch?: unknown }).memorySearch).toEqual({
         provider: "local",
         fallback: "none",
         query: { maxResults: 7 },
@@ -1051,8 +1051,8 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
       expect(snap.legacyIssues).toHaveLength(0);
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         every: "30m",
         model: "anthropic/claude-3-5-haiku-20241022",
       });
@@ -1074,8 +1074,8 @@ describe("config strict validation", () => {
 
       expect(snap.valid).toBe(false);
       expectSomeIssueMessageContains(snap.issues, '"heartbeat"');
-      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
       expect(snap.legacyIssues).toHaveLength(0);
+      expect((snap.sourceConfig as { heartbeat?: unknown }).heartbeat).toEqual({
         showOk: true,
         showAlerts: false,
         useIndicator: true,

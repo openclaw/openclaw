@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path, { basename, dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { MEDIA_MAX_BYTES } from "../media/store.js";
+import { MEDIA_MAX_BYTES, saveMediaBufferWithId } from "../media/store.js";
 import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 import {
   createSandboxMediaContexts,
@@ -155,15 +155,16 @@ async function setupSandboxWorkspace(home: string): Promise<{
 }
 
 async function writeInboundMedia(
-  home: string,
+  _home: string,
   fileName: string,
   payload: string | Buffer,
 ): Promise<string> {
-  const inboundDir = join(home, ".openclaw", "media", "inbound");
-  await fs.mkdir(inboundDir, { recursive: true });
-  const mediaPath = join(inboundDir, fileName);
-  await fs.writeFile(mediaPath, payload);
-  return mediaPath;
+  return await saveMediaBufferWithId({
+    subdir: "inbound",
+    id: fileName,
+    buffer: Buffer.isBuffer(payload) ? payload : Buffer.from(payload),
+    contentType: "image/jpeg",
+  });
 }
 
 describe("stageSandboxMedia", () => {

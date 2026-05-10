@@ -939,18 +939,6 @@ describe("task-registry", () => {
       ownerKey: "agent:main:guildchat:group:-100123:topic:42",
       target: "guildchat:group:-100123:topic:42",
     },
-    {
-      id: "discord-legacy-channel",
-      name: "legacy Discord channel",
-      ownerKey: "agent:main:discord:guild-123:channel-456",
-      target: "guildchat:channel:456",
-    },
-    {
-      id: "whatsapp-legacy-group",
-      name: "legacy WhatsApp group",
-      ownerKey: "agent:main:whatsapp:123@g.us",
-      target: "guildchat:group:123@g.us",
-    },
   ])("routes $name ACP completion through the parent session", async ({ id, ownerKey, target }) => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

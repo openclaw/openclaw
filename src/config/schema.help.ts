@@ -1090,7 +1090,7 @@ export const FIELD_HELP: Record<string, string> = {
   "agents.defaults.memorySearch.qmd":
     "Use this when one agent should query another agent's QMD-indexed memory collections without flattening everything into one shared namespace.",
   "agents.defaults.memorySearch.qmd.extraCollections":
-    "Adds directional QMD memory collections for cross-agent recall without creating a shared global memory namespace.",
+    "Use extra directional QMD memory collections for cross-agent recall without creating a shared global memory namespace. Keep this empty unless one agent intentionally searches another curated memory root.",
   "agents.defaults.memorySearch.qmd.extraCollections.path":
     "Use an absolute or workspace-relative filesystem path for the extra QMD collection; keep it pointed at the memory note folder you actually want this agent to search.",
   "agents.defaults.memorySearch.qmd.extraCollections.name":
