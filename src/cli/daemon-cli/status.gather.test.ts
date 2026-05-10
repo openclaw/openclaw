@@ -182,10 +182,10 @@ vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
-  return call?.[0] as T;
+  return call?.[0];
 }
 
 describe("gatherDaemonStatus", () => {
@@ -241,11 +241,11 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(loadGatewayTlsRuntime).toHaveBeenCalledTimes(1);
-    const probeInput = callArg<{
+    const probeInput = callArg(callGatewayStatusProbe) as {
       url?: string;
       tlsFingerprint?: string;
       token?: string;
-    }>(callGatewayStatusProbe);
+    };
     expect(probeInput.url).toBe("wss://127.0.0.1:19001");
     expect(probeInput.tlsFingerprint).toBe("sha256:11:22:33:44");
     expect(probeInput.token).toBe("daemon-token");
@@ -269,9 +269,10 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg<{ requireRpc?: boolean; configPath?: string }>(
-      callGatewayStatusProbe,
-    );
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      requireRpc?: boolean;
+      configPath?: string;
+    };
     expect(probeInput.requireRpc).toBe(true);
     expect(probeInput.configPath).toBe("/tmp/openclaw-daemon/openclaw.json");
   });
@@ -292,11 +293,11 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg<{
+    const probeInput = callArg(callGatewayStatusProbe) as {
       config?: unknown;
       preauthHandshakeTimeoutMs?: number;
       timeoutMs?: number;
-    }>(callGatewayStatusProbe);
+    };
     expect(probeInput.config).toBe(daemonLoadedConfig);
     expect(probeInput.preauthHandshakeTimeoutMs).toBe(30_000);
     expect(probeInput.timeoutMs).toBe(30_000);
@@ -344,7 +345,10 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(loadGatewayTlsRuntime).not.toHaveBeenCalled();
-    const probeInput = callArg<{ url?: string; tlsFingerprint?: string }>(callGatewayStatusProbe);
+    const probeInput = callArg(callGatewayStatusProbe) as {
+      url?: string;
+      tlsFingerprint?: string;
+    };
     expect(probeInput.url).toBe("wss://override.example:18790");
     expect(probeInput.tlsFingerprint).toBeUndefined();
     expect(status.gateway?.probeUrl).toBe("wss://override.example:18790");
@@ -400,9 +404,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(
-      serviceReadRuntime.mock.calls.some(
-        ([env]) => (env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT === "19001",
-      ),
+      serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
@@ -428,7 +430,7 @@ describe("gatherDaemonStatus", () => {
       deep: true,
     });
 
-    const handoffInput = callArg<NodeJS.ProcessEnv>(readGatewayRestartHandoffSync);
+    const handoffInput = callArg(readGatewayRestartHandoffSync) as NodeJS.ProcessEnv;
     expect(handoffInput.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
     expect(handoffInput.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-daemon/openclaw.json");
     expect(status.service.restartHandoff?.reason).toBe("plugin source changed");
@@ -558,7 +560,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    expect(callArg<{ password?: string }>(callGatewayStatusProbe).password).toBe(
+    expect((callArg(callGatewayStatusProbe) as { password?: string }).password).toBe(
       "daemon-secretref-password",
     ); // pragma: allowlist secret
   });
@@ -587,7 +589,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    expect(callArg<{ token?: string }>(callGatewayStatusProbe).token).toBe(
+    expect((callArg(callGatewayStatusProbe) as { token?: string }).token).toBe(
       "daemon-secretref-token",
     );
   });
@@ -616,7 +618,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg<{ token?: string; password?: string }>(callGatewayStatusProbe);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBe("daemon-token");
     expect(probeInput.password).toBeUndefined();
   });
@@ -644,7 +646,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg<{ token?: string; password?: string }>(callGatewayStatusProbe);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
     expect(probeInput.password).toBeUndefined();
     expect(status.rpc?.authWarning).toBeUndefined();
@@ -709,7 +711,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    const probeInput = callArg<{ token?: string; password?: string }>(callGatewayStatusProbe);
+    const probeInput = callArg(callGatewayStatusProbe) as { token?: string; password?: string };
     expect(probeInput.token).toBeUndefined();
     expect(probeInput.password).toBe("env-password"); // pragma: allowlist secret
   });
@@ -750,7 +752,7 @@ describe("gatherDaemonStatus", () => {
       deep: false,
     });
 
-    expect(callArg<{ port?: number }>(inspectGatewayRestart).port).toBe(19001);
+    expect((callArg(inspectGatewayRestart) as { port?: number }).port).toBe(19001);
     expect(status.health).toEqual({
       healthy: false,
       staleGatewayPids: [9000],
