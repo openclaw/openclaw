@@ -152,11 +152,9 @@ type SelectedConnectAuth = {
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
 export const CONTROL_UI_OPERATOR_SCOPES = [
-  "operator.admin",
   "operator.read",
   "operator.write",
   "operator.approvals",
-  "operator.pairing",
 ] as const;
 
 export type GatewayConnectAuth = {

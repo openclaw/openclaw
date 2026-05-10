@@ -132,6 +132,8 @@ private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodab
     if let error {
         if details["code"] == nil {
             details["code"] = ProtoAnyCodable(error.code)
+        } else {
+            details["errorCode"] = ProtoAnyCodable(error.code)
         }
         details["message"] = ProtoAnyCodable(error.message)
         if let retryable = error.retryable {
@@ -149,11 +151,9 @@ private enum ConnectChallengeError: Error {
 }
 
 private let defaultOperatorConnectScopes: [String] = [
-    "operator.admin",
     "operator.read",
     "operator.write",
     "operator.approvals",
-    "operator.pairing",
 ]
 
 extension String {

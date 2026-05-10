@@ -25,6 +25,23 @@ struct GatewayChannelConnectTests {
         }
     }
 
+    private final class ScopeCapture: @unchecked Sendable {
+        private let lock = NSLock()
+        private var scopes: [String]?
+
+        func set(_ scopes: [String]?) {
+            self.lock.lock()
+            self.scopes = scopes
+            self.lock.unlock()
+        }
+
+        func snapshot() -> [String]? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            return self.scopes
+        }
+    }
+
     private final class TLSFailureSession: WebSocketSessioning, GatewayTLSFailureProviding, @unchecked Sendable {
         private var failure: GatewayTLSValidationFailure?
 
@@ -150,6 +167,30 @@ struct GatewayChannelConnectTests {
             if case .failure = r2 { true } else { false }
         }())
         #expect(session.snapshotMakeCount() == 1)
+    }
+
+    @Test func `default operator connect scopes are bootstrap-compatible`() async throws {
+        let capture = ScopeCapture()
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                    if sendIndex == 0 {
+                        capture.set(GatewayWebSocketTestSupport.connectScopes(from: message))
+                    }
+                })
+            })
+        let channel = try GatewayChannelActor(
+            url: #require(URL(string: "ws://example.invalid")),
+            token: nil,
+            session: WebSocketSessionBox(session: session))
+
+        try await channel.connect()
+
+        #expect(capture.snapshot() == [
+            "operator.read",
+            "operator.write",
+            "operator.approvals",
+        ])
     }
 
     @Test func `connect surfaces structured auth failure`() async throws {

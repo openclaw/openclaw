@@ -79,6 +79,20 @@ describe("handshake auth helpers", () => {
     });
   });
 
+  it("treats device-token scope mismatch as configuration review guidance", () => {
+    const resolved = resolveUnauthorizedHandshakeContext({
+      connectAuth: { deviceToken: "device-token" },
+      failedAuth: { ok: false, reason: "scope_mismatch" },
+      hasDeviceIdentity: true,
+    });
+
+    expect(resolved).toEqual({
+      authProvided: "device-token",
+      canRetryWithDeviceToken: false,
+      recommendedNextStep: "review_auth_configuration",
+    });
+  });
+
   it("allows silent local pairing for not-paired, scope-upgrade and role-upgrade", () => {
     expect(
       shouldAllowSilentLocalPairing({
