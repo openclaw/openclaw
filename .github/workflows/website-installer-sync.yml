@@ -6,7 +6,6 @@ on:
       - scripts/install.sh
       - scripts/install-cli.sh
       - scripts/install.ps1
-      - scripts/install.cmd
       - .github/workflows/website-installer-sync.yml
   push:
     branches: [main]
@@ -14,7 +13,6 @@ on:
       - scripts/install.sh
       - scripts/install-cli.sh
       - scripts/install.ps1
-      - scripts/install.cmd
       - .github/workflows/website-installer-sync.yml
   workflow_dispatch:
     inputs:
@@ -130,10 +128,6 @@ jobs:
         shell: pwsh
         run: .\scripts\install.ps1 -DryRun -NoOnboard -InstallMethod npm
 
-      - name: install.cmd dry run
-        shell: cmd
-        run: set "OPENCLAW_INSTALL_PS1_URL=%GITHUB_WORKSPACE%\scripts\install.ps1" && .\scripts\install.cmd --dry-run --no-onboard --npm
-
   sync-website:
     needs: [static, linux-docker, macos-installer, windows-installer]
     if: >
@@ -158,7 +152,7 @@ jobs:
           cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
           cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
           cp openclaw/scripts/install.ps1 openclaw.ai/public/install.ps1
-          cp openclaw/scripts/install.cmd openclaw.ai/public/install.cmd
+          rm -f openclaw.ai/public/install.cmd
           chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
 
       - name: Check for changes

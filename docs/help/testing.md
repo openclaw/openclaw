@@ -326,6 +326,26 @@ gh workflow run package-acceptance.yml --ref main \
   - For stable bot-to-bot observation, enable Bot-to-Bot Communication Mode in `@BotFather` for both bots and ensure the driver bot can observe group bot traffic.
   - Writes a Telegram QA report, summary, and observed-messages artifact under `.artifacts/qa-e2e/...`. Replying scenarios include RTT from driver send request to observed SUT reply.
 
+`Mantis Telegram Live` is the PR-evidence wrapper around this lane. It runs the
+candidate ref with Convex-leased Telegram credentials, renders the redacted
+observed-message transcript in a Crabbox desktop browser, records MP4 evidence,
+generates a motion-trimmed GIF, uploads the artifact bundle, and posts inline PR
+evidence through the Mantis GitHub App when `pr_number` is set. Maintainers can
+start it from the Actions UI through `Mantis Scenario` (`scenario_id:
+telegram-live`) or directly from a pull request comment:
+
+```text
+@Mantis telegram
+@Mantis telegram scenario=telegram-status-command
+@Mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
+```
+
+- `pnpm openclaw qa mantis telegram-desktop-builder`
+  - Leases or reuses a Crabbox Linux desktop, installs native Telegram Desktop, configures OpenClaw with a leased Telegram SUT bot token, starts the gateway, and records screenshot/MP4 evidence from the visible VNC desktop.
+  - Defaults to `--credential-source convex` so workflows only need the Convex broker secret. Use `--credential-source env` with the same `OPENCLAW_QA_TELEGRAM_*` variables as `pnpm openclaw qa telegram`.
+  - Telegram Desktop still needs a user login/profile. The bot token configures OpenClaw only. Use `--telegram-profile-archive-env <name>` for a base64 `.tgz` profile archive, or use `--keep-lease` and log in manually through VNC once.
+  - Writes `mantis-telegram-desktop-builder-report.md`, `mantis-telegram-desktop-builder-summary.json`, `telegram-desktop-builder.png`, and `telegram-desktop-builder.mp4` under the output directory.
+
 Live transport lanes share one standard contract so new transports do not drift; the per-lane coverage matrix lives in [QA overview → Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage). `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)

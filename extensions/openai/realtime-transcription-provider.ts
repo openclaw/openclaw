@@ -68,17 +68,22 @@ type OpenAIRealtimeTranscriptionSessionCreate = {
 };
 
 type OpenAIRealtimeTranscriptionSessionUpdate = {
-  input_audio_format: "g711_ulaw";
-  input_audio_transcription: {
-    model: string;
-    language?: string;
-    prompt?: string;
-  };
-  turn_detection: {
-    type: "server_vad";
-    threshold: number;
-    prefix_padding_ms: number;
-    silence_duration_ms: number;
+  type: "transcription";
+  audio: {
+    input: {
+      format: { type: "audio/pcmu" };
+      transcription: {
+        model: string;
+        language?: string;
+        prompt?: string;
+      };
+      turn_detection: {
+        type: "server_vad";
+        threshold: number;
+        prefix_padding_ms: number;
+        silence_duration_ms: number;
+      };
+    };
   };
 };
 
@@ -138,17 +143,22 @@ function buildOpenAIRealtimeTranscriptionSessionUpdateConfig(
   config: OpenAIRealtimeTranscriptionSessionConfig,
 ): OpenAIRealtimeTranscriptionSessionUpdate {
   return {
-    input_audio_format: "g711_ulaw",
-    input_audio_transcription: {
-      model: config.model,
-      ...(config.language ? { language: config.language } : {}),
-      ...(config.prompt ? { prompt: config.prompt } : {}),
-    },
-    turn_detection: {
-      type: "server_vad",
-      threshold: config.vadThreshold,
-      prefix_padding_ms: 300,
-      silence_duration_ms: config.silenceDurationMs,
+    type: "transcription",
+    audio: {
+      input: {
+        format: { type: "audio/pcmu" },
+        transcription: {
+          model: config.model,
+          ...(config.language ? { language: config.language } : {}),
+          ...(config.prompt ? { prompt: config.prompt } : {}),
+        },
+        turn_detection: {
+          type: "server_vad",
+          threshold: config.vadThreshold,
+          prefix_padding_ms: 300,
+          silence_duration_ms: config.silenceDurationMs,
+        },
+      },
     },
   };
 }
@@ -259,7 +269,7 @@ function createOpenAIRealtimeTranscriptionSession(
     },
     onOpen: (transport: RealtimeTranscriptionWebSocketTransport) => {
       transport.sendJson({
-        type: "transcription_session.update",
+        type: "session.update",
         session: buildOpenAIRealtimeTranscriptionSessionUpdateConfig(config),
       });
     },

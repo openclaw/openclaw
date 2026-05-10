@@ -138,6 +138,13 @@ export function resolveMissingPluginCommandMessage(
   const parentPluginId = commandAlias?.pluginId;
   if (parentPluginId) {
     if (allow.length > 0 && !allow.includes(parentPluginId)) {
+      if (parentPluginId === normalizedPluginId) {
+        return (
+          `The \`openclaw ${normalizedPluginId}\` command is unavailable because ` +
+          `\`plugins.allow\` excludes "${normalizedPluginId}". Add "${normalizedPluginId}" to ` +
+          `\`plugins.allow\` if you want that bundled plugin CLI surface.`
+        );
+      }
       return (
         `"${normalizedPluginId}" is not a plugin; it is a command provided by the ` +
         `"${parentPluginId}" plugin. Add "${parentPluginId}" to \`plugins.allow\` ` +

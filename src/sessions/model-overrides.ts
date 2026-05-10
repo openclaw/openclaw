@@ -125,3 +125,48 @@ export function applyModelOverrideToSessionEntry(params: {
 
   return { updated };
 }
+
+function wrappedOverrideModel(provider: string, model: string): string {
+  return `${provider}/${model}`;
+}
+
+export function repairProviderWrappedModelOverride(params: {
+  entry: SessionEntry;
+  defaultProvider: string;
+  defaultModel?: string;
+}): { updated: boolean } {
+  const overrideProvider = normalizeOptionalString(params.entry.providerOverride);
+  const overrideModel = normalizeOptionalString(params.entry.modelOverride);
+  if (!overrideProvider || !overrideModel) {
+    return { updated: false };
+  }
+
+  const wrappedModel = wrappedOverrideModel(overrideProvider, overrideModel);
+  const runtimeProvider = normalizeOptionalString(params.entry.modelProvider);
+  const runtimeModel = normalizeOptionalString(params.entry.model);
+  if (runtimeProvider && runtimeModel === wrappedModel && runtimeProvider !== overrideProvider) {
+    return applyModelOverrideToSessionEntry({
+      entry: params.entry,
+      selection: {
+        provider: runtimeProvider,
+        model: runtimeModel,
+        isDefault:
+          runtimeProvider === params.defaultProvider && runtimeModel === params.defaultModel,
+      },
+      selectionSource: params.entry.modelOverrideSource === "auto" ? "auto" : "user",
+    });
+  }
+
+  if (params.defaultProvider !== overrideProvider && params.defaultModel === wrappedModel) {
+    return applyModelOverrideToSessionEntry({
+      entry: params.entry,
+      selection: {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+        isDefault: true,
+      },
+    });
+  }
+
+  return { updated: false };
+}

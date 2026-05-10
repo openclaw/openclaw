@@ -1477,7 +1477,7 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     expect(finalToolCall.name).toBe("write");
   });
 
-  it("keeps blank names blank and assigns fallback ids when both name and id are blank", async () => {
+  it("stops final blank tool names before dispatch and still assigns fallback ids", async () => {
     const finalToolCall = { type: "toolCall", id: "", name: "" };
     const finalMessage = { role: "assistant", content: [finalToolCall] };
     const baseFn = vi.fn(() =>
@@ -1488,8 +1488,16 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["read", "write"]));
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(finalToolCall.name).toBe("");
     expect(finalToolCall.id).toBe("call_auto_1");
   });
@@ -1618,11 +1626,19 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     );
 
     const stream = await invokeWrappedStream(baseFn, new Set(["exec", "exec2"]));
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(finalToolCall.name).toBe("");
   });
-  it("does not collapse whitespace-only tool names to empty strings", async () => {
+  it("leaves provisional blank streamed names recoverable while stopping final blank dispatch", async () => {
     const partialToolCall = { type: "toolCall", name: "   " };
     const finalToolCall = { type: "toolCall", name: "\t  " };
     const event = {
@@ -1636,11 +1652,43 @@ describe("wrapStreamFnTrimToolCallNames", () => {
     for await (const _item of stream) {
       // drain
     }
-    await stream.result();
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
 
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
     expect(partialToolCall.name).toBe("   ");
     expect(finalToolCall.name).toBe("\t  ");
     expect(baseFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not turn blank model output into a callable _blank tool", async () => {
+    const finalToolCall = { type: "toolCall", id: "call_1", name: "", arguments: {} };
+    const finalMessage = { role: "assistant", content: [finalToolCall] };
+    const baseFn = vi.fn(() =>
+      createFakeStream({
+        events: [],
+        resultMessage: finalMessage,
+      }),
+    );
+
+    const stream = await invokeWrappedStream(baseFn, new Set(["_blank"]));
+    const result = (await stream.result()) as {
+      content: Array<{ type: string; text?: string }>;
+    };
+
+    expect(result.content).toEqual([
+      expect.objectContaining({
+        type: "text",
+        text: expect.stringContaining('"blank tool name"'),
+      }),
+    ]);
+    expect(finalToolCall.name).toBe("");
   });
 
   it("assigns fallback ids to missing/blank tool call ids in streamed and final messages", async () => {
@@ -2321,6 +2369,35 @@ describe("wrapStreamFnSanitizeMalformedToolCalls", () => {
       messages: Array<{ content?: Array<{ name?: string }> }>;
     };
     expect(seenContext.messages[0]?.content?.[0]?.name).toBe("write");
+  });
+
+  it("drops replayed blank tool names that cannot be recovered from ids", async () => {
+    const messages = [
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "   ", arguments: {} }],
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "",
+        content: [{ type: "text", text: "stale result" }],
+        isError: true,
+      },
+    ];
+    const baseFn = vi.fn((_model, _context) =>
+      createFakeStream({ events: [], resultMessage: { role: "assistant", content: [] } }),
+    );
+
+    const wrapped = wrapStreamFnSanitizeMalformedToolCalls(baseFn as never);
+    const stream = wrapped({} as never, { messages } as never, {} as never) as
+      | FakeWrappedStream
+      | Promise<FakeWrappedStream>;
+    await Promise.resolve(stream);
+
+    expect(baseFn).toHaveBeenCalledTimes(1);
+    const seenContext = baseFn.mock.calls[0]?.[1] as { messages: unknown[] };
+    expect(seenContext.messages).toStrictEqual([]);
   });
 
   it("recovers mangled replayed tool names before dropping the call", async () => {

@@ -1042,6 +1042,59 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves direct moonshotai refs through the Moonshot provider alias", () => {
+    const cfg = {
+      models: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("kimi-k2.6"),
+                name: "Kimi K2.6",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("moonshotai", "kimi-k2.6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.moonshot.ai/v1",
+      input: ["text", "image"],
+    });
+  });
+
+  it("resolves direct moonshot-ai refs through the Moonshot provider alias", () => {
+    const cfg = {
+      models: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-completions",
+            models: [makeModel("kimi-k2.6")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("moonshot-ai", "kimi-k2.6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+    });
+  });
+
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
       models: {
@@ -1315,6 +1368,7 @@ describe("resolveModel", () => {
       name: "Healer Alpha",
       input: ["text", "image"],
       reasoning: true,
+      supportsTools: false,
       contextWindow: 262144,
       maxTokens: 65536,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1323,7 +1377,7 @@ describe("resolveModel", () => {
     const result = resolveModelForTest("openrouter", "openrouter/healer-alpha", "/tmp/agent");
 
     expect(result.error).toBeUndefined();
-    expectRecordFields(result.model, {
+    const resolvedModel = expectRecordFields(result.model, {
       provider: "openrouter",
       id: "openrouter/healer-alpha",
       name: "Healer Alpha",
@@ -1332,6 +1386,7 @@ describe("resolveModel", () => {
       contextWindow: 262144,
       maxTokens: 65536,
     });
+    expect(resolvedModel.compat).toMatchObject({ supportsTools: false });
   });
 
   it("falls back to text-only when OpenRouter API cache is empty", () => {

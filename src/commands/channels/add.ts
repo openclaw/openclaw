@@ -154,6 +154,8 @@ export async function channelsAddCommand(
         postWriteHooks.collect(hook);
       },
       promptAccountIds: true,
+      deferStatusUntilSelection: true,
+      skipStatusNote: true,
       onSelection: (value) => {
         selection = value;
       },

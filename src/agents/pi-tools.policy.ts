@@ -327,7 +327,7 @@ export function resolveTrustedGroupId(params: {
   });
 }
 
-function resolveProviderToolPolicy(params: {
+export function resolveProviderToolPolicy(params: {
   byProvider?: Record<string, ToolPolicyConfig>;
   modelProvider?: string;
   modelId?: string;
