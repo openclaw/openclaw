@@ -129,14 +129,14 @@ async function streamOpenRouterMusic(params: {
     }
 
     const reader = response.body.getReader();
-    const audioChunks: Buffer[] = [];
+    const audioDataStrings: string[] = [];
     const transcriptPieces: string[] = [];
 
     try {
       for await (const event of parseSSEStream(reader)) {
         const delta = event.choices?.[0]?.delta?.audio;
         if (delta?.data) {
-          audioChunks.push(Buffer.from(delta.data, "base64"));
+          audioDataStrings.push(delta.data);
         }
         if (delta?.transcript) {
           transcriptPieces.push(delta.transcript);
@@ -147,11 +147,12 @@ async function streamOpenRouterMusic(params: {
       throw error;
     }
 
-    if (audioChunks.length === 0) {
+    if (audioDataStrings.length === 0) {
       throw new Error("OpenRouter music generation response missing audio data");
     }
 
-    return { audioBuffer: Buffer.concat(audioChunks), transcriptPieces };
+    const audioBuffer = Buffer.from(audioDataStrings.join(""), "base64");
+    return { audioBuffer, transcriptPieces };
   } finally {
     release();
   }
@@ -160,6 +161,7 @@ async function streamOpenRouterMusic(params: {
 function buildMusicRequestBody(
   req: MusicGenerationRequest,
   model: string,
+  format?: string,
 ): Record<string, unknown> {
   let promptText = req.prompt.trim();
   const lyrics = normalizeOptionalString(req.lyrics);
@@ -180,7 +182,7 @@ function buildMusicRequestBody(
     stream: true,
     audio: {
       voice: "default",
-      format: "wav",
+      format: format ?? "mp3",
     },
   };
 }
@@ -266,7 +268,8 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
       const { audioBuffer, transcriptPieces } = await streamOpenRouterMusic({
         baseUrl,
         headers,
-        body: buildMusicRequestBody(req, model),
+        body: buildMusicRequestBody(req, model, req.format),
+
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
