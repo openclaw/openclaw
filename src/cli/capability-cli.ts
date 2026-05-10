@@ -672,6 +672,7 @@ async function runModelRun(params: {
   files?: string[];
   model?: string;
   thinking?: ThinkLevel;
+  timeoutMs?: number;
   transport: CapabilityTransport;
 }) {
   const cfg = getRuntimeConfig();
@@ -808,13 +809,14 @@ async function runModelRun(params: {
       provider,
       model,
       ...(params.thinking ? { thinking: params.thinking } : {}),
+      ...(params.timeoutMs !== undefined ? { timeout: Math.ceil(params.timeoutMs / 1000) } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
     expectFinal: true,
-    timeoutMs: 120_000,
+    timeoutMs: params.timeoutMs ?? 120_000,
     clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
@@ -1677,6 +1679,7 @@ export function registerCapabilityCli(program: Command) {
     .option("--file <path>", "Image file", collectOption, [])
     .option("--model <provider/model>", "Model override")
     .option("--thinking <level>", "Thinking level override")
+    .option("--timeout-ms <ms>", "Gateway wait timeout in milliseconds")
     .option("--local", "Force local execution", false)
     .option("--gateway", "Force gateway execution", false)
     .option("--json", "Output JSON", false)
@@ -1684,17 +1687,25 @@ export function registerCapabilityCli(program: Command) {
       await runCommandWithRuntime(defaultRuntime, async () => {
         const prompt = requireModelRunPrompt(opts.prompt);
         const thinking = normalizeModelRunThinking(opts.thinking);
+        const timeoutMs = parseOptionalFiniteNumber(opts.timeoutMs, "--timeout-ms");
+        if (timeoutMs !== undefined && timeoutMs <= 0) {
+          throw new Error("--timeout-ms must be greater than 0");
+        }
         const transport = resolveTransport({
           local: Boolean(opts.local),
           gateway: Boolean(opts.gateway),
           supported: ["local", "gateway"],
           defaultTransport: "local",
         });
+        if (timeoutMs !== undefined && transport !== "gateway") {
+          throw new Error("--timeout-ms is only supported with --gateway");
+        }
         const result = await runModelRun({
           prompt,
           files: opts.file as string[] | undefined,
           model: opts.model as string | undefined,
           thinking,
+          timeoutMs: timeoutMs === undefined ? undefined : Math.ceil(timeoutMs),
           transport,
         });
         emitJsonOrText(defaultRuntime, Boolean(opts.json), result, formatEnvelopeForText);
