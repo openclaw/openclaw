@@ -9,6 +9,7 @@ function createMockDraftApi(sendMessageImpl?: () => Promise<{ message_id: number
     sendMessage: vi.fn(sendMessageImpl ?? (async () => ({ message_id: 17 }))),
     editMessageText: vi.fn().mockResolvedValue(true),
     deleteMessage: vi.fn().mockResolvedValue(true),
+    sendMessageDraft: vi.fn().mockResolvedValue(true),
   };
 }
 
@@ -585,6 +586,159 @@ describe("draft stream initial message debounce", () => {
       await stream.flush();
 
       expect(api.sendMessage).toHaveBeenCalledWith(123, "Hi", undefined);
+    });
+  });
+
+  describe("native sendMessageDraft transport", () => {
+    function createDraftTransportStream(
+      api: ReturnType<typeof createMockDraftApi>,
+      overrides: Omit<Partial<TelegramDraftStreamParams>, "api" | "chatId"> = {},
+    ) {
+      return createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: 123,
+        transport: "draft",
+        ...overrides,
+      });
+    }
+
+    it("streams partial updates through sendMessageDraft using a stable draft_id", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      stream.update("Hello, world");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+      expect(api.sendMessage).not.toHaveBeenCalled();
+      expect(api.editMessageText).not.toHaveBeenCalled();
+      const [firstChatId, firstDraftId, firstText] = api.sendMessageDraft.mock.calls[0] ?? [];
+      const [secondChatId, secondDraftId, secondText] = api.sendMessageDraft.mock.calls[1] ?? [];
+      expect(firstChatId).toBe(123);
+      expect(secondChatId).toBe(123);
+      expect(firstText).toBe("Hello");
+      expect(secondText).toBe("Hello, world");
+      expect(typeof firstDraftId).toBe("number");
+      expect(firstDraftId).not.toBe(0);
+      expect(secondDraftId).toBe(firstDraftId);
+    });
+
+    it("converts the draft into a permanent message via sendMessage on stop", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api);
+
+      stream.update("Hello, world");
+      await stream.flush();
+      await stream.stop();
+
+      expect(api.sendMessageDraft).toHaveBeenCalledTimes(1);
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello, world", undefined);
+      expect(stream.messageId()).toBe(17);
+    });
+
+    it("rotates draft_id when forceNewMessage starts a new animation", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api);
+
+      stream.update("Thinking...");
+      await stream.flush();
+      const firstDraftId = api.sendMessageDraft.mock.calls[0]?.[1];
+
+      stream.forceNewMessage();
+      stream.update("After thinking");
+      await stream.flush();
+      const secondDraftId = api.sendMessageDraft.mock.calls[1]?.[1];
+
+      expect(typeof firstDraftId).toBe("number");
+      expect(typeof secondDraftId).toBe("number");
+      expect(secondDraftId).not.toBe(firstDraftId);
+    });
+
+    it("forwards message_thread_id and parse_mode to sendMessageDraft", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api, {
+        thread: { id: 42, scope: "dm" },
+        renderText: (text) => ({
+          text: text.replace("**bold**", "<b>bold</b>"),
+          parseMode: "HTML",
+        }),
+      });
+
+      stream.update("**bold**");
+      await stream.flush();
+
+      const [chatId, draftId, text, other] = api.sendMessageDraft.mock.calls[0] ?? [];
+      expect(chatId).toBe(123);
+      expect(typeof draftId).toBe("number");
+      expect(text).toBe("<b>bold</b>");
+      expect(other).toMatchObject({ message_thread_id: 42, parse_mode: "HTML" });
+      expect(api.sendMessage).not.toHaveBeenCalled();
+    });
+
+    it("preserves reply_to_message_id on the final permanent sendMessage only", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api, {
+        thread: { id: 42, scope: "dm" },
+        replyToMessageId: 411,
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+      await stream.stop();
+
+      // Streaming updates do not get reply_to_message_id (sendMessageDraft has no such field).
+      const draftOther = api.sendMessageDraft.mock.calls[0]?.[3];
+      expect(draftOther ?? {}).not.toHaveProperty("reply_to_message_id");
+
+      // Reply semantics survive on the final permanent message.
+      expect(api.sendMessage).toHaveBeenCalledWith(123, "Hello", {
+        message_thread_id: 42,
+        reply_to_message_id: 411,
+        allow_sending_without_reply: true,
+      });
+    });
+
+    it("refuses to start a draft animation when chat_id is not numeric", async () => {
+      const api = createMockDraftApi();
+      const warn = vi.fn();
+      const stream = createTelegramDraftStream({
+        api: api as unknown as Bot["api"],
+        chatId: "@channelusername",
+        transport: "draft",
+        warn,
+      });
+
+      stream.update("Hello");
+      await stream.flush();
+
+      expect(api.sendMessageDraft).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("numeric chat_id"));
+    });
+
+    it("deletes the permanent message on clear() after stop", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      await stream.stop();
+      await stream.clear();
+
+      expect(api.deleteMessage).toHaveBeenCalledWith(123, 17);
+    });
+
+    it("does not call deleteMessage when clear() is invoked before any final send", async () => {
+      const api = createMockDraftApi();
+      const stream = createDraftTransportStream(api);
+
+      stream.update("Hello");
+      await stream.flush();
+      await stream.clear();
+
+      // Drafts auto-expire on Telegram's side; nothing to delete locally.
+      expect(api.deleteMessage).not.toHaveBeenCalled();
     });
   });
 });

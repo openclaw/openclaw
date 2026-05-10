@@ -1,5 +1,4 @@
 import type {
-  ChannelPreviewStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -7,6 +6,7 @@ import type {
   OutboundRetryConfig,
   ReplyToMode,
   SessionThreadBindingsConfig,
+  TelegramChannelStreamingConfig,
 } from "./types.base.js";
 import type {
   ChannelHealthMonitorConfig,
@@ -148,7 +148,7 @@ export type TelegramAccountConfig = {
   /** Outbound text chunk size (chars). Default: 4000. */
   textChunkLimit?: number;
   /** Streaming + chunking settings. Prefer this nested shape over legacy flat keys. */
-  streaming?: ChannelPreviewStreamingConfig;
+  streaming?: TelegramChannelStreamingConfig;
   mediaMaxMb?: number;
   /** Telegram API client timeout in seconds (grammY ApiClientOptions). */
   timeoutSeconds?: number;

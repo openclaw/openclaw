@@ -1644,4 +1644,95 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expect(generateTopicLabel).not.toHaveBeenCalled();
     expect(bot.api.editForumTopic).not.toHaveBeenCalled();
   });
+
+  describe("native sendMessageDraft transport selection", () => {
+    function captureDraftStreamTransport(): Promise<unknown> {
+      return new Promise((resolve) => {
+        createTelegramDraftStream.mockImplementation((streamParams: { transport?: unknown }) => {
+          resolve(streamParams.transport);
+          return createDraftStream();
+        });
+      });
+    }
+
+    it("passes transport=draft when nativeTransport is enabled in a private chat", async () => {
+      const transportPromise = captureDraftStreamTransport();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Hello" });
+          await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        telegramCfg: { streaming: { nativeTransport: true } },
+      });
+
+      await expect(transportPromise).resolves.toBe("draft");
+    });
+
+    it("falls back to transport=edit in group chats even when nativeTransport is enabled", async () => {
+      const transportPromise = captureDraftStreamTransport();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Hello" });
+          await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext({
+          isGroup: true,
+          msg: {
+            chat: { id: 123, type: "supergroup" },
+            message_id: 456,
+            message_thread_id: 777,
+          } as unknown as TelegramMessageContext["msg"],
+          threadSpec: { id: 777, scope: "forum" },
+        }),
+        telegramCfg: { streaming: { nativeTransport: true } },
+      });
+
+      await expect(transportPromise).resolves.toBe("edit");
+    });
+
+    it("falls back to transport=edit when streamMode is not partial", async () => {
+      const transportPromise = captureDraftStreamTransport();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Hello" });
+          await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "block",
+        telegramCfg: { streaming: { mode: "block", nativeTransport: true } },
+      });
+
+      await expect(transportPromise).resolves.toBe("edit");
+    });
+
+    it("defaults to transport=edit when nativeTransport is unset", async () => {
+      const transportPromise = captureDraftStreamTransport();
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Hello" });
+          await dispatcherOptions.deliver({ text: "Hello" }, { kind: "final" });
+          return { queuedFinal: true };
+        },
+      );
+
+      await dispatchWithContext({
+        context: createContext(),
+      });
+
+      await expect(transportPromise).resolves.toBe("edit");
+    });
+  });
 });

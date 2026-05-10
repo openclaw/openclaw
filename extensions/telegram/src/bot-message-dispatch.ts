@@ -22,6 +22,7 @@ import {
   isChannelProgressDraftWorkToolName,
   resolveChannelProgressDraftMaxLines,
   resolveChannelStreamingBlockEnabled,
+  resolveChannelStreamingNativeTransport,
   resolveChannelStreamingPreviewToolProgress,
 } from "openclaw/plugin-sdk/channel-streaming";
 import { isAbortRequestText } from "openclaw/plugin-sdk/command-primitives-runtime";
@@ -78,7 +79,7 @@ import {
 } from "./bot/native-quote.js";
 import type { TelegramStreamMode } from "./bot/types.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { createTelegramDraftStream } from "./draft-stream.js";
+import { createTelegramDraftStream, type TelegramDraftStreamTransport } from "./draft-stream.js";
 import {
   buildTelegramErrorScopeKey,
   isSilentErrorPolicy,
@@ -526,6 +527,14 @@ export const dispatchTelegramMessage = async ({
       : undefined;
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
+  // Native sendMessageDraft transport (Telegram Bot API 9.3+) animates per-character
+  // typewriter previews in private chats. It is unsupported in group/forum chats and
+  // requires a numeric chat_id, so fall back to editMessageText for those routes.
+  const nativeTransportEnabled = resolveChannelStreamingNativeTransport(telegramCfg) === true;
+  const draftStreamTransport: TelegramDraftStreamTransport =
+    nativeTransportEnabled && streamMode === "partial" && !isGroup && typeof chatId === "number"
+      ? "draft"
+      : "edit";
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
@@ -536,6 +545,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
+          transport: draftStreamTransport,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {

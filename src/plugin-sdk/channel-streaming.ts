@@ -21,6 +21,7 @@ export type {
   ChannelStreamingPreviewConfig,
   SlackChannelStreamingConfig,
   StreamingMode,
+  TelegramChannelStreamingConfig,
   TextChunkMode,
 } from "../config/types.base.js";
 

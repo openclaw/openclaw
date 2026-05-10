@@ -198,6 +198,7 @@ const telegramMessageAdapter = createChannelMessageAdapterFromOutbound<OpenClawC
       draftPreview: true,
       previewFinalization: true,
       progressUpdates: true,
+      nativeStreaming: true,
     },
     finalizer: {
       capabilities: {

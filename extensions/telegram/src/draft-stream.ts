@@ -12,6 +12,18 @@ const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 
+export type TelegramDraftStreamTransport = "edit" | "draft";
+
+// sendMessageDraft requires a non-zero draft_id; same id animates as one bubble.
+// Combine wall-clock time and an in-process counter to keep ids unique per stream.
+let telegramDraftIdCounter = 0;
+function generateTelegramDraftId(): number {
+  telegramDraftIdCounter = (telegramDraftIdCounter + 1) & 0xfffff;
+  const timePart = Date.now() & 0x7fffffff;
+  const id = ((timePart << 4) | (telegramDraftIdCounter & 0xf)) >>> 0;
+  return id === 0 ? 1 : id;
+}
+
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
 
 function hasNumericMessageThreadId(
@@ -94,6 +106,14 @@ export function createTelegramDraftStream(params: {
   throttleMs?: number;
   /** Minimum chars before sending first message (debounce for push notifications) */
   minInitialChars?: number;
+  /**
+   * Streaming transport. "edit" (default) sends a placeholder via sendMessage and
+   * mutates it with editMessageText. "draft" uses Telegram's native sendMessageDraft
+   * for typewriter animation in private chats; on finalize, a real sendMessage
+   * converts the draft into a permanent message. Caller must guarantee the chat
+   * is a private chat with a numeric chat_id when selecting "draft".
+   */
+  transport?: TelegramDraftStreamTransport;
   /** Optional preview renderer (e.g. markdown -> HTML + parse mode). */
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
@@ -120,6 +140,7 @@ export function createTelegramDraftStream(params: {
         }
       : threadParams;
 
+  const transport: TelegramDraftStreamTransport = params.transport ?? "edit";
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
   let streamMessageId: number | undefined;
@@ -130,6 +151,7 @@ export function createTelegramDraftStream(params: {
   let previewRevision = 0;
   let generation = 0;
   let deliveredTextOffset = 0;
+  let activeDraftId: number | undefined;
   let resetStreamToNewMessage: (options?: { keepPending?: boolean; resetOffset?: boolean }) => void;
   type PreviewSendParams = {
     renderedText: string;
@@ -223,6 +245,78 @@ export function createTelegramDraftStream(params: {
     return true;
   };
 
+  const draftTransportPreview = async ({
+    renderedText,
+    renderedParseMode,
+    sendGeneration,
+  }: PreviewSendParams): Promise<boolean> => {
+    // Final tick: convert the in-progress draft into a permanent message.
+    // sendMessageDraft itself does not support reply_to_message_id, so reply
+    // semantics are preserved by attaching them to this final sendMessage.
+    if (streamState.final) {
+      messageSendAttempted = true;
+      let sent: Awaited<ReturnType<typeof sendRenderedMessageWithThreadFallback>>["sent"];
+      try {
+        ({ sent } = await sendRenderedMessageWithThreadFallback({
+          renderedText,
+          renderedParseMode,
+          fallbackWarnMessage:
+            "telegram draft preview final send failed with message_thread_id, retrying without thread",
+        }));
+      } catch (err) {
+        if (isSafeToRetrySendError(err) || isTelegramClientRejection(err)) {
+          messageSendAttempted = false;
+        }
+        throw err;
+      }
+      const sentMessageId = sent?.message_id;
+      if (typeof sentMessageId === "number" && Number.isFinite(sentMessageId)) {
+        const visibleSinceMs = Date.now();
+        if (sendGeneration !== generation) {
+          params.onSupersededPreview?.({
+            messageId: Math.trunc(sentMessageId),
+            textSnapshot: renderedText,
+            parseMode: renderedParseMode,
+            visibleSinceMs,
+          });
+          return true;
+        }
+        streamMessageId = Math.trunc(sentMessageId);
+        streamVisibleSinceMs = visibleSinceMs;
+      }
+      activeDraftId = undefined;
+      return true;
+    }
+    if (typeof chatId !== "number") {
+      // Telegram's sendMessageDraft requires a numeric chat_id (private chats
+      // only). Refuse to start a draft animation for username-style chat ids.
+      streamState.stopped = true;
+      params.warn?.("telegram draft transport requires a numeric chat_id; stopping preview");
+      return false;
+    }
+    if (activeDraftId === undefined) {
+      activeDraftId = generateTelegramDraftId();
+    }
+    streamVisibleSinceMs ??= Date.now();
+    const draftOther: NonNullable<Parameters<Bot["api"]["sendMessageDraft"]>[3]> = {};
+    if (typeof threadParams?.message_thread_id === "number") {
+      draftOther.message_thread_id = threadParams.message_thread_id;
+    }
+    if (renderedParseMode) {
+      draftOther.parse_mode = renderedParseMode;
+    }
+    await params.api.sendMessageDraft(
+      chatId,
+      activeDraftId,
+      renderedText,
+      Object.keys(draftOther).length > 0 ? draftOther : undefined,
+    );
+    return true;
+  };
+
+  const dispatchPreview =
+    transport === "draft" ? draftTransportPreview : sendMessageTransportPreview;
+
   const sendOrEditStreamMessage = async (text: string): Promise<boolean> => {
     if (streamState.stopped && !streamState.final) {
       return false;
@@ -276,7 +370,17 @@ export function createTelegramDraftStream(params: {
       );
       return false;
     }
-    if (renderedText === lastSentText && renderedParseMode === lastSentParseMode) {
+    // Draft transport must always emit a final sendMessage to convert the
+    // animated draft into a permanent message, even if the text matches the
+    // last frame; the edit transport can safely dedup because each edit is
+    // already permanent.
+    const needsDraftFinalize =
+      transport === "draft" && streamState.final && typeof streamMessageId !== "number";
+    if (
+      !needsDraftFinalize &&
+      renderedText === lastSentText &&
+      renderedParseMode === lastSentParseMode
+    ) {
       return true;
     }
     const sendGeneration = generation;
@@ -290,7 +394,7 @@ export function createTelegramDraftStream(params: {
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
-      const sent = await sendMessageTransportPreview({
+      const sent = await dispatchPreview({
         renderedText,
         renderedParseMode,
         sendGeneration,
@@ -322,6 +426,7 @@ export function createTelegramDraftStream(params: {
     streamVisibleSinceMs = undefined;
     lastSentText = "";
     lastSentParseMode = undefined;
+    activeDraftId = undefined;
     if (options?.resetOffset !== false) {
       deliveredTextOffset = 0;
     }
@@ -363,7 +468,23 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, transport=${transport})`,
+  );
+
+  // Draft transport needs a final sendMessage to convert the in-progress draft
+  // into a permanent message even when the last frame's text is unchanged.
+  // The shared SDK loop only flushes pending text, so re-queue the last delivered
+  // text before invoking the underlying stop so the final tick reaches dispatch.
+  const stopWithDraftFinalize = async () => {
+    if (transport === "draft" && typeof streamMessageId !== "number") {
+      const finalText = lastDeliveredText || lastSentText;
+      if (finalText) {
+        loop.update(finalText);
+      }
+    }
+    await stop();
+  };
 
   return {
     update,
@@ -373,7 +494,7 @@ export function createTelegramDraftStream(params: {
     previewRevision: () => previewRevision,
     lastDeliveredText: () => lastDeliveredText,
     clear,
-    stop,
+    stop: stopWithDraftFinalize,
     discard,
     materialize,
     forceNewMessage,

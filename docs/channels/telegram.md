@@ -360,6 +360,42 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
   </Accordion>
 
+  <Accordion title="Native sendMessageDraft transport (typewriter animation)">
+    Telegram Bot API 9.3+ introduced `sendMessageDraft`, which renders a per-character typewriter animation natively in the Telegram client. OpenClaw can use it as the streaming transport for the live preview instead of the default `sendMessage` + `editMessageText` edit loop.
+
+    - default: `streaming.nativeTransport: false` keeps the released edit-message behavior
+    - opt in with `channels.telegram.streaming.nativeTransport: true`
+    - the native draft transport is only used when **all** of the following hold; otherwise OpenClaw transparently falls back to `editMessageText`:
+      - `streaming.mode` is `partial`
+      - the chat is a private chat (DMs and DM topics; not groups, supergroups, or forum topics — Telegram restricts `sendMessageDraft` to private chats)
+      - the chat id is numeric
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "nativeTransport": true
+          }
+        }
+      }
+    }
+    ```
+
+    Behavior:
+
+    - while the assistant is generating, OpenClaw calls `sendMessageDraft` with a stable `draft_id`, so each frame animates as the same bubble expanding character-by-character
+    - on completion, OpenClaw calls `sendMessage` with the final answer, which converts the animated draft into a permanent message; reply targeting (`reply_to_message_id`) is preserved on this final permanent message because `sendMessageDraft` itself does not accept it
+    - parse mode (HTML) and `message_thread_id` (for DM topics) are forwarded to the draft frames
+
+    Known limitations:
+
+    - drafts have a Telegram-side lifetime around 30 seconds; if generation takes longer than the draft lifetime, the typewriter animation may stop before the final message arrives, but the final permanent message is still delivered
+    - tool-progress preview lines (`streaming.preview.toolProgress`) currently animate as draft frames; if you prefer the released edit-message look for tool progress, leave `nativeTransport` unset
+
+  </Accordion>
+
   <Accordion title="Formatting and HTML fallback">
     Outbound text uses Telegram `parse_mode: "HTML"`.
 

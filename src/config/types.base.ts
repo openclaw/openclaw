@@ -103,6 +103,11 @@ export type SlackChannelStreamingConfig = Pick<
   "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
 >;
 
+export type TelegramChannelStreamingConfig = Pick<
+  ChannelStreamingConfig,
+  "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
+>;
+
 export type MarkdownTableMode = "off" | "bullets" | "code" | "block";
 
 export type MarkdownConfig = {
