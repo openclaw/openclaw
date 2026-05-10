@@ -1,8 +1,8 @@
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayScopedOptions } from "../../gateway/call.js";
-import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { callGatewayTool, resolveGatewayOptions } from "./gateway.js";
 
 const mocks = vi.hoisted(() => ({
   callGateway: vi.fn(),
@@ -206,7 +206,7 @@ describe("gateway tool defaults", () => {
 
   it("falls back to broad scopes when a plugin session action is not locally registered", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
-    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
 
     await callGatewayTool(
       "plugins.sessionAction",
@@ -217,7 +217,7 @@ describe("gateway tool defaults", () => {
       },
     );
 
-    expect(callGatewayMock).toHaveBeenCalledWith(
+    expect(mocks.callGateway).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "plugins.sessionAction",
         scopes: [
