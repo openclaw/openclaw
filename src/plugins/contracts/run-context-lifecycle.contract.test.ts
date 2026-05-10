@@ -57,7 +57,7 @@ describe("plugin run context lifecycle", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
 
     expect(
-      capturedApi?.setRunContext({
+      capturedApi?.runContext?.setRunContext({
         runId: "stale-run",
         namespace: "state",
         value: { stale: true },
@@ -76,7 +76,7 @@ describe("plugin run context lifecycle", () => {
         patch: { runId: "stale-run", namespace: "state", value: { live: true } },
       }),
     ).toBe(true);
-    capturedApi?.clearRunContext({ runId: "stale-run", namespace: "state" });
+    capturedApi?.runContext?.clearRunContext({ runId: "stale-run", namespace: "state" });
     expect(
       getPluginRunContext({
         pluginId: "stale-run-context-plugin",
@@ -104,16 +104,16 @@ describe("plugin run context lifecycle", () => {
     setActivePluginRegistry(registry.registry);
 
     expect(
-      capturedApi?.setRunContext({
+      capturedApi?.runContext?.setRunContext({
         runId: "restored-run",
         namespace: "state",
         value: { restored: true },
       }),
     ).toBe(true);
     expect(
-      getPluginRunContext({
-        pluginId: "restored-run-context-plugin",
-        get: { runId: "restored-run", namespace: "state" },
+      capturedApi?.runContext?.getRunContext({
+        runId: "restored-run",
+        namespace: "state",
       }),
     ).toEqual({ restored: true });
   });

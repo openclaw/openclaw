@@ -2449,6 +2449,60 @@ export type PluginSetupAutoEnableProbe = (
   ctx: PluginSetupAutoEnableContext,
 ) => string | string[] | null | undefined;
 
+export type OpenClawPluginSessionStateApi = {
+  registerSessionExtension: (extension: PluginSessionExtensionRegistration) => void;
+};
+
+export type OpenClawPluginSessionWorkflowApi = {
+  enqueueNextTurnInjection: (
+    injection: PluginNextTurnInjection,
+  ) => Promise<PluginNextTurnInjectionEnqueueResult>;
+  registerSessionSchedulerJob: (
+    job: PluginSessionSchedulerJobRegistration,
+  ) => PluginSessionSchedulerJobHandle | undefined;
+  sendSessionAttachment: (
+    params: PluginSessionAttachmentParams,
+  ) => Promise<PluginSessionAttachmentResult>;
+  scheduleSessionTurn: (
+    params: PluginSessionTurnScheduleParams,
+  ) => Promise<PluginSessionSchedulerJobHandle | undefined>;
+  unscheduleSessionTurnsByTag: (
+    params: PluginSessionTurnUnscheduleByTagParams,
+  ) => Promise<PluginSessionTurnUnscheduleByTagResult>;
+};
+
+export type OpenClawPluginSessionControlsApi = {
+  registerSessionAction: (action: PluginSessionActionRegistration) => void;
+  registerControlUiDescriptor: (descriptor: PluginControlUiDescriptor) => void;
+};
+
+export type OpenClawPluginSessionApi = {
+  state: OpenClawPluginSessionStateApi;
+  workflow: OpenClawPluginSessionWorkflowApi;
+  controls: OpenClawPluginSessionControlsApi;
+};
+
+export type OpenClawPluginAgentEventsApi = {
+  registerAgentEventSubscription: (
+    subscription: PluginAgentEventSubscriptionRegistration,
+  ) => void;
+  emitAgentEvent: (params: PluginAgentEventEmitParams) => PluginAgentEventEmitResult;
+};
+
+export type OpenClawPluginAgentApi = {
+  events: OpenClawPluginAgentEventsApi;
+};
+
+export type OpenClawPluginRunContextApi = {
+  setRunContext: (patch: PluginRunContextPatch) => boolean;
+  getRunContext: (params: PluginRunContextGetParams) => PluginJsonValue | undefined;
+  clearRunContext: (params: { runId: string; namespace?: string }) => void;
+};
+
+export type OpenClawPluginLifecycleApi = {
+  registerRuntimeLifecycle: (lifecycle: PluginRuntimeLifecycleRegistration) => void;
+};
+
 /** Main registration API injected into native plugin entry files. */
 export type OpenClawPluginApi = {
   id: string;
@@ -2468,6 +2522,17 @@ export type OpenClawPluginApi = {
    */
   runtime: PluginRuntime;
   logger: PluginLogger;
+  /**
+   * Additive grouped aliases over the existing flat session-related plugin API.
+   * Flat methods remain supported.
+   */
+  session?: OpenClawPluginSessionApi;
+  /** Additive grouped aliases for agent-event workflow seams. */
+  agent?: OpenClawPluginAgentApi;
+  /** Additive grouped aliases for run-scoped plugin scratch state. */
+  runContext?: OpenClawPluginRunContextApi;
+  /** Additive grouped aliases for plugin-owned lifecycle cleanup hooks. */
+  lifecycle?: OpenClawPluginLifecycleApi;
   registerTool: (
     tool: AnyAgentTool | OpenClawPluginToolFactory,
     opts?: OpenClawPluginToolOptions,

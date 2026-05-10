@@ -114,7 +114,6 @@ export function createCapturedPluginRegistration(params?: {
   const sessionSchedulerJobs: PluginSessionSchedulerJobRegistration[] = [];
   const sessionActions: PluginSessionActionRegistration[] = [];
   let capturedSessionTurnCount = 0;
-  const sessionActions: PluginSessionActionRegistration[] = [];
   const tools: AnyAgentTool[] = [];
   const modelCatalogProviders: UnifiedModelCatalogProviderPlugin[] = [];
   const pluginId = params?.id ?? "captured-plugin-registration";

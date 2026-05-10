@@ -26,6 +26,8 @@ import {
 import { resolveUserPath } from "../utils.js";
 import { resolvePluginActivationSourceConfig } from "./activation-source-config.js";
 import { buildPluginApi } from "./api-builder.js";
+import { attachPluginApiFacades } from "./api-facades.js";
+import { isLateCallablePluginApiMethod } from "./api-lifecycle.js";
 import { inspectBundleMcpRuntimeSupport } from "./bundle-mcp.js";
 import {
   clearPluginCommands,
@@ -448,32 +450,19 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
   close: () => void;
 } {
   let closed = false;
-  type LateCallablePluginApiMethod = keyof Pick<
-    OpenClawPluginApi,
-    "sendSessionAttachment" | "scheduleSessionTurn" | "unscheduleSessionTurnsByTag"
-  >;
-  const lateCallableMethods = new Set<LateCallablePluginApiMethod>([
-    "sendSessionAttachment",
-    "scheduleSessionTurn",
-    "unscheduleSessionTurnsByTag",
-  ]);
-  return {
-    api: new Proxy(api, {
+  const guardedApi = attachPluginApiFacades(
+    new Proxy(api, {
       get(target, prop, receiver) {
         const value = Reflect.get(target, prop, receiver);
         if (typeof value !== "function") {
           return value;
         }
-        if (
-          typeof prop === "string" &&
-          lateCallableMethods.has(prop as LateCallablePluginApiMethod)
-        ) {
+        if (typeof prop === "string" && isLateCallablePluginApiMethod(prop)) {
           return (...args: unknown[]) => Reflect.apply(value, target, args);
         }
         return (...args: unknown[]) => {
           const isLateCallableMethod =
-            typeof prop === "string" &&
-            lateCallableMethods.has(prop as Extract<keyof OpenClawPluginApi, string>);
+            typeof prop === "string" && isLateCallablePluginApiMethod(prop);
           if (closed && !isLateCallableMethod) {
             return undefined;
           }
@@ -481,6 +470,9 @@ function createGuardedPluginRegistrationApi(api: OpenClawPluginApi): {
         };
       },
     }),
+  );
+  return {
+    api: guardedApi,
     close: () => {
       closed = true;
     },

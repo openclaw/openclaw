@@ -801,7 +801,7 @@ describe("plugin session actions", () => {
 
     try {
       expect(
-        bundledApi?.emitAgentEvent({
+        bundledApi?.agent?.events.emitAgentEvent({
           runId: "run-emit",
           sessionKey: " agent:main:main ",
           stream: "approval",

@@ -1,9 +1,10 @@
+import { attachPluginApiFacades } from "../plugins/api-facades.js";
 import type { OpenClawPluginApi } from "./plugin-runtime.js";
 
 export type TestPluginApiInput = Partial<OpenClawPluginApi>;
 
 export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPluginApi {
-  return {
+  return attachPluginApiFacades({
     id: "test-plugin",
     name: "test-plugin",
     source: "test",
@@ -70,10 +71,6 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     sendSessionAttachment: async () => ({ ok: false, error: "test plugin api" }),
     scheduleSessionTurn: async () => undefined,
     unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
-    registerSessionAction() {},
-    sendSessionAttachment: async () => ({ ok: false, error: "test plugin api" }),
-    scheduleSessionTurn: async () => undefined,
-    unscheduleSessionTurnsByTag: async () => ({ removed: 0, failed: 0 }),
     registerMemoryCapability() {},
     registerMemoryPromptSection() {},
     registerMemoryPromptSupplement() {},
@@ -86,5 +83,5 @@ export function createTestPluginApi(api: TestPluginApiInput = {}): OpenClawPlugi
     },
     on() {},
     ...api,
-  };
+  });
 }

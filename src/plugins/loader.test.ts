@@ -1476,6 +1476,7 @@ describe("loadOpenClawPlugins", () => {
         "keeps sendSessionAttachment callable after register closes while blocking registration-only APIs",
       run: () => {
         const registerGatewayMethod = vi.fn();
+        const registerSessionExtension = vi.fn();
         const sendSessionAttachment = vi.fn(async () => ({
           ok: true as const,
           channel: "proofchat",
@@ -1498,6 +1499,7 @@ describe("loadOpenClawPlugins", () => {
           resolvePath: (input) => input,
           handlers: {
             registerGatewayMethod,
+            registerSessionExtension,
             sendSessionAttachment,
           },
         });
@@ -1521,14 +1523,23 @@ describe("loadOpenClawPlugins", () => {
           text: "attachment ready",
         };
         const lateResult = capturedApi?.sendSessionAttachment(attachmentParams);
+        const lateWorkflowResult = capturedApi?.session?.workflow.sendSessionAttachment(
+          attachmentParams,
+        );
+        capturedApi?.session?.state.registerSessionExtension({
+          namespace: "late",
+          description: "late extension should stay blocked",
+        });
 
         expect(lateResult).toBe(sendSessionAttachment.mock.results[0]?.value);
+        expect(lateWorkflowResult).toBe(sendSessionAttachment.mock.results[1]?.value);
         expect(sendSessionAttachment).toHaveBeenCalledWith({
           sessionKey: "agent:main:main",
           files: [{ path: "./proof-report.txt" }],
           text: "attachment ready",
         });
-        expect(sendSessionAttachment).toHaveBeenCalledTimes(1);
+        expect(sendSessionAttachment).toHaveBeenCalledTimes(2);
+        expect(registerSessionExtension).not.toHaveBeenCalled();
       },
     },
     {

@@ -146,6 +146,23 @@ plugins.
 | `api.registerSessionSchedulerJob(...)`                                   | Plugin-owned session scheduler job records with deterministic cleanup                                                             |
 | `api.sendSessionAttachment(...)`                                         | Bundled-only host-mediated file attachment delivery to the active direct-outbound session route                                   |
 
+Grouped aliases are also available for the host-hook-heavy parts of the SDK.
+They are additive aliases over the existing flat methods, not new runtime
+plumbing, so both styles remain valid:
+
+- `api.session.state.registerSessionExtension(...)`
+- `api.session.workflow.enqueueNextTurnInjection(...)`
+- `api.session.workflow.registerSessionSchedulerJob(...)`
+- `api.session.workflow.sendSessionAttachment(...)`
+- `api.session.workflow.scheduleSessionTurn(...)`
+- `api.session.workflow.unscheduleSessionTurnsByTag(...)`
+- `api.session.controls.registerSessionAction(...)`
+- `api.session.controls.registerControlUiDescriptor(...)`
+- `api.agent.events.registerAgentEventSubscription(...)`
+- `api.agent.events.emitAgentEvent(...)`
+- `api.runContext.setRunContext(...)` / `getRunContext(...)` / `clearRunContext(...)`
+- `api.lifecycle.registerRuntimeLifecycle(...)`
+
 The contracts intentionally split authority:
 
 - External plugins can own session extensions, UI descriptors, commands, tool

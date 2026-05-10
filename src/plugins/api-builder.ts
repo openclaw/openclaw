@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { attachPluginApiFacades } from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
 
@@ -176,7 +177,7 @@ const noopOn: OpenClawPluginApi["on"] = () => {};
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
   const handlers = params.handlers ?? {};
   const registerCli = handlers.registerCli ?? noopRegisterCli;
-  return {
+  return attachPluginApiFacades({
     id: params.id,
     name: params.name,
     version: params.version,
@@ -260,9 +261,6 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     clearRunContext: handlers.clearRunContext ?? noopClearRunContext,
     registerSessionSchedulerJob:
       handlers.registerSessionSchedulerJob ?? noopRegisterSessionSchedulerJob,
-    scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
-    unscheduleSessionTurnsByTag:
-      handlers.unscheduleSessionTurnsByTag ?? noopUnscheduleSessionTurnsByTag,
     registerSessionAction: handlers.registerSessionAction ?? noopRegisterSessionAction,
     sendSessionAttachment: handlers.sendSessionAttachment ?? noopSendSessionAttachment,
     scheduleSessionTurn: handlers.scheduleSessionTurn ?? noopScheduleSessionTurn,
@@ -283,5 +281,5 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
-  };
+  });
 }
