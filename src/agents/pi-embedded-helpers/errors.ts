@@ -777,6 +777,13 @@ function isOpenRouterKeyLimitExceededError(raw: string, provider?: string): bool
   );
 }
 
+function isOpenRouterKeyBudgetLimitExceededError(raw: string, provider?: string): boolean {
+  return (
+    isProvider(provider, "openrouter") &&
+    /\bapi\s+key\s+budget\s+limit\s*(?:exceeded|reached|hit)\b/i.test(raw)
+  );
+}
+
 function isExactUnknownNoDetailsError(raw: string): boolean {
   return (
     normalizeOptionalLowercaseString(raw)?.trim() === "unknown error (no error details in response)"
@@ -806,7 +813,10 @@ function classifyFailoverClassificationFromMessage(
   if (reasonFrom402Text) {
     return toReasonClassification(reasonFrom402Text);
   }
-  if (isOpenRouterKeyLimitExceededError(raw, provider)) {
+  if (
+    isOpenRouterKeyLimitExceededError(raw, provider) ||
+    isOpenRouterKeyBudgetLimitExceededError(raw, provider)
+  ) {
     return toReasonClassification("billing");
   }
   if (isPeriodicUsageLimitErrorMessage(raw)) {

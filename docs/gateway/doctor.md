@@ -223,6 +223,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
     - legacy `models.providers.*.api: "openai"` → `"openai-completions"` (gateway startup also skips providers whose `api` is set to a future or unknown enum value rather than failing closed)
+    - remove `plugins.entries.codex.config.codexDynamicToolsProfile`; Codex app-server always keeps Codex-native workspace tools native
 
     Doctor warnings also include account-default guidance for multi-account channels:
 
@@ -269,10 +270,11 @@ That stages grounded durable candidates into the short-term dreaming store while
     In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
     - `openai-codex/gpt-*` becomes `openai/gpt-*`.
+    - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs so `openai-codex:...` auth profiles can still be selected after the model ref becomes `openai/*`.
     - Stale whole-agent runtime config and persisted session runtime pins are removed because runtime selection is provider/model-scoped.
-    - Explicit provider/model runtime policy is preserved.
+    - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
-    - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, auth-profile pins, and Codex harness pins are repaired across all discovered agent session stores.
+    - Persisted session `modelProvider`/`providerOverride`, `model`/`modelOverride`, fallback notices, and auth-profile pins are repaired across all discovered agent session stores.
     - `/codex ...` means "control or bind a native Codex conversation from chat."
     - `/acp ...` or `runtime: "acp"` means "use the external ACP/acpx adapter."
 
@@ -318,7 +320,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="3c. Session lock cleanup">
-    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID or older than 30 minutes). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
+    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected file next to the original and rewrites the transcript to the active branch so gateway history and memory readers no longer see duplicate turns.

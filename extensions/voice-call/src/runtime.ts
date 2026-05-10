@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isLoopbackHost } from "openclaw/plugin-sdk/gateway-runtime";
 import {
@@ -334,6 +334,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeProvider.provider,
       realtimeProvider.providerConfig,
       config.serve.path,
+      cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(

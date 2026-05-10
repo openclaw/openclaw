@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
@@ -422,7 +422,7 @@ describe("telegram live qa runtime", () => {
         ?.buildRun("sut_bot").steps[0],
     ).toMatchObject({
       expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
-      expectedSutMessageCount: 2,
+      expectedSutMessageCountRange: [1, 2],
       replyToLatestSutMessage: true,
     });
     expect(
@@ -513,7 +513,33 @@ describe("telegram live qa runtime", () => {
     expect(
       __testing.assertTelegramScenarioMessageSet({
         expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
-        expectedSutMessageCount: 2,
+        expectedSutMessageCountRange: [1, 2],
+        groupId: "-100123",
+        scenarioId: "telegram-long-final-reuses-preview",
+        sutBotId: 99,
+        observedMessages: [
+          {
+            updateId: 1,
+            messageId: 10,
+            chatId: -100123,
+            senderId: 99,
+            senderIsBot: true,
+            scenarioId: "telegram-long-final-reuses-preview",
+            scenarioTitle: "Telegram long final reuses the preview message",
+            matchedScenario: true,
+            text: "TELEGRAM-LONG-FINAL-BEGIN part one part two TELEGRAM-LONG-FINAL-END",
+            timestamp: 1_700_000_000_000,
+            inlineButtons: [],
+            mediaKinds: [],
+          },
+        ],
+      }),
+    ).toBeUndefined();
+
+    expect(
+      __testing.assertTelegramScenarioMessageSet({
+        expectedJoinedSutTextIncludes: ["TELEGRAM-LONG-FINAL-BEGIN", "TELEGRAM-LONG-FINAL-END"],
+        expectedSutMessageCountRange: [1, 2],
         groupId: "-100123",
         scenarioId: "telegram-long-final-reuses-preview",
         sutBotId: 99,
@@ -552,7 +578,7 @@ describe("telegram live qa runtime", () => {
 
     expect(() =>
       __testing.assertTelegramScenarioMessageSet({
-        expectedSutMessageCount: 2,
+        expectedSutMessageCountRange: [1, 2],
         groupId: "-100123",
         scenarioId: "telegram-long-final-reuses-preview",
         sutBotId: 99,
@@ -601,7 +627,7 @@ describe("telegram live qa runtime", () => {
           },
         ],
       }),
-    ).toThrow("expected 2 SUT message(s), observed 3");
+    ).toThrow("expected 1-2 SUT message(s), observed 3");
   });
 
   it("accepts legitimate three-chunk Telegram final replies", () => {
@@ -714,7 +740,7 @@ describe("telegram live qa runtime", () => {
         sutBotId: 88,
         message: {
           updateId: 3,
-          messageId: 12,
+          messageId: 56,
           chatId: -100123,
           senderId: 88,
           senderIsBot: true,
@@ -727,6 +753,27 @@ describe("telegram live qa runtime", () => {
         },
       }),
     ).toBe(true);
+    expect(
+      __testing.matchesTelegramScenarioReply({
+        allowAnySutReply: true,
+        groupId: "-100123",
+        sentMessageId: 55,
+        sutBotId: 88,
+        message: {
+          updateId: 4,
+          messageId: 54,
+          chatId: -100123,
+          senderId: 88,
+          senderIsBot: true,
+          senderUsername: "sut_bot",
+          text: "stale reply from a previous scenario",
+          replyToMessageId: undefined,
+          timestamp: 1_700_000_004_000,
+          inlineButtons: [],
+          mediaKinds: [],
+        },
+      }),
+    ).toBe(false);
   });
 
   it("validates expected Telegram reply markers", () => {

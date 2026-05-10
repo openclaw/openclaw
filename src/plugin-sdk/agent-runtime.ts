@@ -1,4 +1,7 @@
-// Public agent/model/runtime helpers for plugins that integrate with core agent flows.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused agent/runtime subpaths
+ * and avoid adding new imports here.
+ */
 
 export * from "../agents/agent-scope.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";

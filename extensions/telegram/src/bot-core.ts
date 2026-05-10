@@ -22,7 +22,7 @@ import { createNonExitingRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/ru
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getOrCreateAccountThrottler } from "./account-throttler.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
@@ -59,6 +59,7 @@ const DEFAULT_TELEGRAM_BOT_RUNTIME: TelegramBotRuntime = {
   sequentialize,
   apiThrottler,
 };
+const TELEGRAM_TYPING_COALESCE_MS = 4_000;
 
 let telegramBotRuntimeForTest: TelegramBotRuntime | undefined;
 
@@ -562,6 +563,7 @@ export function createTelegramBotCore(
     sendChatActionFn: (chatId, action, threadParams) =>
       bot.api.sendChatAction(chatId, action, threadParams),
     logger: (message) => logVerbose(`telegram: ${message}`),
+    minIntervalMs: TELEGRAM_TYPING_COALESCE_MS,
   });
 
   const processMessage = createTelegramMessageProcessor({

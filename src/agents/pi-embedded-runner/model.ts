@@ -1223,6 +1223,14 @@ function buildUnknownModelError(params: {
     return suppressed;
   }
   const base = `Unknown model: ${params.provider}/${params.modelId}`;
+  const registrationHint = buildMissingProviderModelRegistrationHint({
+    provider: params.provider,
+    modelId: params.modelId,
+    cfg: params.cfg,
+  });
+  if (registrationHint) {
+    return `${base}. ${registrationHint}`;
+  }
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
     provider: params.provider,
@@ -1239,4 +1247,38 @@ function buildUnknownModelError(params: {
     },
   });
   return hint ? `${base}. ${hint}` : base;
+}
+
+function buildMissingProviderModelRegistrationHint(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): string | undefined {
+  const configuredModels = params.cfg?.agents?.defaults?.models;
+  if (!configuredModels) {
+    return undefined;
+  }
+  const agentModelKey = modelKey(params.provider, params.modelId);
+  if (
+    !configuredModels[agentModelKey] &&
+    !configuredModels[`${params.provider}/${params.modelId}`]
+  ) {
+    return undefined;
+  }
+  const providerConfig = findNormalizedProviderValue(
+    params.cfg?.models?.providers,
+    params.provider,
+  ) as { models?: unknown } | undefined;
+  const providerModels = Array.isArray(providerConfig?.models) ? providerConfig.models : [];
+  const hasProviderModel = providerModels.some((entry) => {
+    if (!entry || typeof entry !== "object" || !("id" in entry)) {
+      return false;
+    }
+    const id = (entry as { id?: unknown }).id;
+    return typeof id === "string" && id === params.modelId;
+  });
+  if (hasProviderModel) {
+    return undefined;
+  }
+  return `Found agents.defaults.models["${agentModelKey}"], but no matching models.providers["${params.provider}"].models[] entry. Add { "id": "${params.modelId}" } to models.providers["${params.provider}"].models[] to register this provider model.`;
 }

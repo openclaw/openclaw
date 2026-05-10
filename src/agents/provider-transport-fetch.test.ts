@@ -324,6 +324,66 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("synthesizes SSE frames for JSON bodies returned to streaming OpenAI SDK requests", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('  {"ok": true}  ', {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    expect(items).toEqual([{ ok: true }]);
+  });
+
+  it("preserves JSON bodies when the request is not streaming", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('{"ok": true}', {
+        headers: { "content-type": "application/json" },
+      }),
+      finalUrl: "https://api.openai.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.4",
+      provider: "openai",
+      api: "openai-completions",
+      baseUrl: "https://api.openai.com/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.4", stream: false }),
+      },
+    );
+
+    expect(response.headers.get("content-type")).toBe("application/json");
+    await expect(response.json()).resolves.toEqual({ ok: true });
+  });
+
   it("preserves non-OK SSE bodies for provider HTTP error parsing", async () => {
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(

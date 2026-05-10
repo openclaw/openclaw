@@ -15,6 +15,7 @@ afterEach(async () => {
 async function createRealtimeServer(params?: {
   closeOnConnection?: boolean;
   initialEvent?: unknown;
+  onUpgrade?: (headers: Record<string, string | string[] | undefined>) => void;
   onBinary?: (payload: Buffer) => void;
   onText?: (payload: unknown) => void;
 }) {
@@ -23,6 +24,7 @@ async function createRealtimeServer(params?: {
   const clients = new Set<WebSocket>();
 
   server.on("upgrade", (request, socket, head) => {
+    params?.onUpgrade?.(request.headers);
     wss.handleUpgrade(request, socket, head, (ws) => {
       clients.add(ws);
       ws.on("close", () => clients.delete(ws));
@@ -137,6 +139,85 @@ describe("createRealtimeTranscriptionWebSocketSession", () => {
       { type: "input_audio.append", audio: Buffer.from("queued").toString("base64") },
     ]);
     session.close();
+  });
+
+  it("resolves async URLs and headers before opening the socket", async () => {
+    const seenAuthHeaders: Array<string | string[] | undefined> = [];
+    const server = await createRealtimeServer({
+      onUpgrade: (headers) => {
+        seenAuthHeaders.push(headers.authorization);
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: async () => server.url,
+      headers: async () => ({ Authorization: "Bearer resolved-token" }),
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await session.connect();
+
+    expect(seenAuthHeaders).toEqual(["Bearer resolved-token"]);
+    session.close();
+  });
+
+  it("applies the connect timeout while resolving async connection details", async () => {
+    const onError = vi.fn();
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: { onError },
+      url: () => new Promise<string>(() => {}),
+      connectTimeoutMs: 10,
+      connectTimeoutMessage: "test realtime transcription connection timeout",
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    await expect(session.connect()).rejects.toThrow(
+      "test realtime transcription connection timeout",
+    );
+    expect(session.isConnected()).toBe(false);
+    expect(onError).toHaveBeenCalledWith(expect.any(Error));
+    expect(onError.mock.calls[0]?.[0]).toMatchObject({
+      message: "test realtime transcription connection timeout",
+    });
+  });
+
+  it("does not open a socket when closed while async connection resolves", async () => {
+    const seenAuthHeaders: Array<string | string[] | undefined> = [];
+    let resolveUrl!: (url: string) => void;
+    const url = new Promise<string>((resolve) => {
+      resolveUrl = resolve;
+    });
+    const server = await createRealtimeServer({
+      onUpgrade: (headers) => {
+        seenAuthHeaders.push(headers.authorization);
+      },
+    });
+    const session = createRealtimeTranscriptionWebSocketSession({
+      providerId: "test",
+      callbacks: {},
+      url: () => url,
+      headers: async () => ({ Authorization: "Bearer resolved-token" }),
+      readyOnOpen: true,
+      sendAudio: (audio, transport) => {
+        transport.sendBinary(audio);
+      },
+    });
+
+    const connecting = session.connect();
+    session.close();
+    resolveUrl(server.url);
+    await connecting;
+
+    expect(seenAuthHeaders).toEqual([]);
+    expect(session.isConnected()).toBe(false);
   });
 
   it("rejects provider setup errors before ready", async () => {
