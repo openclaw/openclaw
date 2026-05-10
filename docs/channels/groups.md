@@ -19,6 +19,7 @@ Default behavior:
 - Normal final replies in groups/channels are private by default. Visible room output uses the `message` tool.
 
 Translation: allowlisted senders can trigger OpenClaw by mentioning it.
+On Discord, a native reply to the bot counts as an implicit mention by default. Multi-bot servers can keep human reply activation while disabling bot-authored reply-only activation with `channels.discord.implicitReplyMentions: { fromUsers: true, fromBots: false }`.
 
 <Note>
 **TL;DR**

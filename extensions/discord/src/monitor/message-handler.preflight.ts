@@ -302,17 +302,36 @@ export async function preflightDiscordMessage(
     return null;
   }
   const mentionRegexes = buildMentionRegexes(params.cfg, effectiveRoute.agentId);
-  const explicitlyMentioned = Boolean(
+  const referencedAuthorId = message.referencedMessage?.author?.id;
+  const rawExplicitlyMentioned = Boolean(
     botId && message.mentionedUsers?.some((user: User) => user.id === botId),
+  );
+  const replyAuthorIsBot = Boolean(author.bot) && !sender.isPluralKit;
+  const implicitReplyMentions = params.discordConfig?.implicitReplyMentions;
+  const allowReplyOnlyMention = replyAuthorIsBot
+    ? implicitReplyMentions?.fromBots !== false
+    : implicitReplyMentions?.fromUsers !== false;
+  const hasBotMentionInText = Boolean(botId && new RegExp(`<@!?${botId}>`).test(baseText));
+  const replyOnlyBotMentionSuppressed = Boolean(
+    rawExplicitlyMentioned &&
+    botId &&
+    referencedAuthorId === botId &&
+    !hasBotMentionInText &&
+    !allowReplyOnlyMention,
+  );
+  const explicitlyMentioned = rawExplicitlyMentioned && !replyOnlyBotMentionSuppressed;
+  const effectiveMentionedUserCount = Math.max(
+    0,
+    (message.mentionedUsers?.length ?? 0) - (replyOnlyBotMentionSuppressed ? 1 : 0),
   );
   const hasAnyMention =
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 ||
+    (effectiveMentionedUserCount > 0 ||
       (message.mentionedRoles?.length ?? 0) > 0 ||
       (message.mentionedEveryone && (!author.bot || sender.isPluralKit)));
   const hasUserOrRoleMention =
     !isDirectMessage &&
-    ((message.mentionedUsers?.length ?? 0) > 0 || (message.mentionedRoles?.length ?? 0) > 0);
+    (effectiveMentionedUserCount > 0 || (message.mentionedRoles?.length ?? 0) > 0);
 
   if (
     isGuildMessage &&
@@ -451,12 +470,13 @@ export async function preflightDiscordMessage(
     authorIsBot: Boolean(author.bot),
     botId,
     hasAnyMention,
+    implicitReplyMentions: params.discordConfig?.implicitReplyMentions,
     isDirectMessage,
     isExplicitlyMentioned: explicitlyMentioned,
     mentionRegexes,
     mentionText,
     mentionedEveryone: message.mentionedEveryone,
-    referencedAuthorId: message.referencedMessage?.author?.id,
+    referencedAuthorId,
     senderIsPluralKit: sender.isPluralKit,
     transcript: preflightTranscript,
   });

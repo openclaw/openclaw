@@ -659,6 +659,23 @@ Default slash command settings:
 
     Message IDs are surfaced in context/history so agents can target specific messages.
 
+    In mention-gated guild channels, a native Discord reply to the bot also counts as an implicit mention. This preserves normal human reply behavior, but multi-bot servers can disable bot-authored reply-only activation:
+
+```json5
+{
+  channels: {
+    discord: {
+      implicitReplyMentions: {
+        fromUsers: true,
+        fromBots: false,
+      },
+    },
+  },
+}
+```
+
+    Both fields default to `true` for compatibility. Set `fromUsers: false` only when human native replies to the bot should not wake the agent. PluralKit-resolved senders follow `fromUsers`, while explicit `<@botId>` mentions and configured mention aliases still work independently of this policy.
+
   </Accordion>
 
   <Accordion title="Live stream preview">
@@ -1561,6 +1578,7 @@ openclaw logs --follow
 
     If you set `channels.discord.allowBots=true`, use strict mention and allowlist rules to avoid loop behavior.
     Prefer `channels.discord.allowBots="mentions"` to only accept bot messages that mention the bot.
+    In multi-bot channels, set `implicitReplyMentions.fromBots=false` so a bot-authored native reply to your bot does not count as a mention unless the message also includes an explicit mention or configured mention pattern.
 
 ```json5
 {
@@ -1570,6 +1588,10 @@ openclaw logs --follow
         mantis: {
           // Mantis listens to other bots only when they mention her.
           allowBots: "mentions",
+          implicitReplyMentions: {
+            fromUsers: true,
+            fromBots: false,
+          },
         },
         molty: {
           // Molty listens to all bot-authored Discord messages.
@@ -1611,7 +1633,7 @@ Primary reference: [Configuration reference - Discord](/gateway/config-channels#
 - command: `commands.native`, `commands.useAccessGroups`, `configWrites`, `slashCommand.*`
 - event queue: `eventQueue.listenerTimeout` (listener budget), `eventQueue.maxQueueSize`, `eventQueue.maxConcurrency`
 - gateway: `gatewayInfoTimeoutMs`, `gatewayReadyTimeoutMs`, `gatewayRuntimeReadyTimeoutMs`
-- reply/history: `replyToMode`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
+- reply/history: `replyToMode`, `implicitReplyMentions`, `historyLimit`, `dmHistoryLimit`, `dms.*.historyLimit`
 - delivery: `textChunkLimit`, `chunkMode`, `maxLinesPerMessage`
 - streaming: `streaming` (legacy alias: `streamMode`), `streaming.preview.toolProgress`, `draftChunk`, `blockStreaming`, `blockStreamingCoalesce`
 - media/retry: `mediaMaxMb` (caps outbound Discord uploads, default `100MB`), `retry`

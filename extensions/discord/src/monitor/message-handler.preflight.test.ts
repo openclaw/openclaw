@@ -253,14 +253,26 @@ async function runMentionOnlyBotPreflight(params: {
   channelId: string;
   guildId: string;
   message: import("../internal/discord.js").Message;
+  discordConfig?: DiscordConfig;
 }) {
   return runGuildPreflight({
     channelId: params.channelId,
     guildId: params.guildId,
     message: params.message,
-    discordConfig: {
-      allowBots: "mentions",
-    } as DiscordConfig,
+    discordConfig: params.discordConfig ?? ({ allowBots: "mentions" } as DiscordConfig),
+  });
+}
+
+function createReferencedBotMessage(channelId: string) {
+  return createDiscordMessage({
+    id: "referenced-bot-message",
+    channelId,
+    content: "Earlier bot message",
+    author: {
+      id: "openclaw-bot",
+      bot: true,
+      username: "OpenClaw",
+    },
   });
 }
 
@@ -877,6 +889,114 @@ describe("preflightDiscordMessage", () => {
     expect(result).toBeNull();
   });
 
+  it("accepts human native replies to the bot as implicit mentions by default", async () => {
+    const channelId = "channel-human-reply-default";
+    const guildId = "guild-human-reply-default";
+    const message = createDiscordMessage({
+      id: "m-human-reply-default",
+      channelId,
+      content: "following up",
+      referencedMessage: createReferencedBotMessage(channelId),
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {} as DiscordConfig,
+    });
+
+    expect(expectPreflightResult(result).effectiveWasMentioned).toBe(true);
+  });
+
+  it("accepts bot native replies to the bot as implicit mentions by default when bots are allowed", async () => {
+    const channelId = "channel-bot-reply-default";
+    const guildId = "guild-bot-reply-default";
+    const message = createDiscordMessage({
+      id: "m-bot-reply-default",
+      channelId,
+      content: "relay follow-up",
+      referencedMessage: createReferencedBotMessage(channelId),
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: true,
+      } as DiscordConfig,
+    });
+
+    expect(expectPreflightResult(result).effectiveWasMentioned).toBe(true);
+  });
+
+  it("drops bot native reply-only mentions when implicitReplyMentions.fromBots=false", async () => {
+    const channelId = "channel-bot-reply-policy-off";
+    const guildId = "guild-bot-reply-policy-off";
+    const message = createDiscordMessage({
+      id: "m-bot-reply-policy-off",
+      channelId,
+      content: "relay follow-up",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      referencedMessage: createReferencedBotMessage(channelId),
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: true,
+        implicitReplyMentions: { fromBots: false },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it("drops human native reply-only mentions when implicitReplyMentions.fromUsers=false", async () => {
+    const channelId = "channel-human-reply-policy-off";
+    const guildId = "guild-human-reply-policy-off";
+    const message = createDiscordMessage({
+      id: "m-human-reply-policy-off",
+      channelId,
+      content: "following up",
+      referencedMessage: createReferencedBotMessage(channelId),
+      author: {
+        id: "user-1",
+        bot: false,
+        username: "Alice",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        implicitReplyMentions: { fromUsers: false },
+      } as DiscordConfig,
+    });
+
+    expect(result).toBeNull();
+  });
+
   it("allows bot messages with explicit mention when allowBots=mentions", async () => {
     const channelId = "channel-bot-mentions-on";
     const guildId = "guild-bot-mentions-on";
@@ -895,6 +1015,72 @@ describe("preflightDiscordMessage", () => {
     const result = await runMentionOnlyBotPreflight({ channelId, guildId, message });
 
     expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
+  });
+
+  it("allows bot explicit mentions when allowBots=mentions and implicitReplyMentions.fromBots=false", async () => {
+    const channelId = "channel-bot-mentions-policy-off";
+    const guildId = "guild-bot-mentions-policy-off";
+    const message = createDiscordMessage({
+      id: "m-bot-mentions-policy-off",
+      channelId,
+      content: "hi <@openclaw-bot>",
+      mentionedUsers: [{ id: "openclaw-bot" }],
+      author: {
+        id: "relay-bot-1",
+        bot: true,
+        username: "Relay",
+      },
+    });
+
+    const result = await runMentionOnlyBotPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: "mentions",
+        implicitReplyMentions: { fromBots: false },
+      } as DiscordConfig,
+    });
+
+    expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-policy-off");
+  });
+
+  it("treats PluralKit-resolved bot authors as users for implicit reply mention policy", async () => {
+    fetchPluralKitMessageInfoMock.mockResolvedValue({
+      id: "proxy-reply-policy",
+      original: "orig-reply-policy",
+      member: { id: "member-1", name: "Echo" },
+      system: { id: "system-1", name: "System" },
+    });
+    const channelId = "channel-pluralkit-reply-policy";
+    const guildId = "guild-pluralkit-reply-policy";
+    const message = createDiscordMessage({
+      id: "proxy-reply-policy",
+      channelId,
+      content: "proxy follow-up",
+      webhookId: "pluralkit-webhook-1",
+      referencedMessage: createReferencedBotMessage(channelId),
+      author: {
+        id: "webhook-author",
+        bot: true,
+        username: "PluralKit",
+      },
+    });
+
+    const result = await runGuildPreflight({
+      channelId,
+      guildId,
+      message,
+      discordConfig: {
+        allowBots: "mentions",
+        implicitReplyMentions: { fromBots: false },
+        pluralkit: { enabled: true },
+      } as DiscordConfig,
+    });
+
+    const preflight = expectPreflightResult(result);
+    expect(preflight.sender.isPluralKit).toBe(true);
+    expect(preflight.effectiveWasMentioned).toBe(true);
   });
 
   it("hydrates mention metadata from REST when bot mention syntax is present but mentions are missing", async () => {

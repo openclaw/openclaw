@@ -63,6 +63,7 @@ export function createDiscordMessage(params: {
   };
   mentionedUsers?: Array<{ id: string }>;
   mentionedEveryone?: boolean;
+  referencedMessage?: import("../internal/discord.js").Message;
   attachments?: Array<Record<string, unknown>>;
   webhookId?: string;
   type?: import("../internal/discord.js").MessageType;
@@ -78,6 +79,7 @@ export function createDiscordMessage(params: {
     mentionedUsers: params.mentionedUsers ?? [],
     mentionedRoles: [],
     mentionedEveryone: params.mentionedEveryone ?? false,
+    referencedMessage: params.referencedMessage,
     author: params.author,
   } as unknown as import("../internal/discord.js").Message;
 }
