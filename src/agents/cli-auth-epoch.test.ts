@@ -471,7 +471,7 @@ describe("resolveCliAuthEpoch", () => {
   it("keeps epoch stable when local credential file appears or disappears while profile credential is present", async () => {
     let localCredential: {
       type: "oauth";
-      provider: string;
+      provider: "anthropic";
       access: string;
       refresh: string;
       expires: number;
