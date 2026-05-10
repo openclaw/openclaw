@@ -1,0 +1,52 @@
+{
+  "id": "home-assistant",
+  "name": "Home Assistant",
+  "description": "WebSocket bridge from OpenClaw to Home Assistant. Powers the kiosk dashboard view; auth, allow-list, and deny-list policy live in this plugin.",
+  "enabledByDefault": false,
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "homeAssistantUrl": { "type": "string" },
+      "tokenRef": { "type": "string" },
+      "allowList": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "denyServiceList": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "slots": {
+        "type": "object",
+        "additionalProperties": { "type": "string" }
+      }
+    },
+    "required": ["homeAssistantUrl", "tokenRef"]
+  },
+  "uiHints": {
+    "homeAssistantUrl": {
+      "label": "Home Assistant URL",
+      "help": "WebSocket URL for the Home Assistant API. Must start with ws:// or wss://.",
+      "placeholder": "ws://192.168.2.41:8123/api/websocket"
+    },
+    "tokenRef": {
+      "label": "HA token credential reference",
+      "help": "Credential reference for the dedicated non-admin HA user (jarvis_kiosk). The literal long-lived token lives under ~/.openclaw/credentials/, never in this config.",
+      "placeholder": "homeAssistant.jarvisKiosk",
+      "sensitive": false
+    },
+    "allowList": {
+      "label": "Allow-listed entities",
+      "help": "Home Assistant entity IDs the kiosk is permitted to read. Every slot target must reference an entity in this list."
+    },
+    "denyServiceList": {
+      "label": "Service deny-list",
+      "help": "Services the kiosk must never call (for example lock.unlock). Belt-and-braces with the HA-user-side deny-list from the Jarvis Butler plan."
+    },
+    "slots": {
+      "label": "Slot to entity map",
+      "help": "Maps kiosk slot names (gauge.battery_soc, tile.gate_main, ...) to allow-listed HA entity IDs."
+    }
+  }
+}
