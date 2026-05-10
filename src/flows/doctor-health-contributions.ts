@@ -24,6 +24,7 @@ type DoctorConfigResult = {
   cfg: OpenClawConfig;
   path?: string;
   shouldWriteConfig?: boolean;
+  pendingChanges?: boolean;
   sourceConfigValid?: boolean;
   sourceLastTouchedVersion?: string;
   skipPluginValidationOnWrite?: boolean;
@@ -950,7 +951,7 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     }
     return;
   }
-  if (!ctx.prompter.shouldRepair) {
+  if (!ctx.prompter.shouldRepair && ctx.configResult.pendingChanges) {
     ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
