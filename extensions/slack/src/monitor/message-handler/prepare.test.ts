@@ -299,7 +299,8 @@ describe("slack prepareSlackMessage inbound contract", () => {
     expect(prepared.ctxPayload.ThreadStarterBody).toBe(starterText);
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(starterText);
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain(followUpText);
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("Bot (this assistant) (assistant)");
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   }
@@ -981,7 +982,8 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     assertPrepared(prepared);
     expect(prepared.ctxPayload.IsFirstThreadTurn).toBe(true);
     expect(prepared.ctxPayload.ThreadHistoryBody).toContain("follow-up question");
-    expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("assistant reply");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("assistant reply");
+    expect(prepared.ctxPayload.ThreadHistoryBody).toContain("Bot (this assistant) (assistant)");
     expect(prepared.ctxPayload.ThreadHistoryBody).not.toContain("current message");
     expect(replies).toHaveBeenCalledTimes(2);
   });
