@@ -47,13 +47,10 @@ OpenClaw/Polytropos loads plugins via a manifest.
 
 Our plugin toolchain enforces this (see `polytropos-plugins/scripts/deploy-plugin.mjs`).
 
-### Dev vs prod deployments
-We use two deployment modes:
+### Plugin deployment modes (polytropos-plugins)
+Plugin deployment mode policy is defined in the **plugins repo**, not the fork.
 
-- **deploy-dev:** symlink (fast iteration)
-- **deploy-prod:** copy (release-like, what we consider “migrated”)
-
-A plugin migration is not considered complete until it ends in **deploy-prod**.
+See: https://github.com/JoshuaCWebDeveloper/polytropos-plugins
 
 ---
 
