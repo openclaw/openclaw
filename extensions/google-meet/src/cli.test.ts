@@ -372,10 +372,19 @@ describe("google-meet CLI", () => {
         ended: true,
         tokenSource: "cached-access-token",
       });
-      expect(fetchMock).toHaveBeenCalledWith(
-        "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
-        expect.objectContaining({ method: "POST", body: "{}" }),
+      const endCall = fetchMock.mock.calls.find(
+        ([input]) =>
+          input === "https://meet.googleapis.com/v2/spaces/space-resource-123:endActiveConference",
       );
+      expect(endCall?.[1]).toEqual({
+        method: "POST",
+        body: "{}",
+        headers: {
+          Accept: "application/json",
+          Authorization: "Bearer token",
+          "Content-Type": "application/json",
+        },
+      });
     } finally {
       stdout.restore();
     }
@@ -603,14 +612,14 @@ describe("google-meet CLI", () => {
           attendanceRows: 1,
           warnings: 0,
         },
-        files: expect.arrayContaining([
+        files: [
           "summary.md",
           "attendance.csv",
           "transcript.md",
           "artifacts.json",
           "attendance.json",
           "manifest.json",
-        ]),
+        ],
       });
       expect(JSON.parse(readFileSync(path.join(tempDir, "artifacts.json"), "utf8"))).toMatchObject({
         conferenceRecords: [{ name: "conferenceRecords/rec-1" }],
@@ -856,7 +865,7 @@ describe("google-meet CLI", () => {
 
       expect(callGatewayFromCli).toHaveBeenCalledWith(
         "googlemeet.testSpeech",
-        { json: true, timeout: expect.any(String) },
+        { json: true, timeout: "60000" },
         {
           url: "https://meet.google.com/abc-defg-hij",
           transport: "chrome",
@@ -961,7 +970,14 @@ describe("google-meet CLI", () => {
             transcriptEntries: 1,
             warnings: 0,
           },
-          files: expect.arrayContaining(["summary.md", "manifest.json"]),
+          files: [
+            "summary.md",
+            "attendance.csv",
+            "transcript.md",
+            "artifacts.json",
+            "attendance.json",
+            "manifest.json",
+          ],
         },
         tokenSource: "cached-access-token",
       });

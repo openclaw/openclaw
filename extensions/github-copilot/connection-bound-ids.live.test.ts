@@ -1,7 +1,7 @@
 import { streamOpenAIResponses, type AssistantMessage, type Model } from "@mariozechner/pi-ai";
-import { buildCopilotDynamicHeaders } from "openclaw/plugin-sdk/provider-stream-shared";
 import { describe, expect, it } from "vitest";
 import { resolveFirstGithubToken } from "./auth.js";
+import { buildCopilotDynamicHeaders } from "./stream.js";
 import { wrapCopilotOpenAIResponsesStream } from "./stream.js";
 import { resolveCopilotApiToken } from "./token.js";
 

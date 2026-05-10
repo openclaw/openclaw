@@ -18,6 +18,12 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+function queueActiveRunMessageForTest(
+  ...args: Parameters<typeof queueAgentHarnessMessage>
+): boolean {
+  return queueAgentHarnessMessage(...args);
+}
 import { CODEX_GPT5_BEHAVIOR_CONTRACT } from "../../prompt-overlay.js";
 import {
   buildCodexAppInventoryCacheKey,
@@ -1177,7 +1183,7 @@ describe("runCodexAppServerAttempt", () => {
         }),
       { interval: 1 },
     );
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
   it("does not count account rate-limit updates as turn completion activity", async () => {
@@ -1486,7 +1492,7 @@ describe("runCodexAppServerAttempt", () => {
         }),
       { interval: 1 },
     );
-    expect(queueAgentHarnessMessage("session-1", "after silent turn")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after silent turn")).toBe(false);
   });
 
   it("applies before_prompt_build to Codex developer instructions and turn input", async () => {
@@ -2332,7 +2338,7 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "more context", { debounceMs: 1 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "more context", { debounceMs: 1 })).toBe(true);
     await vi.waitFor(() => expect(requests.map((entry) => entry.method)).toContain("turn/steer"), {
       interval: 1,
     });
@@ -2377,8 +2383,8 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "first", { debounceMs: 5 })).toBe(true);
-    expect(queueAgentHarnessMessage("session-1", "second", { debounceMs: 5 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "first", { debounceMs: 5 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "second", { debounceMs: 5 })).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -2410,7 +2416,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "late steer", { debounceMs: 30_000 })).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "late steer", { debounceMs: 30_000 })).toBe(
+      true,
+    );
 
     await completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -2435,12 +2443,12 @@ describe("runCodexAppServerAttempt", () => {
     );
     await waitForMethod("turn/start");
 
-    expect(queueAgentHarnessMessage("session-1", "first", { steeringMode: "one-at-a-time" })).toBe(
-      true,
-    );
-    expect(queueAgentHarnessMessage("session-1", "second", { steeringMode: "one-at-a-time" })).toBe(
-      true,
-    );
+    expect(
+      queueActiveRunMessageForTest("session-1", "first", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
+    expect(
+      queueActiveRunMessageForTest("session-1", "second", { steeringMode: "one-at-a-time" }),
+    ).toBe(true);
 
     await vi.waitFor(
       () =>
@@ -2540,7 +2548,7 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await vi.waitFor(() => expect(params.onBlockReply).toHaveBeenCalledTimes(1), { interval: 1 });
-    expect(queueAgentHarnessMessage("session-1", "2")).toBe(true);
+    expect(queueActiveRunMessageForTest("session-1", "2")).toBe(true);
     await expect(response).resolves.toEqual({
       answers: { mode: { answers: ["Deep"] } },
     });
@@ -3388,7 +3396,7 @@ describe("runCodexAppServerAttempt", () => {
     await expect(runCodexAppServerAttempt(params, { startupTimeoutFloorMs: 1 })).rejects.toThrow(
       "codex app-server startup timed out",
     );
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
   it("passes the selected auth profile into app-server startup", async () => {
@@ -3450,7 +3458,7 @@ describe("runCodexAppServerAttempt", () => {
     params.timeoutMs = 1;
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow("turn/start timed out");
-    expect(queueAgentHarnessMessage("session-1", "after timeout")).toBe(false);
+    expect(queueActiveRunMessageForTest("session-1", "after timeout")).toBe(false);
   });
 
   it("keeps extended history enabled when resuming a bound Codex thread", async () => {
@@ -4447,7 +4455,7 @@ describe("runCodexAppServerAttempt", () => {
       },
     });
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
-      "The purpose of heartbeats is to make you feel magical and proactive.",
+      "Use heartbeats to create useful proactive progress",
     );
     expect(buildTurnCollaborationMode(params).settings.developer_instructions).toContain(
       "If `heartbeat_respond` is not already available and `tool_search` is available",

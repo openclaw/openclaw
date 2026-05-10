@@ -198,6 +198,7 @@ function normalizeOpenAIServiceTier(value: unknown): OpenAIServiceTier | undefin
   return undefined;
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIServiceTier(
   extraParams: Record<string, unknown> | undefined,
 ): OpenAIServiceTier | undefined {
@@ -239,6 +240,7 @@ function normalizeOpenAIFastMode(value: unknown): boolean | undefined {
   return undefined;
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function resolveOpenAIFastMode(
   extraParams: Record<string, unknown> | undefined,
 ): boolean | undefined {
@@ -260,6 +262,7 @@ function applyOpenAIFastModePayloadOverrides(params: {
   }
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIResponsesContextManagementWrapper(
   baseStreamFn: StreamFn | undefined,
   extraParams: Record<string, unknown> | undefined,
@@ -295,6 +298,7 @@ export function createOpenAIResponsesContextManagementWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIReasoningCompatibilityWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -312,6 +316,7 @@ export function createOpenAIReasoningCompatibilityWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -327,6 +332,7 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAICompletionsStrictMessageKeysWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -344,6 +350,7 @@ export function createOpenAICompletionsStrictMessageKeysWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAICompletionsToolsCompatWrapper(
   baseStreamFn: StreamFn | undefined,
 ): StreamFn {
@@ -360,6 +367,7 @@ export function createOpenAICompletionsToolsCompatWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIThinkingLevelWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -407,6 +415,7 @@ export function createOpenAIThinkingLevelWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -434,6 +443,7 @@ export function createOpenAIFastModeWrapper(baseStreamFn: StreamFn | undefined):
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIServiceTierWrapper(
   baseStreamFn: StreamFn | undefined,
   serviceTier: OpenAIServiceTier,
@@ -451,6 +461,7 @@ export function createOpenAIServiceTierWrapper(
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAITextVerbosityWrapper(
   baseStreamFn: StreamFn | undefined,
   verbosity: OpenAITextVerbosity,
@@ -482,6 +493,7 @@ export function createOpenAITextVerbosityWrapper(
     });
   };
 }
+/** @deprecated OpenAI Codex provider-owned stream helper; do not use from third-party plugins. */
 export function createCodexNativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
   params: { config?: OpenClawConfig; agentDir?: string },
@@ -534,6 +546,7 @@ export function createCodexNativeWebSearchWrapper(
     });
   };
 }
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
@@ -545,6 +558,7 @@ export function createOpenAIDefaultTransportWrapper(baseStreamFn: StreamFn | und
   };
 }
 
+/** @deprecated OpenAI provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenAIAttributionHeadersWrapper(
   baseStreamFn: StreamFn | undefined,
   opts?: { codexNativeTransportStreamFn?: StreamFn },

@@ -261,7 +261,7 @@ describe("runCliAgent spawn path", () => {
       ].join("\n"),
     });
 
-    expect(systemPrompt).toContain("## Skills (mandatory)");
+    expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
   });
@@ -2393,7 +2393,7 @@ describe("runCliAgent spawn path", () => {
       expect(allArgs).toContain(`## ${soulPath}`);
       expect(allArgs).toContain("SOUL-SECRET");
       expect(allArgs).toContain(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
       );
       expect(allArgs).toContain(`## ${identityPath}`);
       expect(allArgs).toContain("IDENTITY-SECRET");

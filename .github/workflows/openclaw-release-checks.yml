@@ -36,7 +36,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
       run_release_soak:
@@ -259,7 +259,18 @@ jobs:
           else
             run_release_soak=true
           fi
-          if [[ "$RELEASE_PROFILE_INPUT" == "full" ]]; then
+          release_profile="$RELEASE_PROFILE_INPUT"
+          if [[ "$release_profile" == "minimum" ]]; then
+            release_profile=beta
+          fi
+          case "$release_profile" in
+            beta|stable|full) ;;
+            *)
+              echo "release_profile must be one of: beta, stable, full" >&2
+              exit 1
+              ;;
+          esac
+          if [[ "$release_profile" == "full" ]]; then
             run_release_soak=true
           fi
 
@@ -330,7 +341,7 @@ jobs:
             printf 'ref=%s\n' "$RELEASE_REF_INPUT"
             printf 'provider=%s\n' "$RELEASE_PROVIDER_INPUT"
             printf 'mode=%s\n' "$RELEASE_MODE_INPUT"
-            printf 'release_profile=%s\n' "$RELEASE_PROFILE_INPUT"
+            printf 'release_profile=%s\n' "$release_profile"
             printf 'run_release_soak=%s\n' "$run_release_soak"
             printf 'rerun_group=%s\n' "$RELEASE_RERUN_GROUP_INPUT"
             printf 'live_suite_filter=%s\n' "$RELEASE_LIVE_SUITE_FILTER_INPUT"
@@ -350,7 +361,7 @@ jobs:
           RELEASE_REF_FAST_PATH: ${{ steps.fast_ref.outputs.fast }}
           RELEASE_PROVIDER: ${{ inputs.provider }}
           RELEASE_MODE: ${{ inputs.mode }}
-          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RELEASE_PROFILE: ${{ steps.inputs.outputs.release_profile }}
           RUN_RELEASE_SOAK: ${{ steps.inputs.outputs.run_release_soak }}
           RELEASE_RERUN_GROUP: ${{ inputs.rerun_group }}
           RELEASE_LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
@@ -572,7 +583,7 @@ jobs:
       ref: ${{ needs.resolve_target.outputs.revision }}
       include_repo_e2e: false
       include_release_path_suites: true
-      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'minimum' }}
+      include_openwebui: ${{ needs.resolve_target.outputs.release_profile != 'beta' }}
       include_live_suites: false
       release_test_profile: ${{ needs.resolve_target.outputs.release_profile }}
       package_artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}

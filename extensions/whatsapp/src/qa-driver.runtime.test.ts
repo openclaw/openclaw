@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import type { WAMessage } from "@whiskeysockets/baileys";
+import type { WAMessage } from "baileys";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { startWhatsAppQaDriverSession } from "./qa-driver.runtime.js";
 

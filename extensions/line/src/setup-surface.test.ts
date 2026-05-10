@@ -464,14 +464,12 @@ describe("linePlugin gateway.startAccount", () => {
     });
 
     await vi.waitFor(() => {
-      expect(monitorLineProvider).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channelAccessToken: "token",
-          channelSecret: "secret",
-          accountId: "default",
-        }),
-      );
+      expect(monitorLineProvider).toHaveBeenCalledTimes(1);
     });
+    const startupParams = monitorLineProvider.mock.calls[0]?.[0];
+    expect(startupParams?.channelAccessToken).toBe("token");
+    expect(startupParams?.channelSecret).toBe("secret");
+    expect(startupParams?.accountId).toBe("default");
 
     abort.abort();
     await task;

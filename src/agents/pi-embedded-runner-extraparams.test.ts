@@ -274,11 +274,8 @@ function createAnthropicFastModeWrapper(baseStreamFn: StreamFn | undefined, fast
   return createAnthropicServiceTierWrapper(baseStreamFn, fastMode ? "auto" : "standard_only");
 }
 
+import { isAnthropicBedrockModel } from "./pi-embedded-runner/anthropic-family-cache-semantics.js";
 import { createAnthropicToolPayloadCompatibilityWrapper } from "./pi-embedded-runner/anthropic-family-tool-payload-compat.js";
-import {
-  createBedrockNoCacheWrapper,
-  isAnthropicBedrockModel,
-} from "./pi-embedded-runner/bedrock-stream-wrappers.js";
 import {
   applyExtraParamsToAgent,
   resolveAgentTransportOverride,
@@ -338,7 +335,7 @@ function installFullProviderRuntimeDepsForTest() {
       if (params.provider === "amazon-bedrock") {
         return isAnthropicBedrockModel(params.context.modelId)
           ? params.context.streamFn
-          : createBedrockNoCacheWrapper(params.context.streamFn);
+          : createTestBedrockNoCacheWrapper(params.context.streamFn);
       }
       if (params.provider === "google") {
         return createGoogleThinkingPayloadWrapper(
@@ -394,6 +391,15 @@ function installFullProviderRuntimeDepsForTest() {
       return params.context.streamFn;
     },
   });
+}
+
+function createTestBedrockNoCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? (() => ({}) as ReturnType<StreamFn>);
+  return (model, context, options) =>
+    underlying(model, context, {
+      ...options,
+      cacheRetention: "none",
+    });
 }
 
 function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {

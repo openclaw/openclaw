@@ -17,6 +17,11 @@ const normalizeThreadTs = (threadTs?: string | null) => {
   return trimmed ? trimmed : undefined;
 };
 
+const markAmbiguousThreadReply = (message: SlackMessageEvent): SlackMessageEvent => ({
+  ...message,
+  _ambiguousThreadReply: true,
+});
+
 async function resolveThreadTsFromHistory(params: {
   client: SlackWebClient;
   channelId: string;
@@ -87,7 +92,7 @@ export function createSlackThreadTsResolver(params: {
       const now = Date.now();
       const cached = getCached(cacheKey, now);
       if (cached !== undefined) {
-        return cached ? { ...message, thread_ts: cached } : message;
+        return cached ? { ...message, thread_ts: cached } : markAmbiguousThreadReply(message);
       }
 
       if (shouldLogVerbose()) {
@@ -126,10 +131,10 @@ export function createSlackThreadTsResolver(params: {
 
       if (shouldLogVerbose()) {
         logVerbose(
-          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}`,
+          `slack inbound: could not resolve missing thread_ts channel=${message.channel} ts=${message.ts}; marking reply ambiguous`,
         );
       }
-      return message;
+      return markAmbiguousThreadReply(message);
     },
   };
 }

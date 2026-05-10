@@ -72,8 +72,14 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
+const createConfigIOCalls = vi.fn((configPath: string, pluginValidation?: "full" | "skip") => ({
+  configPath,
+  pluginValidation,
+}));
 const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
 const loadConfigCalls = vi.fn((configPath: string) => configPath);
+let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
+let cliConfigWarnings: Array<{ path: string; message: string }> = [];
 let daemonLoadedConfig: Record<string, unknown> = {
   gateway: {
     bind: "lan",
@@ -88,9 +94,17 @@ let cliLoadedConfig: Record<string, unknown> = {
 };
 
 vi.mock("../../config/config.js", () => ({
-  createConfigIO: ({ configPath }: { configPath: string }) => {
+  createConfigIO: ({
+    configPath,
+    pluginValidation,
+  }: {
+    configPath: string;
+    pluginValidation?: "full" | "skip";
+  }) => {
     const isDaemon = configPath.includes("/openclaw-daemon/");
     const runtimeConfig = isDaemon ? daemonLoadedConfig : cliLoadedConfig;
+    const warnings = isDaemon ? daemonConfigWarnings : cliConfigWarnings;
+    createConfigIOCalls(configPath, pluginValidation);
     return {
       readConfigFileSnapshot: async () => {
         readConfigFileSnapshotCalls(configPath);
@@ -99,6 +113,7 @@ vi.mock("../../config/config.js", () => ({
           exists: true,
           valid: true,
           issues: [],
+          warnings: pluginValidation === "full" ? warnings : [],
           runtimeConfig,
           config: runtimeConfig,
         };
@@ -186,11 +201,14 @@ describe("gatherDaemonStatus", () => {
     delete process.env.DAEMON_GATEWAY_TOKEN;
     delete process.env.DAEMON_GATEWAY_PASSWORD;
     callGatewayStatusProbe.mockClear();
+    createConfigIOCalls.mockClear();
     loadGatewayTlsRuntime.mockClear();
     inspectGatewayRestart.mockClear();
     readGatewayRestartHandoffSync.mockClear();
     readConfigFileSnapshotCalls.mockClear();
     loadConfigCalls.mockClear();
+    daemonConfigWarnings = [];
+    cliConfigWarnings = [];
     daemonLoadedConfig = {
       gateway: {
         bind: "lan",
@@ -474,6 +492,51 @@ describe("gatherDaemonStatus", () => {
       expect(status.config?.daemon).toBe(status.config?.cli);
       expect(status.gateway?.bindMode).toBe("custom");
       expect(status.gateway?.customBindHost).toBe("10.0.0.5");
+    } finally {
+      await fs.rm(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("uses full plugin-aware config validation for deep status", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-status-config-"));
+    const configPath = path.join(tmp, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({
+        gateway: {
+          bind: "loopback",
+        },
+      }),
+    );
+    process.env.OPENCLAW_STATE_DIR = tmp;
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    cliLoadedConfig = {
+      gateway: {
+        bind: "loopback",
+      },
+    };
+    cliConfigWarnings = [
+      {
+        path: "plugins.entries.test-bad-plugin",
+        message:
+          "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
+      },
+    ];
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
+    });
+
+    try {
+      const status = await gatherDaemonStatus({
+        rpc: {},
+        probe: false,
+        deep: true,
+      });
+
+      expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full");
+      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
+      expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
+      expect(status.config?.daemon).toBe(status.config?.cli);
     } finally {
       await fs.rm(tmp, { recursive: true, force: true });
     }

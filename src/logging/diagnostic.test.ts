@@ -13,6 +13,7 @@ import {
   getDiagnosticSessionActivitySnapshot,
   markDiagnosticRunProgressForTest,
   markDiagnosticEmbeddedRunStarted,
+  markDiagnosticToolStartedForTest,
 } from "./diagnostic-run-activity.js";
 import {
   diagnosticSessionStates,
@@ -60,6 +61,66 @@ function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) 
     }
   }
   return count;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectNumberField(record: Record<string, unknown>, key: string) {
+  expect(typeof record[key]).toBe("number");
+}
+
+function requireMatchingRecord(
+  items: readonly unknown[],
+  fields: Record<string, unknown>,
+  label: string,
+) {
+  const found = items.find((item) => {
+    if (typeof item !== "object" || item === null) {
+      return false;
+    }
+    const record = item as Record<string, unknown>;
+    return Object.entries(fields).every(([key, value]) => Object.is(record[key], value));
+  });
+  expect(found).toBeDefined();
+  if (!found) {
+    throw new Error(`missing ${label}`);
+  }
+  return requireRecord(found, label);
+}
+
+function requireFirstMockCallArg(mock: unknown, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  const call = calls?.[0];
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`missing ${label} call`);
+  }
+  return requireRecord(call[0], `${label} argument`);
+}
+
+function expectRecoveryCall(
+  recoverStuckSession: unknown,
+  fields: Record<string, unknown>,
+  numberFields: readonly string[],
+) {
+  const params = requireFirstMockCallArg(recoverStuckSession, "recoverStuckSession");
+  expectRecordFields(params, fields);
+  for (const key of numberFields) {
+    expectNumberField(params, key);
+  }
 }
 
 describe("diagnostic session state pruning", () => {
@@ -234,18 +295,16 @@ describe("stuck session diagnostics threshold", () => {
 
     const stuckEvents = events.filter((event) => event.type === "session.stuck");
     expect(stuckEvents).toHaveLength(1);
-    expect(stuckEvents[0]).toMatchObject({
+    expectRecordFields(requireRecord(stuckEvents[0], "stuck event"), {
       classification: "stale_session_state",
       reason: "stale_session_state",
       queueDepth: 0,
     });
-    expect(recoverStuckSession).toHaveBeenCalledWith({
-      sessionId: "s1",
-      sessionKey: "main",
-      ageMs: expect.any(Number),
-      queueDepth: 0,
-      stateGeneration: expect.any(Number),
-    });
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0 },
+      ["ageMs", "stateGeneration"],
+    );
   });
 
   it("keeps queued stale sessions eligible for lane recovery", () => {
@@ -274,18 +333,16 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.some((event) => event.type === "session.long_running")).toBe(false);
     const stuckEvents = events.filter((event) => event.type === "session.stuck");
     expect(stuckEvents).toHaveLength(1);
-    expect(stuckEvents[0]).toMatchObject({
+    expectRecordFields(requireRecord(stuckEvents[0], "stuck event"), {
       classification: "stale_session_state",
       reason: "queued_work_without_active_run",
       queueDepth: 1,
     });
-    expect(recoverStuckSession).toHaveBeenCalledWith({
-      sessionId: "s1",
-      sessionKey: "main",
-      ageMs: expect.any(Number),
-      queueDepth: 1,
-      stateGeneration: expect.any(Number),
-    });
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 1 },
+      ["ageMs", "stateGeneration"],
+    );
   });
 
   it("does not warn while a processing session continues reporting progress", () => {
@@ -372,7 +429,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.some((event) => event.type === "session.stuck")).toBe(false);
     const stalledEvents = events.filter((event) => event.type === "session.stalled");
     expect(stalledEvents).toHaveLength(1);
-    expect(stalledEvents[0]).toMatchObject({
+    expectRecordFields(requireRecord(stalledEvents[0], "stalled event"), {
       classification: "stalled_agent_run",
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
@@ -411,10 +468,16 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("terminalProgressStale=true"));
-    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
-      terminalProgressStale: true,
-      lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
-    });
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        terminalProgressStale: true,
+        lastProgressReason: "codex_app_server:notification:rawResponseItem/completed",
+      },
+    );
   });
 
   it("aborts and drains embedded runs after an extended no-progress stall", () => {
@@ -446,18 +509,57 @@ describe("stuck session diagnostics threshold", () => {
 
     const stalledEvents = events.filter((event) => event.type === "session.stalled");
     expect(stalledEvents.length).toBeGreaterThan(0);
-    expect(stalledEvents.at(-1)).toMatchObject({
+    expectRecordFields(requireRecord(stalledEvents.at(-1), "stalled event"), {
       classification: "stalled_agent_run",
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
     });
-    expect(recoverStuckSession).toHaveBeenCalledWith({
-      sessionId: "s1",
-      sessionKey: "main",
-      ageMs: expect.any(Number),
-      queueDepth: 0,
-      allowActiveAbort: true,
-      stateGeneration: expect.any(Number),
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
+  });
+
+  it("does not abort embedded runs while a native tool call is active", async () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+            stuckSessionAbortMs: 60_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+      markDiagnosticToolStartedForTest({
+        sessionId: "s1",
+        sessionKey: "main",
+        runId: "run-1",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+      });
+
+      vi.advanceTimersByTime(2 * 60_000);
+    } finally {
+      unsubscribe();
+    }
+
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
+      classification: "blocked_tool_call",
+      reason: "blocked_tool_call",
+      activeWorkKind: "tool_call",
+      activeToolName: "bash",
+      activeToolCallId: "cmd-1",
     });
   });
 
@@ -479,14 +581,11 @@ describe("stuck session diagnostics threshold", () => {
 
     vi.advanceTimersByTime(61_000);
 
-    expect(recoverStuckSession).toHaveBeenCalledWith({
-      sessionId: "s1",
-      sessionKey: "main",
-      ageMs: expect.any(Number),
-      queueDepth: 0,
-      allowActiveAbort: true,
-      stateGeneration: expect.any(Number),
-    });
+    expectRecoveryCall(
+      recoverStuckSession,
+      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
+      ["ageMs", "stateGeneration"],
+    );
   });
 
   it("marks diagnostic session state idle only after a mutating recovery outcome", async () => {
@@ -523,12 +622,10 @@ describe("stuck session diagnostics threshold", () => {
     const state = getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" });
     expect(state.state).toBe("idle");
     expect(state.queueDepth).toBe(0);
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "session.recovery.completed",
-        status: "released",
-        action: "release_lane",
-      }),
+    requireMatchingRecord(
+      events,
+      { type: "session.recovery.completed", status: "released", action: "release_lane" },
+      "released recovery event",
     );
   });
 
@@ -569,12 +666,10 @@ describe("stuck session diagnostics threshold", () => {
     expect(getDiagnosticSessionState({ sessionId: "s1", sessionKey: "main" }).state).toBe(
       "processing",
     );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "session.recovery.completed",
-        status: "released",
-        stale: true,
-      }),
+    requireMatchingRecord(
+      events,
+      { type: "session.recovery.completed", status: "released", stale: true },
+      "stale recovery event",
     );
   });
 
@@ -621,12 +716,14 @@ describe("stuck session diagnostics threshold", () => {
 
       vi.advanceTimersByTime(60_000);
       expect(recoverStuckSession).toHaveBeenCalledTimes(1);
-      expect(events).toContainEqual(
-        expect.objectContaining({
+      requireMatchingRecord(
+        events,
+        {
           type: "session.recovery.completed",
           status: "skipped",
           outcomeReason: "already_in_flight",
-        }),
+        },
+        "skipped recovery event",
       );
 
       resolveRecovery?.({
@@ -671,7 +768,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
-    expect(longRunningEvents[0]).toMatchObject({
+    expectRecordFields(requireRecord(longRunningEvents[0], "long-running event"), {
       classification: "long_running",
       reason: "active_work",
       activeWorkKind: "embedded_run",
@@ -751,7 +848,7 @@ describe("stuck session diagnostics threshold", () => {
     expect(events.some((event) => event.type === "session.stalled")).toBe(false);
     const longRunningEvents = events.filter((event) => event.type === "session.long_running");
     expect(longRunningEvents).toHaveLength(1);
-    expect(longRunningEvents[0]).toMatchObject({
+    expectRecordFields(requireRecord(longRunningEvents[0], "long-running event"), {
       classification: "long_running",
       reason: "queued_behind_active_work",
       activeWorkKind: "embedded_run",
@@ -768,11 +865,10 @@ describe("stuck session diagnostics threshold", () => {
     });
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
 
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
-      expect.objectContaining({
-        type: "session.state",
-        outcome: "processing",
-      }),
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      { type: "session.state", outcome: "processing" },
+      "session state stability event",
     );
     const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
     expect(event).not.toHaveProperty("sessionId");
@@ -856,8 +952,9 @@ describe("stuck session diagnostics threshold", () => {
     expect(events).toContain("diagnostic.liveness.warning");
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
-      expect.objectContaining({
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
         type: "diagnostic.liveness.warning",
         level: "info",
         reason: "cpu",
@@ -870,7 +967,8 @@ describe("stuck session diagnostics threshold", () => {
         active: 0,
         waiting: 0,
         queued: 0,
-      }),
+      },
+      "idle liveness stability event",
     );
   });
 
@@ -898,14 +996,16 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
-      expect.objectContaining({
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
         type: "diagnostic.liveness.warning",
         level: "warning",
         active: 0,
         waiting: 0,
         queued: 1,
-      }),
+      },
+      "queued liveness stability event",
     );
   });
 
@@ -954,10 +1054,19 @@ describe("stuck session diagnostics threshold", () => {
 
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("phase=startup.plugins.load"));
     expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("work=[queued=main("));
-    expect(events.findLast((event) => event.type === "diagnostic.liveness.warning")).toMatchObject({
-      phase: "startup.plugins.load",
-      queuedWorkLabels: [expect.stringContaining("main(")],
-    });
+    const warning = requireRecord(
+      events.findLast((event) => event.type === "diagnostic.liveness.warning"),
+      "liveness warning event",
+    );
+    expect(warning.phase).toBe("startup.plugins.load");
+    const queuedWorkLabels = warning.queuedWorkLabels;
+    expect(Array.isArray(queuedWorkLabels)).toBe(true);
+    if (!Array.isArray(queuedWorkLabels)) {
+      throw new Error("liveness warning queuedWorkLabels was not an array");
+    }
+    expect(
+      queuedWorkLabels.some((label) => typeof label === "string" && label.includes("main(")),
+    ).toBe(true);
   });
 
   it("keeps transient event-loop max spikes debug-only when only background work is active", () => {
@@ -984,14 +1093,16 @@ describe("stuck session diagnostics threshold", () => {
     vi.advanceTimersByTime(30_000);
 
     expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
-      expect.objectContaining({
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
         type: "diagnostic.liveness.warning",
         level: "warning",
         active: 1,
         waiting: 0,
         queued: 0,
-      }),
+      },
+      "active liveness stability event",
     );
   });
 
@@ -1132,15 +1243,17 @@ describe("diagnostic stability snapshots", () => {
     });
     await flushDiagnosticEvents();
 
-    expect(getDiagnosticStabilitySnapshot({ limit: 10 }).events).toContainEqual(
-      expect.objectContaining({
+    requireMatchingRecord(
+      getDiagnosticStabilitySnapshot({ limit: 10 }).events,
+      {
         type: "message.delivery.error",
         channel: "matrix",
         deliveryKind: "text",
         durationMs: 12,
         outcome: "error",
         reason: "TypeError",
-      }),
+      },
+      "bounded outbound delivery stability event",
     );
     const [event] = getDiagnosticStabilitySnapshot({ limit: 10 }).events;
     expect(event).not.toHaveProperty("sessionKey");
