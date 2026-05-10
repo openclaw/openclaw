@@ -31,4 +31,23 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).unexpected).toBeUndefined();
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
+
+  it("preserves root-level defaultModel and agent description fields", () => {
+    const result = stripUnknownConfigKeys({
+      defaultModel: "openrouter/openrouter/free",
+      agents: {
+        list: [
+          {
+            id: "main",
+            description: "Main agent for general tasks",
+          },
+        ],
+      },
+    } as never);
+    expect(result.removed).toHaveLength(0);
+    const cfg = result.config as Record<string, unknown>;
+    expect(cfg.defaultModel).toBe("openrouter/openrouter/free");
+    const agents = cfg.agents as { list: Array<Record<string, unknown>> };
+    expect(agents.list[0].description).toBe("Main agent for general tasks");
+  });
 });
