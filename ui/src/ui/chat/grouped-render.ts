@@ -743,7 +743,7 @@ function renderGroupedMessage(
                         <pre class="chat-json-content"><code>${jsonResult.pretty}</code></pre>
                       </details>`
                     : markdown
-                      ? html`<div class="chat-text" dir="${detectTextDirection(markdown)}">${unsafeHTML(toSanitizedMarkdownHtml(markdown))}</div>`
+                ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar, opts.expandToolCalls ?? false) : nothing}
                       : nothing
                 }
                         ${hasToolCards ? renderCollapsedToolCards(toolCards, onOpenSidebar, opts.expandToolCalls ?? false) : nothing}
