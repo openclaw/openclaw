@@ -376,6 +376,21 @@ describe("loadWebMedia", () => {
     expect(result.contentType).toBe("text/markdown");
   });
 
+  it("allows host-read ZIP files", async () => {
+    const zipFile = path.join(fixtureRoot, "archive.zip");
+    // Write valid ZIP magic bytes (PK\x03\x04) with minimal empty ZIP structure.
+    // file-type detects application/zip from these magic bytes.
+    await fs.writeFile(zipFile, Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    const result = await loadWebMedia(zipFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("application/zip");
+  });
+
   it("rejects binary data disguised as a CSV file", async () => {
     const fakeCsv = path.join(fixtureRoot, "evil.csv");
     // Write ZIP magic bytes — file-type detects application/zip (not image, not CSV),

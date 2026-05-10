@@ -242,7 +242,7 @@ export const talkSessionHandlers: GatewayRequestHandlers = {
           connId,
           provider: resolution.provider,
           providerConfig: withRealtimeBrowserOverrides(resolution.providerConfig, { model, voice }),
-          instructions: buildRealtimeInstructions(),
+          instructions: buildRealtimeInstructions(realtimeConfig.instructions),
           tools: [REALTIME_VOICE_AGENT_CONSULT_TOOL],
           model,
           voice,

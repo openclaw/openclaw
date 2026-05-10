@@ -76,14 +76,12 @@ describe("resolveAttemptTranscriptPolicy", () => {
       env,
     });
 
-    expect(policy).toMatchObject({
-      sanitizeMode: "images-only",
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      repairToolUseResultPairing: true,
-      validateAnthropicTurns: false,
-      allowSyntheticToolResults: false,
-    });
+    expect(policy.sanitizeMode).toBe("images-only");
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.repairToolUseResultPairing).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(false);
+    expect(policy.allowSyntheticToolResults).toBe(false);
     expect(resolveProviderRuntimePluginMock).toHaveBeenCalledWith({
       provider: "custom-openai-compatible",
       config: undefined,
@@ -102,11 +100,9 @@ describe("resolveAttemptTranscriptPolicy", () => {
       modelId: "anthropic-foundry/claude-opus-4-7",
     });
 
-    expect(policy).toMatchObject({
-      sanitizeToolCallIds: true,
-      toolCallIdMode: "strict",
-      validateAnthropicTurns: true,
-      validateGeminiTurns: false,
-    });
+    expect(policy.sanitizeToolCallIds).toBe(true);
+    expect(policy.toolCallIdMode).toBe("strict");
+    expect(policy.validateAnthropicTurns).toBe(true);
+    expect(policy.validateGeminiTurns).toBe(false);
   });
 });

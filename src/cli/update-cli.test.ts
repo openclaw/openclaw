@@ -42,6 +42,9 @@ const updateNpmInstalledPlugins = vi.fn();
 const loadInstalledPluginIndexInstallRecords = vi.fn(
   async (params: { config?: OpenClawConfig } = {}) => params.config?.plugins?.installs ?? {},
 );
+const legacyConfigRepairMocks = vi.hoisted(() => ({
+  repairLegacyConfigForUpdateChannel: vi.fn(),
+}));
 const nodeVersionSatisfiesEngine = vi.fn();
 const spawn = vi.fn();
 const { defaultRuntime: runtimeCapture, resetRuntimeCapture } = createCliRuntimeCapture();
@@ -245,6 +248,9 @@ vi.mock("./update-cli/restart-helper.js", () => ({
 // Mock doctor (heavy module; should not run in unit tests)
 vi.mock("../commands/doctor.js", () => ({
   doctorCommand: vi.fn(),
+}));
+vi.mock("../commands/doctor/legacy-config-repair.js", () => ({
+  repairLegacyConfigForUpdateChannel: legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel,
 }));
 // Mock the daemon-cli module
 vi.mock("./daemon-cli.js", () => ({
@@ -579,6 +585,12 @@ describe("update-cli", () => {
     vi.mocked(runDaemonInstall).mockResolvedValue(undefined);
     vi.mocked(runDaemonRestart).mockResolvedValue(true);
     vi.mocked(doctorCommand).mockResolvedValue(undefined);
+    legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementation(
+      async (params: { configSnapshot: ConfigFileSnapshot }) => ({
+        snapshot: params.configSnapshot,
+        repaired: false,
+      }),
+    );
     confirm.mockResolvedValue(false);
     select.mockResolvedValue("stable");
     vi.mocked(runGatewayUpdate).mockResolvedValue(makeOkUpdateResult());
@@ -2563,9 +2575,32 @@ describe("update-cli", () => {
         valid: true,
         hash: "migrated-hash",
       });
+    legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel.mockImplementationOnce(
+      async (params: { configSnapshot: ConfigFileSnapshot; jsonMode: boolean }) => {
+        await replaceConfigFile({
+          nextConfig: migratedConfig,
+          baseHash: params.configSnapshot.hash,
+          writeOptions: {
+            allowConfigSizeDrop: true,
+            skipOutputLogs: params.jsonMode,
+          },
+        });
+        return {
+          snapshot: await readConfigFileSnapshot(),
+          repaired: true,
+        };
+      },
+    );
 
     await updateCommand({ channel: "beta", yes: true });
 
+    expect(legacyConfigRepairMocks.repairLegacyConfigForUpdateChannel).toHaveBeenCalledWith({
+      configSnapshot: expect.objectContaining({
+        hash: "legacy-hash",
+        valid: false,
+      }),
+      jsonMode: false,
+    });
     expect(replaceConfigFile).toHaveBeenCalledTimes(2);
     expect(replaceConfigFile).toHaveBeenNthCalledWith(1, {
       nextConfig: expect.objectContaining({

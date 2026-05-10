@@ -112,6 +112,26 @@
     "target": "Codex harness"
   },
   {
+    "source": "Codex harness reference",
+    "target": "Codex harness reference"
+  },
+  {
+    "source": "Codex harness runtime",
+    "target": "Codex harness runtime"
+  },
+  {
+    "source": "Native Codex plugins",
+    "target": "Native Codex plugins"
+  },
+  {
+    "source": "Codex Computer Use",
+    "target": "Codex Computer Use"
+  },
+  {
+    "source": "Diagnostics export",
+    "target": "诊断导出"
+  },
+  {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
   },
@@ -692,6 +712,10 @@
     "target": "迁移"
   },
   {
+    "source": "Migrate CLI",
+    "target": "迁移 CLI"
+  },
+  {
     "source": "Migrating",
     "target": "迁移"
   },
@@ -782,6 +806,10 @@
   {
     "source": "Rich Output Protocol",
     "target": "富输出协议"
+  },
+  {
+    "source": "Trajectory export",
+    "target": "轨迹导出"
   },
   {
     "source": "Tencent Cloud (TokenHub)",

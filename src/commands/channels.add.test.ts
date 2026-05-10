@@ -614,7 +614,9 @@ describe("channelsAddCommand", () => {
         }),
       }),
     );
-    expect(runtime.error).not.toHaveBeenCalledWith("Channel telegram does not support add.");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Channel telegram does not support non-interactive add"),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
@@ -665,7 +667,9 @@ describe("channelsAddCommand", () => {
         }),
       }),
     );
-    expect(runtime.error).not.toHaveBeenCalledWith("Channel telegram does not support add.");
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("Channel telegram does not support non-interactive add"),
+    );
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 

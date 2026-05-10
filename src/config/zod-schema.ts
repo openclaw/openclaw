@@ -236,6 +236,7 @@ const TalkRealtimeSchema = z
     providers: z.record(z.string(), TalkProviderEntrySchema).optional(),
     model: z.string().optional(),
     voice: z.string().optional(),
+    instructions: z.string().optional(),
     mode: z.enum(["realtime", "stt-tts", "transcription"]).optional(),
     transport: z.enum(["webrtc", "provider-websocket", "gateway-relay", "managed-room"]).optional(),
     brain: z.enum(["agent-consult", "direct-tools", "none"]).optional(),
@@ -1080,6 +1081,7 @@ export const OpenClawSchema = z
         load: z
           .object({
             extraDirs: z.array(z.string()).optional(),
+            allowSymlinkTargets: z.array(z.string()).optional(),
             watch: z.boolean().optional(),
             watchDebounceMs: z.number().int().min(0).optional(),
           })
@@ -1091,6 +1093,7 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+            allowUploadedArchives: z.boolean().optional(),
           })
           .strict()
           .optional(),

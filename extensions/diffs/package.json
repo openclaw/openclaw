@@ -11,7 +11,7 @@
     "build:viewer": "bun build src/viewer-client.ts --target browser --format esm --minify --outfile assets/viewer-runtime.js"
   },
   "dependencies": {
-    "@pierre/diffs": "1.1.20",
+    "@pierre/diffs": "1.1.21",
     "@pierre/theme": "0.0.29",
     "playwright-core": "1.59.1",
     "typebox": "1.1.38"

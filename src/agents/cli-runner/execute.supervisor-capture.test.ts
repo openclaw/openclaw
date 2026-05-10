@@ -220,12 +220,15 @@ describe("executePreparedCliRun supervisor output capture", () => {
       });
     });
 
-    await expect(
-      executePreparedCliRun(buildPreparedCliRunContext({ output: "text" })),
-    ).rejects.toMatchObject({
-      reason: "rate_limit",
-      status: 429,
-    });
+    try {
+      await executePreparedCliRun(buildPreparedCliRunContext({ output: "text" }));
+    } catch (error) {
+      const classified = error as { reason?: unknown; status?: unknown };
+      expect(classified.reason).toBe("rate_limit");
+      expect(classified.status).toBe(429);
+      return;
+    }
+    throw new Error("Expected CLI run to reject with a rate limit error");
   });
 
   it("still streams every JSONL stdout chunk with supervisor capture disabled", async () => {

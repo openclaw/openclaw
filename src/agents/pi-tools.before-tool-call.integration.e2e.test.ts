@@ -503,7 +503,11 @@ describe("before_tool_call hook integration for client tools", () => {
           namespace: "policy",
           value: { gate: "client" },
         }),
-      ).resolves.toMatchObject({ ok: true });
+      ).resolves.toEqual({
+        ok: true,
+        key: "agent:main:client",
+        value: { gate: "client" },
+      });
 
       const [tool] = toClientToolDefinitions(
         [

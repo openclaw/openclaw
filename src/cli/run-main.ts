@@ -401,9 +401,11 @@ export async function runCli(argv: string[] = process.argv) {
     return;
   }
   let normalizedArgv = parsedProfile.argv;
+  const normalizedInvocation = resolveCliArgvInvocation(normalizedArgv);
+  const isHelpOrVersionInvocation = normalizedInvocation.hasHelpOrVersion;
   startupTrace.mark("argv");
 
-  if (shouldLoadCliDotEnv()) {
+  if (!isHelpOrVersionInvocation && shouldLoadCliDotEnv()) {
     await startupTrace.measure("dotenv", async () => {
       const { loadCliDotEnv } = await import("./dotenv.js");
       loadCliDotEnv({ quiet: true });
@@ -443,7 +445,7 @@ export async function runCli(argv: string[] = process.argv) {
     proxyHandle = null;
     handle?.kill("SIGTERM");
   };
-  if (shouldStartProxyForCli(normalizedArgv)) {
+  if (!isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv)) {
     const config = await readBestEffortCliConfig();
     const unownedPrimary = await resolveUnownedCliPrimary({ argv: normalizedArgv, config });
     if (unownedPrimary) {
@@ -543,7 +545,8 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    const shouldUseCliEnvProxy = shouldStartProxyForCli(normalizedArgv);
+    const shouldUseCliEnvProxy =
+      !isHelpOrVersionInvocation && shouldStartProxyForCli(normalizedArgv);
     const bootstrapProxyBeforeFastPath =
       shouldUseCliEnvProxy && shouldBootstrapCliProxyBeforeFastPath();
     if (
@@ -553,9 +556,11 @@ export async function runCli(argv: string[] = process.argv) {
       return;
     }
 
-    await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
-      ensureDispatcher: shouldUseCliEnvProxy,
-    });
+    if (!isHelpOrVersionInvocation) {
+      await bootstrapCliProxyCaptureAndDispatcher(startupTrace, {
+        ensureDispatcher: shouldUseCliEnvProxy,
+      });
+    }
 
     if (
       bootstrapProxyBeforeFastPath &&

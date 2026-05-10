@@ -272,6 +272,11 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
+vi.mock("../../../trajectory/metadata.js", () => ({
+  buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
+  buildTrajectoryRunMetadata: () => ({ source: "test" }),
+}));
+
 vi.mock("@mariozechner/pi-coding-agent", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
@@ -500,6 +505,27 @@ vi.mock("../extra-params.js", async () => {
   return {
     ...actual,
     applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+    resolvePreparedExtraParams: (params: {
+      cfg?: unknown;
+      provider: string;
+      modelId: string;
+      agentId?: string;
+      extraParamsOverride?: Record<string, unknown>;
+      resolvedExtraParams?: Record<string, unknown>;
+    }) => ({
+      ...(params.resolvedExtraParams ??
+        actual.resolveExtraParams({
+          cfg: params.cfg as Parameters<typeof actual.resolveExtraParams>[0]["cfg"],
+          provider: params.provider,
+          modelId: params.modelId,
+          agentId: params.agentId,
+        })),
+      ...(params.extraParamsOverride
+        ? Object.fromEntries(
+            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+          )
+        : undefined),
+    }),
     resolveAgentTransportOverride: () => undefined,
   };
 });
@@ -515,6 +541,17 @@ vi.mock("../../cache-trace.js", () => ({
 vi.mock("../../pi-tools.js", () => ({
   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
     hoisted.createOpenClawCodingToolsMock(options),
+  resolveProcessToolScopeKey: ({
+    scopeKey,
+    sessionKey,
+    sessionId,
+    agentId,
+  }: {
+    scopeKey?: string;
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+  }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -991,11 +1028,9 @@ export function createContextEngineBootstrapAndAssemble() {
 }
 
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionKey,
-    }),
-  );
+  expect(mock).toHaveBeenCalled();
+  const [params] = mock.mock.calls.at(-1) ?? [];
+  expect((params as { sessionKey?: string } | undefined)?.sessionKey).toBe(sessionKey);
 }
 
 export const testModel = {

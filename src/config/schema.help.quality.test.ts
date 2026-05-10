@@ -568,6 +568,8 @@ const FINAL_BACKLOG_TARGET_KEYS = [
   "diagnostics.otel.traces",
   "gateway.remote.password",
   "gateway.remote.token",
+  "skills.load.allowSymlinkTargets",
+  "skills.load.extraDirs",
   "skills.load.watch",
   "skills.load.watchDebounceMs",
   "ui.assistant.avatar",

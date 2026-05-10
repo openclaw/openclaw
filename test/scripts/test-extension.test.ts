@@ -250,7 +250,7 @@ describe("scripts/test-extension.mjs", () => {
 
   it("can fail safe to all extensions when the base revision is unavailable", () => {
     const extensionIds = listChangedExtensionIds({
-      base: "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef",
+      base: "refs/heads/openclaw-test-missing-base",
       unavailableBaseBehavior: "all",
     });
 

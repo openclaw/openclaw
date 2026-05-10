@@ -254,6 +254,7 @@ export const TalkSessionSubmitToolResultParamsSchema = Type.Object(
     options: Type.Optional(
       Type.Object(
         {
+          suppressResponse: Type.Optional(Type.Boolean()),
           willContinue: Type.Optional(Type.Boolean()),
         },
         { additionalProperties: false },
@@ -493,6 +494,7 @@ const TalkRealtimeConfigSchema = Type.Object(
     providers: Type.Optional(Type.Record(Type.String(), TalkProviderConfigSchema)),
     model: Type.Optional(Type.String()),
     voice: Type.Optional(Type.String()),
+    instructions: Type.Optional(Type.String()),
     mode: Type.Optional(TalkModeSchema),
     transport: Type.Optional(TalkTransportSchema),
     brain: Type.Optional(TalkBrainSchema),

@@ -42,6 +42,9 @@ export interface GatewayPluginRuntime {
         peer: { kind: "group" | "direct"; id: string };
       }) => { sessionKey: string; accountId: string; agentId?: string };
     };
+    commands?: {
+      isControlCommandMessage?: (text?: string, cfg?: unknown) => boolean;
+    };
     reply: {
       dispatchReplyWithBufferedBlockDispatcher: (params: unknown) => Promise<unknown>;
       resolveEffectiveMessagesConfig: (

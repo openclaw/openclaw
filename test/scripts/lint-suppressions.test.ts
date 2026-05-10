@@ -91,7 +91,6 @@ describe("production lint suppressions", () => {
       "scripts/lib/plugin-npm-release.ts|typescript/no-unnecessary-type-parameters|1",
       "src/agents/agent-scope.ts|no-control-regex|1",
       "src/agents/pi-embedded-runner/run/images.ts|no-control-regex|1",
-      "src/agents/skills-clawhub.ts|no-control-regex|1",
       "src/agents/subagent-attachments.ts|no-control-regex|1",
       "src/agents/subagent-spawn.ts|no-control-regex|1",
       "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",

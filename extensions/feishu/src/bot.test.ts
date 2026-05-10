@@ -1,6 +1,7 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
+import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
@@ -1214,6 +1215,61 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ChatType: "group",
         SenderId: "ou-allowed",
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Feishu group policy bound to the chat while preserving speaker identity", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-context-79457",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const finalized = mockFinalizeInboundContext.mock.calls.at(-1)?.[0];
+    expect(finalized).toEqual(
+      expect.objectContaining({
+        ChatType: "group",
+        From: "feishu:ou-allowed",
+        To: "chat:oc-group",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "chat:oc-group",
+        SenderId: "ou-allowed",
+      }),
+    );
+    expect(resolveGroupSessionKey(finalized as never)).toEqual(
+      expect.objectContaining({
+        channel: "feishu",
+        id: "oc-group",
+        key: "feishu:group:oc-group",
       }),
     );
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);

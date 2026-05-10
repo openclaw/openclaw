@@ -24,7 +24,13 @@ async function expectLockRemovedOnlyAfterFinalRelease(params: {
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
-  await expect(fs.access(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
 }
 
 async function expectCurrentPidOwnsLock(params: {
@@ -273,7 +279,8 @@ describe("acquireSessionWriteLock", () => {
         staleMs: 60_000,
       });
       const raw = await fs.readFile(lockPath, "utf8");
-      expect(JSON.parse(raw)).toMatchObject({ pid: process.pid });
+      const payload = JSON.parse(raw) as { pid?: unknown };
+      expect(payload.pid).toBe(process.pid);
       await lock.release();
     });
   });

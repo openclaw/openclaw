@@ -103,11 +103,12 @@ describe("discoverAuthStorage", () => {
       type: "api_key",
       key: "sk-ant-runtime",
     });
-    expect(credentials["openai-codex"]).toMatchObject({
-      type: "oauth",
-      access: "oauth-access",
-      refresh: "oauth-refresh",
-    });
+    const codexCredential = credentials["openai-codex"] as
+      | { type?: string; access?: string; refresh?: string }
+      | undefined;
+    expect(codexCredential?.type).toBe("oauth");
+    expect(codexCredential?.access).toBe("oauth-access");
+    expect(codexCredential?.refresh).toBe("oauth-refresh");
   });
 
   it("scrubs static api_key entries from legacy auth.json and keeps oauth entries", async () => {
@@ -126,10 +127,9 @@ describe("discoverAuthStorage", () => {
 
       const parsed = await readLegacyAuthJson(agentDir);
       expect(parsed.openrouter).toBeUndefined();
-      expect(parsed["openai-codex"]).toMatchObject({
-        type: "oauth",
-        access: "oauth-access",
-      });
+      const codexEntry = parsed["openai-codex"] as { type?: string; access?: string } | undefined;
+      expect(codexEntry?.type).toBe("oauth");
+      expect(codexEntry?.access).toBe("oauth-access");
     });
   });
 
@@ -145,7 +145,9 @@ describe("discoverAuthStorage", () => {
         scrubLegacyStaticAuthJsonEntriesForDiscovery(path.join(agentDir, "auth.json"));
 
         const parsed = await readLegacyAuthJson(agentDir);
-        expect(parsed.openrouter).toMatchObject({ type: "api_key", key: "legacy-static-key" });
+        const openrouterEntry = parsed.openrouter as { type?: string; key?: string } | undefined;
+        expect(openrouterEntry?.type).toBe("api_key");
+        expect(openrouterEntry?.key).toBe("legacy-static-key");
       } finally {
         if (previous === undefined) {
           delete process.env.OPENCLAW_AUTH_STORE_READONLY;

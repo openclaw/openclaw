@@ -50,6 +50,11 @@ export type RealtimeVoiceToolCallEvent = {
 };
 
 export type RealtimeVoiceToolResultOptions = {
+  /**
+   * Submit the tool result without prompting the realtime provider to generate a new assistant
+   * response. Use when another channel has already delivered the user-visible answer.
+   */
+  suppressResponse?: boolean;
   willContinue?: boolean;
 };
 
@@ -188,4 +193,6 @@ export type RealtimeVoiceBargeInOptions = {
    * This lets providers interrupt output even when the sink cannot provide real playback marks.
    */
   audioPlaybackActive?: boolean;
+  /** Interrupt even when normal barge-in audio-duration guards would treat the event as echo. */
+  force?: boolean;
 };

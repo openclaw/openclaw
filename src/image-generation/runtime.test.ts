@@ -488,17 +488,14 @@ describe("image-generation runtime", () => {
       resolution: undefined,
     });
     expect(result.ignoredOverrides).toStrictEqual([]);
-    expect(result.normalization).toMatchObject({
-      aspectRatio: {
-        applied: "16:9",
-        derivedFrom: "size",
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedSize: "1280x720",
-      normalizedAspectRatio: "16:9",
-      aspectRatioDerivedFromSize: "16:9",
-    });
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected image-generation normalization metadata");
+    }
+    expect(result.normalization.aspectRatio?.applied).toBe("16:9");
+    expect(result.normalization.aspectRatio?.derivedFrom).toBe("size");
+    expect(result.metadata.requestedSize).toBe("1280x720");
+    expect(result.metadata.normalizedAspectRatio).toBe("16:9");
+    expect(result.metadata.aspectRatioDerivedFromSize).toBe("16:9");
   });
 
   it("lists runtime image-generation providers through the provider registry", () => {

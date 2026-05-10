@@ -4878,6 +4878,80 @@ public struct SkillsDetailResult: Codable, Sendable {
     }
 }
 
+public struct SkillsUploadBeginParams: Codable, Sendable {
+    public let kind: String
+    public let slug: String
+    public let sizebytes: Int
+    public let sha256: String?
+    public let force: Bool?
+    public let idempotencykey: String?
+
+    public init(
+        kind: String,
+        slug: String,
+        sizebytes: Int,
+        sha256: String?,
+        force: Bool?,
+        idempotencykey: String?)
+    {
+        self.kind = kind
+        self.slug = slug
+        self.sizebytes = sizebytes
+        self.sha256 = sha256
+        self.force = force
+        self.idempotencykey = idempotencykey
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind
+        case slug
+        case sizebytes = "sizeBytes"
+        case sha256
+        case force
+        case idempotencykey = "idempotencyKey"
+    }
+}
+
+public struct SkillsUploadChunkParams: Codable, Sendable {
+    public let uploadid: String
+    public let offset: Int
+    public let database64: String
+
+    public init(
+        uploadid: String,
+        offset: Int,
+        database64: String)
+    {
+        self.uploadid = uploadid
+        self.offset = offset
+        self.database64 = database64
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uploadid = "uploadId"
+        case offset
+        case database64 = "dataBase64"
+    }
+}
+
+public struct SkillsUploadCommitParams: Codable, Sendable {
+    public let uploadid: String
+    public let sha256: String?
+
+    public init(
+        uploadid: String,
+        sha256: String?)
+    {
+        self.uploadid = uploadid
+        self.sha256 = sha256
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case uploadid = "uploadId"
+        case sha256
+    }
+}
+
 public struct CronJob: Codable, Sendable {
     public let id: String
     public let agentid: String?

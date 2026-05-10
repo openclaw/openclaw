@@ -133,6 +133,26 @@ describe("talk normalization", () => {
     });
   });
 
+  it("preserves normalized realtime instructions in talk.config payloads", () => {
+    const payload = buildTalkConfigResponse({
+      realtime: {
+        provider: "openai",
+        providers: {
+          openai: {
+            model: "gpt-realtime",
+            voice: "alloy",
+          },
+        },
+        instructions: " Speak with crisp diction. ",
+      },
+    });
+
+    expect(payload?.realtime).toMatchObject({
+      provider: "openai",
+      instructions: "Speak with crisp diction.",
+    });
+  });
+
   it("does not report an active provider when the configured speech provider cannot resolve", () => {
     const mismatchPayload = buildTalkConfigResponse({
       provider: "acme",

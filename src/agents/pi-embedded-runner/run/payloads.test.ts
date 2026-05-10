@@ -88,10 +88,27 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Fixed.");
   });
 
-  it("suppresses exec tool errors when verbose mode is off", () => {
-    expectNoPayloads({
+  it("surfaces concise exec tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces concise bash tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "bash", error: "command failed" },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "command failed",
     });
   });
 
@@ -132,11 +149,16 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps non-timeout exec tool errors suppressed for cron sessions when verbose mode is off", () => {
-    expectNoPayloads({
+  it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
+    const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "Command not found" },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "Command not found",
     });
   });
 
@@ -229,11 +251,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({
-      mediaUrl: "/tmp/openclaw/tts-a/voice-a.opus",
-      mediaUrls: ["/tmp/openclaw/tts-a/voice-a.opus"],
-      audioAsVoice: true,
-    });
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/openclaw/tts-a/voice-a.opus");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/openclaw/tts-a/voice-a.opus"]);
+    expect(payloads[0]?.audioAsVoice).toBe(true);
     expect(payloads[0]?.text).toBeUndefined();
   });
 
@@ -258,11 +278,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({
-      text: "Attached image",
-      mediaUrl: "/tmp/reply-image.png",
-      mediaUrls: ["/tmp/reply-image.png"],
-    });
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
   });
 
   it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
@@ -285,11 +303,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expect(payloads).toHaveLength(1);
-    expect(payloads[0]).toMatchObject({
-      text: "Attached image",
-      mediaUrl: "/tmp/reply-image.png",
-      mediaUrls: ["/tmp/reply-image.png"],
-    });
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
   });
 
   it("suppresses native reasoning payloads when thinking is disabled", () => {

@@ -17,10 +17,13 @@ export function shouldSkipPluginCommandRegistration(params: {
   primary: string | null;
   hasBuiltinPrimary: boolean;
 }): boolean {
+  const invocation = resolveCliArgvInvocation(params.argv);
+  if (invocation.hasHelpOrVersion) {
+    return true;
+  }
   if (params.hasBuiltinPrimary) {
     return true;
   }
-  const invocation = resolveCliArgvInvocation(params.argv);
   if (params.primary === "help") {
     return invocation.hasHelpOrVersion && invocation.commandPath.length <= 1;
   }

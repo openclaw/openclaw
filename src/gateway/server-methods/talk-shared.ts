@@ -127,6 +127,7 @@ export function buildTalkRealtimeConfig(config: OpenClawConfig, requestedProvide
     },
     model: normalizeOptionalString(talkRealtime?.model),
     voice: normalizeOptionalString(talkRealtime?.voice),
+    instructions: normalizeOptionalString(talkRealtime?.instructions),
     mode: normalizeOptionalLowercaseString(talkRealtime?.mode),
     transport: normalizeOptionalLowercaseString(talkRealtime?.transport),
     brain: normalizeOptionalLowercaseString(talkRealtime?.brain),
@@ -210,8 +211,14 @@ export function resolveConfiguredRealtimeTranscriptionProvider(params: {
   throw new Error("No realtime transcription provider registered");
 }
 
-export function buildRealtimeInstructions(): string {
-  return `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+const DEFAULT_REALTIME_INSTRUCTIONS = `You are OpenClaw's realtime voice interface. Keep spoken replies concise. If the user asks for code, repository state, tools, files, current OpenClaw context, or deeper reasoning, call ${REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME} and then summarize the result naturally.`;
+
+export function buildRealtimeInstructions(configuredInstructions?: string): string {
+  const extra = normalizeOptionalString(configuredInstructions);
+  if (!extra) {
+    return DEFAULT_REALTIME_INSTRUCTIONS;
+  }
+  return `${DEFAULT_REALTIME_INSTRUCTIONS}\n\nAdditional realtime instructions:\n${extra}`;
 }
 
 export function withRealtimeBrowserOverrides(

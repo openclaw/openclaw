@@ -133,6 +133,8 @@ import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
@@ -1173,6 +1175,11 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         arguments: call.arguments,
       });
+      projector?.recordDynamicToolCall({
+        callId: call.callId,
+        tool: call.tool,
+        arguments: call.arguments,
+      });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
@@ -1186,18 +1193,22 @@ export async function runCodexAppServerAttempt(
           ...(toolArgs ? { args: toolArgs } : {}),
         },
       });
+      const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
+        call,
+        config: params.config,
+      });
       const response = await handleDynamicToolCallWithTimeout({
         call,
         toolBridge,
         signal: runAbortController.signal,
-        timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+        timeoutMs: dynamicToolTimeoutMs,
         onTimeout: () => {
           trajectoryRecorder?.recordEvent("tool.timeout", {
             threadId: call.threadId,
             turnId: call.turnId,
             toolCallId: call.callId,
             name: call.tool,
-            timeoutMs: CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+            timeoutMs: dynamicToolTimeoutMs,
           });
         },
       });
@@ -1206,6 +1217,12 @@ export async function runCodexAppServerAttempt(
         turnId: call.turnId,
         toolCallId: call.callId,
         name: call.tool,
+        success: response.success,
+        contentItems: response.contentItems,
+      });
+      projector?.recordDynamicToolResult({
+        callId: call.callId,
+        tool: call.tool,
         success: response.success,
         contentItems: response.contentItems,
       });
@@ -1579,7 +1596,7 @@ async function handleDynamicToolCallWithTimeout(params: {
     resolveAbort = resolve;
   });
   const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
-    const timeoutMs = Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_TIMEOUT_MS, params.timeoutMs));
+    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -1623,6 +1640,61 @@ function failedDynamicToolResponse(message: string): CodexDynamicToolCallRespons
     success: false,
     contentItems: [{ type: "inputText", text: message }],
   };
+}
+
+function resolveDynamicToolCallTimeoutMs(params: {
+  call: CodexDynamicToolCallParams;
+  config: EmbeddedRunAttemptParams["config"];
+}): number {
+  return clampDynamicToolTimeoutMs(
+    readDynamicToolCallTimeoutMs(params.call.arguments) ??
+      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
+      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  return readPositiveFiniteTimeoutMs(value.timeoutMs);
+}
+
+function readConfiguredDynamicToolTimeoutMs(
+  toolName: string,
+  config: EmbeddedRunAttemptParams["config"],
+): number | undefined {
+  if (toolName === "image_generate") {
+    const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
+    if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
+      return undefined;
+    }
+    return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
+  }
+
+  if (toolName === "image") {
+    return (
+      readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
+      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
+    );
+  }
+
+  return undefined;
+}
+
+function readTimeoutSecondsAsMs(value: unknown): number | undefined {
+  const seconds = readPositiveFiniteTimeoutMs(value);
+  return seconds === undefined ? undefined : seconds * 1000;
+}
+
+function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function clampDynamicToolTimeoutMs(timeoutMs: number): number {
+  return Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
 }
 
 function createCodexNativeHookRelay(params: {
@@ -2292,6 +2364,8 @@ function handleApprovalRequest(params: {
 
 export const __testing = {
   CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
+  CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
@@ -2300,6 +2374,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
