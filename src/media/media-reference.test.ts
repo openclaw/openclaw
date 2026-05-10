@@ -59,6 +59,26 @@ describe("media reference helpers", () => {
     }
   });
 
+  it("resolves inbound media route paths", async () => {
+    const stateDir = resolveStateDir();
+    const id = `ref-route-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;
+    const filePath = path.join(stateDir, "media", "inbound", id);
+    await fs.mkdir(path.dirname(filePath), { recursive: true });
+    await fs.writeFile(filePath, Buffer.from("png"));
+
+    try {
+      await expect(resolveInboundMediaReference(`/media/inbound/${id}`)).resolves.toMatchObject({
+        id,
+        normalizedSource: `/media/inbound/${id}`,
+        physicalPath: filePath,
+        sourceType: "uri",
+      });
+      await expect(resolveMediaReferenceLocalPath(`media/inbound/${id}`)).resolves.toBe(filePath);
+    } finally {
+      await fs.rm(filePath, { force: true });
+    }
+  });
+
   it("maps canonical inbound media URIs to local paths for direct file readers", async () => {
     const stateDir = resolveStateDir();
     const id = `ref-local-path-${Date.now()}-${Math.random().toString(36).slice(2)}.png`;

@@ -492,6 +492,29 @@ describe("tryDispatchAcpReply", () => {
     );
   });
 
+  it("waits for pre-agent message hooks before starting ACP runTurn", async () => {
+    setReadyAcpResolution();
+    let resolveHook: (() => void) | undefined;
+    preAgentHookMocks.emitPreAgentMessageHooks.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveHook = resolve;
+        }),
+    );
+
+    const dispatchPromise = runDispatch({ bodyForAgent: "run acp" });
+    await vi.waitFor(() => {
+      expect(preAgentHookMocks.emitPreAgentMessageHooks).toHaveBeenCalledOnce();
+    });
+
+    expect(managerMocks.runTurn).not.toHaveBeenCalled();
+
+    resolveHook?.();
+    await dispatchPromise;
+
+    expect(managerMocks.runTurn).toHaveBeenCalledOnce();
+  });
+
   it("starts reply lifecycle for tool-only ACP turns while suppressing automatic delivery", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("hidden final");

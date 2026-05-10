@@ -779,7 +779,10 @@ function renderReplyPill(replyTarget: NormalizedMessage["replyTarget"]) {
 
 function isLocalAssistantAttachmentSource(source: string): boolean {
   const trimmed = source.trim();
-  if (/^\/(?:__openclaw__|media|api\/chat\/media\/outgoing)\//.test(trimmed)) {
+  if (isInboundMediaStoreSource(trimmed)) {
+    return true;
+  }
+  if (/^\/(?:__openclaw__|api\/chat\/media\/outgoing)\//.test(trimmed)) {
     return false;
   }
   return (
@@ -790,10 +793,20 @@ function isLocalAssistantAttachmentSource(source: string): boolean {
   );
 }
 
+function isInboundMediaStoreSource(source: string): boolean {
+  const trimmed = source.trim();
+  return (
+    /^media:\/\/inbound\/[^/\\]+$/i.test(trimmed) || /^\/?media\/inbound\/[^/\\]+$/i.test(trimmed)
+  );
+}
+
 function normalizeLocalAttachmentPath(source: string): string | null {
   const trimmed = source.trim();
   if (!isLocalAssistantAttachmentSource(trimmed)) {
     return null;
+  }
+  if (isInboundMediaStoreSource(trimmed)) {
+    return trimmed;
   }
   if (trimmed.startsWith("file://")) {
     try {
@@ -855,6 +868,9 @@ function isLocalAttachmentPreviewAllowed(
       : [];
   if (comparableSources.length === 0) {
     return false;
+  }
+  if (normalizedSource && isInboundMediaStoreSource(normalizedSource)) {
+    return true;
   }
   return localMediaPreviewRoots.some((root) => {
     const normalizedRoot = canonicalizeLocalPathForComparison(root.trim());

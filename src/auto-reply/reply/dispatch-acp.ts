@@ -470,7 +470,7 @@ export async function tryDispatchAcpReply(params: {
       }
     }
 
-    emitPreAgentMessageHooks({
+    await emitPreAgentMessageHooks({
       ctx: params.ctx,
       cfg: params.cfg,
       isFastTestEnv: process.env.OPENCLAW_TEST_FAST === "1",

@@ -19,6 +19,17 @@ describe("resolveCanvasIframeUrl", () => {
     );
   });
 
+  it("preserves reverse-proxy path prefixes on scoped canvas hosts", () => {
+    expect(
+      resolveCanvasIframeUrl(
+        "/__openclaw__/canvas/documents/cv_demo/index.html",
+        "https://hosted.example.test/proxy/path/__openclaw__/cap/cap_123",
+      ),
+    ).toBe(
+      "https://hosted.example.test/proxy/path/__openclaw__/cap/cap_123/__openclaw__/canvas/documents/cv_demo/index.html",
+    );
+  });
+
   it("rejects non-canvas same-origin paths", () => {
     expect(resolveCanvasIframeUrl("/not-canvas/snake.html")).toBeUndefined();
   });

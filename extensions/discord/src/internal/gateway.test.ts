@@ -164,6 +164,42 @@ describe("GatewayPlugin", () => {
     expect(gateway.sockets).toHaveLength(2);
   });
 
+  it("does not identify on a replacement socket from a stale HELLO wait", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    await sharedGatewayIdentifyLimiter.wait({ shardId: 0, maxConcurrency: 1 });
+    const gateway = new TestGatewayPlugin({
+      autoInteractions: false,
+      url: "wss://gateway.example.test",
+    });
+    const errorSpy = vi.fn();
+    gateway.emitter.on("error", errorSpy);
+
+    gateway.connect(false);
+    const staleSocket = gateway.sockets[0];
+    staleSocket?.emit("open");
+    staleSocket?.emit(
+      "message",
+      JSON.stringify({
+        op: GatewayOpcodes.Hello,
+        d: { heartbeat_interval: 45_000 },
+        s: null,
+      }),
+    );
+
+    gateway.connect(false);
+    const replacementSocket = gateway.sockets[1];
+    replacementSocket?.emit("open");
+
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(staleSocket?.send).not.toHaveBeenCalled();
+    expect(replacementSocket?.send).not.toHaveBeenCalled();
+    expect(errorSpy).not.toHaveBeenCalled();
+    expect(gateway.connectCalls).toEqual([false, false]);
+    expect(gateway.sockets).toHaveLength(2);
+  });
+
   it("preserves MESSAGE_CREATE author payloads for inbound dispatch", async () => {
     const gateway = new GatewayPlugin({ autoInteractions: false });
     const dispatchGatewayEvent = vi.fn(async (_event: string, _data: unknown) => {});

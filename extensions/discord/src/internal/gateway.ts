@@ -251,7 +251,7 @@ export class GatewayPlugin extends Plugin {
             true,
           );
         } else {
-          void this.identifyWithConcurrency().catch((error: unknown) => {
+          void this.identifyWithConcurrency(this.ws).catch((error: unknown) => {
             this.emitter.emit(
               "error",
               error instanceof Error ? error : new Error(String(error), { cause: error }),
@@ -332,18 +332,18 @@ export class GatewayPlugin extends Plugin {
     );
   }
 
-  private async identifyWithConcurrency(): Promise<void> {
+  private async identifyWithConcurrency(socket: ws.WebSocket | null): Promise<void> {
     await sharedGatewayIdentifyLimiter.wait({
       shardId: this.shardId,
       maxConcurrency: this.gatewayInfo?.session_start_limit.max_concurrency,
     });
-    const socket = this.ws;
-    if (!socket || socket.readyState !== READY_STATE_OPEN) {
+    if (!socket || socket !== this.ws) {
+      return;
+    }
+    if (socket.readyState !== READY_STATE_OPEN) {
       const error = new Error("Discord gateway socket closed before IDENTIFY could be sent");
       this.emitter.emit("error", error);
-      if (socket) {
-        this.scheduleReconnect(false);
-      }
+      this.scheduleReconnect(false);
       return;
     }
     this.identify();

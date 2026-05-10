@@ -15,6 +15,14 @@ function isExternalHttpUrl(entry: URL): boolean {
   return entry.protocol === "http:" || entry.protocol === "https:";
 }
 
+function isCanvasCapabilityScopedPath(pathname: string): boolean {
+  return (
+    pathname === CANVAS_CAPABILITY_PATH_PREFIX ||
+    pathname.startsWith(`${CANVAS_CAPABILITY_PATH_PREFIX}/`) ||
+    pathname.includes(`${CANVAS_CAPABILITY_PATH_PREFIX}/`)
+  );
+}
+
 function sanitizeCanvasEntryUrl(
   rawEntryUrl: string,
   allowExternalEmbedUrls = false,
@@ -55,7 +63,7 @@ export function resolveCanvasIframeUrl(
   try {
     const scopedHostUrl = new URL(canvasHostUrl);
     const scopedPrefix = scopedHostUrl.pathname.replace(/\/+$/, "");
-    if (!scopedPrefix.startsWith(CANVAS_CAPABILITY_PATH_PREFIX)) {
+    if (!isCanvasCapabilityScopedPath(scopedPrefix)) {
       return safeEntryUrl;
     }
     const entry = new URL(safeEntryUrl, scopedHostUrl.origin);

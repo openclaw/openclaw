@@ -35,13 +35,11 @@ describe("emitPreAgentMessageHooks", () => {
       actions.push(event.action);
     });
 
-    emitPreAgentMessageHooks({
+    await emitPreAgentMessageHooks({
       ctx: makeCtx(),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,
     });
-    await Promise.resolve();
-    await Promise.resolve();
 
     expect(actions).toEqual(["transcribed", "preprocessed"]);
   });
@@ -52,27 +50,44 @@ describe("emitPreAgentMessageHooks", () => {
       actions.push(event.action);
     });
 
-    emitPreAgentMessageHooks({
+    await emitPreAgentMessageHooks({
       ctx: makeCtx({ Transcript: undefined }),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,
     });
-    await Promise.resolve();
-    await Promise.resolve();
 
     expect(actions).toEqual(["preprocessed"]);
+  });
+
+  it("awaits preprocessed hook mutations before returning", async () => {
+    const ctx = makeCtx({ Body: "raw", BodyForAgent: "original", Transcript: undefined });
+    registerInternalHook("message:preprocessed", async (event) => {
+      await Promise.resolve();
+      event.context.body = "rewritten raw";
+      event.context.bodyForAgent = "rewritten for agent";
+      event.context.transcript = "late transcript";
+    });
+
+    await emitPreAgentMessageHooks({
+      ctx,
+      cfg: {} as OpenClawConfig,
+      isFastTestEnv: false,
+    });
+
+    expect(ctx.Body).toBe("rewritten raw");
+    expect(ctx.BodyForAgent).toBe("rewritten for agent");
+    expect(ctx.Transcript).toBe("late transcript");
   });
 
   it("skips hook emission in fast-test mode", async () => {
     const handler = vi.fn();
     registerInternalHook("message", handler);
 
-    emitPreAgentMessageHooks({
+    await emitPreAgentMessageHooks({
       ctx: makeCtx(),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: true,
     });
-    await Promise.resolve();
 
     expect(handler).not.toHaveBeenCalled();
   });
@@ -81,12 +96,11 @@ describe("emitPreAgentMessageHooks", () => {
     const handler = vi.fn();
     registerInternalHook("message", handler);
 
-    emitPreAgentMessageHooks({
+    await emitPreAgentMessageHooks({
       ctx: makeCtx({ SessionKey: " " }),
       cfg: {} as OpenClawConfig,
       isFastTestEnv: false,
     });
-    await Promise.resolve();
 
     expect(handler).not.toHaveBeenCalled();
   });

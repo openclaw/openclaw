@@ -1173,32 +1173,51 @@ describe("grouped chat rendering", () => {
     vi.unstubAllGlobals();
   });
 
-  it("preserves same-origin assistant attachments without local preview rewriting", () => {
+  it("proxies inbound media-store assistant attachments through the authenticated media route", async () => {
     resetAssistantAttachmentAvailabilityCacheForTest();
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes("meta=1")) {
+        return {
+          ok: true,
+          json: async () => ({ available: true }),
+        };
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const container = document.createElement("div");
-    renderAssistantMessage(
-      container,
-      {
-        id: "assistant-same-origin-media-inline",
-        role: "assistant",
-        content:
-          "Inline\nMEDIA:/media/inbound/test-image.png\nMEDIA:/__openclaw__/media/test-doc.pdf",
-        timestamp: Date.now(),
-      },
-      {
-        showToolCalls: false,
-        basePath: "/openclaw",
-        localMediaPreviewRoots: ["/tmp/openclaw"],
-      },
-    );
+    const renderMessage = () =>
+      renderAssistantMessage(
+        container,
+        {
+          id: "assistant-same-origin-media-inline",
+          role: "assistant",
+          content:
+            "Inline\nMEDIA:/media/inbound/test-image.png\nMEDIA:/__openclaw__/media/test-doc.pdf",
+          timestamp: Date.now(),
+        },
+        {
+          showToolCalls: false,
+          basePath: "/openclaw",
+          assistantAttachmentAuthToken: "session-token",
+          localMediaPreviewRoots: ["/tmp/openclaw"],
+          onRequestUpdate: renderMessage,
+        },
+      );
+
+    renderMessage();
+    await flushAssistantAttachmentAvailabilityChecks();
 
     const image = container.querySelector<HTMLImageElement>(".chat-message-image");
     const docLink = container.querySelector<HTMLAnchorElement>(
       ".chat-assistant-attachment-card__link",
     );
-    expect(image?.getAttribute("src")).toBe("/media/inbound/test-image.png");
+    expect(image?.getAttribute("src")).toBe(
+      "/openclaw/__openclaw__/assistant-media?source=%2Fmedia%2Finbound%2Ftest-image.png&token=session-token",
+    );
     expect(docLink?.getAttribute("href")).toBe("/__openclaw__/media/test-doc.pdf");
     expect(container.textContent).not.toContain("Unavailable");
+    vi.unstubAllGlobals();
   });
 
   it("renders blocked local assistant files as unavailable with a reason", () => {

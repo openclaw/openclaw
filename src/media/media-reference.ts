@@ -130,6 +130,32 @@ async function resolveInboundMediaUri(
   };
 }
 
+async function resolveInboundMediaRoutePath(
+  normalizedSource: string,
+): Promise<InboundMediaReference | null> {
+  const match = /^(?:\/?media\/inbound\/)([^/\\]+)$/i.exec(normalizedSource);
+  if (!match) {
+    return null;
+  }
+  let id: string;
+  try {
+    id = decodeURIComponent(match[1]);
+  } catch (err) {
+    throw new MediaReferenceError("invalid-path", `Invalid media reference: ${normalizedSource}`, {
+      cause: err,
+    });
+  }
+  if (!id || id.includes("/") || id.includes("\\")) {
+    throw new MediaReferenceError("invalid-path", `Invalid media reference: ${normalizedSource}`);
+  }
+  return {
+    id,
+    normalizedSource,
+    physicalPath: await resolveInboundMediaPath(id, normalizedSource),
+    sourceType: "uri",
+  };
+}
+
 export async function resolveInboundMediaReference(
   source: string,
 ): Promise<InboundMediaReference | null> {
@@ -141,6 +167,11 @@ export async function resolveInboundMediaReference(
   const uriSource = await resolveInboundMediaUri(normalizedSource);
   if (uriSource) {
     return uriSource;
+  }
+
+  const routePathSource = await resolveInboundMediaRoutePath(normalizedSource);
+  if (routePathSource) {
+    return routePathSource;
   }
 
   const localPath = maybeLocalPathFromSource(normalizedSource);
