@@ -1,5 +1,5 @@
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
 import {
   __resetContainerCacheForTest,
@@ -17,6 +17,40 @@ import {
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
+
+const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
+
+function clearFlyMachineEnvForTest(): () => void {
+  const previousEnv = new Map<(typeof flyMachineEnvKeys)[number], string | undefined>();
+  for (const key of flyMachineEnvKeys) {
+    previousEnv.set(key, process.env[key]);
+    delete process.env[key];
+  }
+
+  return () => {
+    for (const key of flyMachineEnvKeys) {
+      const value = previousEnv.get(key);
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  };
+}
+
+function useClearedFlyMachineEnv() {
+  let restoreFlyMachineEnv: (() => void) | undefined;
+
+  beforeEach(() => {
+    restoreFlyMachineEnv = clearFlyMachineEnvForTest();
+  });
+
+  afterEach(() => {
+    restoreFlyMachineEnv?.();
+    restoreFlyMachineEnv = undefined;
+  });
+}
 
 describe("resolveHostName", () => {
   it.each([
@@ -482,6 +516,8 @@ describe("isPrivateOrLoopbackHost", () => {
 });
 
 describe("isContainerEnvironment", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -516,30 +552,15 @@ describe("isContainerEnvironment", () => {
   });
 
   it("returns true on Fly Machines without Docker sentinel files", () => {
-    const previousFlyMachineId = process.env.FLY_MACHINE_ID;
-    const previousFlyAppName = process.env.FLY_APP_NAME;
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => {
       throw new Error("ENOENT");
     });
     vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
-    try {
-      process.env.FLY_MACHINE_ID = "3d8d5459a03038";
-      process.env.FLY_APP_NAME = "openclaw-clawcks-test";
-      expect(isContainerEnvironment()).toBe(true);
-    } finally {
-      if (previousFlyMachineId === undefined) {
-        delete process.env.FLY_MACHINE_ID;
-      } else {
-        process.env.FLY_MACHINE_ID = previousFlyMachineId;
-      }
-      if (previousFlyAppName === undefined) {
-        delete process.env.FLY_APP_NAME;
-      } else {
-        process.env.FLY_APP_NAME = previousFlyAppName;
-      }
-    }
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-test";
+    expect(isContainerEnvironment()).toBe(true);
   });
 
   it("returns true when /proc/1/cgroup contains docker marker", () => {
@@ -613,6 +634,8 @@ describe("isContainerEnvironment", () => {
 });
 
 describe("resolveGatewayBindHost", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
@@ -652,6 +675,8 @@ describe("resolveGatewayBindHost", () => {
 });
 
 describe("defaultGatewayBindMode", () => {
+  useClearedFlyMachineEnv();
+
   afterEach(() => {
     __resetContainerCacheForTest();
     vi.restoreAllMocks();
