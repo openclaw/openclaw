@@ -104,6 +104,7 @@ const ChannelPreviewStreamingConfigSchema = z
     preview: ChannelStreamingPreviewSchema.optional(),
     progress: ChannelStreamingProgressSchema.optional(),
     block: ChannelStreamingBlockSchema.optional(),
+    nativeTransport: z.boolean().optional(),
   })
   .strict();
 const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({

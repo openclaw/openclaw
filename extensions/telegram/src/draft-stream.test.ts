@@ -588,3 +588,196 @@ describe("draft stream initial message debounce", () => {
     });
   });
 });
+
+describe("sendMessageDraft transport", () => {
+  function createMockApiWithDraft() {
+    return {
+      sendMessage: vi.fn().mockResolvedValue({ message_id: 17 }),
+      editMessageText: vi.fn().mockResolvedValue(true),
+      deleteMessage: vi.fn().mockResolvedValue(true),
+      sendMessageDraft: vi.fn().mockResolvedValue(true),
+    };
+  }
+
+  it("uses sendMessageDraft when previewTransport is 'draft'", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", undefined);
+    expect(api.sendMessage).not.toHaveBeenCalled();
+    expect(api.editMessageText).not.toHaveBeenCalled();
+  });
+
+  it("updates draft on subsequent text changes", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+    stream.update("Hello world");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledTimes(2);
+    expect(api.sendMessageDraft).toHaveBeenLastCalledWith(
+      123,
+      expect.any(Number),
+      "Hello world",
+      undefined,
+    );
+    expect(api.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("includes parse_mode in draft when renderText provides HTML", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+      renderText: (text) => ({ text, parseMode: "HTML" }),
+    });
+
+    stream.update("text");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "text", {
+      parse_mode: "HTML",
+    });
+  });
+
+  it("rotates draftId on forceNewMessage", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("First");
+    await stream.flush();
+    const firstDraftId = api.sendMessageDraft.mock.calls[0][1];
+
+    stream.forceNewMessage();
+    stream.update("Second");
+    await stream.flush();
+    const secondDraftId = api.sendMessageDraft.mock.calls[1][1];
+
+    expect(secondDraftId).not.toBe(firstDraftId);
+  });
+
+  it("falls back to message transport when sendMessageDraft is unavailable", async () => {
+    const api = createMockDraftApi();
+    const warn = vi.fn();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+      warn,
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessage).toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
+    );
+  });
+
+  it("reports correct previewMode", () => {
+    const api = createMockApiWithDraft();
+    const draftStream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+    expect(draftStream.previewMode?.()).toBe("draft");
+
+    const messageStream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+    });
+    expect(messageStream.previewMode?.()).toBe("message");
+  });
+
+  it("passes message_thread_id to draft when in threaded context", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      thread: { id: 42, scope: "dm" },
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(123, expect.any(Number), "Hello", {
+      message_thread_id: 42,
+    });
+  });
+
+  it("sets sendMayHaveLanded after draft send for lane-delivery contract", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("Hello");
+    await stream.flush();
+
+    // sendMayHaveLanded must be true so lane delivery treats draft as "streamed".
+    expect(stream.sendMayHaveLanded?.()).toBe(true);
+  });
+
+  it("materializes native drafts with durable sendMessage on stop", async () => {
+    const api = createMockApiWithDraft();
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("Partial");
+    await stream.flush();
+    stream.update("Final answer");
+    await stream.stop();
+
+    expect(api.sendMessageDraft).toHaveBeenCalledWith(
+      123,
+      expect.any(Number),
+      "Partial",
+      undefined,
+    );
+    expect(api.sendMessage).toHaveBeenCalledWith(123, "Final answer", undefined);
+    expect(stream.messageId()).toBe(17);
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+
+  it("does not mark drafts as landed after failed draft send", async () => {
+    const api = createMockApiWithDraft();
+    api.sendMessageDraft.mockRejectedValueOnce(new Error("400: Bad Request"));
+    const stream = createTelegramDraftStream({
+      api: api as unknown as Bot["api"],
+      chatId: 123,
+      previewTransport: "draft",
+    });
+
+    stream.update("Partial");
+    await stream.flush();
+
+    expect(stream.sendMayHaveLanded?.()).toBe(false);
+  });
+});

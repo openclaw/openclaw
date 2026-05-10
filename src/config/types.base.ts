@@ -95,7 +95,7 @@ export type ChannelDeliveryStreamingConfig = Pick<ChannelStreamingConfig, "chunk
 
 export type ChannelPreviewStreamingConfig = Pick<
   ChannelStreamingConfig,
-  "mode" | "chunkMode" | "preview" | "progress" | "block"
+  "mode" | "chunkMode" | "preview" | "progress" | "block" | "nativeTransport"
 >;
 
 export type SlackChannelStreamingConfig = Pick<

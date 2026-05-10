@@ -10,7 +10,38 @@ import { normalizeTelegramReplyToMessageId } from "./outbound-params.js";
 
 const TELEGRAM_STREAM_MAX_CHARS = 4096;
 const DEFAULT_THROTTLE_MS = 1000;
+const TELEGRAM_DRAFT_ID_MAX = 2_147_483_647;
 const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
+
+/** sendMessageDraft API signature exposed by grammY / Bot API 9.3+. */
+type TelegramSendMessageDraft = (
+  chatId: Parameters<Bot["api"]["sendMessage"]>[0],
+  draftId: number,
+  text: string,
+  params?: {
+    message_thread_id?: number;
+    parse_mode?: "HTML";
+  },
+) => Promise<true>;
+
+let nextDraftId = 0;
+
+function allocateTelegramDraftId(): number {
+  nextDraftId = nextDraftId >= TELEGRAM_DRAFT_ID_MAX ? 1 : nextDraftId + 1;
+  return nextDraftId;
+}
+
+function resolveSendMessageDraftApi(
+  api: Bot["api"],
+): TelegramSendMessageDraft | undefined {
+  const sendMessageDraft = (
+    api as Bot["api"] & { sendMessageDraft?: TelegramSendMessageDraft }
+  ).sendMessageDraft;
+  if (typeof sendMessageDraft !== "function") {
+    return undefined;
+  }
+  return sendMessageDraft.bind(api as object);
+}
 
 type TelegramSendMessageParams = Parameters<Bot["api"]["sendMessage"]>[2];
 
@@ -28,6 +59,7 @@ export type TelegramDraftStream = {
   update: (text: string) => void;
   flush: () => Promise<void>;
   messageId: () => number | undefined;
+  previewMode?: () => "message" | "draft";
   visibleSinceMs?: () => number | undefined;
   previewRevision?: () => number;
   lastDeliveredText?: () => string;
@@ -98,6 +130,12 @@ export function createTelegramDraftStream(params: {
   renderText?: (text: string) => TelegramDraftPreview;
   /** Called when a late send resolves after forceNewMessage() switched generations. */
   onSupersededPreview?: (preview: SupersededTelegramPreview) => void;
+  /**
+   * Preview transport mode:
+   * - "message" (default): sendMessage + editMessageText
+   * - "draft": Telegram native sendMessageDraft (private chats only, opt-in)
+   */
+  previewTransport?: "message" | "draft";
   log?: (message: string) => void;
   warn?: (message: string) => void;
 }): TelegramDraftStream {
@@ -108,6 +146,17 @@ export function createTelegramDraftStream(params: {
   const throttleMs = Math.max(250, params.throttleMs ?? DEFAULT_THROTTLE_MS);
   const minInitialChars = params.minInitialChars;
   const chatId = params.chatId;
+  const requestedPreviewTransport = params.previewTransport ?? "message";
+  const prefersDraftTransport = requestedPreviewTransport === "draft";
+  const resolvedDraftApi = prefersDraftTransport
+    ? resolveSendMessageDraftApi(params.api)
+    : undefined;
+  const usesDraftTransport = Boolean(prefersDraftTransport && resolvedDraftApi);
+  if (prefersDraftTransport && !usesDraftTransport) {
+    params.warn?.(
+      "telegram stream preview: sendMessageDraft unavailable; falling back to sendMessage/editMessageText",
+    );
+  }
   const threadParams = buildTelegramThreadParams(params.thread);
   const allowThreadlessRetry = params.thread?.scope !== "dm";
   const replyToMessageId = normalizeTelegramReplyToMessageId(params.replyToMessageId);
@@ -123,6 +172,7 @@ export function createTelegramDraftStream(params: {
   const streamState = { stopped: false, final: false };
   let messageSendAttempted = false;
   let streamMessageId: number | undefined;
+  let streamDraftId = usesDraftTransport ? allocateTelegramDraftId() : undefined;
   let streamVisibleSinceMs: number | undefined;
   let lastSentText = "";
   let lastDeliveredText = "";
@@ -135,6 +185,32 @@ export function createTelegramDraftStream(params: {
     renderedText: string;
     renderedParseMode: "HTML" | undefined;
     sendGeneration: number;
+  };
+  const sendDraftTransportPreview = async (preview: PreviewSendParams): Promise<boolean> => {
+    const { renderedText, renderedParseMode } = preview;
+    if (streamState.final) {
+      return await sendMessageTransportPreview(preview);
+    }
+
+    const draftId = streamDraftId ?? allocateTelegramDraftId();
+    streamDraftId = draftId;
+    const draftParams: Record<string, unknown> = {};
+    if (renderedParseMode) {
+      draftParams.parse_mode = renderedParseMode;
+    }
+    if (threadParams?.message_thread_id != null) {
+      draftParams.message_thread_id = threadParams.message_thread_id;
+    }
+    await resolvedDraftApi!(
+      chatId,
+      draftId,
+      renderedText,
+      Object.keys(draftParams).length > 0
+        ? (draftParams as Parameters<TelegramSendMessageDraft>[3])
+        : undefined,
+    );
+    messageSendAttempted = true;
+    return true;
   };
   const sendRenderedMessageWithThreadFallback = async (sendArgs: {
     renderedText: string;
@@ -290,7 +366,10 @@ export function createTelegramDraftStream(params: {
     lastSentText = renderedText;
     lastSentParseMode = renderedParseMode;
     try {
-      const sent = await sendMessageTransportPreview({
+      const transportSender = usesDraftTransport
+        ? sendDraftTransportPreview
+        : sendMessageTransportPreview;
+      const sent = await transportSender({
         renderedText,
         renderedParseMode,
         sendGeneration,
@@ -319,6 +398,9 @@ export function createTelegramDraftStream(params: {
     generation += 1;
     messageSendAttempted = false;
     streamMessageId = undefined;
+    if (usesDraftTransport) {
+      streamDraftId = allocateTelegramDraftId();
+    }
     streamVisibleSinceMs = undefined;
     lastSentText = "";
     lastSentParseMode = undefined;
@@ -363,12 +445,15 @@ export function createTelegramDraftStream(params: {
     return streamMessageId;
   };
 
-  params.log?.(`telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs})`);
+  params.log?.(
+    `telegram stream preview ready (maxChars=${maxChars}, throttleMs=${throttleMs}, transport=${usesDraftTransport ? "draft" : "message"})`,
+  );
 
   return {
     update,
     flush: loop.flush,
     messageId: () => streamMessageId,
+    previewMode: () => (usesDraftTransport ? "draft" : "message") as "draft" | "message",
     visibleSinceMs: () => streamVisibleSinceMs,
     previewRevision: () => previewRevision,
     lastDeliveredText: () => lastDeliveredText,

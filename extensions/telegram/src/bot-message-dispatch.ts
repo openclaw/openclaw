@@ -546,6 +546,11 @@ export const dispatchTelegramMessage = async ({
   const draftMinInitialChars = streamMode === "progress" ? 0 : DRAFT_MIN_INITIAL_CHARS;
   const progressSeed = `${route.accountId}:${chatId}:${threadSpec.id ?? ""}`;
   const mediaLocalRoots = getAgentScopedMediaLocalRoots(cfg, route.agentId);
+  // Draft transport only applies to DM partial/progress previews (Telegram API restriction).
+  const canUseNativeDraftTransport =
+    telegramCfg.streaming?.nativeTransport === true && !isGroup && streamDeliveryEnabled;
+  const draftPreviewTransport: "message" | "draft" | undefined =
+    canUseNativeDraftTransport ? "draft" : undefined;
   const createDraftLane = (laneName: LaneName, enabled: boolean): DraftLaneState => {
     const stream = enabled
       ? (telegramDeps.createTelegramDraftStream ?? createTelegramDraftStream)({
@@ -555,6 +560,7 @@ export const dispatchTelegramMessage = async ({
           thread: threadSpec,
           replyToMessageId: draftReplyToMessageId,
           minInitialChars: draftMinInitialChars,
+          previewTransport: draftPreviewTransport,
           renderText: renderStreamText,
           onSupersededPreview: (superseded) => {
             if (superseded.retain) {
