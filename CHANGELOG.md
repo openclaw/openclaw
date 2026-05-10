@@ -37,6 +37,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- iMessage: when macOS Full Disk Access is missing for the gateway's Node binary (very common right after a `brew upgrade` bumps Node and silently invalidates the previous TCC grant), the iMessage channel was flooding the gateway log with one ERROR per banner line of the imsg help text and respawning imsg into the same denial on every channel call, dragging the event loop until the dashboard looked frozen. Now the client recognizes the FDA banner, logs it once per spawn cycle as a single grouped entry, raises a typed `IMessagePermissionDeniedError` with the actual fix instructions, fails-fast on every later request from the same client, and surfaces the same remediation through `openclaw doctor --deep` as a fatal probe result instead of an unreadable `Unexpected token` parse error. Thanks @YaanFPV.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids while converting manifest catalog rows into emitted provider config, so `google/gemini-3.1-pro-preview` is used for testing instead of `google/gemini-3-pro-preview`.
 - Native apps: advertise the Gateway protocol compatibility range so chat and node sessions can connect to v3 gateways after additive v4 client updates.
 - Gateway: avoid synchronous restart-sentinel state probes during post-attach startup, preventing slow Windows or redirected state directories from blocking channel turns. Fixes #79264. Thanks @liyi58.

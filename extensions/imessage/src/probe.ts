@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { detectBinary } from "openclaw/plugin-sdk/setup";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { createIMessageRpcClient } from "./client.js";
+import { createIMessageRpcClient, IMessagePermissionDeniedError } from "./client.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 import {
   clearCachedIMessagePrivateApiStatus,
@@ -292,8 +292,26 @@ export async function probeIMessage(
     await client.request("chats.list", { limit: 1 }, { timeoutMs: effectiveTimeout });
     return { ok: true, privateApi };
   } catch (err) {
-    return { ok: false, error: String(err), privateApi };
+    return { ...classifyImsgProbeError(err), privateApi };
   } finally {
     await client.stop();
   }
+}
+
+/**
+ * Maps an error thrown by the iMessage RPC client into the probe-result
+ * shape that doctor consumes. A typed `IMessagePermissionDeniedError`
+ * becomes `fatal: true` so doctor reports it as action-required rather
+ * than as a transient probe failure, and the error's existing message
+ * already contains the exact remediation steps.
+ */
+export function classifyImsgProbeError(err: unknown): {
+  ok: false;
+  fatal?: boolean;
+  error: string;
+} {
+  if (err instanceof IMessagePermissionDeniedError) {
+    return { ok: false, fatal: true, error: err.message };
+  }
+  return { ok: false, error: String(err) };
 }

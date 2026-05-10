@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { imessageRpcSupportsMethod } from "./probe.js";
+import { IMessagePermissionDeniedError } from "./client.js";
+import { classifyImsgProbeError, imessageRpcSupportsMethod } from "./probe.js";
 
 describe("imessageRpcSupportsMethod", () => {
   it("returns false when the bridge is not available", () => {
@@ -90,5 +91,34 @@ describe("imessageRpcSupportsMethod", () => {
     ]) {
       expect(imessageRpcSupportsMethod(oldBuild, method)).toBe(false);
     }
+  });
+});
+
+describe("classifyImsgProbeError", () => {
+  it("flags Full Disk Access denial as fatal so doctor surfaces the remediation", () => {
+    const err = new IMessagePermissionDeniedError(
+      "⚠️  Permission Error: Cannot access Messages database",
+    );
+    const result = classifyImsgProbeError(err);
+    expect(result).toEqual({
+      ok: false,
+      fatal: true,
+      error: err.message,
+    });
+    expect(result.error).toContain("Full Disk Access");
+  });
+
+  it("leaves any other error as a non-fatal probe failure", () => {
+    const result = classifyImsgProbeError(new Error("imsg rpc timeout (chats.list)"));
+    expect(result).toEqual({
+      ok: false,
+      error: "Error: imsg rpc timeout (chats.list)",
+    });
+    expect(result.fatal).toBeUndefined();
+  });
+
+  it("stringifies non-Error throws so doctor still gets a readable message", () => {
+    const result = classifyImsgProbeError("imsg disappeared");
+    expect(result).toEqual({ ok: false, error: "imsg disappeared" });
   });
 });

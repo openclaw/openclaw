@@ -1,30 +1,19 @@
 import { type ChildProcessWithoutNullStreams, spawn } from "node:child_process";
 import { createInterface, type Interface } from "node:readline";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { IMessagePermissionDeniedError, ImsgStdoutHandler } from "./client-stdout-handler.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
-export type IMessageRpcError = {
-  code?: number;
-  message?: string;
-  data?: unknown;
-};
+export { IMessagePermissionDeniedError } from "./client-stdout-handler.js";
+export type {
+  IMessageRpcError,
+  IMessageRpcNotification,
+  IMessageRpcResponse,
+} from "./client-types.js";
 
-export type IMessageRpcResponse<T> = {
-  jsonrpc?: string;
-  id?: string | number | null;
-  result?: T;
-  error?: IMessageRpcError;
-  method?: string;
-  params?: unknown;
-};
-
-export type IMessageRpcNotification = {
-  method: string;
-  params?: unknown;
-};
+import type { IMessageRpcNotification, IMessageRpcResponse } from "./client-types.js";
 
 export type IMessageRpcClientOptions = {
   cliPath?: string;
@@ -58,6 +47,8 @@ export class IMessageRpcClient {
   private child: ChildProcessWithoutNullStreams | null = null;
   private reader: Interface | null = null;
   private nextId = 1;
+  private stdoutHandler: ImsgStdoutHandler | null = null;
+  private permissionDeniedError: IMessagePermissionDeniedError | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
     this.cliPath = opts.cliPath?.trim() || "imsg";
@@ -85,13 +76,26 @@ export class IMessageRpcClient {
     });
     this.child = child;
     this.reader = createInterface({ input: child.stdout });
+    this.stdoutHandler = new ImsgStdoutHandler({
+      onJsonFrame: (parsed) => {
+        this.dispatchParsed(parsed);
+      },
+      onPermissionDenied: (err) => {
+        this.permissionDeniedError = err;
+        this.runtime?.error?.(`imsg rpc: ${err.message}`);
+        this.failAll(err);
+      },
+      onNoiseFlushed: (grouped) => {
+        // imsg sometimes prints multi-line banners (e.g. permission help
+        // text) instead of JSON-RPC. Surface them as one log entry per
+        // spawn cycle so the gateway log does not flood with one ERROR
+        // per banner line.
+        this.runtime?.log?.(`imsg rpc: non-JSON output from imsg:\n${grouped}`);
+      },
+    });
 
     this.reader.on("line", (line) => {
-      const trimmed = line.trim();
-      if (!trimmed) {
-        return;
-      }
-      this.handleLine(trimmed);
+      this.stdoutHandler?.handle(line);
     });
 
     child.stderr?.on("data", (chunk) => {
@@ -116,7 +120,12 @@ export class IMessageRpcClient {
     });
 
     child.on("close", (code, signal) => {
-      if (code !== 0 && code !== null) {
+      // Flush any banner text the subprocess printed right before exiting
+      // so the operator sees the diagnostic instead of just a bare close.
+      this.stdoutHandler?.flush();
+      if (this.permissionDeniedError) {
+        this.failAll(this.permissionDeniedError);
+      } else if (code !== 0 && code !== null) {
         const reason = signal ? `signal ${signal}` : `code ${code}`;
         this.failAll(new Error(`imsg rpc exited (${reason})`));
       } else {
@@ -158,6 +167,12 @@ export class IMessageRpcClient {
     params?: Record<string, unknown>,
     opts?: { timeoutMs?: number },
   ): Promise<T> {
+    if (this.permissionDeniedError) {
+      // Fail-fast on every subsequent request after the first denial, so the
+      // channel stops respawning imsg straight back into the same denial and
+      // operators see one clear permission error instead of a flooded log.
+      throw this.permissionDeniedError;
+    }
     if (!this.child || !this.child.stdin) {
       throw new Error("imsg rpc not running");
     }
@@ -205,16 +220,7 @@ export class IMessageRpcClient {
     return await response;
   }
 
-  private handleLine(line: string) {
-    let parsed: IMessageRpcResponse<unknown>;
-    try {
-      parsed = JSON.parse(line) as IMessageRpcResponse<unknown>;
-    } catch (err) {
-      const detail = formatErrorMessage(err);
-      this.runtime?.error?.(`imsg rpc: failed to parse ${line}: ${detail}`);
-      return;
-    }
-
+  private dispatchParsed(parsed: IMessageRpcResponse<unknown>) {
     if (parsed.id !== undefined && parsed.id !== null) {
       const key = String(parsed.id);
       const pending = this.pending.get(key);
