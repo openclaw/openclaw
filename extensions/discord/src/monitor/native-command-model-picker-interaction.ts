@@ -147,6 +147,17 @@ export async function handleDiscordModelPickerInteraction(params: {
     return;
   }
 
+  let deferredUpdate = interaction.acknowledged;
+  if (!deferredUpdate) {
+    const deferred = await params.safeInteractionCall("model picker defer", () =>
+      interaction.acknowledge(),
+    );
+    if (deferred === null) {
+      return;
+    }
+    deferredUpdate = true;
+  }
+
   const route = await resolveDiscordModelPickerRoute({
     interaction,
     cfg: ctx.cfg,
@@ -175,7 +186,9 @@ export async function handleDiscordModelPickerInteraction(params: {
     limit: 5,
   });
   const updatePicker = async (payload: MessagePayload) =>
-    await params.safeInteractionCall("model picker update", () => interaction.update(payload));
+    await params.safeInteractionCall("model picker update", () =>
+      deferredUpdate ? interaction.editReply(payload) : interaction.update(payload),
+    );
   const showNotice = async (message: string) =>
     await updatePicker(buildDiscordModelPickerNoticePayload(message));
 

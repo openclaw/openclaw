@@ -4,6 +4,7 @@ import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
 } from "../../agents/agent-scope.js";
+import { consumeExecApprovalFollowupElevatedDefaultsFromIdempotencyKey } from "../../agents/bash-tools.exec-approval-followup-state.js";
 import { isTimeoutError } from "../../agents/failover-error.js";
 import {
   resolveAgentAvatar,
@@ -1391,6 +1392,22 @@ export const agentHandlers: GatewayRequestHandlers = {
           (!resolvedSessionKey || resolveAgentIdFromSessionKey(resolvedSessionKey) === agentId)
             ? agentId
             : undefined;
+        let execApprovalFollowupElevatedDefaults =
+          consumeExecApprovalFollowupElevatedDefaultsFromIdempotencyKey({
+            idempotencyKey: idem,
+            sessionKey: resolvedSessionKey,
+          });
+        if (
+          !execApprovalFollowupElevatedDefaults &&
+          requestedSessionKeyRaw &&
+          requestedSessionKeyRaw !== resolvedSessionKey
+        ) {
+          execApprovalFollowupElevatedDefaults =
+            consumeExecApprovalFollowupElevatedDefaultsFromIdempotencyKey({
+              idempotencyKey: idem,
+              sessionKey: requestedSessionKeyRaw,
+            });
+        }
 
         dispatchAgentRunFromGateway({
           ingressOpts: {
@@ -1417,6 +1434,9 @@ export const agentHandlers: GatewayRequestHandlers = {
               groupSpace: resolvedGroupSpace,
               currentThreadTs: resolvedThreadId != null ? String(resolvedThreadId) : undefined,
             },
+            ...(execApprovalFollowupElevatedDefaults
+              ? { bashElevated: execApprovalFollowupElevatedDefaults }
+              : {}),
             groupId: resolvedGroupId,
             groupChannel: resolvedGroupChannel,
             groupSpace: resolvedGroupSpace,

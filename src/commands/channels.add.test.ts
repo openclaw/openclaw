@@ -53,7 +53,7 @@ const channelWizardMocks = vi.hoisted(() => {
   };
   return {
     prompter,
-    setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
+    setupChannels: vi.fn(async (...args: unknown[]) => args[0] as OpenClawConfig),
   };
 });
 
@@ -344,7 +344,9 @@ describe("channelsAddCommand", () => {
     channelWizardMocks.prompter.select.mockClear();
     channelWizardMocks.prompter.text.mockClear();
     channelWizardMocks.setupChannels.mockClear();
-    channelWizardMocks.setupChannels.mockImplementation(async (cfg: OpenClawConfig) => cfg);
+    channelWizardMocks.setupChannels.mockImplementation(
+      async (...args: unknown[]) => args[0] as OpenClawConfig,
+    );
     setMinimalChannelsAddRegistryForTests();
   });
 
