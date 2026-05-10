@@ -11,6 +11,7 @@ import { randomUUID } from "node:crypto";
 import type * as LanceDB from "@lancedb/lancedb";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveLivePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -330,6 +331,27 @@ class MemoryDB {
     await this.ensureInitialized();
     return this.table!;
   }
+
+  async get(id: string): Promise<MemoryEntry | null> {
+    await this.ensureInitialized();
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    if (!uuidRegex.test(id)) {
+      return null;
+    }
+    const rows = await this.table!.query().where(`id = '${id}'`).limit(1).toArray();
+    const row = rows[0];
+    if (!row) {
+      return null;
+    }
+    return {
+      id: row.id as string,
+      text: row.text as string,
+      vector: row.vector as number[],
+      importance: row.importance as number,
+      category: row.category as MemoryEntry["category"],
+      createdAt: row.createdAt as number,
+    };
+  }
 }
 
 // ============================================================================
@@ -626,6 +648,25 @@ export function detectCategory(text: string): MemoryCategory {
   return "other";
 }
 
+function resolveMemoryProviderLabel(params: { baseUrl?: string; model: string }): string {
+  if (params.baseUrl && params.baseUrl.trim().length > 0) {
+    return "openai-compatible";
+  }
+  const lowerModel = normalizeLowercaseStringOrEmpty(params.model);
+  if (lowerModel.startsWith("text-embedding-") || lowerModel.startsWith("gemini-embedding-")) {
+    return lowerModel.startsWith("gemini-embedding-") ? "google" : "openai";
+  }
+  return "remote";
+}
+
+function extractMemoryIdFromPath(relPath: string): string | null {
+  const normalized = relPath.trim().replace(/\\/g, "/");
+  const match = normalized.match(
+    /(?:^|\/)([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:\.md)?$/i,
+  );
+  return match?.[1] ?? null;
+}
+
 // ============================================================================
 // Plugin Definition
 // ============================================================================
@@ -694,6 +735,112 @@ export default definePluginEntry({
     };
 
     api.logger.info(`memory-lancedb: plugin registered (db: ${resolvedDbPath}, lazy init)`);
+
+    // ========================================================================
+    // Memory capability runtime
+    //
+    // Registering a runtime makes core doctor/status surfaces (and any other
+    // memory-runtime consumer) discover memory-lancedb as the active memory
+    // plugin. Without this, `openclaw doctor` reports "No active memory
+    // plugin is registered for the current config" even when capture/recall
+    // tools are working fine.
+    // ========================================================================
+
+    const providerLabel = resolveMemoryProviderLabel({
+      baseUrl: cfg.embedding.baseUrl,
+      model: cfg.embedding.model,
+    });
+    const memoryRuntime: MemoryPluginRuntime = {
+      async getMemorySearchManager() {
+        return {
+          manager: {
+            async search(query, opts) {
+              const vector = await embeddings.embed(
+                normalizeRecallQuery(query, cfg.recallMaxChars),
+              );
+              const results = await db.search(vector, opts?.maxResults ?? 5, opts?.minScore ?? 0.1);
+              return results.map((result) => ({
+                path: `memories/${result.entry.id}.md`,
+                startLine: 1,
+                endLine: 1,
+                score: result.score,
+                snippet: result.entry.text,
+                source: "memory" as const,
+                citation: result.entry.category,
+              }));
+            },
+            async readFile(params) {
+              const memoryId = extractMemoryIdFromPath(params.relPath);
+              if (!memoryId) {
+                throw new Error(`memory-lancedb: unknown memory path: ${params.relPath}`);
+              }
+              const entry = await db.get(memoryId);
+              if (!entry) {
+                throw new Error(`memory-lancedb: memory not found: ${params.relPath}`);
+              }
+              return {
+                path: `memories/${entry.id}.md`,
+                text: entry.text,
+              };
+            },
+            status() {
+              return {
+                backend: "builtin" as const,
+                provider: providerLabel,
+                model: cfg.embedding.model,
+                dbPath: resolvedDbPath,
+                custom: {
+                  pluginId: "memory-lancedb",
+                  vectorDim,
+                },
+              };
+            },
+            async probeEmbeddingAvailability() {
+              // Route the probe through the same embeddings adapter that real
+              // recall/store calls use so provider-backed configs (which don't
+              // need a plugin-local apiKey) are detected as available.
+              try {
+                const vector = await embeddings.embed("ping");
+                if (!Array.isArray(vector) || vector.length === 0) {
+                  return {
+                    ok: false,
+                    error: "memory-lancedb embedding probe returned empty vector",
+                  };
+                }
+                return { ok: true };
+              } catch (err) {
+                const message =
+                  err instanceof Error
+                    ? err.message
+                    : typeof err === "string"
+                      ? err
+                      : "memory-lancedb embedding probe failed";
+                return { ok: false, error: message };
+              }
+            },
+            async probeVectorAvailability() {
+              try {
+                await db.count();
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            async close() {},
+          },
+        };
+      },
+      resolveMemoryBackendConfig() {
+        return {
+          backend: "builtin" as const,
+        };
+      },
+      async closeAllMemorySearchManagers() {},
+    };
+
+    api.registerMemoryCapability({
+      runtime: memoryRuntime,
+    });
 
     // ========================================================================
     // Tools
