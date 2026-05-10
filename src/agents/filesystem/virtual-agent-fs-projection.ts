@@ -11,7 +11,7 @@ export type VirtualAgentFsProjection = {
 };
 
 function normalizeVfsPath(input?: string): string {
-  if (!input?.trim() || input.trim() === ".") {
+  if (!input || input === ".") {
     return "/";
   }
   if (input.includes("\0")) {

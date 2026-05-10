@@ -186,6 +186,10 @@ function isChildProcessPermissionAvailable(): boolean {
   }
 }
 
+function isUnsafeVirtualExecEnabled(): boolean {
+  return process.env.OPENCLAW_UNSAFE_VFS_EXEC === "1";
+}
+
 function createLazyVirtualExecTool(
   defaults: ExecToolDefaults | undefined,
   scratch: AgentFilesystem["scratch"],
@@ -694,6 +698,7 @@ export function createOpenClawCodingTools(options?: {
     !hasHostWorkspaceCapability &&
     Boolean(virtualScratch) &&
     toolConstructionPlan.includeShellTools &&
+    isUnsafeVirtualExecEnabled() &&
     isChildProcessPermissionAvailable();
   const includePatchTool =
     includeCoreTools &&

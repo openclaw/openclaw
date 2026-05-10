@@ -70,6 +70,42 @@ describe("SqliteVirtualAgentFs", () => {
     ]);
   });
 
+  it("preserves significant whitespace in virtual paths", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/space ", "trailing");
+    scratch.writeFile("/ leading", "leading");
+
+    expect(scratch.readFile("/space ").toString("utf8")).toBe("trailing");
+    expect(scratch.readFile("/ leading").toString("utf8")).toBe("leading");
+    expect(scratch.stat("/space")).toBeNull();
+    expect(scratch.stat("/leading")).toBeNull();
+  });
+
+  it("rejects file and directory overlap states", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/dir/a.txt", "a");
+    expect(() => scratch.writeFile("/dir", "file")).toThrow("VFS path is a directory: /dir");
+
+    scratch.writeFile("/parent", "file");
+    expect(() => scratch.writeFile("/parent/child.txt", "child")).toThrow(
+      "VFS parent is not a directory: /parent",
+    );
+    expect(() => scratch.mkdir("/parent/child")).toThrow("VFS parent is not a directory: /parent");
+    expect(() => scratch.writeFile("/", "root")).toThrow("VFS cannot write a file at root.");
+  });
+
   it("renames and removes directory trees", () => {
     const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
     const scratch = createSqliteVirtualAgentFs({
@@ -89,6 +125,28 @@ describe("SqliteVirtualAgentFs", () => {
     scratch.remove("/archive", { recursive: true });
 
     expect(scratch.stat("/archive/tmp/a.txt")).toBeNull();
+  });
+
+  it("rejects ambiguous or cyclic renames", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/tmp/a.txt", "a");
+    scratch.writeFile("/other.txt", "other");
+    scratch.writeFile("/target/existing.txt", "existing");
+
+    expect(() => scratch.rename("/", "/archive")).toThrow("VFS cannot rename root.");
+    expect(() => scratch.rename("/tmp", "/tmp/nested")).toThrow(
+      "VFS cannot move a path into itself: /tmp -> /tmp/nested",
+    );
+    expect(() => scratch.rename("/tmp/a.txt", "/other.txt")).toThrow(
+      "VFS target already exists: /other.txt",
+    );
+    expect(() => scratch.rename("/tmp", "/target")).toThrow("VFS target already exists: /target");
   });
 
   it("lists and exports VFS contents for support bundles", () => {

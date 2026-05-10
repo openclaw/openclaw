@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createSqliteVirtualAgentFs } from "./filesystem/virtual-agent-fs.sqlite.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
@@ -12,11 +12,13 @@ function createTempDbPath(): string {
 }
 
 afterEach(() => {
+  vi.unstubAllEnvs();
   closeOpenClawStateDatabaseForTest();
 });
 
 describe("VFS-backed exec tool", () => {
   it("projects scratch to disk and syncs foreground command output back", async () => {
+    vi.stubEnv("OPENCLAW_UNSAFE_VFS_EXEC", "1");
     const scratch = createSqliteVirtualAgentFs({
       agentId: "main",
       namespace: "scratch",

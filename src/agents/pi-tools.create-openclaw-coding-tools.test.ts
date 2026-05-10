@@ -434,6 +434,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("uses VFS-backed read/write/edit tools when runtime filesystem has no workspace capability", async () => {
+    vi.stubEnv("OPENCLAW_UNSAFE_VFS_EXEC", "0");
     const scratch = createMemoryVirtualFs();
     const tools = createOpenClawCodingTools({
       workspaceDir: "/tmp/workspace",
@@ -452,7 +453,7 @@ describe("createOpenClawCodingTools", () => {
     expect(names.has("write")).toBe(true);
     expect(names.has("edit")).toBe(true);
     expect(names.has("apply_patch")).toBe(false);
-    expect(names.has("exec")).toBe(true);
+    expect(names.has("exec")).toBe(false);
     expect(names.has("process")).toBe(false);
 
     await tools
@@ -529,6 +530,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("uses VFS-backed apply_patch when runtime filesystem has no workspace capability", async () => {
+    vi.stubEnv("OPENCLAW_UNSAFE_VFS_EXEC", "0");
     const scratch = createMemoryVirtualFs();
     scratch.writeFile("/notes/a.txt", "hello vfs\n");
     const tools = createOpenClawCodingTools({
@@ -547,7 +549,7 @@ describe("createOpenClawCodingTools", () => {
     const names = new Set(tools.map((tool) => tool.name));
 
     expect(names.has("apply_patch")).toBe(true);
-    expect(names.has("exec")).toBe(true);
+    expect(names.has("exec")).toBe(false);
     expect(names.has("process")).toBe(false);
 
     await tools
