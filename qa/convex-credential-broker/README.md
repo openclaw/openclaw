@@ -6,6 +6,7 @@ Keep private operator notes in `~/Projects/manager/docs/`, not in public docs.
 This broker exposes:
 
 - `POST /qa-credentials/v1/acquire`
+- `POST /qa-credentials/v1/payload-chunk`
 - `POST /qa-credentials/v1/heartbeat`
 - `POST /qa-credentials/v1/release`
 - `POST /qa-credentials/v1/admin/add`
@@ -144,6 +145,21 @@ For `kind: "telegram"`, broker `admin/add` validates that payload includes:
 - `groupId` as a numeric chat id string
 - non-empty `driverToken`
 - non-empty `sutToken`
+
+For `kind: "telegram-user"`, broker `admin/add` validates one exclusive real-user
+credential for both the TDLib CLI driver and the Telegram Desktop visual witness:
+
+- `groupId` as a numeric chat id string
+- non-empty `sutToken`
+- `testerUserId` as a numeric Telegram user id string
+- non-empty `testerUsername`
+- `telegramApiId` as a numeric string
+- non-empty `telegramApiHash`
+- non-empty `tdlibDatabaseEncryptionKey`
+- non-empty `tdlibArchiveBase64`
+- `tdlibArchiveSha256` as a SHA-256 hex string
+- non-empty `desktopTdataArchiveBase64`
+- `desktopTdataArchiveSha256` as a SHA-256 hex string
 
 For `kind: "discord"`, broker `admin/add` validates that payload includes:
 
