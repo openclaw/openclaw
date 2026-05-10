@@ -24,12 +24,14 @@ Inside it:
 
 - `~/polytropos/releases/`
   - `~/polytropos/releases/<version>/` — a **release directory**, equivalent to `dist/`
-  - `~/polytropos/releases/dev` — symlink to a worktree build output (a `dist/` directory)
+  - `~/polytropos/releases/dev` — symlink to `~/polytropos/openclaw-polytropos/dist` (the core repo build output)
   - `~/polytropos/releases/current` — symlink to the release currently running (typically a versioned release, sometimes `dev`)
 
 Optional:
 
-- `~/polytropos/worktrees/` — git worktrees for core development (only if needed)
+- `~/polytropos/worktrees/` — optional git worktrees for core development (only if needed)
+
+Note: the default dev target is the main core checkout at `~/polytropos/openclaw-polytropos/`.
 
 ## What a "release" contains
 
