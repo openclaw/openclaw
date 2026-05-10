@@ -175,7 +175,7 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
   expect(endEvent.transcriptArchived).toBe(true);
-  expect(String(endEvent.sessionFile ?? "")).toContain(".jsonl.reset.");
+  expect(endEvent.sessionFile).toEqual(expect.stringContaining(".jsonl.reset."));
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");
@@ -371,7 +371,7 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
   expect(startEvent.sessionId).toBeTypeOf("string");
   expect(startEvent.sessionId).not.toBe("");
-  expect(String(startEvent.sessionKey ?? "")).toMatch(/^agent:main:dashboard:/);
+  expect(startEvent.sessionKey).toEqual(expect.stringMatching(/^agent:main:dashboard:/));
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {

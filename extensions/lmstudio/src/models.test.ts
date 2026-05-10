@@ -251,7 +251,7 @@ describe("lmstudio-models", () => {
     const modelsRequest = fetchMock.mock.calls.find(
       ([url]) => url === "http://localhost:1234/api/v1/models",
     );
-    const modelsRequestOptions = modelsRequest?.[1] as
+    const modelsRequestOptions = (modelsRequest as unknown[] | undefined)?.[1] as
       | { headers?: Record<string, string>; signal?: unknown }
       | undefined;
     expect(modelsRequestOptions?.headers).toEqual({

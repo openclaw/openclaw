@@ -609,7 +609,7 @@ describe("handleLineWebhookEvents", () => {
     });
 
     expect(processMessage).not.toHaveBeenCalled();
-    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
       | { accountId?: string; channel?: string; id?: string }
       | undefined;
     expect(pairingRequest?.channel).toBe("line");
@@ -656,7 +656,7 @@ describe("handleLineWebhookEvents", () => {
 
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
     expect(processMessage).not.toHaveBeenCalled();
-    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
       | { accountId?: string; channel?: string; id?: string }
       | undefined;
     expect(pairingRequest?.channel).toBe("line");

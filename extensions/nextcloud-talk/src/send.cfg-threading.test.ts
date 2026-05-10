@@ -221,7 +221,7 @@ describe("nextcloud-talk send cfg threading", () => {
           expect(mediaSendCall?.[0]).toBe(
             "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
           );
-          expect((mediaSendCall?.[1] as RequestInit | undefined)?.body).toBe(
+          expect(mediaSendCall?.[1]?.body).toBe(
             JSON.stringify({
               message: "image\n\nAttachment: https://example.com/image.png",
             }),

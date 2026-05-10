@@ -208,10 +208,14 @@ describe("tavily tools", () => {
     await searchTool.execute("search-call", { query: "openclaw" });
     await extractTool.execute("extract-call", { urls: ["https://example.com"] });
 
-    const searchParams = runTavilySearch.mock.calls[0]?.[0];
+    const searchParams = runTavilySearch.mock.calls[0]?.[0] as
+      | { cfg?: unknown; query?: string }
+      | undefined;
     expect(searchParams?.cfg).toBe(runtimeConfig);
     expect(searchParams?.query).toBe("openclaw");
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0];
+    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as
+      | { cfg?: unknown; urls?: string[] }
+      | undefined;
     expect(extractParams?.cfg).toBe(runtimeConfig);
     expect(extractParams?.urls).toEqual(["https://example.com"]);
   });
@@ -249,7 +253,9 @@ describe("tavily tools", () => {
       chunks_per_source: 2,
     });
 
-    const extractParams = runTavilyExtract.mock.calls[0]?.[0];
+    const extractParams = runTavilyExtract.mock.calls[0]?.[0] as
+      | { cfg?: unknown; chunksPerSource?: number; query?: string; urls?: string[] }
+      | undefined;
     expect(extractParams?.cfg).toEqual({});
     expect(extractParams?.urls).toEqual(["https://example.com"]);
     expect(extractParams?.query).toBe("pricing");

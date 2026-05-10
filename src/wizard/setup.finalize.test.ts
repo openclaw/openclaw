@@ -239,7 +239,12 @@ function createAdvancedFinalizeArgs(params: AdvancedFinalizeArgs = {}) {
   };
 }
 
-function requireMockArg<T>(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): T {
+function requireMockArg<T>(
+  mock: ReturnType<typeof vi.fn>,
+  callIndex = 0,
+  argIndex = 0,
+  _type?: T,
+): T {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call ${callIndex}`);
@@ -253,7 +258,7 @@ function expectNoteContains(
   title: string,
 ): void {
   const calls = vi.mocked(prompter.note).mock.calls;
-  expect(calls.some((call) => String(call[0]).includes(expected) && call[1] === title)).toBe(true);
+  expect(calls.some((call) => call[0].includes(expected) && call[1] === title)).toBe(true);
 }
 
 function expectNoteTitleNotCalled(

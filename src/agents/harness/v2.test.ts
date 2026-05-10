@@ -83,7 +83,7 @@ function captureDiagnosticEvents(): {
   return { events, unsubscribe };
 }
 
-function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: T): T {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
   return call[0] as T;

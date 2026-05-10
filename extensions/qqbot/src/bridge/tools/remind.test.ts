@@ -103,7 +103,7 @@ describe("bridge/tools/remind", () => {
       time: "5m",
     });
 
-    const cronParams = callCron.mock.calls[0]?.[0] as RemindCronAction | undefined;
+    const cronParams = (callCron.mock.calls as unknown[][])[0]?.[0] as RemindCronAction | undefined;
     expect(cronParams?.action).toBe("add");
     if (cronParams?.action !== "add") {
       throw new Error("Expected add reminder cron params");

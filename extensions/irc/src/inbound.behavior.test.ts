@@ -129,7 +129,7 @@ describe("irc inbound behavior", () => {
       expect.stringContaining("Your IRC id: alice!ident@example.com"),
       undefined,
     );
-    const replyMessages = sendReply.mock.calls.map((call) => String(call[1]));
+    const replyMessages = (sendReply.mock.calls as unknown[][]).map((call) => String(call[1]));
     expect(replyMessages.some((message) => message.includes("CODE"))).toBe(true);
   });
 
@@ -185,7 +185,7 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
-    const assembledRequest = coreRuntime.channel.turn.runAssembled.mock.calls[0]?.[0];
+    const assembledRequest = vi.mocked(coreRuntime.channel.turn.runAssembled).mock.calls[0]?.[0];
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

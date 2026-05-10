@@ -396,7 +396,7 @@ const expectOkInvokeResponse = async (res: Response) => {
 const firstHookCallArg = () => {
   const call = hookMocks.runBeforeToolCallHook.mock.calls[0];
   expect(call).toBeDefined();
-  return call?.[0] as RunBeforeToolCallHookArgs;
+  return call?.[0];
 };
 
 const invokeToolsRpc = async (params: Record<string, unknown>, scopes = ["operator.write"]) => {

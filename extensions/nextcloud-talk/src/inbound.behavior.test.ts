@@ -279,7 +279,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime: createRuntimeEnv(),
     });
 
-    const assembledRequest = coreRuntime.channel.turn.runAssembled.mock.calls[0]?.[0];
+    const assembledRequest = vi.mocked(coreRuntime.channel.turn.runAssembled).mock.calls[0]?.[0];
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

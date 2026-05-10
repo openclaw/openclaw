@@ -115,7 +115,7 @@ describe("handleClickClackInbound", () => {
 
     expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
-    const completionRequest = runtime.llm.complete.mock.calls[0]?.[0];
+    const completionRequest = vi.mocked(runtime.llm.complete).mock.calls[0]?.[0];
     expect(completionRequest?.agentId).toBe("service-bot");
     expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
     expect(completionRequest?.maxTokens).toBe(96);

@@ -153,7 +153,7 @@ function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   return result.details as Record<string, unknown>;
 }
 
-function firstMockCallArg<T>(mock: { mock: { calls: unknown[][] } }): T {
+function firstMockCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: T): T {
   const firstCall = mock.mock.calls[0];
   expect(firstCall).toBeDefined();
   return firstCall[0] as T;
