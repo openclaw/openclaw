@@ -188,6 +188,33 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     vi.restoreAllMocks();
   });
 
+  it("enables Tool Search controls for embedded PI runs when configured", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: true,
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalled();
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.includeToolSearchControls).toBe(true);
+    expect(options.toolSearchCatalogRef).toBeTruthy();
+  });
+
   it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {
     const seen: { prompt?: string; messages?: unknown[]; systemPrompt?: string } = {};
 
