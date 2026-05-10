@@ -1,12 +1,14 @@
 // @vitest-environment node
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 
 const loadSessionsMock = vi.fn();
 const loadChatHistoryMock = vi.fn();
 const applySessionsChangedEventMock = vi.fn();
+const handleChatEventMock = vi.fn(() => "idle");
 
 vi.mock("./app-chat.ts", () => ({
   CHAT_SESSIONS_ACTIVE_MINUTES: 10,
+  clearPendingQueueItemsForRun: vi.fn(),
   flushChatQueueForEvent: vi.fn(),
   refreshChatAvatar: vi.fn(),
 }));
@@ -29,7 +31,7 @@ vi.mock("./controllers/assistant-identity.ts", () => ({
 }));
 vi.mock("./controllers/chat.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
-  handleChatEvent: vi.fn(() => "idle"),
+  handleChatEvent: handleChatEventMock,
 }));
 vi.mock("./controllers/devices.ts", () => ({
   loadDevices: vi.fn(),
@@ -38,6 +40,7 @@ vi.mock("./controllers/exec-approval.ts", () => ({
   addExecApproval: vi.fn(),
   parseExecApprovalRequested: vi.fn(() => null),
   parseExecApprovalResolved: vi.fn(() => null),
+  pruneExecApprovalQueue: vi.fn((queue) => queue),
   removeExecApproval: vi.fn(),
 }));
 vi.mock("./controllers/nodes.ts", () => ({
@@ -57,6 +60,21 @@ const { handleGatewayEvent } = await import("./app-gateway.ts");
 const { addExecApproval } = await vi.importActual<typeof import("./controllers/exec-approval.ts")>(
   "./controllers/exec-approval.ts",
 );
+
+afterAll(() => {
+  vi.doUnmock("./app-chat.ts");
+  vi.doUnmock("./app-settings.ts");
+  vi.doUnmock("./app-tool-stream.ts");
+  vi.doUnmock("./controllers/agents.ts");
+  vi.doUnmock("./controllers/assistant-identity.ts");
+  vi.doUnmock("./controllers/chat.ts");
+  vi.doUnmock("./controllers/devices.ts");
+  vi.doUnmock("./controllers/exec-approval.ts");
+  vi.doUnmock("./controllers/nodes.ts");
+  vi.doUnmock("./controllers/sessions.ts");
+  vi.doUnmock("./gateway.ts");
+  vi.resetModules();
+});
 
 function createHost() {
   return {
@@ -105,6 +123,7 @@ function createHost() {
     serverVersion: null,
     sessionKey: "main",
     chatRunId: null,
+    toolStreamOrder: [],
     refreshSessionsAfterChat: new Set<string>(),
     execApprovalQueue: [],
     execApprovalError: null,
@@ -113,7 +132,50 @@ function createHost() {
 }
 
 describe("handleGatewayEvent sessions.changed", () => {
-  it("reloads sessions when the gateway pushes a sessions.changed event", () => {
+  it("scopes post-chat final session refreshes to the run's agent", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("final");
+    const host = createHost();
+    host.sessionKey = "agent:ops:main";
+    host.refreshSessionsAfterChat.add("run-1");
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "chat",
+      payload: { state: "final", runId: "run-1", sessionKey: "agent:ops:main" },
+      seq: 1,
+    });
+
+    expect(loadSessionsMock).toHaveBeenCalledWith(host, {
+      activeMinutes: 10,
+      agentId: "ops",
+    });
+  });
+
+  it("applies reliable session change snapshots without refetching the list", () => {
+    loadSessionsMock.mockReset();
+    handleChatEventMock.mockReset().mockReturnValue("idle");
+    applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: true, change: "updated" });
+    const host = createHost();
+    const payload = {
+      sessionKey: "agent:main:main",
+      sessionId: "sess-main",
+      kind: "direct",
+      reason: "patch",
+    };
+
+    handleGatewayEvent(host, {
+      type: "event",
+      event: "sessions.changed",
+      payload,
+      seq: 1,
+    });
+
+    expect(applySessionsChangedEventMock).toHaveBeenCalledWith(host, payload);
+    expect(loadSessionsMock).not.toHaveBeenCalled();
+  });
+
+  it("reloads sessions when a change event cannot be applied locally", () => {
     loadSessionsMock.mockReset();
     applySessionsChangedEventMock.mockReset().mockReturnValue({ applied: false });
     const host = createHost();
@@ -121,11 +183,10 @@ describe("handleGatewayEvent sessions.changed", () => {
     handleGatewayEvent(host, {
       type: "event",
       event: "sessions.changed",
-      payload: { sessionKey: "agent:main:main", reason: "patch" },
+      payload: { sessionKey: "agent:main:main", reason: "cleanup" },
       seq: 1,
     });
 
-    expect(loadSessionsMock).toHaveBeenCalledTimes(1);
     expect(loadSessionsMock).toHaveBeenCalledWith(host);
   });
 

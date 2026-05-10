@@ -17,6 +17,7 @@ import {
   resolveMattermostThreadSessionContext,
   shouldFinalizeMattermostPreviewAfterDispatch,
   shouldClearMattermostDraftPreview,
+  shouldSuppressMattermostDefaultToolProgressMessages,
   shouldUpdateMattermostDraftToolProgress,
   type MattermostMentionGateInput,
   type MattermostRequireMentionResolverInput,
@@ -112,13 +113,15 @@ describe("mattermost mention gating", () => {
     const { resolver, decision } = evaluateMentionGateForMessage({ cfg });
     expect(decision.dropReason).toBeNull();
     expect(decision.shouldRequireMention).toBe(false);
-    expect(resolver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-        groupId: "chan-1",
-        requireMentionOverride: false,
-      }),
-    );
+    expect(resolver).toHaveBeenCalledTimes(1);
+    const [resolverCall] = resolver.mock.calls[0] ?? [];
+    expect(resolverCall).toStrictEqual({
+      cfg,
+      channel: "mattermost",
+      accountId: "default",
+      groupId: "chan-1",
+      requireMentionOverride: false,
+    });
   });
 
   it("accepts unmentioned thread replies in onmessage mode", () => {
@@ -314,6 +317,37 @@ describe("shouldUpdateMattermostDraftToolProgress", () => {
   });
 });
 
+describe("shouldSuppressMattermostDefaultToolProgressMessages", () => {
+  type MattermostConfig = NonNullable<NonNullable<OpenClawConfig["channels"]>["mattermost"]>;
+
+  function resolveSuppressDefaultProgress(mattermostConfig: MattermostConfig) {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: mattermostConfig,
+        },
+      },
+      accountId: "default",
+      allowUnresolvedSecretRef: true,
+    });
+    return shouldSuppressMattermostDefaultToolProgressMessages(account);
+  }
+
+  it("suppresses standalone progress messages while draft previews are active", () => {
+    expect(resolveSuppressDefaultProgress({ enabled: true })).toBe(true);
+  });
+
+  it("keeps standalone progress messages available when draft streaming is off", () => {
+    expect(
+      resolveSuppressDefaultProgress({
+        streaming: {
+          mode: "off",
+        },
+      }),
+    ).toBe(false);
+  });
+});
+
 describe("shouldClearMattermostDraftPreview", () => {
   it("deletes the preview after successful normal final delivery", () => {
     expect(
@@ -443,12 +477,13 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
   it("finalizes the preview in place when the final targets the same thread", async () => {
     const draftStream = createDraftStreamMock();
     const deliverFinal = vi.fn(async () => {});
+    const client = createMattermostClientMock();
 
     await deliverMattermostReplyWithDraftPreview({
       payload: { text: "Final answer", replyToId: "child-post-789" } as never,
       info: { kind: "final" },
       kind: "channel",
-      client: createMattermostClientMock(),
+      client,
       draftStream,
       effectiveReplyToId: "thread-root-456",
       resolvePreviewFinalText: (text) => text?.trim(),
@@ -457,11 +492,11 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
       deliverFinal,
     });
 
-    expect(updateMattermostPostSpy).toHaveBeenCalledWith(
-      expect.anything(),
-      "preview-post-1",
-      expect.objectContaining({ message: "Final answer" }),
-    );
+    expect(updateMattermostPostSpy).toHaveBeenCalledTimes(1);
+    const [updateClient, updatePostId, updateParams] = updateMattermostPostSpy.mock.calls[0] ?? [];
+    expect(updateClient).toBe(client);
+    expect(updatePostId).toBe("preview-post-1");
+    expect(updateParams).toStrictEqual({ message: "Final answer" });
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
     expect(draftStream.seal).toHaveBeenCalledTimes(1);
     expect(draftStream.seal.mock.invocationCallOrder[0]).toBeLessThan(
@@ -493,11 +528,7 @@ describe("deliverMattermostReplyWithDraftPreview", () => {
 
     expect(draftStream.discardPending).toHaveBeenCalledTimes(1);
     expect(draftStream.clear).not.toHaveBeenCalled();
-    expect(updateMattermostPostSpy).not.toHaveBeenCalledWith(
-      expect.anything(),
-      "preview-post-1",
-      expect.objectContaining({ message: "↓ See below." }),
-    );
+    expect(updateMattermostPostSpy).not.toHaveBeenCalled();
   });
 });
 

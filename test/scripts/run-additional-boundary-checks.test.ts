@@ -50,11 +50,19 @@ describe("run-additional-boundary-checks", () => {
     const shardedLabels = [1, 2, 3, 4].flatMap((index) =>
       selectChecksForShard(BOUNDARY_CHECKS, `${index}/4`).map((check) => check.label),
     );
-    expect(shardedLabels.toSorted()).toEqual(
-      BOUNDARY_CHECKS.map((check) => check.label).toSorted(),
+    expect(shardedLabels.toSorted((a, b) => a.localeCompare(b))).toEqual(
+      BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
     );
     expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
+  });
+
+  it("keeps the raw HTTP/2 import guard in source boundary checks", () => {
+    expect(BOUNDARY_CHECKS).toContainEqual({
+      label: "lint:tmp:no-raw-http2-imports",
+      command: "pnpm",
+      args: ["run", "lint:tmp:no-raw-http2-imports"],
+    });
   });
 
   it("buffers grouped output and reports aggregate failures", async () => {

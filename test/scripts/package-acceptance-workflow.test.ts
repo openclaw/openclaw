@@ -7,6 +7,7 @@ const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusab
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
+const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
@@ -26,10 +27,12 @@ type WorkflowJob = {
   if?: string;
   name?: string;
   needs?: string | string[];
+  "timeout-minutes"?: number | string;
   steps?: WorkflowStep[];
 };
 
 type Workflow = {
+  env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
 };
 
@@ -39,18 +42,24 @@ function readWorkflow(path: string): Workflow {
 
 function workflowJob(path: string, jobName: string): WorkflowJob {
   const job = readWorkflow(path).jobs?.[jobName];
-  expect(job, `expected workflow job ${jobName}`).toBeDefined();
-  return job!;
+  if (!job) {
+    throw new Error(`Expected workflow job ${jobName} in ${path}`);
+  }
+  return job;
 }
 
 function workflowStep(job: WorkflowJob, stepName: string): WorkflowStep {
   const step = job.steps?.find((candidate) => candidate.name === stepName);
-  expect(step, `expected workflow step ${stepName}`).toBeDefined();
-  return step!;
+  if (!step) {
+    throw new Error(`Expected workflow step ${stepName}`);
+  }
+  return step;
 }
 
 function expectTextToIncludeAll(text: string | undefined, snippets: string[]): void {
-  expect(text).toBeDefined();
+  if (text === undefined) {
+    throw new Error("Expected text to be defined before checking snippets");
+  }
   for (const snippet of snippets) {
     expect(text).toContain(snippet);
   }
@@ -92,17 +101,21 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("suite_profile:");
     expect(workflow).toContain("published_upgrade_survivor_baseline:");
     expect(workflow).toContain("published_upgrade_survivor_baselines:");
+    expect(workflow).toContain("last-stable-4");
     expect(workflow).toContain("all-since-2026.4.23");
     expect(workflow).toContain("published_upgrade_survivor_scenarios:");
     expect(workflow).toContain("scripts/resolve-upgrade-survivor-baselines.mjs");
     expect(workflow).toContain("--history-count 6");
     expect(workflow).toContain("--include-version 2026.4.23");
     expect(workflow).toContain("--pre-date 2026-03-15T00:00:00Z");
+    expect(workflow).toContain('"last-stable-"');
     expect(workflow).toContain('"all-since-"');
     expect(workflow).toContain("npm-onboard-channel-agent gateway-network config-reload");
     expect(workflow).toContain("npm-onboard-channel-agent doctor-switch");
-    expect(workflow).toContain("update-channel-switch upgrade-survivor");
+    expect(workflow).toContain("update-channel-switch skill-install update-corrupt-plugin");
+    expect(workflow).toContain("update-corrupt-plugin upgrade-survivor");
     expect(workflow).toContain("published-upgrade-survivor");
+    expect(workflow).toContain("published-upgrade-survivor update-restart-auth");
     expect(workflow).toContain("plugins-offline plugin-update");
     expect(workflow).toContain("include_release_path_suites=true");
     expect(workflow).not.toContain("telegram_mode requires source=npm");
@@ -139,16 +152,22 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("Published upgrade survivor scenarios:");
   });
 
-  it("requires full release child workflows to run at the resolved target SHA", () => {
+  it("requires pinned full release child workflows to run at the resolved target SHA", () => {
     const workflow = readFileSync(FULL_RELEASE_VALIDATION_WORKFLOW, "utf8");
     const releaseChecksWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
 
     expect(workflow).toContain("TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}");
+    expect(workflow).toContain("CHILD_WORKFLOW_REF: ${{ github.ref_name }}");
+    expect(workflow).toContain("release_package_spec:");
+    expect(workflow).toContain('args+=(-f release_package_spec="$RELEASE_PACKAGE_SPEC")');
     expect(workflow).toContain("package_acceptance_package_spec:");
     expect(workflow).toContain(
       'args+=(-f package_acceptance_package_spec="$PACKAGE_ACCEPTANCE_PACKAGE_SPEC")',
     );
     expect(workflow).toContain("--json status,conclusion,url,attempt,headSha,jobs");
+    expect(workflow).toContain(
+      '[[ "$CHILD_WORKFLOW_REF" == release-ci/* && -n "${TARGET_SHA// }" && "$head_sha" != "$TARGET_SHA" ]]',
+    );
     expect(workflow).toContain("child run used ${head_sha}, expected ${TARGET_SHA}");
     expect(workflow).toContain(
       "Dispatch Full Release Validation from a ref pinned to the target SHA",
@@ -156,10 +175,10 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("| Child | Result | Minutes | Head SHA | Run |");
     expect(releaseChecksWorkflow).toContain("refs/heads/release-ci/[0-9a-f]{12}-[0-9]+");
     expect(releaseChecksWorkflow).toContain(
-      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
     );
     expect(releaseChecksWorkflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
     );
   });
 
@@ -199,7 +218,7 @@ describe("package artifact reuse", () => {
       "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}",
     );
     expect(workflow).toContain(
-      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}",
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}",
     );
     expect(workflow).toContain(
       "OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: ${{ inputs.published_upgrade_survivor_scenarios }}",
@@ -221,16 +240,25 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("node .release-harness/scripts/docker-e2e.mjs github-outputs");
     expect(workflow).toContain("bash .release-harness/scripts/ci-docker-pull-retry.sh");
     const prepareDockerImage = workflowJob(LIVE_E2E_WORKFLOW, "prepare_docker_e2e_image");
-    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toMatchObject({
+    expect(workflowStep(prepareDockerImage, "Plan Docker E2E images").env).toEqual({
+      INCLUDE_OPENWEBUI: "${{ inputs.include_openwebui }}",
+      INCLUDE_RELEASE_PATH_SUITES: "${{ inputs.include_release_path_suites }}",
+      LANES: "${{ inputs.docker_lanes }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: "${{ inputs.published_upgrade_survivor_baseline }}",
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+      RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
     expect(workflow).toContain("targeted_docker_lane_group_size:");
+    expect(workflow).toContain("scripts/plan-targeted-docker-lane-groups.mjs");
+    expect(workflow).toContain(
+      "OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}",
+    );
     expect(workflow).toContain("Docker E2E targeted lanes (${{ matrix.group.label }})");
     expect(workflow).toContain("LANES: ${{ matrix.group.docker_lanes }}");
+    expect(workflow).toContain("GROUP_LABEL: ${{ matrix.group.label }}");
     expect(workflow).toContain("DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}");
     expect(workflow).toContain("name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}");
     expect(scheduler).toContain(
@@ -245,7 +273,19 @@ describe("package artifact reuse", () => {
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS",');
     expect(scheduler).toContain('["OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS",');
     expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE=1");
+    expect(packageJson).toContain("test:docker:update-restart-auth");
+    expect(packageJson).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE=auto-auth");
     expect(publishedUpgradeSurvivor).toContain("validate_baseline_package_spec");
+    expect(publishedUpgradeSurvivor).toContain("OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE");
+    expect(publishedUpgradeSurvivor).toContain('local shim_dir="$npm_config_prefix/bin"');
+    expect(publishedUpgradeSurvivor).toContain("seed_update_restart_probe_device_auth");
+    expect(publishedUpgradeSurvivor).toContain("upgrade survivor restart probe");
+    expect(publishedUpgradeSurvivor).toContain("write_update_restart_service_secretref_env");
+    expect(publishedUpgradeSurvivor).toContain("GATEWAY_AUTH_TOKEN_REF=%s");
+    expect(publishedUpgradeSurvivor).toContain(
+      "env -u OPENCLAW_GATEWAY_TOKEN -u OPENCLAW_GATEWAY_PASSWORD openclaw",
+    );
+    expect(publishedUpgradeSurvivor).toContain("phase prepare-update-restart-probe");
     expect(publishedUpgradeSurvivor).toContain("openclaw@(alpha|beta|latest|");
     expect(publishedUpgradeSurvivor).toContain("plugin_deps_cleanup_plugin_dirs");
     expect(publishedUpgradeSurvivor).toContain('"$(package_root)/extensions/$plugin"');
@@ -253,6 +293,11 @@ describe("package artifact reuse", () => {
     expect(publishedUpgradeSurvivor).toContain(
       "assert_legacy_plugin_dependency_debris_before_doctor",
     );
+    expect(publishedUpgradeSurvivor.indexOf("phase seed-source-only-plugin-shadow")).toBeLessThan(
+      publishedUpgradeSurvivor.indexOf("phase assert-baseline"),
+    );
+    expect(publishedUpgradeSurvivor).toContain('"id": "opik-openclaw"');
+    expect(publishedUpgradeSurvivor).toContain('"configSchema": {');
     expect(publishedUpgradeSurvivor).toContain(
       "Legacy plugin dependency debris was already removed before doctor",
     );
@@ -302,14 +347,16 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("live_suite_filter:");
     expect(workflow).toContain("validate_live_suite_filter:");
     expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
+    expect(workflow).toContain("live-cache attempt ${attempt}/3");
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
-    expect(workflow).toContain('add_profile_suite docker-live-models "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite docker-live-models "beta minimum stable full"');
     expect(workflow).toContain(
-      'add_profile_suite native-live-src-gateway-core "minimum stable full"',
+      'add_profile_suite native-live-src-gateway-core "beta minimum stable full"',
     );
-    expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain(
@@ -323,6 +370,8 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id",
     );
+    expect(workflow).not.toContain("openai-ws-stream-live-e2e");
+    expect(workflow).not.toContain("src/agents/openai-ws-stream.e2e.test.ts");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-deepseek-fireworks");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-opencode-openrouter");
     expect(workflow).toContain("suite_id: live-gateway-advisory-docker-xai-zai");
@@ -346,12 +395,25 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("suite_id: native-live-src-gateway-core");
     expect(workflow).toContain("suite_id: native-live-src-gateway-backends");
+    expect(workflow).toContain("suite_id: native-live-src-infra");
+    expect(workflow).toContain(
+      "command: OPENCLAW_LIVE_APNS_REACHABILITY=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-infra",
+    );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-smoke");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-opus");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku");
     expect(workflow).toContain("suite_group: native-live-src-gateway-profiles-anthropic");
     expect(workflow).toContain("anthropic/claude-opus-4-7,anthropic/claude-opus-4-6");
     expect(workflow).toContain("anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5");
+    expect(workflow).toMatch(
+      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?advisory: true/u,
+    );
+    expect(workflow).toMatch(
+      /suite_id: native-live-src-gateway-profiles-openai[\s\S]*?timeout_minutes: 60[\s\S]*?profiles: beta minimum stable full/u,
+    );
+    expect(workflow).toMatch(
+      /suite_id: native-live-src-gateway-profiles-fireworks[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
+    );
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-deepseek");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-opencode-go");
     expect(workflow).toContain("suite_id: native-live-src-gateway-profiles-openrouter");
@@ -369,6 +431,15 @@ describe("package artifact reuse", () => {
     expect(workflow).toMatch(/suite_id: native-live-extensions-moonshot[\s\S]*?advisory: true/u);
     expect(workflow).toContain("OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}");
     expect(workflow).toContain("Advisory live suite failed with exit code");
+    expect(workflow).toMatch(
+      /suite_id: live-gateway-advisory-docker-deepseek-fireworks[\s\S]*?advisory: true/u,
+    );
+    expect(workflow).toMatch(
+      /validate_live_media_provider_suites:[\s\S]*?OPENCLAW_LIVE_SUITE_ADVISORY: \$\{\{ matrix\.advisory \}\}/u,
+    );
+    expect(workflow).toMatch(
+      /suite_id: native-live-extensions-media-video-d[\s\S]*?timeout_minutes: 30[\s\S]*?advisory: true/u,
+    );
     expect(workflow).toContain("suite_id: native-live-extensions-openai");
     expect(workflow).toContain("suite_id: native-live-extensions-o-z-other");
     expect(workflow).toContain("validate_live_media_provider_suites:");
@@ -502,27 +573,31 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("include_release_path_suites: true");
     expect(workflow).toContain("uses: ./.github/workflows/package-acceptance.yml");
     expect(workflow).toContain(
-      "source: ${{ needs.resolve_target.outputs.package_acceptance_package_spec != '' && 'npm' || 'artifact' }}",
+      "source: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec != '' || needs.resolve_target.outputs.release_package_spec != '') && 'npm' || 'artifact' }}",
     );
     expect(workflow).toContain(
-      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || 'openclaw@beta' }}",
+      "package_spec: ${{ needs.resolve_target.outputs.package_acceptance_package_spec || needs.resolve_target.outputs.release_package_spec || 'openclaw@beta' }}",
     );
     expect(workflow).toContain(".artifacts/docker-e2e-package/package-candidate.json");
     expect(workflow).toContain(
       "artifact_name: ${{ needs.prepare_release_package.outputs.artifact_name }}",
     );
     expect(workflow).toContain(
-      "package_sha256: ${{ needs.prepare_release_package.outputs.package_sha256 }}",
+      "package_sha256: ${{ (needs.resolve_target.outputs.package_acceptance_package_spec == '' && needs.resolve_target.outputs.release_package_spec == '') && needs.prepare_release_package.outputs.package_sha256 || '' }}",
     );
     expect(workflow).toContain("suite_profile: custom");
     expect(workflow).toContain(
-      "docker_lanes: doctor-switch update-channel-switch upgrade-survivor published-upgrade-survivor plugins-offline plugin-update",
+      "docker_lanes: doctor-switch update-channel-switch skill-install update-corrupt-plugin upgrade-survivor published-upgrade-survivor update-restart-auth plugins-offline plugin-update",
     );
-    expect(workflow).toContain("published_upgrade_survivor_baselines: all-since-2026.4.23");
-    expect(workflow).toContain("published_upgrade_survivor_scenarios: reported-issues");
+    expect(workflow).toContain(
+      "published_upgrade_survivor_baselines: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'last-stable-4 2026.4.23 2026.5.2 2026.4.15' || '' }}",
+    );
+    expect(workflow).toContain(
+      "published_upgrade_survivor_scenarios: ${{ needs.resolve_target.outputs.run_release_soak == 'true' && 'reported-issues' || '' }}",
+    );
     expect(workflow).toContain("telegram_mode: mock-openai");
     expect(workflow).toContain(
-      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-context-command,telegram-mention-gating",
+      "telegram_scenarios: telegram-help-command,telegram-commands-command,telegram-tools-compact-command,telegram-whoami-command,telegram-status-command,telegram-other-bot-command-gating,telegram-context-command,telegram-mentioned-message-reply,telegram-reply-chain-exact-marker,telegram-stream-final-single-message,telegram-long-final-reuses-preview,telegram-mention-gating",
     );
     expect(workflow).toContain("ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}");
     expect(workflow).toContain("ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}");
@@ -534,6 +609,10 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("rerun_group:");
     expect(workflow).toContain("live_suite_filter:");
+    expect(workflow).toContain("cross_os_suite_filter:");
+    expect(workflow).toContain(
+      "suite_filter: ${{ needs.resolve_target.outputs.cross_os_suite_filter }}",
+    );
     expect(workflow).toContain(
       "live_suite_filter: ${{ needs.resolve_target.outputs.live_suite_filter }}",
     );
@@ -541,10 +620,11 @@ describe("package artifact reuse", () => {
       "contains(fromJSON('[\"all\",\"cross-os\",\"package\"]'), needs.resolve_target.outputs.rerun_group) || (needs.resolve_target.outputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
     expect(workflow).toContain(
-      "contains(fromJSON('[\"all\",\"live-e2e\"]'), needs.resolve_target.outputs.rerun_group) && needs.resolve_target.outputs.live_suite_filter == ''",
+      "(needs.resolve_target.outputs.rerun_group == 'live-e2e' || (needs.resolve_target.outputs.rerun_group == 'all' && needs.resolve_target.outputs.run_release_soak == 'true')) && needs.resolve_target.outputs.live_suite_filter == ''",
     );
     expect(workflow).toContain("- live-e2e");
     expect(workflow).toContain("- qa-live");
+    expect(workflow).toContain("QA release-check lanes are advisory");
   });
 
   it("detects Matrix fail-fast support for older release refs", () => {
@@ -570,6 +650,23 @@ describe("package artifact reuse", () => {
     );
   });
 
+  it("runs live transport lanes nightly while release checks stay gated", () => {
+    const releaseWorkflow = readFileSync(RELEASE_CHECKS_WORKFLOW, "utf8");
+    const qaWorkflow = readFileSync(QA_LIVE_TRANSPORTS_WORKFLOW, "utf8");
+
+    for (const channel of ["DISCORD", "WHATSAPP", "SLACK"]) {
+      const lower = channel.toLowerCase();
+      expect(releaseWorkflow).toContain(
+        `RELEASE_QA_${channel}_LIVE_CI_ENABLED: \${{ vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED || 'false' }}`,
+      );
+      expect(releaseWorkflow).toContain(`qa_live_${lower}_enabled="$qa_live_${lower}_ci_enabled"`);
+      expect(releaseWorkflow).toContain(
+        `vars.OPENCLAW_RELEASE_QA_${channel}_LIVE_CI_ENABLED == 'true'`,
+      );
+      expect(qaWorkflow).not.toContain(`OPENCLAW_QA_${channel}_LIVE_CI_ENABLED`);
+    }
+  });
+
   it("names package acceptance Telegram as artifact-backed package validation", () => {
     const workflow = readFileSync(PACKAGE_ACCEPTANCE_WORKFLOW, "utf8");
 
@@ -578,6 +675,21 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("PACKAGE_TELEGRAM_RESULT:");
     expect(workflow).toContain("package_telegram=${PACKAGE_TELEGRAM_RESULT}");
     expect(workflow).not.toContain("npm_telegram:");
+  });
+
+  it("gives release build steps enough Node heap", () => {
+    for (const workflowPath of [LIVE_E2E_WORKFLOW, RELEASE_CHECKS_WORKFLOW]) {
+      const jobs = readWorkflow(workflowPath).jobs ?? {};
+      for (const [jobName, job] of Object.entries(jobs)) {
+        for (const step of job.steps ?? []) {
+          if (step.run === "pnpm build") {
+            expect(step.env, `${workflowPath}:${jobName}:${step.name}`).toMatchObject({
+              NODE_OPTIONS: "--max-old-space-size=8192",
+            });
+          }
+        }
+      }
+    }
   });
 
   it("runs full release children from the trusted workflow ref", () => {
@@ -609,9 +721,14 @@ describe("package artifact reuse", () => {
     expect(npmTelegramJob.if).toContain(
       "inputs.rerun_group == 'all' && inputs.release_profile == 'full'",
     );
-    expect(dispatchStep.env).toMatchObject({
+    expect(dispatchStep.env).toEqual({
+      CHILD_WORKFLOW_REF: "${{ github.ref_name }}",
+      GH_TOKEN: "${{ github.token }}",
       PACKAGE_ARTIFACT_NAME: "${{ needs.prepare_release_package.outputs.artifact_name }}",
+      PACKAGE_SPEC: "${{ inputs.npm_telegram_package_spec || inputs.release_package_spec }}",
       PREPARE_PACKAGE_RESULT: "${{ needs.prepare_release_package.result }}",
+      PROVIDER_MODE: "${{ inputs.npm_telegram_provider_mode }}",
+      SCENARIO: "${{ inputs.npm_telegram_scenario }}",
       TARGET_SHA: "${{ needs.resolve_target.outputs.sha }}",
     });
     expectTextToIncludeAll(dispatchStep.run, [
@@ -628,6 +745,7 @@ describe("package artifact reuse", () => {
       "child_rerun_group=all",
       '-f rerun_group="$child_rerun_group"',
       'args+=(-f live_suite_filter="$LIVE_SUITE_FILTER")',
+      'args+=(-f cross_os_suite_filter="$CROSS_OS_SUITE_FILTER")',
       "cancel-in-progress: ${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
       "gh run cancel",
       "NORMAL_CI_RESULT: ${{ needs.normal_ci.result }}",
@@ -645,16 +763,18 @@ describe("package artifact reuse", () => {
     expectTextToIncludeAll(workflow, [
       "Published-package Telegram E2E:",
       "Package Telegram E2E: parent \\`release-package-under-test\\` artifact",
-      "Package Telegram E2E: skipped unless \\`release_profile=full\\` or \\`npm_telegram_package_spec\\` is provided",
+      "Package Telegram E2E: skipped unless \\`release_profile=full\\`, \\`release_package_spec\\`, or \\`npm_telegram_package_spec\\` is provided",
     ]);
     expect(releaseDocs).toContain(
-      "Focused `npm-telegram` reruns require `npm_telegram_package_spec`",
+      "Focused `npm-telegram` reruns require `release_package_spec` or",
     );
     expectTextToIncludeAll(fullReleaseDocs, [
-      "full pre-publish candidate",
+      "pre-publish candidate",
+      "cross_os_suite_filter",
+      "QA release-check lanes are advisory",
       "silently skip that",
       "Telegram package lane",
-      "| `npm-telegram`      | Published-package Telegram E2E; requires `npm_telegram_package_spec`. |",
+      "| `npm-telegram`      | Published-package Telegram E2E; requires `release_package_spec` or `npm_telegram_package_spec`. |",
     ]);
   });
 
@@ -668,16 +788,18 @@ describe("package artifact reuse", () => {
     const validateStep = workflowStep(job, "Validate inputs and secrets");
     const runStep = workflowStep(job, "Run package Telegram E2E");
 
-    expect(currentRunDownload).toMatchObject({
+    expect(currentRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''",
+      name: "Download package-under-test artifact",
       uses: "actions/download-artifact@v8",
       with: {
         name: "${{ inputs.package_artifact_name }}",
         path: ".artifacts/telegram-package-under-test",
       },
     });
-    expect(releaseRunDownload).toMatchObject({
+    expect(releaseRunDownload).toEqual({
       if: "inputs.package_artifact_name != '' && inputs.package_artifact_run_id != ''",
+      name: "Download package-under-test artifact from release run",
       uses: "actions/download-artifact@v8",
       with: {
         "github-token": "${{ github.token }}",
@@ -734,5 +856,62 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
     expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
+  });
+
+  it("keeps release publish creation compatible with gh api and prerelease notes", () => {
+    const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+
+    expect(workflow).toContain("timeout-minutes: 60");
+    expect(workflow).toContain("Download OpenClaw npm preflight manifest");
+    expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
+    expect(workflow).toContain("preflight-manifest.json");
+    expect(npmWorkflow).toContain("preflight-manifest.json");
+    expect(npmWorkflow).toContain("tarballSha256");
+    expect(workflow).toContain("Checkout release SHA");
+    expect(workflow).toContain('git show "${TARGET_SHA}:CHANGELOG.md" > "${changelog_file}"');
+    expect(workflow).toContain('$0 == "## Unreleased" { in_section = 1; next }');
+    expect(workflow).toContain("Unreleased prerelease fallback");
+    expect(workflow).not.toContain("gh api --repo");
+    expect(workflow).not.toContain("timeout-minutes: 360");
+  });
+
+  it("keeps release workflow setup and timeout budgets bounded", () => {
+    const fullRelease = readWorkflow(FULL_RELEASE_VALIDATION_WORKFLOW);
+    const releaseChecks = readWorkflow(RELEASE_CHECKS_WORKFLOW);
+    const crossOs = readWorkflow(".github/workflows/openclaw-cross-os-release-checks-reusable.yml");
+    const liveE2e = readWorkflow(LIVE_E2E_WORKFLOW);
+    const releaseWorkflowPaths = [
+      FULL_RELEASE_VALIDATION_WORKFLOW,
+      RELEASE_CHECKS_WORKFLOW,
+      ".github/workflows/openclaw-cross-os-release-checks-reusable.yml",
+      LIVE_E2E_WORKFLOW,
+      NPM_TELEGRAM_WORKFLOW,
+      ".github/workflows/openclaw-release-publish.yml",
+      ".github/workflows/openclaw-npm-release.yml",
+      ".github/workflows/macos-release.yml",
+      ".github/workflows/plugin-clawhub-release.yml",
+      PACKAGE_ACCEPTANCE_WORKFLOW,
+      ".github/workflows/plugin-npm-release.yml",
+    ];
+
+    for (const workflowPath of releaseWorkflowPaths) {
+      const workflow = readWorkflow(workflowPath);
+      expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
+      if (workflow.env?.PNPM_VERSION !== undefined) {
+        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("10.33.0");
+      }
+    }
+
+    expect(fullRelease.jobs?.release_checks?.["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile == 'full' && 240 || 60 }}",
+    );
+    expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
+    expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
+    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(40);
+    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
+      "timeout --foreground --kill-after=30s 12m pnpm test:live:cache",
+    );
   });
 });

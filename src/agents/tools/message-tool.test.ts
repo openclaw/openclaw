@@ -4,12 +4,14 @@ import type { ChannelMessageCapability } from "../../channels/plugins/message-ca
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
+type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
   typeof import("../../plugins/runtime.js").resetPluginRuntimeStateForTest;
 type SetActivePluginRegistry = typeof import("../../plugins/runtime.js").setActivePluginRegistry;
 type CreateTestRegistry = typeof import("../../test-utils/channel-plugins.js").createTestRegistry;
 
 let createMessageTool: CreateMessageTool;
+let createOpenClawTools: CreateOpenClawTools;
 let resetPluginRuntimeStateForTest: ResetPluginRuntimeStateForTest;
 let setActivePluginRegistry: SetActivePluginRegistry;
 let createTestRegistry: CreateTestRegistry;
@@ -101,6 +103,19 @@ const mocks = vi.hoisted(() => ({
   ),
 }));
 
+const openClawToolsFactoryMocks = vi.hoisted(() => {
+  const tool = (name: string) => ({
+    name,
+    displaySummary: `${name} test stub`,
+    description: `${name} test stub`,
+    parameters: { type: "object", properties: {} },
+    execute: vi.fn(async () => ({ type: "json", data: { ok: true } })),
+  });
+  return {
+    tool,
+  };
+});
+
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/message-action-runner.js")
@@ -128,6 +143,79 @@ vi.mock("../../cli/command-secret-targets.js", () => ({
   getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
 }));
 
+vi.mock("../../channels/plugins/message-tool-api.js", () => ({
+  resolveBundledChannelMessageToolDiscoveryAdapter: () => ({
+    describeMessageTool: () => ({ actions: ["send"], capabilities: [] }),
+  }),
+}));
+
+vi.mock("./agents-list-tool.js", () => ({
+  createAgentsListTool: () => openClawToolsFactoryMocks.tool("agents"),
+}));
+vi.mock("./cron-tool.js", () => ({
+  createCronTool: () => openClawToolsFactoryMocks.tool("cron"),
+}));
+vi.mock("./gateway-tool.js", () => ({
+  createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),
+}));
+vi.mock("./heartbeat-response-tool.js", () => ({
+  createHeartbeatResponseTool: () => openClawToolsFactoryMocks.tool("heartbeat_response"),
+}));
+vi.mock("./image-generate-tool.js", () => ({
+  createImageGenerateTool: () => null,
+}));
+vi.mock("./image-tool.js", () => ({
+  createImageTool: () => null,
+}));
+vi.mock("./manifest-capability-availability.js", () => ({
+  hasSnapshotCapabilityAvailability: () => false,
+  hasSnapshotProviderEnvAvailability: () => false,
+  loadCapabilityMetadataSnapshot: () => ({ index: {}, plugins: [] }),
+}));
+vi.mock("./music-generate-tool.js", () => ({
+  createMusicGenerateTool: () => null,
+}));
+vi.mock("./nodes-tool.js", () => ({
+  createNodesTool: () => openClawToolsFactoryMocks.tool("nodes"),
+}));
+vi.mock("./pdf-tool.js", () => ({
+  createPdfTool: () => null,
+}));
+vi.mock("./session-status-tool.js", () => ({
+  createSessionStatusTool: () => openClawToolsFactoryMocks.tool("session_status"),
+}));
+vi.mock("./sessions-history-tool.js", () => ({
+  createSessionsHistoryTool: () => openClawToolsFactoryMocks.tool("sessions_history"),
+}));
+vi.mock("./sessions-list-tool.js", () => ({
+  createSessionsListTool: () => openClawToolsFactoryMocks.tool("sessions_list"),
+}));
+vi.mock("./sessions-send-tool.js", () => ({
+  createSessionsSendTool: () => openClawToolsFactoryMocks.tool("sessions_send"),
+}));
+vi.mock("./sessions-spawn-tool.js", () => ({
+  createSessionsSpawnTool: () => openClawToolsFactoryMocks.tool("sessions_spawn"),
+}));
+vi.mock("./sessions-yield-tool.js", () => ({
+  createSessionsYieldTool: () => openClawToolsFactoryMocks.tool("sessions_yield"),
+}));
+vi.mock("./subagents-tool.js", () => ({
+  createSubagentsTool: () => openClawToolsFactoryMocks.tool("subagents"),
+}));
+vi.mock("./tts-tool.js", () => ({
+  createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
+}));
+vi.mock("./update-plan-tool.js", () => ({
+  createUpdatePlanTool: () => openClawToolsFactoryMocks.tool("update_plan"),
+}));
+vi.mock("./video-generate-tool.js", () => ({
+  createVideoGenerateTool: () => null,
+}));
+vi.mock("./web-tools.js", () => ({
+  createWebFetchTool: () => openClawToolsFactoryMocks.tool("web_fetch"),
+  createWebSearchTool: () => openClawToolsFactoryMocks.tool("web_search"),
+}));
+
 function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
   mocks.runMessageAction.mockClear();
   mocks.runMessageAction.mockResolvedValue({
@@ -149,11 +237,29 @@ function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
 
+function expectStringSchema(
+  schema: unknown,
+  expected?: {
+    descriptionIncludes?: string;
+  },
+) {
+  expect(schema).toBeTruthy();
+  if (!schema || typeof schema !== "object") {
+    throw new Error("Expected string schema");
+  }
+  const record = schema as Record<string, unknown>;
+  expect(record.type).toBe("string");
+  if (expected?.descriptionIncludes) {
+    expect(record.description).toEqual(expect.stringContaining(expected.descriptionIncludes));
+  }
+}
+
 beforeAll(async () => {
   ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } =
     await import("../../plugins/runtime.js"));
   ({ createTestRegistry } = await import("../../test-utils/channel-plugins.js"));
   ({ createMessageTool } = await import("./message-tool.js"));
+  ({ createOpenClawTools } = await import("../openclaw-tools.js"));
 });
 
 beforeEach(() => {
@@ -236,6 +342,41 @@ async function executeSend(params: {
 }
 
 describe("message tool secret scoping", () => {
+  it("marks message-tool-only source replies in the tool description", () => {
+    const scopedTool = createMessageTool({
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const explicitTargetTool = createMessageTool({
+      requireExplicitTarget: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+    const defaultTool = createMessageTool();
+
+    expect(scopedTool.description).toContain(
+      'visible replies to the current source conversation must use action="send"',
+    );
+    expect(scopedTool.description).toContain("target defaults to the current source conversation");
+    expect(scopedTool.description).toContain("Normal final answers are private");
+    expect(explicitTargetTool.description).toContain("Include target when sending");
+    expect(explicitTargetTool.description).not.toContain(
+      "target defaults to the current source conversation",
+    );
+    expect(defaultTool.description).not.toContain(
+      "visible replies to the current source conversation",
+    );
+  });
+
+  it("forwards source reply delivery mode through createOpenClawTools", () => {
+    const tool = createOpenClawTools({
+      config: {} as never,
+      sourceReplyDeliveryMode: "message_tool_only",
+    }).find((candidate) => candidate.name === "message");
+
+    expect(tool?.description).toContain(
+      'visible replies to the current source conversation must use action="send"',
+    );
+  });
+
   it("scopes command-time secret resolution to the selected channel/account", async () => {
     mockSendResult({ channel: "discord", to: "discord:123" });
     mocks.getRuntimeConfig.mockReturnValue({
@@ -358,6 +499,79 @@ describe("message tool agent routing", () => {
     expect(call?.agentId).toBe("alpha");
     expect(call?.sessionKey).toBe("agent:alpha:main");
   });
+
+  it("uses agentThreadId as ambient thread context when currentThreadTs is absent", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createMessageTool({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "stay in thread",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("all");
+  });
+
+  it("keeps explicit reply mode opt-out when agentThreadId is present", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createMessageTool({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+      replyToMode: "off",
+      runMessageAction: mocks.runMessageAction as never,
+    });
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "send at channel level",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("off");
+  });
+
+  it("forwards agentThreadId through createOpenClawTools to the message tool", async () => {
+    mockSendResult({ channel: "slack", to: "channel:C123" });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      config: {} as never,
+      agentChannel: "slack",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      message: "stay in thread",
+    });
+
+    const call = mocks.runMessageAction.mock.calls[0]?.[0];
+    expect(call?.toolContext?.currentThreadTs).toBe("111.222");
+    expect(call?.toolContext?.replyToMode).toBe("all");
+  });
 });
 
 describe("message tool explicit target guard", () => {
@@ -424,6 +638,30 @@ describe("message tool path passthrough", () => {
 
     expect(call?.params?.[field]).toBe(value);
     expect(call?.params?.media).toBeUndefined();
+  });
+});
+
+describe("message tool Telegram topic targets", () => {
+  it("passes numeric forum topic targets and thread ids to outbound resolution", async () => {
+    mockSendResult({ to: "telegram:-1001234567890:topic:42" });
+
+    const call = await executeSend({
+      toolOptions: {
+        currentChannelProvider: "telegram",
+        currentChannelId: "telegram:-1001234567890:topic:42",
+      },
+      action: {
+        channel: "telegram",
+        target: "-1001234567890:topic:42",
+        threadId: "42",
+        message: "topic hello",
+      },
+    });
+
+    expect(call?.params?.channel).toBe("telegram");
+    expect(call?.params?.target).toBe("-1001234567890:topic:42");
+    expect(call?.params?.threadId).toBe("42");
+    expect(call?.params?.message).toBe("topic hello");
   });
 });
 
@@ -499,7 +737,7 @@ describe("message tool schema scoping", () => {
       const properties = getToolProperties(tool);
       const actionEnum = getActionEnum(properties);
 
-      expect(properties.presentation).toBeDefined();
+      expect(properties).toHaveProperty("presentation");
       expect(properties.components).toBeUndefined();
       expect(properties.blocks).toBeUndefined();
       expect(properties.buttons).toBeUndefined();
@@ -507,17 +745,17 @@ describe("message tool schema scoping", () => {
         expect(actionEnum).toContain(action);
       }
       if (expectTelegramPollExtras) {
-        expect(properties.pollDurationSeconds).toBeDefined();
-        expect(properties.pollAnonymous).toBeDefined();
-        expect(properties.pollPublic).toBeDefined();
+        expect(properties).toHaveProperty("pollDurationSeconds");
+        expect(properties).toHaveProperty("pollAnonymous");
+        expect(properties).toHaveProperty("pollPublic");
       } else {
         expect(properties.pollDurationSeconds).toBeUndefined();
         expect(properties.pollAnonymous).toBeUndefined();
         expect(properties.pollPublic).toBeUndefined();
       }
-      expect(properties.pollId).toBeDefined();
-      expect(properties.pollOptionIndex).toBeDefined();
-      expect(properties.pollOptionId).toBeDefined();
+      expect(properties).toHaveProperty("pollId");
+      expect(properties).toHaveProperty("pollOptionIndex");
+      expect(properties).toHaveProperty("pollOptionId");
     },
   );
 
@@ -616,8 +854,38 @@ describe("message tool schema scoping", () => {
       currentChannelProvider: "telegram",
     });
 
-    expect(getToolProperties(scopedTool).presentation).toBeDefined();
+    expect(getToolProperties(scopedTool)).toHaveProperty("presentation");
     expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
+  });
+
+  it("keeps send-only scoped schemas small", () => {
+    const sendOnlyPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram send plugin.",
+      actions: ["send"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: sendOnlyPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).toHaveProperty("media");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(properties).not.toHaveProperty("channelId");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("eventName");
   });
 
   it("uses discovery account scope for other configured channel actions", () => {
@@ -695,19 +963,17 @@ describe("message tool schema scoping", () => {
       requesterSenderId: "user-42",
     });
 
-    expect(seenContexts).toContainEqual(
-      expect.objectContaining({
-        currentChannelProvider: "discord",
-        currentChannelId: "channel:123",
-        currentThreadTs: "thread-456",
-        currentMessageId: "msg-789",
-        accountId: "ops",
-        sessionKey: "agent:alpha:main",
-        sessionId: "session-123",
-        agentId: "alpha",
-        requesterSenderId: "user-42",
-      }),
-    );
+    const context = seenContexts.find((item) => item.phase === "describeMessageTool");
+    expect(context).toBeDefined();
+    expect(context?.currentChannelProvider).toBe("discord");
+    expect(context?.currentChannelId).toBe("channel:123");
+    expect(context?.currentThreadTs).toBe("thread-456");
+    expect(context?.currentMessageId).toBe("msg-789");
+    expect(context?.accountId).toBe("ops");
+    expect(context?.sessionKey).toBe("agent:alpha:main");
+    expect(context?.sessionId).toBe("session-123");
+    expect(context?.agentId).toBe("alpha");
+    expect(context?.requesterSenderId).toBe("user-42");
   });
 
   it("forwards senderIsOwner into plugin action discovery", () => {
@@ -742,8 +1008,8 @@ describe("message tool schema scoping", () => {
 
     expect(getActionEnum(getToolProperties(ownerTool))).toContain("set-profile");
     expect(getActionEnum(getToolProperties(nonOwnerTool))).not.toContain("set-profile");
-    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: true }));
-    expect(seenContexts).toContainEqual(expect.objectContaining({ senderIsOwner: false }));
+    expect(seenContexts.some((context) => context.senderIsOwner === true)).toBe(true);
+    expect(seenContexts.some((context) => context.senderIsOwner === false)).toBe(true);
   });
 
   it("keeps core send and broadcast actions in unscoped schemas", () => {
@@ -751,9 +1017,9 @@ describe("message tool schema scoping", () => {
       config: {} as never,
     });
 
-    expect(getActionEnum(getToolProperties(tool))).toEqual(
-      expect.arrayContaining(["send", "broadcast"]),
-    );
+    const actionEnum = getActionEnum(getToolProperties(tool));
+    expect(actionEnum).toContain("send");
+    expect(actionEnum).toContain("broadcast");
   });
 
   it("advertises Slack download-file fileId in scoped schemas", () => {
@@ -776,7 +1042,7 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("download-file");
-    expect(properties.fileId).toMatchObject({ type: "string" });
+    expectStringSchema(properties.fileId);
   });
 
   it("advertises messageId for read actions", () => {
@@ -799,10 +1065,7 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("read");
-    expect(properties.messageId).toMatchObject({
-      type: "string",
-      description: expect.stringContaining("read"),
-    });
+    expectStringSchema(properties.messageId, { descriptionIncludes: "read" });
   });
 });
 
@@ -811,11 +1074,11 @@ describe("message tool description", () => {
     setActivePluginRegistry(createTestRegistry([]));
   });
 
-  const bluebubblesPlugin = createChannelPlugin({
-    id: "bluebubbles",
-    label: "BlueBubbles",
-    docsPath: "/channels/bluebubbles",
-    blurb: "BlueBubbles test plugin.",
+  const imessagePlugin = createChannelPlugin({
+    id: "imessage",
+    label: "iMessage",
+    docsPath: "/channels/imessage",
+    blurb: "iMessage test plugin.",
     describeMessageTool: ({ currentChannelId }) => {
       const all: ChannelMessageActionName[] = [
         "react",
@@ -841,7 +1104,7 @@ describe("message tool description", () => {
     },
     messaging: {
       normalizeTarget: (raw) => {
-        const trimmed = raw.trim().replace(/^bluebubbles:/i, "");
+        const trimmed = raw.trim().replace(/^imessage:/i, "");
         const lower = trimmed.toLowerCase();
         if (lower.startsWith("chat_guid:")) {
           const guid = trimmed.slice("chat_guid:".length);
@@ -869,15 +1132,15 @@ describe("message tool description", () => {
     expect(target?.description).toContain("Telegram chat id/@username");
   });
 
-  it("hides BlueBubbles group actions for DM targets", () => {
+  it("hides iMessage group actions for DM targets", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
-      currentChannelId: "bluebubbles:chat_guid:iMessage;-;+15551234567",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:chat_guid:iMessage;-;+15551234567",
     });
 
     expect(tool.description).not.toContain("renameGroup");
@@ -970,8 +1233,8 @@ describe("message tool description", () => {
     const currentChannelProperties = getToolProperties(currentChannelTool);
 
     expect(getActionEnum(currentChannelProperties)).toContain("set-profile");
-    expect(currentChannelProperties.displayName).toBeDefined();
-    expect(currentChannelProperties.avatarUrl).toBeDefined();
+    expect(currentChannelProperties).toHaveProperty("displayName");
+    expect(currentChannelProperties).toHaveProperty("avatarUrl");
   });
 
   it("normalizes channel aliases before building the current channel description", () => {
@@ -999,12 +1262,12 @@ describe("message tool description", () => {
 
   it("keeps the current-channel description stable when only one channel is configured", () => {
     setActivePluginRegistry(
-      createTestRegistry([{ pluginId: "bluebubbles", source: "test", plugin: bluebubblesPlugin }]),
+      createTestRegistry([{ pluginId: "imessage", source: "test", plugin: imessagePlugin }]),
     );
 
     const tool = createMessageTool({
       config: {} as never,
-      currentChannelProvider: "bluebubbles",
+      currentChannelProvider: "imessage",
     });
 
     expect(tool.description).toContain("Supports actions:");
@@ -1107,6 +1370,20 @@ describe("message tool reasoning tag sanitization", () => {
       target: "signal:+15551234567",
       channel: "signal",
     },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n\nVisible answer",
+      expected: "Visible answer",
+      target: "telegram:123",
+      channel: "telegram",
+    },
+    {
+      field: "message",
+      input: "Reasoning:\n_internal plan_\n_more internal notes_",
+      expected: "",
+      target: "telegram:123",
+      channel: "telegram",
+    },
   ])(
     "sanitizes reasoning tags in $field before sending",
     async ({ channel, target, field, input, expected }) => {
@@ -1121,6 +1398,57 @@ describe("message tool reasoning tag sanitization", () => {
       expect(call?.params?.[field]).toBe(expected);
     },
   );
+
+  it("sanitizes visible presentation text before sending", async () => {
+    mockSendResult({ channel: "slack", to: "slack:C123" });
+
+    const call = await executeSend({
+      action: {
+        target: "slack:C123",
+        presentation: {
+          title: "<think>internal title</think>Deploy ready",
+          blocks: [
+            { type: "text", text: "<think>internal note</think>Ship it" },
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "<think>button rationale</think>Approve",
+                  value: "approve",
+                },
+              ],
+            },
+            {
+              type: "select",
+              placeholder: "<think>selection rationale</think>Pick a lane",
+              options: [
+                {
+                  label: "<think>option rationale</think>Main",
+                  value: "main",
+                },
+              ],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(call?.params?.presentation).toEqual({
+      title: "Deploy ready",
+      blocks: [
+        { type: "text", text: "Ship it" },
+        {
+          type: "buttons",
+          buttons: [{ label: "Approve", value: "approve" }],
+        },
+        {
+          type: "select",
+          placeholder: "Pick a lane",
+          options: [{ label: "Main", value: "main" }],
+        },
+      ],
+    });
+  });
 });
 
 describe("message tool sandbox passthrough", () => {

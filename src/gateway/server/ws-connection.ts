@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Socket } from "node:net";
 import type { RawData, WebSocket, WebSocketServer } from "ws";
-import { resolveCanvasHostUrl } from "../../infra/canvas-host-url.js";
+import { getRuntimeConfig } from "../../config/io.js";
 import { removeRemoteNodeInfo } from "../../infra/skills-remote.js";
 import { upsertPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
@@ -12,7 +12,9 @@ import { isWebchatClient } from "../../utils/message-channel.js";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "../auth.js";
 import { resolvePreauthHandshakeTimeoutMs } from "../handshake-timeouts.js";
+import { resolveHostedPluginSurfaceUrl } from "../hosted-plugin-surface-url.js";
 import { isLoopbackAddress } from "../net.js";
+import type { PluginNodeCapabilitySurface } from "../plugin-node-capability.js";
 import { MAX_PAYLOAD_BYTES, MAX_PREAUTH_PAYLOAD_BYTES } from "../server-constants.js";
 import { clearNodeWakeState } from "../server-methods/nodes-wake-state.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../server-methods/types.js";
@@ -123,8 +125,8 @@ export type GatewayWsSharedHandlerParams = {
   preauthConnectionBudget: PreauthConnectionBudget;
   port: number;
   gatewayHost?: string;
-  canvasHostEnabled: boolean;
-  canvasHostServerPort?: number;
+  pluginSurfaceScheme?: "http" | "https";
+  getPluginNodeCapabilities?: () => PluginNodeCapabilitySurface[];
   resolvedAuth: ResolvedGatewayAuth;
   getResolvedAuth?: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
@@ -197,13 +199,15 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     clients,
     preauthConnectionBudget,
     port,
-    gatewayHost,
-    canvasHostEnabled,
-    canvasHostServerPort,
+    pluginSurfaceScheme,
+    getPluginNodeCapabilities,
     resolvedAuth,
     getResolvedAuth = () => resolvedAuth,
     getRequiredSharedGatewaySessionGeneration = () =>
-      resolveSharedGatewaySessionGeneration(getResolvedAuth()),
+      resolveSharedGatewaySessionGeneration(
+        getResolvedAuth(),
+        getRuntimeConfig().gateway?.trustedProxies,
+      ),
     rateLimiter,
     browserRateLimiter,
     isStartupPending,
@@ -244,16 +248,18 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
     const forwardedFor = headerValue(upgradeReq.headers["x-forwarded-for"]);
     const realIp = headerValue(upgradeReq.headers["x-real-ip"]);
 
-    const canvasHostPortForWs = canvasHostServerPort ?? (canvasHostEnabled ? port : undefined);
-    const canvasHostOverride =
-      gatewayHost && gatewayHost !== "0.0.0.0" && gatewayHost !== "::" ? gatewayHost : undefined;
-    const canvasHostUrl = resolveCanvasHostUrl({
-      canvasPort: canvasHostPortForWs,
-      hostOverride: canvasHostServerPort ? canvasHostOverride : undefined,
-      requestHost: upgradeReq.headers.host,
-      forwardedProto: upgradeReq.headers["x-forwarded-proto"],
-      localAddress: upgradeReq.socket?.localAddress,
-    });
+    const pluginNodeCapabilities = getPluginNodeCapabilities?.() ?? [];
+    const pluginSurfaceBaseUrl =
+      pluginNodeCapabilities.length > 0
+        ? resolveHostedPluginSurfaceUrl({
+            port,
+            forwardedHost: upgradeReq.headers["x-forwarded-host"],
+            requestHost: upgradeReq.headers.host,
+            forwardedProto: upgradeReq.headers["x-forwarded-proto"],
+            localAddress: upgradeReq.socket?.localAddress,
+            scheme: pluginSurfaceScheme,
+          })
+        : undefined;
 
     logWs("in", "open", { connId, remoteAddr, remotePort, localAddr, localPort, endpoint });
     let handshakeState: "pending" | "connected" | "failed" = "pending";
@@ -381,19 +387,23 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
           `webchat disconnected code=${code} reason=${logReason || "n/a"} conn=${connId}`,
         );
       }
-      if (client?.presenceKey) {
+      const context = buildRequestContext();
+      context.unsubscribeAllSessionEvents(connId);
+      let currentDisconnectedNodeId: string | null = null;
+      if (client?.connect?.role === "node") {
+        currentDisconnectedNodeId = context.nodeRegistry.unregister(connId);
+      }
+      if (
+        client?.presenceKey &&
+        (client.connect.role !== "node" || currentDisconnectedNodeId !== null)
+      ) {
         upsertPresence(client.presenceKey, { reason: "disconnect" });
         broadcastPresenceSnapshot({ broadcast, incrementPresenceVersion, getHealthVersion });
       }
-      const context = buildRequestContext();
-      context.unsubscribeAllSessionEvents(connId);
-      if (client?.connect?.role === "node") {
-        const nodeId = context.nodeRegistry.unregister(connId);
-        if (nodeId) {
-          removeRemoteNodeInfo(nodeId);
-          context.nodeUnsubscribeAll(nodeId);
-          clearNodeWakeState(nodeId);
-        }
+      if (currentDisconnectedNodeId) {
+        removeRemoteNodeInfo(currentDisconnectedNodeId);
+        context.nodeUnsubscribeAll(currentDisconnectedNodeId);
+        clearNodeWakeState(currentDisconnectedNodeId);
       }
       logWs("out", "close", {
         connId,
@@ -441,7 +451,8 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       requestHost,
       requestOrigin,
       requestUserAgent,
-      canvasHostUrl,
+      pluginSurfaceBaseUrl,
+      pluginNodeCapabilities,
       connectNonce,
       getResolvedAuth,
       getRequiredSharedGatewaySessionGeneration,

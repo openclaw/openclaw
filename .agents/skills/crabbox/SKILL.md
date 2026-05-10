@@ -22,6 +22,8 @@ Blacksmith fallback playbook.
 command -v crabbox
 ../crabbox/bin/crabbox --version
 pnpm crabbox:run -- --help | sed -n '1,120p'
+../crabbox/bin/crabbox desktop launch --help
+../crabbox/bin/crabbox webvnc --help
 ```
 
 - OpenClaw scripts prefer `../crabbox/bin/crabbox` when present. The user PATH
@@ -29,7 +31,22 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - Check `.crabbox.yaml` for repo defaults, but override provider explicitly.
   Even if config still says AWS, maintainer validation should normally pass
   `--provider blacksmith-testbox`.
+- For live/provider bugs, check keys on the local Mac before downgrading to
+  mocks: source local `~/.profile` and test only presence/length. If Crabbox
+  does not already have the key, copy only the exact needed key into the remote
+  process environment for that one command. Do not print it, do not sync it as a
+  repo file, and do not leave it in remote shell history or logs. If no
+  secret-safe injection path is available, say true live provider auth is
+  blocked instead of silently using a fake key.
 - Prefer local targeted tests for tight edit loops. Broad gates belong remote.
+- Do not treat inherited shell env as operator intent. In particular,
+  `OPENCLAW_LOCAL_CHECK_MODE=throttled` from the local shell is not permission
+  to move broad `pnpm check:changed`, `pnpm test:changed`, full `pnpm test`, or
+  lint/typecheck fan-out onto the laptop.
+- Only use `OPENCLAW_LOCAL_CHECK_MODE=throttled|full` when the user explicitly
+  asks for local proof in the current task. If Testbox is queued or capacity is
+  constrained, report the blocker and keep only targeted local edit-loop checks
+  running.
 
 ## macOS And Windows Targets
 
@@ -121,6 +138,81 @@ unclear:
 blacksmith testbox list
 ```
 
+## Efficient Bug E2E Verification
+
+Use the smallest Crabbox lane that proves the reported user path, not just the
+touched code. Aim for one after-fix E2E proof before commenting, closing, or
+opening a PR for a user-visible bug.
+
+Pick the lane by symptom:
+
+- Docker/setup/install bug: build a package tarball and run the matching
+  `scripts/e2e/*-docker.sh` or package script. This proves npm packaging,
+  install paths, runtime deps, config writes, and container behavior.
+- Provider/model/auth bug: prefer true live E2E. First source local Mac
+  `~/.profile`, then inject the single needed key into Crabbox if needed. Scrub
+  unrelated provider env vars in the child command so interactive defaults do
+  not drift to another provider. If only a dummy key is used, label the proof
+  narrowly, e.g. "UI/install path only; live provider auth not exercised."
+- Channel delivery bug: use the channel Docker/live lane when available; include
+  setup, config, gateway start, send/receive or agent-turn proof, and redacted
+  logs.
+- Gateway/session/tool bug: prefer an end-to-end CLI or Gateway RPC command that
+  creates real state and inspects the resulting files/API output.
+- Pure parser/config bug: targeted tests may be enough, but still run a
+  Crabbox command when OS, package, Docker, secrets, or service lifecycle could
+  change behavior.
+
+Efficient flow:
+
+1. Reproduce or prove the pre-fix symptom when feasible. If the issue cannot be
+   reproduced, capture the exact command and observed behavior instead.
+2. Patch locally and run narrow local tests for edit speed.
+3. Run one Crabbox E2E command that starts from the user-facing entrypoint:
+   package install, Docker setup, onboarding, channel add, gateway start, or
+   agent turn as appropriate.
+4. Record proof as: Testbox id, command, environment shape, redacted secret
+   source, and copied success/failure output.
+5. If the issue says "cannot reproduce", ask for the missing config/log fields
+   that would distinguish the tested path from the reporter's path.
+
+Keep it efficient:
+
+- Reuse existing E2E scripts and helper assertions before writing ad hoc shell.
+- Use one-shot Crabbox for a single proof; use a reusable Testbox only when
+  several commands must share built images, installed packages, or live state.
+- Prefer `OPENCLAW_CURRENT_PACKAGE_TGZ` with Docker/package lanes when testing a
+  candidate tarball; prefer the repo's package helper instead of direct source
+  execution when the bug might be packaging/install related.
+- Keep secrets redacted. It is fine to report key presence, source, and length;
+  never print secret values.
+- Include `--timing-json` on broad or flaky runs when command duration or sync
+  behavior matters.
+
+Interactive CLI/onboarding:
+
+- For full-screen or prompt-heavy CLI flows, run the target command inside tmux
+  on the Crabbox and drive it with `tmux send-keys`; capture proof with
+  `tmux capture-pane`, redacted through `sed`.
+- Prefer deterministic arrow navigation over search typing for Clack-style
+  searchable selects. Raw `send-keys -l openai` may not trigger filtering in a
+  tmux pane; inspect option order locally or on-box and send exact Down/Enter
+  sequences.
+- Isolate mutable state with `OPENCLAW_STATE_DIR=$(mktemp -d)`. Plugin npm
+  installs live under that state dir (`npm/node_modules/...`), not under
+  `OPENCLAW_CONFIG_DIR`. Verify downloads by checking the state dir, package
+  lock, and installed package metadata.
+- To test automatic setup installs against local package artifacts, use
+  `OPENCLAW_ALLOW_PLUGIN_INSTALL_OVERRIDES=1` plus
+  `OPENCLAW_PLUGIN_INSTALL_OVERRIDES='{"plugin-id":"npm-pack:/tmp/plugin.tgz"}'`.
+  Pack with `npm pack`, set an isolated `OPENCLAW_STATE_DIR`, and verify the
+  package under `npm/node_modules`. Overrides are test-only and must not be
+  treated as official/trusted-source installs.
+- For OpenAI/Codex onboarding proof, the useful markers are the UI line
+  `Installed Codex plugin`, `npm/node_modules/@openclaw/codex`, and the
+  package-lock entry showing the bundled `@openai/codex` dependency. A dummy
+  OpenAI-shaped key can prove only UI/install behavior; it is not live auth.
+
 ## Reuse And Keepalive
 
 For most Blacksmith-backed Crabbox calls, one-shot is enough. Use reuse only
@@ -138,6 +230,35 @@ Stop boxes you created before handoff:
 pnpm crabbox:stop -- <id-or-slug>
 blacksmith testbox stop --id <tbx_id>
 ```
+
+## Interactive Desktop And WebVNC
+
+Prefer WebVNC for human inspection because the browser portal can preload the
+lease VNC password and avoids a native VNC client's copy/paste/password dance.
+Use native `crabbox vnc` only when WebVNC is unavailable, the browser portal is
+broken, or the user explicitly wants a local VNC client.
+
+Common desktop flow:
+
+```sh
+../crabbox/bin/crabbox warmup --provider hetzner --desktop --browser --class standard --idle-timeout 60m --ttl 240m
+../crabbox/bin/crabbox desktop launch --provider hetzner --id <cbx_id-or-slug> --browser --url https://example.com --webvnc --open
+```
+
+Useful WebVNC commands:
+
+```sh
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --open
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --daemon --open
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --status
+../crabbox/bin/crabbox webvnc --provider hetzner --id <cbx_id-or-slug> --stop
+../crabbox/bin/crabbox screenshot --provider hetzner --id <cbx_id-or-slug> --output desktop.png
+```
+
+`desktop launch --webvnc --open` is usually the nicest one-shot: it starts the
+browser/app inside the visible session, bridges the lease into the authenticated
+WebVNC portal, and opens the portal. Keep browsers windowed for human QA; use
+`--fullscreen` only for capture/video workflows.
 
 ## If Crabbox Fails
 
@@ -167,6 +288,10 @@ Common Crabbox-only failures:
   printed Actions URL.
 - Cleanup uncertainty: run `blacksmith testbox list` and stop only boxes you
   created.
+- Testbox queued/capacity pressure: do not convert a broad changed gate or full
+  suite into local `OPENCLAW_LOCAL_CHECK_MODE=throttled pnpm ...`. Leave the
+  remote lane queued, switch to a narrower targeted local check, or stop and
+  report the capacity blocker.
 
 If Crabbox cannot dispatch, sync, attach, or stop but Blacksmith itself works,
 use direct Blacksmith from the repo root:
@@ -253,8 +378,26 @@ Install/auth for owned Crabbox if needed:
 
 ```sh
 brew install openclaw/tap/crabbox
-printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin
+crabbox login --url https://crabbox.openclaw.ai --provider aws
 ```
+
+New users should self-resolve broker auth before anyone asks for AWS keys:
+
+```sh
+crabbox config show
+crabbox doctor
+crabbox whoami
+```
+
+- If broker auth is missing, run `crabbox login --url https://crabbox.openclaw.ai --provider aws`.
+- If the CLI asks for `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, or AWS
+  profile setup during normal OpenClaw validation, assume the agent selected
+  the wrong path. Use brokered `crabbox login`, `--provider blacksmith-testbox`,
+  or an existing brokered lease before asking the user for cloud credentials.
+- Ask for AWS keys only for explicit direct-provider/account administration,
+  not for normal brokered OpenClaw proof.
+- Trusted automation may still use
+  `printf '%s' "$CRABBOX_COORDINATOR_TOKEN" | crabbox login --url https://crabbox.openclaw.ai --provider aws --token-stdin`.
 
 macOS config lives at:
 
@@ -265,6 +408,18 @@ macOS config lives at:
 It should include `broker.url`, `broker.token`, and usually `provider: aws`
 for owned-cloud lanes. Do not let that config override the OpenClaw default
 when Blacksmith proof is requested; pass `--provider blacksmith-testbox`.
+
+### Interactive Desktop / WebVNC
+
+For human desktop demos, prefer `webvnc` over native `vnc` and keep the remote
+desktop visible/windowed. Do not fullscreen the remote browser or hide the XFCE
+panel/window chrome unless the explicit goal is video/capture output. After
+launch, verify a screenshot shows the desktop panel plus browser title bar. If
+Chrome is fullscreen, toggle it back with:
+
+```sh
+crabbox run --id <lease> --shell -- 'DISPLAY=:99 xdotool search --onlyvisible --class google-chrome windowactivate key F11'
+```
 
 ## Diagnostics
 

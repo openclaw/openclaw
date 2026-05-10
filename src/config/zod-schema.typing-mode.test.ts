@@ -4,12 +4,26 @@ import { SessionSchema } from "./zod-schema.session.js";
 
 describe("typing mode schema reuse", () => {
   it("accepts supported typingMode values for session and agent defaults", () => {
-    expect(() => SessionSchema.parse({ typingMode: "thinking" })).not.toThrow();
-    expect(() => AgentDefaultsSchema.parse({ typingMode: "message" })).not.toThrow();
+    expect(SessionSchema.parse({ typingMode: "thinking" })).toMatchObject({
+      typingMode: "thinking",
+    });
+    expect(AgentDefaultsSchema.parse({ typingMode: "message" })).toMatchObject({
+      typingMode: "message",
+    });
   });
 
   it("rejects unsupported typingMode values for session and agent defaults", () => {
-    expect(() => SessionSchema.parse({ typingMode: "always" })).toThrow();
-    expect(() => AgentDefaultsSchema.parse({ typingMode: "soon" })).toThrow();
+    const sessionResult = SessionSchema.safeParse({ typingMode: "always" });
+    const agentDefaultsResult = AgentDefaultsSchema.safeParse({ typingMode: "soon" });
+
+    expect(sessionResult.success).toBe(false);
+    expect(agentDefaultsResult.success).toBe(false);
+    if (sessionResult.success || agentDefaultsResult.success) {
+      throw new Error("Expected unsupported typingMode values to fail schema validation.");
+    }
+    expect(sessionResult.error.issues.map((issue) => issue.path.join("."))).toContain("typingMode");
+    expect(agentDefaultsResult.error.issues.map((issue) => issue.path.join("."))).toContain(
+      "typingMode",
+    );
   });
 });

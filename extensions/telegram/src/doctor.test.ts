@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   collectTelegramInvalidAllowFromWarnings,
@@ -20,7 +20,7 @@ const listTelegramAccountIdsMock = vi.hoisted(() => vi.fn());
 const inspectTelegramAccountMock = vi.hoisted(() => vi.fn());
 const lookupTelegramChatIdMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/runtime-secret-resolution", () => {
+vi.mock("openclaw/plugin-sdk/runtime", () => {
   return {
     getChannelsCommandSecretTargetIds: () => ["channels"],
     resolveCommandSecretRefsViaGateway: resolveCommandSecretRefsViaGatewayMock,
@@ -72,9 +72,8 @@ describe("telegram doctor", () => {
 
   it("normalizes legacy telegram streaming aliases into the nested streaming shape", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({
@@ -134,9 +133,8 @@ describe("telegram doctor", () => {
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
     const normalize = telegramDoctor.normalizeCompatibilityConfig;
-    expect(normalize).toBeDefined();
     if (!normalize) {
-      return;
+      throw new Error("expected telegram compatibility normalizer");
     }
 
     const result = normalize({
@@ -406,7 +404,7 @@ describe("telegram doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toEqual([]);
+    expect(scanTelegramSelectedQuoteToolProgressWarnings(cfg)).toStrictEqual([]);
   });
 
   it("skips selected quote tool-progress warning when preview streaming is off or block streaming owns delivery", () => {
@@ -419,7 +417,7 @@ describe("telegram doctor", () => {
           },
         },
       } as unknown as OpenClawConfig),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       scanTelegramSelectedQuoteToolProgressWarnings({
@@ -434,7 +432,7 @@ describe("telegram doctor", () => {
           },
         },
       } as unknown as OpenClawConfig),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("wires apiRoot preview warnings and repair through the doctor adapter", async () => {
@@ -496,7 +494,7 @@ describe("telegram doctor", () => {
     });
     expect(
       collectTelegramMissingEnvTokenWarnings({ cfg, env: { TELEGRAM_BOT_TOKEN: "123:tok" } }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     inspectTelegramAccountMock.mockReturnValueOnce({
       enabled: true,
@@ -528,6 +526,6 @@ describe("telegram doctor", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([]);
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toStrictEqual([]);
   });
 });

@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeMainKey } from "openclaw/plugin-sdk/routing";
 import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -29,7 +29,6 @@ function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };
@@ -343,11 +342,11 @@ describe("web auto-reply util", () => {
   describe("isLikelyWhatsAppCryptoError", () => {
     it("matches known Baileys crypto auth errors (Error)", () => {
       const err = new Error("bad mac");
-      err.stack = "at something\nat @whiskeysockets/baileys/noise-handler\n";
+      err.stack = "at something\nat baileys/noise-handler\n";
       expect(isLikelyWhatsAppCryptoError(err)).toBe(true);
     });
 
-    it("does not throw on circular objects", () => {
+    it("returns false for circular objects", () => {
       const circular: Record<string, unknown> = {};
       circular.self = circular;
       expect(isLikelyWhatsAppCryptoError(circular)).toBe(false);

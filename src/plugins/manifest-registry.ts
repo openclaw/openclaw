@@ -11,6 +11,7 @@ import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { discoverOpenClawPlugins, type PluginCandidate } from "./discovery.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-record-reader.js";
 import type { PluginManifestCommandAlias } from "./manifest-command-aliases.js";
 import type {
@@ -46,6 +47,8 @@ import { checkMinHostVersion } from "./min-host-version.js";
 import {
   getOfficialExternalPluginCatalogEntryForPackage,
   getOfficialExternalPluginCatalogManifest,
+  resolveOfficialExternalPluginId,
+  resolveOfficialExternalPluginInstall,
 } from "./official-external-plugin-catalog.js";
 import { isPathInside, safeRealpathSync } from "./path-safety.js";
 import type { PluginKind } from "./plugin-kind.types.js";
@@ -140,6 +143,7 @@ export type PluginManifestRecord = {
   packageOptionalDependencies?: PluginDependencySpecMap;
   packageChannel?: PluginPackageChannel;
   packageInstall?: PluginPackageInstall;
+  trustedOfficialInstall?: boolean;
   qaRunners?: PluginManifestQaRunner[];
   skills: string[];
   settingsFiles?: string[];
@@ -365,6 +369,7 @@ function buildRecord(params: {
   schemaCacheKey?: string;
   configSchema?: Record<string, unknown>;
   bundledChannelConfigCollector?: BundledChannelConfigCollector;
+  trustedOfficialInstall?: boolean;
 }): PluginManifestRecord {
   const manifestChannelConfigs =
     params.candidate.origin === "bundled" && params.bundledChannelConfigCollector
@@ -408,11 +413,15 @@ function buildRecord(params: {
     kind: params.manifest.kind,
     channels: params.manifest.channels ?? [],
     providers: params.manifest.providers ?? [],
-    providerDiscoverySource: params.manifest.providerDiscoveryEntry
-      ? resolvePluginSourcePath(
-          path.resolve(params.candidate.rootDir, params.manifest.providerDiscoveryEntry),
-        )
-      : undefined,
+    providerDiscoverySource:
+      (params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry)
+        ? resolvePluginSourcePath(
+            path.resolve(
+              params.candidate.rootDir,
+              params.manifest.providerCatalogEntry ?? params.manifest.providerDiscoveryEntry!,
+            ),
+          )
+        : undefined,
     modelSupport: params.manifest.modelSupport,
     modelCatalog: params.manifest.modelCatalog,
     modelPricing: params.manifest.modelPricing,
@@ -434,6 +443,7 @@ function buildRecord(params: {
     packageOptionalDependencies: params.candidate.packageOptionalDependencies,
     packageChannel: params.candidate.packageManifest?.channel,
     packageInstall: params.candidate.packageManifest?.install,
+    trustedOfficialInstall: params.trustedOfficialInstall === true ? true : undefined,
     qaRunners: params.manifest.qaRunners,
     skills: params.manifest.skills ?? [],
     settingsFiles: [],
@@ -568,8 +578,18 @@ function pushProviderAuthEnvVarsCompatDiagnostic(params: {
 function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
   if (params.record.origin === "bundled" || params.record.format === "bundle") {
+    return;
+  }
+  const configuredEntry = params.normalized?.entries[params.record.id];
+  if (
+    params.normalized?.enabled === false ||
+    configuredEntry?.enabled === false ||
+    params.normalized?.deny.includes(params.record.id) ||
+    (params.normalized?.allow.length && !params.normalized.allow.includes(params.record.id))
+  ) {
     return;
   }
   const declaredChannels = params.record.channels
@@ -597,6 +617,7 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
 function pushManifestCompatibilityDiagnostics(params: {
   record: PluginManifestRecord;
   diagnostics: PluginDiagnostic[];
+  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
 }): void {
   pushProviderAuthEnvVarsCompatDiagnostic(params);
   pushNonBundledChannelConfigDescriptorDiagnostic(params);
@@ -623,7 +644,7 @@ function matchesInstalledPluginRecord(params: {
   env: NodeJS.ProcessEnv;
   installRecords: Record<string, PluginInstallRecord>;
 }): boolean {
-  if (params.candidate.origin !== "global") {
+  if (params.candidate.origin !== "global" && params.candidate.origin !== "config") {
     return false;
   }
   const record = params.installRecords[params.pluginId];
@@ -640,6 +661,72 @@ function matchesInstalledPluginRecord(params: {
   return trackedPaths.some((trackedPath) => {
     return candidateSource === trackedPath || isPathInside(trackedPath, candidateSource);
   });
+}
+
+function npmSpecMatchesPackage(value: string | undefined, packageName: string): boolean {
+  const normalized = value?.trim();
+  if (!normalized) {
+    return false;
+  }
+  if (normalized === packageName) {
+    return true;
+  }
+  return normalized.startsWith(`${packageName}@`);
+}
+
+function isTrustedOfficialPluginInstall(params: {
+  pluginId: string;
+  candidate: PluginCandidate;
+  env: NodeJS.ProcessEnv;
+  installRecords: Record<string, PluginInstallRecord>;
+}): boolean {
+  if (
+    (params.candidate.origin !== "global" && params.candidate.origin !== "config") ||
+    !matchesInstalledPluginRecord({
+      pluginId: params.pluginId,
+      candidate: params.candidate,
+      env: params.env,
+      installRecords: params.installRecords,
+    })
+  ) {
+    return false;
+  }
+  const packageName = params.candidate.packageName?.trim();
+  if (!packageName) {
+    return false;
+  }
+  const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(packageName);
+  if (!catalogEntry || resolveOfficialExternalPluginId(catalogEntry) !== params.pluginId) {
+    return false;
+  }
+  const officialInstall = resolveOfficialExternalPluginInstall(catalogEntry);
+  const installRecord = params.installRecords[params.pluginId];
+  if (!installRecord) {
+    return false;
+  }
+  if (
+    installRecord.source === "npm" &&
+    officialInstall?.npmSpec === packageName &&
+    [
+      installRecord.resolvedName,
+      installRecord.spec,
+      installRecord.resolvedSpec,
+      params.candidate.packageName,
+    ].some((value) => npmSpecMatchesPackage(value, packageName))
+  ) {
+    return true;
+  }
+  if (
+    installRecord.source === "clawhub" &&
+    officialInstall?.clawhubSpec &&
+    installRecord.clawhubChannel === "official" &&
+    (installRecord.clawhubPackage === packageName ||
+      installRecord.spec === officialInstall.clawhubSpec ||
+      installRecord.resolvedSpec === officialInstall.clawhubSpec)
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function resolveDuplicatePrecedenceRank(params: {
@@ -702,6 +789,22 @@ function isIntentionalInstalledBundledDuplicate(params: {
   );
 }
 
+function isSameGlobalPackageDuplicate(left: PluginCandidate, right: PluginCandidate): boolean {
+  if (left.origin !== "global" || right.origin !== "global") {
+    return false;
+  }
+  const leftPackageName = normalizeOptionalString(left.packageName);
+  const rightPackageName = normalizeOptionalString(right.packageName);
+  if (!leftPackageName || leftPackageName !== rightPackageName) {
+    return false;
+  }
+  const leftPackageVersion = normalizeOptionalString(left.packageVersion);
+  const rightPackageVersion = normalizeOptionalString(right.packageVersion);
+  return Boolean(
+    leftPackageVersion && rightPackageVersion && leftPackageVersion === rightPackageVersion,
+  );
+}
+
 export function loadPluginManifestRegistry(
   params: {
     config?: OpenClawConfig;
@@ -745,7 +848,12 @@ export function loadPluginManifestRegistry(
   const currentHostVersion = resolveCompatibilityHostVersion(env);
 
   for (const candidate of candidates) {
-    const rejectHardlinks = candidate.origin !== "bundled";
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: candidate.origin,
+      rootDir: candidate.rootDir,
+      env,
+      realpathCache,
+    });
     const isBundleRecord = (candidate.format ?? "openclaw") === "bundle";
     const manifestRes:
       | ReturnType<typeof loadPluginManifest>
@@ -831,6 +939,12 @@ export function loadPluginManifestRegistry(
           manifestPath: manifestRes.manifestPath,
           schemaCacheKey,
           configSchema,
+          trustedOfficialInstall: isTrustedOfficialPluginInstall({
+            pluginId: manifest.id,
+            candidate,
+            env,
+            installRecords: getInstallRecords(),
+          }),
           ...(params.bundledChannelConfigCollector
             ? { bundledChannelConfigCollector: params.bundledChannelConfigCollector }
             : {}),
@@ -856,7 +970,7 @@ export function loadPluginManifestRegistry(
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           records[existing.recordIndex] = record;
           seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-          pushManifestCompatibilityDiagnostics({ record, diagnostics });
+          pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }
@@ -881,7 +995,7 @@ export function loadPluginManifestRegistry(
       if (candidateWins) {
         records[existing.recordIndex] = record;
         seenIds.set(manifest.id, { candidate, recordIndex: existing.recordIndex });
-        pushManifestCompatibilityDiagnostics({ record, diagnostics });
+        pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
@@ -893,6 +1007,9 @@ export function loadPluginManifestRegistry(
           installRecords: getInstallRecords(),
         })
       ) {
+        continue;
+      }
+      if (isSameGlobalPackageDuplicate(candidate, existing.candidate)) {
         continue;
       }
       diagnostics.push({
@@ -909,7 +1026,7 @@ export function loadPluginManifestRegistry(
 
     seenIds.set(manifest.id, { candidate, recordIndex: records.length });
     records.push(record);
-    pushManifestCompatibilityDiagnostics({ record, diagnostics });
+    pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
   const registry = { plugins: records, diagnostics: dedupePluginDiagnostics(diagnostics) };

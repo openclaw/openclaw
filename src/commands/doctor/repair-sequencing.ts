@@ -1,11 +1,13 @@
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
+import { maybeRepairStaleManagedNpmBundledPlugins } from "../doctor-plugin-registry.js";
 import { maybeRepairAllowlistPolicyAllowFrom } from "./shared/allowlist-policy-repair.js";
 import { maybeRepairBundledPluginLoadPaths } from "./shared/bundled-plugin-load-paths.js";
 import {
   createChannelDoctorEmptyAllowlistPolicyHooks,
   collectChannelDoctorRepairMutations,
 } from "./shared/channel-doctor.js";
+import { maybeRepairCodexRoutes } from "./shared/codex-route-warnings.js";
 import {
   applyDoctorConfigMutation,
   type DoctorConfigMutationState,
@@ -67,6 +69,21 @@ export async function runDoctorRepairSequence(params: {
   }
   applyMutation(maybeRepairOpenPolicyAllowFrom(state.candidate));
   applyMutation(maybeRepairBundledPluginLoadPaths(state.candidate, env));
+  maybeRepairStaleManagedNpmBundledPlugins({
+    config: state.candidate,
+    env,
+    prompter: { shouldRepair: true },
+  });
+  const codexRouteRepair = maybeRepairCodexRoutes({
+    cfg: state.candidate,
+    env,
+    shouldRepair: true,
+  });
+  applyMutation({
+    config: codexRouteRepair.cfg,
+    changes: codexRouteRepair.changes,
+    warnings: codexRouteRepair.warnings,
+  });
   const missingConfiguredPluginInstallRepair = await repairMissingConfiguredPluginInstalls({
     cfg: state.candidate,
     env,

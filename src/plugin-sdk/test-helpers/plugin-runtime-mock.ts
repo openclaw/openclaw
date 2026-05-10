@@ -265,7 +265,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
         OriginatingChannel: params.channel,
         OriginatingTo: params.reply.originatingTo,
         CommandAuthorized: params.access?.commands
-          ? params.access.commands.authorizers.some((entry) => entry.allowed)
+          ? (params.access.commands.authorized ??
+            params.access.commands.authorizers?.some((entry) => entry.allowed) ??
+            false)
           : false,
         ...params.extra,
       }) as ReturnType<PluginRuntime["channel"]["turn"]["buildContext"]>,
@@ -392,6 +394,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
     tts: {
       textToSpeech: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeech"],
+      textToSpeechStream: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechStream"],
       textToSpeechTelephony: vi.fn() as unknown as PluginRuntime["tts"]["textToSpeechTelephony"],
       listVoices: vi.fn() as unknown as PluginRuntime["tts"]["listVoices"],
     },
@@ -635,6 +638,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       },
       turn: {
         run: runChannelTurnMock,
+        runAssembled:
+          dispatchAssembledChannelTurnMock as unknown as PluginRuntime["channel"]["turn"]["runAssembled"],
         runResolved: vi.fn(
           async (params: Parameters<PluginRuntime["channel"]["turn"]["runResolved"]>[0]) =>
             await runChannelTurnMock({
@@ -720,6 +725,9 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       getSessionMessages: vi.fn(),
       getSession: vi.fn(),
       deleteSession: vi.fn(),
+    },
+    llm: {
+      complete: vi.fn(),
     },
     nodes: {
       list: vi.fn(async () => ({ nodes: [] })),

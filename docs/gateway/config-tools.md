@@ -37,11 +37,11 @@ Local onboarding defaults new local configs to `tools.profile: "coding"` when un
 | `group:memory`     | `memory_search`, `memory_get`                                                                                           |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                   |
 | `group:ui`         | `browser`, `canvas`                                                                                                     |
-| `group:automation` | `cron`, `gateway`                                                                                                       |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                  |
 | `group:messaging`  | `message`                                                                                                               |
 | `group:nodes`      | `nodes`                                                                                                                 |
-| `group:agents`     | `agents_list`                                                                                                           |
-| `group:media`      | `image`, `image_generate`, `video_generate`, `tts`                                                                      |
+| `group:agents`     | `agents_list`, `update_plan`                                                                                            |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                    |
 | `group:openclaw`   | All built-in tools (excludes provider plugins)                                                                          |
 
 ### `tools.allow` / `tools.deny`
@@ -209,7 +209,7 @@ Configures inbound media understanding (image/audio/video):
     media: {
       concurrency: 2,
       asyncCompletion: {
-        directSend: false, // opt-in: send finished async video directly to the channel
+        directSend: false, // deprecated: completions stay agent-mediated
       },
       audio: {
         enabled: true,
@@ -262,7 +262,7 @@ Configures inbound media understanding (image/audio/video):
 
     **Async completion fields:**
 
-    - `asyncCompletion.directSend`: when `true`, completed async media tasks that support direct completion delivery try direct channel delivery first. Default: `false` (requester-session wake/model-delivery path). Today this applies to async `video_generate`; async `music_generate` completions stay requester-session mediated even when this is enabled.
+    - `asyncCompletion.directSend`: deprecated compatibility flag. Completed async media tasks stay requester-session mediated so the agent receives the result, decides how to tell the user, and uses the message tool when source delivery requires it.
 
   </Accordion>
 </AccordionGroup>
@@ -474,6 +474,8 @@ OpenClaw uses the built-in model catalog. Add custom providers via `models.provi
     - `models.providers.*.models.*.contextTokens`: optional runtime context cap. This overrides provider-level `contextTokens`; use it when you want a smaller effective context budget than the model's native `contextWindow`; `openclaw models list` shows both values when they differ.
     - `models.providers.*.models.*.compat.supportsDeveloperRole`: optional compatibility hint. For `api: "openai-completions"` with a non-empty non-native `baseUrl` (host not `api.openai.com`), OpenClaw forces this to `false` at runtime. Empty/omitted `baseUrl` keeps default OpenAI behavior.
     - `models.providers.*.models.*.compat.requiresStringContent`: optional compatibility hint for string-only OpenAI-compatible chat endpoints. When `true`, OpenClaw flattens pure text `messages[].content` arrays into plain strings before sending the request.
+    - `models.providers.*.models.*.compat.strictMessageKeys`: optional compatibility hint for strict OpenAI-compatible chat endpoints. When `true`, OpenClaw strips outgoing Chat Completions message objects to `role` and `content` before sending the request.
+    - `models.providers.*.models.*.compat.thinkingFormat`: optional thinking payload hint. Use `"qwen"` for top-level `enable_thinking`, or `"qwen-chat-template"` for `chat_template_kwargs.enable_thinking` on Qwen-family OpenAI-compatible servers that support request-level chat-template kwargs, such as vLLM.
 
   </Accordion>
   <Accordion title="Amazon Bedrock discovery">
@@ -537,8 +539,8 @@ Interactive custom-provider onboarding infers image input for common vision mode
       env: { KIMI_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "kimi/kimi-code" },
-          models: { "kimi/kimi-code": { alias: "Kimi Code" } },
+          model: { primary: "kimi/kimi-for-coding" },
+          models: { "kimi/kimi-for-coding": { alias: "Kimi Code" } },
         },
       },
     }

@@ -14,7 +14,11 @@ describe("exa web search provider", () => {
     expect(provider.id).toBe("exa");
     expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("keeps the lightweight contract surface aligned with provider metadata", () => {
@@ -39,7 +43,11 @@ describe("exa web search provider", () => {
       credentialPath: provider.credentialPath,
     });
     expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected contract Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
@@ -56,9 +64,12 @@ describe("exa web search provider", () => {
     expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
       endpoint: "https://proxy.example/exa/search",
     });
-    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual(
-      expect.objectContaining({ error: "invalid_base_url" }),
-    );
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+      docs: "https://docs.openclaw.ai/tools/exa-search",
+      error: "invalid_base_url",
+      message:
+        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    });
   });
 
   it("partitions Exa cache keys by resolved endpoint", () => {

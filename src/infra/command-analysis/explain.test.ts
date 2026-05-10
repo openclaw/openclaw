@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "../command-explainer/index.js";
 import {
+  explainCommandForDisplay,
   resolveCommandAnalysisSummaryForDisplay,
   summarizeCommandExplanation,
   summarizeCommandSegmentsForDisplay,
@@ -14,7 +15,20 @@ describe("command-analysis explanation summary", () => {
     expect(summary.commandCount).toBe(1);
     expect(summary.riskKinds).toContain("shell-wrapper");
     expect(summary.riskKinds).toContain("inline-eval");
-    expect(summary.warningLines.some((line) => line.includes("inline-eval"))).toBe(true);
+    expect(summary.warningLines).toEqual(
+      expect.arrayContaining([expect.stringContaining("inline-eval")]),
+    );
+  });
+
+  it("loads the rich command explainer for rich display summaries", async () => {
+    const result = await explainCommandForDisplay(`bash -lc 'python3 -c "print(1)"'`);
+
+    expect(result?.summary).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["shell-wrapper", "inline-eval"]),
+      }),
+    );
   });
 
   it("summarizes policy command segments without async parsing", () => {
@@ -31,11 +45,11 @@ describe("command-analysis explanation summary", () => {
     expect(summary.warningLines).toEqual(["Contains inline-eval: python3 -c"]);
   });
 
-  it("resolves display summaries from argv or shell commands", () => {
+  it("resolves node display summaries from argv", () => {
     expect(
       resolveCommandAnalysisSummaryForDisplay({
-        host: "gateway",
-        commandText: "echo ok",
+        host: "node",
+        commandText: "python3 script.py",
         commandArgv: ["python3", "-c", "print(1)"],
       }),
     ).toEqual(
@@ -51,6 +65,29 @@ describe("command-analysis explanation summary", () => {
         commandText: "python3 -c 'print(1)'",
       }),
     ).toBeNull();
+  });
+
+  it("resolves gateway display summaries from shell text even when argv is stale", () => {
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "python3 -c 'print(1)'",
+        commandArgv: ["python3", "script.py"],
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: ["inline-eval"],
+        warningLines: ["Contains inline-eval: python3 -c"],
+      }),
+    );
+    expect(
+      resolveCommandAnalysisSummaryForDisplay({
+        host: "gateway",
+        commandText: "echo ok",
+        commandArgv: ["python3", "-c", "print(1)"],
+      })?.riskKinds,
+    ).toStrictEqual([]);
     expect(
       resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",

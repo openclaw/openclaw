@@ -1,10 +1,12 @@
 import {
+  buildChannelProgressDraftLine,
+  buildChannelProgressDraftLineForEntry,
   resolveChannelPreviewStreamMode,
   resolveChannelStreamingBlockEnabled,
 } from "openclaw/plugin-sdk/channel-streaming";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
-  createChannelReplyPipeline,
+  createChannelMessageReplyPipeline,
   logTypingFailure,
   resolveChannelMediaMaxBytes,
   type OpenClawConfig,
@@ -116,7 +118,7 @@ export function createMSTeamsReplyDispatcher(params: {
       }
     : async () => {};
 
-  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelReplyPipeline({
+  const { onModelSelected, typingCallbacks, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: "msteams",
@@ -376,24 +378,53 @@ export function createMSTeamsReplyDispatcher(params: {
         : {}),
       ...(streamController.shouldStreamPreviewToolProgress()
         ? {
-            onToolStart: async (payload: { name?: string; phase?: string }) => {
+            onToolStart: async (payload: {
+              name?: string;
+              phase?: string;
+              args?: Record<string, unknown>;
+              detailMode?: "explain" | "raw";
+            }) => {
               await streamController.pushProgressLine(
-                payload.name ? `tool: ${payload.name}` : (payload.phase ?? "tool running"),
+                buildChannelProgressDraftLineForEntry(
+                  msteamsCfg,
+                  {
+                    event: "tool",
+                    name: payload.name,
+                    phase: payload.phase,
+                    args: payload.args,
+                  },
+                  payload.detailMode ? { detailMode: payload.detailMode } : undefined,
+                ),
                 { toolName: payload.name },
               );
             },
             onItemEvent: async (payload: {
+              kind?: string;
               progressText?: string;
+              meta?: string;
               summary?: string;
               title?: string;
               name?: string;
+              phase?: string;
+              status?: string;
             }) => {
               await streamController.pushProgressLine(
-                payload.progressText ?? payload.summary ?? payload.title ?? payload.name,
+                buildChannelProgressDraftLineForEntry(msteamsCfg, {
+                  event: "item",
+                  itemKind: payload.kind,
+                  title: payload.title,
+                  name: payload.name,
+                  phase: payload.phase,
+                  status: payload.status,
+                  summary: payload.summary,
+                  progressText: payload.progressText,
+                  meta: payload.meta,
+                }),
               );
             },
             onPlanUpdate: async (payload: {
               phase?: string;
+              title?: string;
               explanation?: string;
               steps?: string[];
             }) => {
@@ -401,33 +432,80 @@ export function createMSTeamsReplyDispatcher(params: {
                 return;
               }
               await streamController.pushProgressLine(
-                payload.explanation ?? payload.steps?.[0] ?? "planning",
+                buildChannelProgressDraftLine({
+                  event: "plan",
+                  phase: payload.phase,
+                  title: payload.title,
+                  explanation: payload.explanation,
+                  steps: payload.steps,
+                }),
               );
             },
-            onApprovalEvent: async (payload: { phase?: string; command?: string }) => {
+            onApprovalEvent: async (payload: {
+              phase?: string;
+              title?: string;
+              command?: string;
+              reason?: string;
+              message?: string;
+            }) => {
               if (payload.phase !== "requested") {
                 return;
               }
               await streamController.pushProgressLine(
-                payload.command ? `approval: ${payload.command}` : "approval requested",
+                buildChannelProgressDraftLine({
+                  event: "approval",
+                  phase: payload.phase,
+                  title: payload.title,
+                  command: payload.command,
+                  reason: payload.reason,
+                  message: payload.message,
+                }),
               );
             },
-            onCommandOutput: async (payload: { phase?: string; summary?: string }) => {
-              if (payload.phase !== "end") {
-                return;
-              }
-              await streamController.pushProgressLine(payload.summary ?? "command output ready");
-            },
-            onPatchSummary: async (payload: {
+            onCommandOutput: async (payload: {
               phase?: string;
-              summary?: string;
               title?: string;
+              name?: string;
+              status?: string;
+              exitCode?: number | null;
             }) => {
               if (payload.phase !== "end") {
                 return;
               }
               await streamController.pushProgressLine(
-                payload.summary ?? payload.title ?? "patch applied",
+                buildChannelProgressDraftLine({
+                  event: "command-output",
+                  phase: payload.phase,
+                  title: payload.title,
+                  name: payload.name,
+                  status: payload.status,
+                  exitCode: payload.exitCode,
+                }),
+              );
+            },
+            onPatchSummary: async (payload: {
+              phase?: string;
+              summary?: string;
+              title?: string;
+              name?: string;
+              added?: string[];
+              modified?: string[];
+              deleted?: string[];
+            }) => {
+              if (payload.phase !== "end") {
+                return;
+              }
+              await streamController.pushProgressLine(
+                buildChannelProgressDraftLine({
+                  event: "patch",
+                  phase: payload.phase,
+                  title: payload.title,
+                  name: payload.name,
+                  added: payload.added,
+                  modified: payload.modified,
+                  deleted: payload.deleted,
+                  summary: payload.summary,
+                }),
               );
             },
           }

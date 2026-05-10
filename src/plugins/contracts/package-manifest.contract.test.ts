@@ -3,7 +3,6 @@ import { describePackageManifestContract } from "openclaw/plugin-sdk/plugin-test
 type PackageManifestContractParams = Parameters<typeof describePackageManifestContract>[0];
 
 const packageManifestContractTests: PackageManifestContractParams[] = [
-  { pluginId: "bluebubbles", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "discord",
     pluginLocalRuntimeDeps: ["@discordjs/voice", "discord-api-types", "opusscript"],
@@ -77,7 +76,7 @@ const packageManifestContractTests: PackageManifestContractParams[] = [
   { pluginId: "voice-call", minHostVersionBaseline: "2026.3.22" },
   {
     pluginId: "whatsapp",
-    pluginLocalRuntimeDeps: ["@whiskeysockets/baileys", "jimp"],
+    pluginLocalRuntimeDeps: ["baileys", "jimp"],
     minHostVersionBaseline: "2026.3.22",
   },
   { pluginId: "zalo", minHostVersionBaseline: "2026.3.22" },

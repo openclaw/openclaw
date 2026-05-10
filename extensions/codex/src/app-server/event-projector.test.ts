@@ -5,6 +5,11 @@ import { SessionManager } from "@mariozechner/pi-coding-agent";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { resetAgentEventsForTest } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
+  onInternalDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  type DiagnosticEventPayload,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
@@ -14,6 +19,7 @@ import {
   CodexAppServerEventProjector,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
+import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
 const THREAD_ID = "thread-1";
@@ -21,6 +27,10 @@ const TURN_ID = "turn-1";
 const tempDirs = new Set<string>();
 
 type ProjectorNotification = Parameters<CodexAppServerEventProjector["handleNotification"]>[0];
+
+function flushDiagnosticEvents() {
+  return new Promise<void>((resolve) => setImmediate(resolve));
+}
 
 function assistantMessage(text: string, timestamp: number) {
   return {
@@ -81,11 +91,14 @@ async function createProjectorWithAssistantHooks() {
 
 beforeEach(() => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
 });
 
 afterEach(async () => {
   resetAgentEventsForTest();
+  resetDiagnosticEventsForTest();
   resetGlobalHookRunner();
+  resetCodexRateLimitCacheForTests();
   vi.restoreAllMocks();
   for (const tempDir of tempDirs) {
     await fs.rm(tempDir, { recursive: true, force: true });
@@ -115,6 +128,84 @@ function buildEmptyToolTelemetry(): CodexAppServerToolTelemetry {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Expected ${label}`);
+  }
+  return value;
+}
+
+function expectUsageFields(
+  usage: unknown,
+  expected: { input: number; output: number; cacheRead: number; total: number },
+) {
+  const record = requireRecord(usage, "usage");
+  expect(record.input).toBe(expected.input);
+  expect(record.output).toBe(expected.output);
+  expect(record.cacheRead).toBe(expected.cacheRead);
+  expect(record.total ?? record.totalTokens).toBe(expected.total);
+}
+
+function mockCallArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error(`Expected ${label} mock calls`);
+  }
+  const call = calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected ${label} call ${callIndex + 1}`);
+  }
+  return call[argIndex];
+}
+
+function findAgentEvent(
+  mock: unknown,
+  params: { stream: string; phase?: string; itemId?: string; name?: string },
+) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error("Expected onAgentEvent mock calls");
+  }
+  for (const call of calls) {
+    const event = requireRecord(call[0], "agent event");
+    const data = requireRecord(event.data, "agent event data");
+    if (
+      event.stream === params.stream &&
+      (!params.phase || data.phase === params.phase) &&
+      (!params.itemId || data.itemId === params.itemId) &&
+      (!params.name || data.name === params.name)
+    ) {
+      return { event, data };
+    }
+  }
+  throw new Error(`Expected agent event ${params.stream}`);
+}
+
+function findPlanEventWithSteps(mock: unknown, steps: string[]) {
+  const calls = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  if (!Array.isArray(calls)) {
+    throw new Error("Expected onAgentEvent mock calls");
+  }
+  for (const call of calls) {
+    const event = requireRecord(call[0], "agent event");
+    if (event.stream !== "plan") {
+      continue;
+    }
+    const data = requireRecord(event.data, "plan event data");
+    if (JSON.stringify(data.steps) === JSON.stringify(steps)) {
+      return data;
+    }
+  }
+  throw new Error(`Expected plan event ${steps.join(", ")}`);
+}
+
 function forCurrentTurn(
   method: ProjectorNotification["method"],
   params: Record<string, unknown>,
@@ -138,6 +229,23 @@ function appServerError(params: { message: string; willRetry: boolean }): Projec
     },
     willRetry: params.willRetry,
   });
+}
+
+function rateLimitsUpdated(resetsAt: number): ProjectorNotification {
+  return {
+    method: "account/rateLimits/updated",
+    params: {
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+    },
+  } as ProjectorNotification;
 }
 
 function turnCompleted(items: unknown[] = []): ProjectorNotification {
@@ -186,12 +294,12 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.assistantTexts).toEqual(["hello"]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual(["user", "assistant"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "hello" }]);
-    expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
-    expect(result.lastAssistant?.usage).toMatchObject({
+    expectUsageFields(result.attemptUsage, { input: 3, output: 7, cacheRead: 2, total: 12 });
+    expectUsageFields(result.lastAssistant?.usage, {
       input: 3,
       output: 7,
       cacheRead: 2,
-      totalTokens: 12,
+      total: 12,
     });
     expect(result.replayMetadata.replaySafe).toBe(true);
   });
@@ -217,11 +325,11 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual(["done"]);
     expect(result.attemptUsage).toBeUndefined();
-    expect(result.lastAssistant?.usage).toMatchObject({
+    expectUsageFields(result.lastAssistant?.usage, {
       input: 0,
       output: 0,
       cacheRead: 0,
-      totalTokens: 0,
+      total: 0,
     });
   });
 
@@ -244,6 +352,55 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(result.assistantTexts).toEqual(["OK from raw"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "OK from raw" }]);
+  });
+
+  it("attaches native Codex image-generation saved paths as reply media", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: "A tiny blue square",
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.assistantTexts).toStrictEqual([]);
+    expect(result.toolMediaUrls).toEqual([savedPath]);
+  });
+
+  it("does not append native Codex image-generation media after explicit media delivery", async () => {
+    const projector = await createProjector();
+    const savedPath = "/tmp/codex-home/generated_images/session-1/ig_123.png";
+
+    await projector.handleNotification(
+      turnCompleted([
+        {
+          type: "imageGeneration",
+          id: "ig_123",
+          status: "completed",
+          revisedPrompt: null,
+          result: "Zm9v",
+          savedPath,
+        },
+      ]),
+    );
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      messagingToolSentMediaUrls: [savedPath],
+      toolMediaUrls: [],
+    });
+
+    expect(result.toolMediaUrls).toStrictEqual([]);
   });
 
   it("does not fail a completed reply after a retryable app-server error notification", async () => {
@@ -280,6 +437,95 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.lastAssistant).toBeUndefined();
   });
 
+  it("uses Codex rate-limit resets for usage-limit app-server errors", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("error", {
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
+          additionalDetails: null,
+        },
+        willRetry: false,
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).toContain("Run /codex account");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses Codex rate-limit resets for failed turns", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+
+    await projector.handleNotification(rateLimitsUpdated(resetsAt));
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
+  it("uses a recent Codex rate-limit snapshot when failed turns omit reset details", async () => {
+    const projector = await createProjector();
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    rememberCodexRateLimits({
+      rateLimits: {
+        limitId: "codex",
+        limitName: "Codex",
+        primary: { usedPercent: 100, windowDurationMins: 300, resetsAt },
+        secondary: null,
+        credits: null,
+        planType: "plus",
+        rateLimitReachedType: "rate_limit_reached",
+      },
+      rateLimitsByLimitId: null,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("turn/completed", {
+        turn: {
+          id: TURN_ID,
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+            additionalDetails: null,
+          },
+          items: [],
+        },
+      }),
+    );
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptErrorSource).toBe("prompt");
+  });
+
   it("normalizes snake_case current token usage fields", async () => {
     const projector = await createProjector();
 
@@ -300,12 +546,12 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(result.attemptUsage).toMatchObject({ input: 5, output: 9, cacheRead: 3, total: 17 });
-    expect(result.lastAssistant?.usage).toMatchObject({
+    expectUsageFields(result.attemptUsage, { input: 5, output: 9, cacheRead: 3, total: 17 });
+    expectUsageFields(result.lastAssistant?.usage, {
       input: 5,
       output: 9,
       cacheRead: 3,
-      totalTokens: 17,
+      total: 17,
     });
   });
 
@@ -365,7 +611,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
@@ -383,7 +629,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
 
@@ -448,30 +694,26 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    expect(onAgentEvent).toHaveBeenCalledWith({
+    const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.guardian",
-      data: expect.objectContaining({
-        phase: "started",
-        reviewId: "review-1",
-        targetItemId: "cmd-1",
-        status: "inProgress",
-        actionType: "execve",
-      }),
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
+      phase: "started",
+    }).data;
+    expect(started.reviewId).toBe("review-1");
+    expect(started.targetItemId).toBe("cmd-1");
+    expect(started.status).toBe("inProgress");
+    expect(started.actionType).toBe("execve");
+    const completed = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.guardian",
-      data: expect.objectContaining({
-        phase: "completed",
-        reviewId: "review-1",
-        targetItemId: "cmd-1",
-        decisionSource: "agent",
-        status: "approved",
-        riskLevel: "low",
-        userAuthorization: "high",
-        rationale: "Benign local probe.",
-        actionType: "execve",
-      }),
-    });
+      phase: "completed",
+    }).data;
+    expect(completed.reviewId).toBe("review-1");
+    expect(completed.targetItemId).toBe("cmd-1");
+    expect(completed.decisionSource).toBe("agent");
+    expect(completed.status).toBe("approved");
+    expect(completed.riskLevel).toBe("low");
+    expect(completed.userAuthorization).toBe("high");
+    expect(completed.rationale).toBe("Benign local probe.");
+    expect(completed.actionType).toBe("execve");
     expect(
       projector.buildResult(buildEmptyToolTelemetry()).didSendDeterministicApprovalPrompt,
     ).toBe(false);
@@ -529,17 +771,11 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onReasoningStream).toHaveBeenCalledWith({ text: "thinking" });
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
-    expect(onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "plan",
-        data: expect.objectContaining({ steps: ["patch (in_progress)"] }),
-      }),
-    );
-    expect(onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "compaction",
-        data: expect.objectContaining({ phase: "start", itemId: "compact-1" }),
-      }),
+    expect(findPlanEventWithSteps(onAgentEvent, ["patch (in_progress)"]).steps).toEqual([
+      "patch (in_progress)",
+    ]);
+    expect(findAgentEvent(onAgentEvent, { stream: "compaction", phase: "start" }).data.itemId).toBe(
+      "compact-1",
     );
     expect(result.toolMetas).toEqual([{ toolName: "sessions_send" }]);
     expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
@@ -549,7 +785,357 @@ describe("CodexAppServerEventProjector", () => {
     ]);
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
-    expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
+    expect(requireRecord(result.itemLifecycle, "item lifecycle").compactionCount).toBe(1);
+  });
+
+  it("synthesizes normalized tool progress for Codex-native tool items", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-1",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-1",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "completed",
+            commandActions: [],
+            aggregatedOutput: "ok",
+            exitCode: 0,
+            durationMs: 42,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const itemStart = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "start",
+      itemId: "cmd-1",
+    }).data;
+    expect(itemStart.kind).toBe("command");
+    expect(itemStart.name).toBe("bash");
+    expect(itemStart.suppressChannelProgress).toBe(true);
+    const toolStart = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "start",
+      itemId: "cmd-1",
+      name: "bash",
+    }).data;
+    expect(toolStart.toolCallId).toBe("cmd-1");
+    expect(toolStart.args).toEqual({ command: "pnpm test extensions/codex", cwd: "/workspace" });
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-1",
+      name: "bash",
+    }).data;
+    expect(toolResult.toolCallId).toBe("cmd-1");
+    expect(toolResult.status).toBe("completed");
+    expect(toolResult.isError).toBe(false);
+    const toolResultPayload = requireRecord(toolResult.result, "tool result payload");
+    expect(toolResultPayload.exitCode).toBe(0);
+    expect(toolResultPayload.durationMs).toBe(42);
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error"
+            | "tool.execution.blocked";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+        durationMs: "durationMs" in event ? event.durationMs : undefined,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+        durationMs: undefined,
+      },
+      {
+        type: "tool.execution.completed",
+        toolName: "bash",
+        toolCallId: "cmd-1",
+        durationMs: 42,
+      },
+    ]);
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    expect(assistant.role).toBe("assistant");
+    const assistantContent = requireArray(assistant.content, "assistant content");
+    expect(assistantContent[0]).toEqual({
+      type: "toolCall",
+      id: "cmd-1",
+      name: "bash",
+      arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      input: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+    });
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.role).toBe("toolResult");
+    expect(toolResultMessage.toolCallId).toBe("cmd-1");
+    expect(toolResultMessage.toolName).toBe("bash");
+    expect(toolResultMessage.isError).toBe(false);
+    const toolResultContent = requireArray(toolResultMessage.content, "tool result content");
+    const toolResultContentItem = requireRecord(toolResultContent[0], "tool result content item");
+    expect(toolResultContentItem.type).toBe("toolResult");
+    expect(toolResultContentItem.id).toBe("cmd-1");
+    expect(toolResultContentItem.name).toBe("bash");
+    expect(toolResultContentItem.toolName).toBe("bash");
+    expect(toolResultContentItem.toolCallId).toBe("cmd-1");
+    expect(toolResultContentItem.content).toBe("ok");
+  });
+
+  it("orders declined native tool diagnostics after their start event", async () => {
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "declined",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: 1,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error"
+            | "tool.execution.blocked";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+      {
+        type: "tool.execution.blocked",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+    ]);
+  });
+
+  it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-browser-1",
+      tool: "browser",
+      arguments: { action: "open", url: "http://127.0.0.1:3000" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-browser-1",
+      tool: "browser",
+      success: true,
+      contentItems: [{ type: "inputText", text: "opened" }],
+    });
+    await projector.handleNotification(agentMessageDelta("done"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    const assistant = requireRecord(result.messagesSnapshot[1], "assistant tool call message");
+    expect(assistant.role).toBe("assistant");
+    expect(requireArray(assistant.content, "assistant content")[0]).toEqual({
+      type: "toolCall",
+      id: "call-browser-1",
+      name: "browser",
+      arguments: { action: "open", url: "http://127.0.0.1:3000" },
+      input: { action: "open", url: "http://127.0.0.1:3000" },
+    });
+    const toolResultMessage = requireRecord(result.messagesSnapshot[2], "tool result message");
+    expect(toolResultMessage.role).toBe("toolResult");
+    expect(toolResultMessage.toolCallId).toBe("call-browser-1");
+    expect(toolResultMessage.toolName).toBe("browser");
+    expect(toolResultMessage.isError).toBe(false);
+    const toolResultContent = requireRecord(
+      requireArray(toolResultMessage.content, "tool result content")[0],
+      "tool result content item",
+    );
+    expect(toolResultContent.type).toBe("toolResult");
+    expect(toolResultContent.id).toBe("call-browser-1");
+    expect(toolResultContent.name).toBe("browser");
+    expect(toolResultContent.toolName).toBe("browser");
+    expect(toolResultContent.toolCallId).toBe("call-browser-1");
+    expect(toolResultContent.content).toBe("opened");
+  });
+
+  it("marks declined Codex-native tool results as non-success", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    const itemEnd = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "end",
+      itemId: "cmd-declined",
+    }).data;
+    expect(itemEnd.kind).toBe("command");
+    expect(itemEnd.name).toBe("bash");
+    expect(itemEnd.status).toBe("blocked");
+    expect(itemEnd.suppressChannelProgress).toBe(true);
+    const toolResult = findAgentEvent(onAgentEvent, {
+      stream: "tool",
+      phase: "result",
+      itemId: "cmd-declined",
+      name: "bash",
+    }).data;
+    expect(toolResult.toolCallId).toBe("cmd-declined");
+    expect(toolResult.status).toBe("blocked");
+    expect(toolResult.isError).toBe(true);
+  });
+
+  it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    const itemStart = findAgentEvent(onAgentEvent, {
+      stream: "item",
+      phase: "start",
+      name: "message",
+    }).data;
+    expect(itemStart.kind).toBe("tool");
+    expect(itemStart.suppressChannelProgress).toBe(true);
+    const calls = (onAgentEvent as { mock: { calls: unknown[][] } }).mock.calls;
+    const toolStart = calls.some((call) => {
+      const event = requireRecord(call[0], "agent event");
+      if (event.stream !== "tool") {
+        return false;
+      }
+      const data = requireRecord(event.data, "agent event data");
+      return data.phase === "start" && data.name === "message";
+    });
+    expect(toolStart).toBe(false);
   });
 
   it("emits verbose tool summaries through onToolResult", async () => {
@@ -580,7 +1166,39 @@ describe("CodexAppServerEventProjector", () => {
 
     expect(onToolResult).toHaveBeenCalledTimes(1);
     expect(onToolResult).toHaveBeenCalledWith({
-      text: "🛠️ Bash: `` run tests (in /workspace), `pnpm test extensions/codex` ``",
+      text: "🛠️ `run tests (workspace)`",
+    });
+  });
+
+  it("can emit raw verbose tool summaries through onToolResult", async () => {
+    const onToolResult = vi.fn();
+    const projector = await createProjector({
+      ...(await createParams()),
+      verboseLevel: "on",
+      toolProgressDetail: "raw",
+      onToolResult,
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onToolResult).toHaveBeenCalledWith({
+      text: "🛠️ `` run tests (workspace), `pnpm test extensions/codex` ``",
     });
   });
 
@@ -589,6 +1207,7 @@ describe("CodexAppServerEventProjector", () => {
     const projector = await createProjector({
       ...(await createParams()),
       verboseLevel: "on",
+      toolProgressDetail: "raw",
       onToolResult,
     });
 
@@ -768,12 +1387,10 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
 
-    expect(onAgentEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        stream: "plan",
-        data: expect.objectContaining({ steps: ["step one", "step two"] }),
-      }),
-    );
+    expect(findAgentEvent(onAgentEvent, { stream: "plan" }).data.steps).toEqual([
+      "step one",
+      "step two",
+    ]);
     expect(result.assistantTexts).toEqual(["final answer"]);
     expect(JSON.stringify(result.messagesSnapshot)).toContain("Codex plan");
   });
@@ -794,28 +1411,33 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(openSpy).not.toHaveBeenCalled();
 
-    expect(beforeCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageCount: 1,
-        sessionFile: expect.stringContaining("session.jsonl"),
-        messages: [expect.objectContaining({ role: "assistant" })],
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
+    const beforePayload = requireRecord(
+      mockCallArg(beforeCompaction, 0, 0, "beforeCompaction"),
+      "before payload",
     );
-    expect(afterCompaction).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageCount: 1,
-        compactedCount: -1,
-        sessionFile: expect.stringContaining("session.jsonl"),
-      }),
-      expect.objectContaining({
-        runId: "run-1",
-        sessionId: "session-1",
-      }),
+    expect(beforePayload.messageCount).toBe(1);
+    expect(String(beforePayload.sessionFile)).toContain("session.jsonl");
+    const beforeMessages = requireArray(beforePayload.messages, "before messages");
+    expect(requireRecord(beforeMessages[0], "before message").role).toBe("assistant");
+    const beforeContext = requireRecord(
+      mockCallArg(beforeCompaction, 0, 1, "beforeCompaction"),
+      "before context",
     );
+    expect(beforeContext.runId).toBe("run-1");
+    expect(beforeContext.sessionId).toBe("session-1");
+    const afterPayload = requireRecord(
+      mockCallArg(afterCompaction, 0, 0, "afterCompaction"),
+      "after payload",
+    );
+    expect(afterPayload.messageCount).toBe(1);
+    expect(afterPayload.compactedCount).toBe(-1);
+    expect(String(afterPayload.sessionFile)).toContain("session.jsonl");
+    const afterContext = requireRecord(
+      mockCallArg(afterCompaction, 0, 1, "afterCompaction"),
+      "after context",
+    );
+    expect(afterContext.runId).toBe("run-1");
+    expect(afterContext.sessionId).toBe("session-1");
   });
 
   it("projects codex hook started and completed notifications into agent events", async () => {
@@ -857,28 +1479,24 @@ describe("CodexAppServerEventProjector", () => {
       }),
     );
 
-    expect(onAgentEvent).toHaveBeenCalledWith({
+    const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.hook",
-      data: expect.objectContaining({
-        phase: "started",
-        threadId: THREAD_ID,
-        turnId: TURN_ID,
-        hookRunId: "hook-1",
-        eventName: "preToolUse",
-        status: "running",
-      }),
-    });
-    expect(onAgentEvent).toHaveBeenCalledWith({
+      phase: "started",
+    }).data;
+    expect(started.threadId).toBe(THREAD_ID);
+    expect(started.turnId).toBe(TURN_ID);
+    expect(started.hookRunId).toBe("hook-1");
+    expect(started.eventName).toBe("preToolUse");
+    expect(started.status).toBe("running");
+    const completed = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.hook",
-      data: expect.objectContaining({
-        phase: "completed",
-        hookRunId: "hook-1",
-        status: "blocked",
-        statusMessage: "blocked by hook",
-        durationMs: 42,
-        entries: [{ kind: "stderr", text: "blocked" }],
-      }),
-    });
+      phase: "completed",
+    }).data;
+    expect(completed.hookRunId).toBe("hook-1");
+    expect(completed.status).toBe("blocked");
+    expect(completed.statusMessage).toBe("blocked by hook");
+    expect(completed.durationMs).toBe(42);
+    expect(completed.entries).toEqual([{ kind: "stderr", text: "blocked" }]);
   });
 
   it("projects thread-scoped codex hook notifications that omit a turn id", async () => {
@@ -906,16 +1524,14 @@ describe("CodexAppServerEventProjector", () => {
       },
     });
 
-    expect(onAgentEvent).toHaveBeenCalledWith({
+    const started = findAgentEvent(onAgentEvent, {
       stream: "codex_app_server.hook",
-      data: expect.objectContaining({
-        phase: "started",
-        threadId: THREAD_ID,
-        turnId: null,
-        hookRunId: "hook-thread-1",
-        eventName: "sessionStart",
-        scope: "thread",
-      }),
-    });
+      phase: "started",
+    }).data;
+    expect(started.threadId).toBe(THREAD_ID);
+    expect(started.turnId).toBeNull();
+    expect(started.hookRunId).toBe("hook-thread-1");
+    expect(started.eventName).toBe("sessionStart");
+    expect(started.scope).toBe("thread");
   });
 });

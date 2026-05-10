@@ -15,7 +15,15 @@ import {
 import { describeGatewayServiceRestart, resolveGatewayService } from "../daemon/service.js";
 import { renderSystemdUnavailableHints } from "../daemon/systemd-hints.js";
 import { isSystemdUserServiceAvailable } from "../daemon/systemd.js";
-import { formatPortDiagnostics, inspectPortUsage } from "../infra/ports.js";
+import {
+  formatPortDiagnostics,
+  inspectPortUsage,
+  isExpectedGatewayListeners,
+} from "../infra/ports.js";
+import {
+  formatGatewayRestartHandoffDiagnostic,
+  readGatewayRestartHandoffSync,
+} from "../infra/restart-handoff.js";
 import { isWSL } from "../infra/wsl.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
@@ -126,8 +134,23 @@ export async function maybeRepairGatewayDaemon(params: {
     loaded = false;
   }
   let serviceRuntime: Awaited<ReturnType<typeof service.readRuntime>> | undefined;
+  const command = params.options.deep
+    ? await Promise.resolve(service.readCommand(process.env)).catch(() => null)
+    : null;
+  const serviceEnv = command?.environment
+    ? ({
+        ...process.env,
+        ...command.environment,
+      } satisfies NodeJS.ProcessEnv)
+    : process.env;
   if (loaded) {
-    serviceRuntime = await service.readRuntime(process.env).catch(() => undefined);
+    serviceRuntime = await service.readRuntime(serviceEnv).catch(() => undefined);
+  }
+  if (params.options.deep) {
+    const handoff = readGatewayRestartHandoffSync(serviceEnv);
+    if (handoff) {
+      note(formatGatewayRestartHandoffDiagnostic(handoff), "Gateway");
+    }
   }
 
   if (process.platform === "darwin" && params.cfg.gateway?.mode !== "remote") {
@@ -159,7 +182,10 @@ export async function maybeRepairGatewayDaemon(params: {
   if (params.cfg.gateway?.mode !== "remote") {
     const port = resolveGatewayPort(params.cfg, process.env);
     const diagnostics = await inspectPortUsage(port);
-    if (diagnostics.status === "busy") {
+    if (
+      diagnostics.status === "busy" &&
+      !isExpectedGatewayListeners(diagnostics.listeners, diagnostics.port)
+    ) {
       note(formatPortDiagnostics(diagnostics).join("\n"), "Gateway port");
     } else if (loaded && serviceRuntime?.status === "running") {
       const lastError = await readLastGatewayErrorLine(process.env);

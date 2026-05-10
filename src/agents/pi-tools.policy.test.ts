@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
@@ -15,6 +16,15 @@ import {
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
+vi.mock("../channels/plugins/session-conversation.js", () => ({
+  resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
+    id: rawId,
+    threadId: undefined,
+    baseConversationId: rawId,
+    parentConversationCandidates: [],
+  }),
+}));
+
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
@@ -25,7 +35,7 @@ describe("pi-tools.policy", () => {
   it("treats * in deny as deny-all", () => {
     const tools = [createStubTool("read"), createStubTool("exec")];
     const filtered = filterToolsByPolicy(tools, { deny: ["*"] });
-    expect(filtered).toEqual([]);
+    expect(filtered).toStrictEqual([]);
   });
 
   it("supports wildcard allow/deny patterns", () => {
@@ -579,6 +589,97 @@ describe("resolveEffectiveToolPolicy", () => {
     expect(result.profileAlsoAllow).toEqual(["image"]);
     expect(result.profileAlsoAllow).not.toContain("exec");
     expect(result.profileAlsoAllow).not.toContain("process");
+  });
+
+  it("does not warn an agent profile about inherited global tool sections (#47487)", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-pi-tools-policy-test");
+    try {
+      const cfg = {
+        tools: {
+          exec: { security: "allowlist" },
+          fs: { workspaceOnly: true },
+        },
+        agents: {
+          list: [
+            {
+              id: "sage",
+              tools: {
+                profile: "messaging",
+                alsoAllow: ["image"],
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      resolveEffectiveToolPolicy({ config: cfg, agentId: "sage" });
+
+      expect(await warnLogs.findText('tools policy: profile "messaging"')).toBeUndefined();
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("still warns when an agent profile has its own configured exec section (#47487)", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-pi-tools-policy-test");
+    try {
+      const cfg = {
+        agents: {
+          list: [
+            {
+              id: "sage",
+              tools: {
+                profile: "messaging",
+                exec: { security: "allowlist" },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      resolveEffectiveToolPolicy({ config: cfg, agentId: "sage" });
+
+      const warning = await warnLogs.findText('tools policy: profile "messaging"');
+      expect(warning).toContain('(agent "sage")');
+      expect(warning).toContain("configured tool sections (tools.exec)");
+      expect(warning).toContain('Add alsoAllow: ["exec", "process"]');
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("only lists configured sections whose grants are still missing (#47487)", async () => {
+    const warnLogs = createWarnLogCapture("openclaw-pi-tools-policy-test");
+    try {
+      const cfg = {
+        agents: {
+          list: [
+            {
+              id: "echo",
+              tools: {
+                profile: "messaging",
+                alsoAllow: ["read", "write", "edit"],
+                exec: { security: "allowlist" },
+                fs: { workspaceOnly: true },
+              },
+            },
+          ],
+        },
+      } as OpenClawConfig;
+
+      resolveEffectiveToolPolicy({ config: cfg, agentId: "echo" });
+
+      const warning = await warnLogs.findText('tools policy: profile "messaging"');
+      expect(warning).toContain('(agent "echo")');
+      expect(warning).toContain("configured tool sections (tools.exec)");
+      expect(warning).not.toContain("tools.exec / tools.fs");
+      expect(warning).toContain('Add alsoAllow: ["exec", "process"]');
+      expect(warning).not.toContain('"read"');
+      expect(warning).not.toContain('"write"');
+      expect(warning).not.toContain('"edit"');
+    } finally {
+      warnLogs.cleanup();
+    }
   });
 
   it("explicit alsoAllow with exec still grants exec under messaging profile", () => {

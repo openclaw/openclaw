@@ -8,7 +8,7 @@ const { normalizeMessageContent, downloadMediaMessage } = vi.hoisted(() => ({
   downloadMediaMessage: vi.fn().mockResolvedValue(Buffer.from("fake-media-data")),
 }));
 
-vi.mock("@whiskeysockets/baileys", async () => {
+vi.mock("baileys", async () => {
   return {
     DisconnectReason: { loggedOut: 401 },
     normalizeMessageContent,
@@ -25,8 +25,7 @@ const mockSock = {
 
 async function expectMimetype(message: Record<string, unknown>, expected: string) {
   const result = await downloadInboundMedia({ message } as never, mockSock as never);
-  expect(result).toBeDefined();
-  expect(result?.mimetype).toBe(expected);
+  expect(result).toMatchObject({ mimetype: expected });
 }
 
 describe("downloadInboundMedia", () => {
@@ -76,8 +75,9 @@ describe("downloadInboundMedia", () => {
       },
     } as never;
     const result = await downloadInboundMedia(msg, mockSock as never);
-    expect(result).toBeDefined();
-    expect(result?.mimetype).toBe("application/pdf");
-    expect(result?.fileName).toBe("report.pdf");
+    expect(result).toMatchObject({
+      mimetype: "application/pdf",
+      fileName: "report.pdf",
+    });
   });
 });

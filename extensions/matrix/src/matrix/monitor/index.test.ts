@@ -1,5 +1,5 @@
-import { z } from "openclaw/plugin-sdk/zod";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { MatrixConfig, MatrixStreamingMode } from "../../types.js";
 import type { MatrixRoomInfo } from "./room-info.js";
 
@@ -483,6 +483,8 @@ describe("monitorMatrixProvider", () => {
     [{ mode: "progress" }, "progress", true],
     [{ mode: "partial", preview: { toolProgress: false } }, "partial", false],
     [{ mode: "quiet", preview: { toolProgress: false } }, "quiet", false],
+    [{ mode: "partial", progress: { toolProgress: false } }, "partial", true],
+    [{ mode: "quiet", progress: { toolProgress: false } }, "quiet", true],
     [{ mode: "progress", progress: { toolProgress: false } }, "progress", false],
     [
       { mode: "progress", progress: { toolProgress: false }, preview: { toolProgress: true } },
@@ -506,7 +508,7 @@ describe("monitorMatrixProvider", () => {
 
     await monitorMatrixProvider({ abortSignal: abortController.signal });
 
-    expect(hoisted.callOrder).toEqual([]);
+    expect(hoisted.callOrder).toStrictEqual([]);
     expect(hoisted.resolveTextChunkLimit).not.toHaveBeenCalled();
     expect(hoisted.createMatrixRoomMessageHandler).not.toHaveBeenCalled();
     expect(hoisted.setActiveMatrixClient).not.toHaveBeenCalled();

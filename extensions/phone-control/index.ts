@@ -1,10 +1,11 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
-} from "openclaw/plugin-sdk/text-runtime";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   definePluginEntry,
   type OpenClawPluginApi,
@@ -150,7 +151,6 @@ async function readArmState(statePath: string): Promise<ArmStateFile | null> {
 }
 
 async function writeArmState(statePath: string, state: ArmStateFile | null): Promise<void> {
-  await fs.mkdir(path.dirname(statePath), { recursive: true });
   if (!state) {
     try {
       await fs.unlink(statePath);
@@ -159,7 +159,11 @@ async function writeArmState(statePath: string, state: ArmStateFile | null): Pro
     }
     return;
   }
-  await fs.writeFile(statePath, `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  await replaceFileAtomic({
+    filePath: statePath,
+    content: `${JSON.stringify(state, null, 2)}\n`,
+    tempPrefix: ".phone-control-arm",
+  });
 }
 
 function normalizeDenyList(cfg: OpenClawPluginApi["config"]): string[] {

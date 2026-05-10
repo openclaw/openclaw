@@ -1,11 +1,17 @@
 import type { Command } from "commander";
-import { getRuntimeConfig, readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  getRuntimeConfig,
+  readConfigFileSnapshot,
+  replaceConfigFile,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { shortenHomeInString } from "../utils.js";
+import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginInspectOptions } from "./plugins-inspect-command.js";
 import type { PluginsListOptions } from "./plugins-list-command.js";
 import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
@@ -53,9 +59,7 @@ function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
 }
 
 function reportMissingPlugin(id: string) {
-  defaultRuntime.error(
-    `Plugin not found: ${id}. Run \`openclaw plugins list\` to see installed plugins.`,
-  );
+  defaultRuntime.error(formatMissingPluginMessage({ id, includeSearch: true }));
   return defaultRuntime.exit(1);
 }
 
@@ -136,6 +140,8 @@ export function registerPluginsCli(program: Command) {
     .description("Enable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      assertConfigWriteAllowedInCurrentMode();
+
       const { enablePluginInConfig } = await import("../plugins/enable.js");
       const { normalizePluginId } = await import("../plugins/config-state.js");
       const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
@@ -185,6 +191,8 @@ export function registerPluginsCli(program: Command) {
     .description("Disable a plugin in config")
     .argument("<id>", "Plugin id")
     .action(async (id: string) => {
+      assertConfigWriteAllowedInCurrentMode();
+
       const { normalizePluginId } = await import("../plugins/config-state.js");
       const { buildPluginRegistrySnapshotReport } = await import("../plugins/status.js");
       const { setPluginEnabledInConfig } = await import("./plugins-config.js");

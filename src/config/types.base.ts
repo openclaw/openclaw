@@ -10,6 +10,7 @@ export type DmPolicy = "pairing" | "allowlist" | "open" | "disabled";
 export type ContextVisibilityMode = "all" | "allowlist" | "allowlist_quote";
 export type TextChunkMode = "length" | "newline";
 export type StreamingMode = "off" | "partial" | "block" | "progress";
+export type ChannelStreamingCommandTextMode = "raw" | "status";
 
 export type OutboundRetryConfig = {
   /** Max retry attempts for outbound requests (default: 3). */
@@ -41,8 +42,12 @@ export type ChannelStreamingProgressConfig = {
   labels?: string[];
   /** Maximum number of progress lines to keep below the label. Default: 8. */
   maxLines?: number;
+  /** Progress draft renderer. "text" is the portable fallback; "rich" lets supported channels use structured UI. */
+  render?: "text" | "rich";
   /** Include compact tool/task progress in the draft. Default: true. */
   toolProgress?: boolean;
+  /** Command/exec progress detail in the draft. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
 };
 
 export type ChannelStreamingPreviewConfig = {
@@ -54,6 +59,8 @@ export type ChannelStreamingPreviewConfig = {
    * Default: true.
    */
   toolProgress?: boolean;
+  /** Command/exec progress detail in the preview. "raw" preserves released behavior; "status" shows only the tool label. Default: "raw". */
+  commandText?: ChannelStreamingCommandTextMode;
 };
 
 export type ChannelStreamingBlockConfig = {
@@ -302,6 +309,8 @@ export type DiagnosticsConfig = {
   flags?: string[];
   /** Threshold in ms before a processing session with no observed progress logs diagnostics. */
   stuckSessionWarnMs?: number;
+  /** Threshold in ms before eligible stalled active work may be aborted for recovery. */
+  stuckSessionAbortMs?: number;
   otel?: DiagnosticsOtelConfig;
   cacheTrace?: DiagnosticsCacheTraceConfig;
 };

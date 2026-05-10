@@ -1,4 +1,5 @@
 import { Type, type TSchema } from "typebox";
+import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import {
   channelSupportsMessageCapability,
@@ -17,6 +18,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../gateway/protocol/client-info.js";
 import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
+import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -45,6 +47,75 @@ const EXPLICIT_TARGET_ACTIONS = new Set<ChannelMessageActionName>([
 function actionNeedsExplicitTarget(action: ChannelMessageActionName): boolean {
   return EXPLICIT_TARGET_ACTIONS.has(action);
 }
+
+function stripFormattedReasoningMessage(text: string): string {
+  const stripped = stripReasoningTagsFromText(text);
+  const lines = stripped.split(/\r?\n/u);
+  if (lines[0]?.trim() !== "Reasoning:") {
+    return stripped;
+  }
+
+  let index = 1;
+  while (index < lines.length) {
+    const trimmed = lines[index]?.trim() ?? "";
+    if (!trimmed || (trimmed.startsWith("_") && trimmed.endsWith("_") && trimmed.length >= 2)) {
+      index += 1;
+      continue;
+    }
+    break;
+  }
+  return lines.slice(index).join("\n").trim();
+}
+
+function sanitizePresentationTextFields(value: unknown): unknown {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const presentation = { ...(value as Record<string, unknown>) };
+  if (typeof presentation.title === "string") {
+    presentation.title = stripFormattedReasoningMessage(presentation.title);
+  }
+  if (Array.isArray(presentation.blocks)) {
+    presentation.blocks = presentation.blocks.map((block) => {
+      if (!block || typeof block !== "object" || Array.isArray(block)) {
+        return block;
+      }
+      const sanitizedBlock = { ...(block as Record<string, unknown>) };
+      for (const field of ["text", "placeholder"]) {
+        if (typeof sanitizedBlock[field] === "string") {
+          sanitizedBlock[field] = stripFormattedReasoningMessage(sanitizedBlock[field]);
+        }
+      }
+      if (Array.isArray(sanitizedBlock.buttons)) {
+        sanitizedBlock.buttons = sanitizedBlock.buttons.map((button) => {
+          if (!button || typeof button !== "object" || Array.isArray(button)) {
+            return button;
+          }
+          const sanitizedButton = { ...(button as Record<string, unknown>) };
+          if (typeof sanitizedButton.label === "string") {
+            sanitizedButton.label = stripFormattedReasoningMessage(sanitizedButton.label);
+          }
+          return sanitizedButton;
+        });
+      }
+      if (Array.isArray(sanitizedBlock.options)) {
+        sanitizedBlock.options = sanitizedBlock.options.map((option) => {
+          if (!option || typeof option !== "object" || Array.isArray(option)) {
+            return option;
+          }
+          const sanitizedOption = { ...(option as Record<string, unknown>) };
+          if (typeof sanitizedOption.label === "string") {
+            sanitizedOption.label = stripFormattedReasoningMessage(sanitizedOption.label);
+          }
+          return sanitizedOption;
+        });
+      }
+      return sanitizedBlock;
+    });
+  }
+  return presentation;
+}
+
 function buildRoutingSchema() {
   return {
     channel: Type.Optional(Type.String()),
@@ -412,6 +483,24 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
+function isSendOnlyActions(actions: readonly string[]): boolean {
+  const uniqueActions = new Set(actions);
+  return uniqueActions.size === 1 && uniqueActions.has("send");
+}
+
+function buildSendOnlyMessageToolSchemaProps(options: {
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
+  extraProperties?: Record<string, TSchema>;
+}) {
+  return {
+    ...buildRoutingSchema(),
+    ...buildSendSchema(options),
+    ...buildGatewaySchema(),
+    ...options.extraProperties,
+  };
+}
+
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
@@ -420,7 +509,9 @@ function buildMessageToolSchemaFromActions(
     extraProperties?: Record<string, TSchema>;
   },
 ) {
-  const props = buildMessageToolSchemaProps(options);
+  const props = isSendOnlyActions(actions)
+    ? buildSendOnlyMessageToolSchemaProps(options)
+    : buildMessageToolSchemaProps(options);
   return Type.Object({
     action: stringEnum(actions),
     ...props,
@@ -444,11 +535,13 @@ type MessageToolOptions = {
   currentChannelId?: string;
   currentChannelProvider?: string;
   currentThreadTs?: string;
+  agentThreadId?: string | number;
   currentMessageId?: string | number;
   replyToMode?: "off" | "first" | "all" | "batched";
   hasRepliedRef?: { value: boolean };
   sandboxRoot?: string;
   requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 };
@@ -577,6 +670,8 @@ function buildMessageToolDescription(options?: {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  requireExplicitTarget?: boolean;
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requesterSenderId?: string;
   senderIsOwner?: boolean;
 }): string {
@@ -608,13 +703,35 @@ function buildMessageToolDescription(options?: {
         ChannelMessageActionName | "send"
       >;
       return appendMessageToolReadHint(
-        `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+        appendMessageToolVisibleReplyHint(
+          `${baseDescription} Supports actions: ${sortedActions.join(", ")}.`,
+          resolvedOptions.sourceReplyDeliveryMode,
+          resolvedOptions.requireExplicitTarget,
+        ),
         sortedActions,
       );
     }
   }
 
-  return `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`;
+  return appendMessageToolVisibleReplyHint(
+    `${baseDescription} Supports actions: send, delete, react, poll, pin, threads, and more.`,
+    resolvedOptions.sourceReplyDeliveryMode,
+    resolvedOptions.requireExplicitTarget,
+  );
+}
+
+function appendMessageToolVisibleReplyHint(
+  description: string,
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode,
+  requireExplicitTarget?: boolean,
+): string {
+  if (sourceReplyDeliveryMode !== "message_tool_only") {
+    return description;
+  }
+  const targetGuidance = requireExplicitTarget
+    ? "Include target when sending."
+    : "The target defaults to the current source conversation, so omit target unless sending elsewhere.";
+  return `${description} For this turn, visible replies to the current source conversation must use action="send" with message. ${targetGuidance} Normal final answers are private and are not posted.`;
 }
 
 function appendMessageToolReadHint(
@@ -637,6 +754,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     options?.resolveCommandSecretRefsViaGateway ?? resolveCommandSecretRefsViaGateway;
   const runMessageActionForTool = options?.runMessageAction ?? runMessageAction;
   const agentAccountId = resolveAgentAccountId(options?.agentAccountId);
+  const currentThreadTs =
+    options?.currentThreadTs ??
+    (options?.agentThreadId != null ? stringifyRouteThreadId(options.agentThreadId) : undefined);
+  const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const resolvedAgentId = options?.agentSessionKey
     ? resolveSessionAgentId({
         sessionKey: options.agentSessionKey,
@@ -648,7 +769,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
         cfg: options.config,
         currentChannelProvider: options.currentChannelProvider,
         currentChannelId: options.currentChannelId,
-        currentThreadTs: options.currentThreadTs,
+        currentThreadTs,
         currentMessageId: options.currentMessageId,
         currentAccountId: agentAccountId,
         sessionKey: options.agentSessionKey,
@@ -662,12 +783,14 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     config: options?.config,
     currentChannel: options?.currentChannelProvider,
     currentChannelId: options?.currentChannelId,
-    currentThreadTs: options?.currentThreadTs,
+    currentThreadTs,
     currentMessageId: options?.currentMessageId,
     currentAccountId: agentAccountId,
     sessionKey: options?.agentSessionKey,
     sessionId: options?.sessionId,
     agentId: resolvedAgentId,
+    requireExplicitTarget: options?.requireExplicitTarget,
+    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });
@@ -692,9 +815,10 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       // in tool arguments, and the messaging tool send path has no other tag filtering.
       for (const field of ["text", "content", "message", "caption"]) {
         if (typeof params[field] === "string") {
-          params[field] = stripReasoningTagsFromText(params[field]);
+          params[field] = stripFormattedReasoningMessage(params[field]);
         }
       }
+      params.presentation = sanitizePresentationTextFields(params.presentation);
 
       const action = readStringParam(params, "action", {
         required: true,
@@ -764,16 +888,16 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
       const toolContext =
         options?.currentChannelId ||
         options?.currentChannelProvider ||
-        options?.currentThreadTs ||
+        currentThreadTs ||
         hasCurrentMessageId ||
-        options?.replyToMode ||
+        replyToMode ||
         options?.hasRepliedRef
           ? {
               currentChannelId: options?.currentChannelId,
               currentChannelProvider: options?.currentChannelProvider,
-              currentThreadTs: options?.currentThreadTs,
+              currentThreadTs,
               currentMessageId: options?.currentMessageId,
-              replyToMode: options?.replyToMode,
+              replyToMode,
               hasRepliedRef: options?.hasRepliedRef,
               // Direct tool invocations should not add cross-context decoration.
               // The agent is composing a message, not forwarding from another chat.

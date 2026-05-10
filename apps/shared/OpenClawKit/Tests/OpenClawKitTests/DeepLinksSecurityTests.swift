@@ -2,6 +2,14 @@ import Foundation
 import OpenClawKit
 import Testing
 
+private func setupCode(from payload: String) -> String {
+    Data(payload.utf8)
+        .base64EncodedString()
+        .replacingOccurrences(of: "+", with: "-")
+        .replacingOccurrences(of: "/", with: "_")
+        .replacingOccurrences(of: "=", with: "")
+}
+
 @Suite struct DeepLinksSecurityTests {
     @Test func gatewayDeepLinkRejectsInsecureNonLoopbackWs() {
         let url = URL(
@@ -31,37 +39,126 @@ import Testing
 
     @Test func setupCodeRejectsInsecureNonLoopbackWs() {
         let payload = #"{"url":"ws://attacker.example:18789","bootstrapToken":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        #expect(GatewayConnectDeepLink.fromSetupCode(encoded) == nil)
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
     }
 
     @Test func setupCodeRejectsInsecurePrefixBypassHost() {
         let payload = #"{"url":"ws://127.attacker.example:18789","bootstrapToken":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
-        #expect(GatewayConnectDeepLink.fromSetupCode(encoded) == nil)
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
     }
 
     @Test func setupCodeAllowsLoopbackWs() {
         let payload = #"{"url":"ws://127.0.0.1:18789","bootstrapToken":"tok"}"#
-        let encoded = Data(payload.utf8)
-            .base64EncodedString()
-            .replacingOccurrences(of: "+", with: "-")
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: "=", with: "")
         #expect(
-            GatewayConnectDeepLink.fromSetupCode(encoded) == .init(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
                 host: "127.0.0.1",
                 port: 18789,
                 tls: false,
                 bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeAllowsPrivateLanWs() {
+        let payload = #"{"url":"ws://192.168.1.20:18789","bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "192.168.1.20",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeAllowsMDNSWs() {
+        let payload = #"{"url":"ws://openclaw.local:18789","bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "openclaw.local",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeRejectsTailnetPlaintextWs() {
+        let payload = #"{"url":"ws://gateway.tailnet.ts.net:18789","bootstrapToken":"tok"}"#
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeRejectsCgnatPlaintextWs() {
+        let payload = #"{"url":"ws://100.64.0.9:18789","bootstrapToken":"tok"}"#
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeParsesHostPayload() {
+        let payload = #"{"host":"gateway.tailnet.ts.net","port":443,"tls":true,"bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "gateway.tailnet.ts.net",
+                port: 443,
+                tls: true,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeParsesHostPayloadWithTLSDefaultPort() {
+        let payload = #"{"host":"gateway.tailnet.ts.net","tls":true,"bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "gateway.tailnet.ts.net",
+                port: 443,
+                tls: true,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupCodeRejectsInsecureHostPayload() {
+        let payload = #"{"host":"gateway.tailnet.ts.net","port":18789,"tls":false,"bootstrapToken":"tok"}"#
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeAllowsPrivateLanHostPayload() {
+        let payload = #"{"host":"openclaw.local","port":18789,"tls":false,"bootstrapToken":"tok"}"#
+        #expect(
+            GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == .init(
+                host: "openclaw.local",
+                port: 18789,
+                tls: false,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupInputParsesFullCopiedSetupMessage() {
+        let payload = #"{"url":"wss://gateway.tailnet.ts.net","bootstrapToken":"tok"}"#
+        let message = """
+        Pairing setup code generated.
+
+        Setup code:
+        \(setupCode(from: payload))
+        """
+        #expect(
+            GatewayConnectDeepLink.fromSetupInput(message) == .init(
+                host: "gateway.tailnet.ts.net",
+                port: 443,
+                tls: true,
+                bootstrapToken: "tok",
+                token: nil,
+                password: nil))
+    }
+
+    @Test func setupInputParsesRawGatewayURL() {
+        #expect(
+            GatewayConnectDeepLink.fromSetupInput("wss://gateway.example.com:444") == .init(
+                host: "gateway.example.com",
+                port: 444,
+                tls: true,
+                bootstrapToken: nil,
                 token: nil,
                 password: nil))
     }

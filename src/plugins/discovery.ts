@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import { openBoundaryFileSync } from "../infra/boundary-file-read.js";
+import { readRootJsonObjectSync } from "../infra/json-files.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -28,6 +29,7 @@ import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
@@ -414,25 +416,30 @@ function readPackageManifest(
   rejectHardlinks = true,
   rootRealPath?: string,
 ): PackageManifest | null {
-  const manifestPath = path.join(dir, "package.json");
-  const opened = openBoundaryFileSync({
-    absolutePath: manifestPath,
-    rootPath: dir,
+  const result = readRootJsonObjectSync({
+    rootDir: dir,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
+    relativePath: "package.json",
     boundaryLabel: "plugin package directory",
     rejectHardlinks,
   });
-  if (!opened.ok) {
-    return null;
+  return result.ok ? (result.value as PackageManifest) : null;
+}
+
+function readTrustedPackageManifest(dir: string): PackageManifest | null {
+  return tryReadJsonSync<PackageManifest>(path.join(dir, "package.json"));
+}
+
+function readCandidatePackageManifest(params: {
+  dir: string;
+  origin: PluginOrigin;
+  rejectHardlinks: boolean;
+  rootRealPath?: string;
+}): PackageManifest | null {
+  if (params.origin === "bundled") {
+    return readTrustedPackageManifest(params.dir);
   }
-  try {
-    const raw = fs.readFileSync(opened.fd, "utf-8");
-    return JSON.parse(raw) as PackageManifest;
-  } catch {
-    return null;
-  } finally {
-    fs.closeSync(opened.fd);
-  }
+  return readPackageManifest(params.dir, params.rejectHardlinks, params.rootRealPath);
 }
 
 function deriveIdHint(params: {
@@ -465,6 +472,26 @@ function deriveIdHint(params: {
     return normalizedPackageId;
   }
   return `${normalizedPackageId}/${base}`;
+}
+
+function derivePackagePluginIdHint(params: {
+  manifestId?: string;
+  packageName?: string;
+}): string | undefined {
+  const rawManifestId = params.manifestId?.trim();
+  if (rawManifestId) {
+    return rawManifestId;
+  }
+  const rawPackageName = params.packageName?.trim();
+  if (!rawPackageName) {
+    return undefined;
+  }
+  const unscoped = rawPackageName.includes("/")
+    ? (rawPackageName.split("/").pop() ?? rawPackageName)
+    : rawPackageName;
+  return unscoped.endsWith("-provider") && unscoped.length > "-provider".length
+    ? unscoped.slice(0, -"-provider".length)
+    : unscoped;
 }
 
 function resolveIdHintManifestId(
@@ -545,6 +572,7 @@ function addCandidate(params: {
 function discoverBundleInRoot(params: {
   rootDir: string;
   origin: PluginOrigin;
+  env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
   manifest?: PackageManifest | null;
@@ -558,11 +586,17 @@ function discoverBundleInRoot(params: {
     return "none";
   }
   const rootRealPath = safeRealpathSync(params.rootDir, params.realpathCache) ?? undefined;
+  const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+    origin: params.origin,
+    rootDir: params.rootDir,
+    env: params.env,
+    realpathCache: params.realpathCache,
+  });
   const bundleManifest = loadBundleManifest({
     rootDir: params.rootDir,
     ...(rootRealPath !== undefined ? { rootRealPath } : {}),
     bundleFormat,
-    rejectHardlinks: params.origin !== "bundled",
+    rejectHardlinks,
   });
   if (!bundleManifest.ok) {
     params.diagnostics.push({
@@ -594,6 +628,7 @@ function discoverBundleInRoot(params: {
 function discoverInDirectory(params: {
   dir: string;
   origin: PluginOrigin;
+  env: NodeJS.ProcessEnv;
   ownershipUid?: number | null;
   workspaceDir?: string;
   candidates: PluginCandidate[];
@@ -658,9 +693,19 @@ function discoverInDirectory(params: {
       continue;
     }
 
-    const rejectHardlinks = params.origin !== "bundled";
     const fullPathRealPath = safeRealpathSync(fullPath, params.realpathCache) ?? undefined;
-    const manifest = readPackageManifest(fullPath, rejectHardlinks, fullPathRealPath);
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: fullPath,
+      env: params.env,
+      realpathCache: params.realpathCache,
+    });
+    const manifest = readCandidatePackageManifest({
+      dir: fullPath,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(fullPathRealPath !== undefined ? { rootRealPath: fullPathRealPath } : {}),
+    });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(fullPath, rejectHardlinks, fullPathRealPath);
@@ -681,6 +726,7 @@ function discoverInDirectory(params: {
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
         sourceLabel: fullPath,
         diagnostics: params.diagnostics,
         rejectHardlinks,
@@ -713,6 +759,7 @@ function discoverInDirectory(params: {
     const bundleDiscovery = discoverBundleInRoot({
       rootDir: fullPath,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
       manifest,
@@ -858,9 +905,19 @@ function discoverFromPath(params: {
   }
 
   if (stat.isDirectory()) {
-    const rejectHardlinks = params.origin !== "bundled";
     const resolvedRealPath = safeRealpathSync(resolved, params.realpathCache) ?? undefined;
-    const manifest = readPackageManifest(resolved, rejectHardlinks, resolvedRealPath);
+    const rejectHardlinks = shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: resolved,
+      env: params.env,
+      realpathCache: params.realpathCache,
+    });
+    const manifest = readCandidatePackageManifest({
+      dir: resolved,
+      origin: params.origin,
+      rejectHardlinks,
+      ...(resolvedRealPath !== undefined ? { rootRealPath: resolvedRealPath } : {}),
+    });
     const extensionResolution = resolvePackageExtensionEntries(manifest ?? undefined);
     const extensions = extensionResolution.status === "ok" ? extensionResolution.entries : [];
     const manifestId = resolveIdHintManifestId(resolved, rejectHardlinks, resolvedRealPath);
@@ -881,6 +938,7 @@ function discoverFromPath(params: {
         manifest,
         extensions,
         origin: params.origin,
+        pluginIdHint: derivePackagePluginIdHint({ manifestId, packageName: manifest?.name }),
         sourceLabel: resolved,
         diagnostics: params.diagnostics,
         rejectHardlinks,
@@ -913,6 +971,7 @@ function discoverFromPath(params: {
     const bundleDiscovery = discoverBundleInRoot({
       rootDir: resolved,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
       manifest,
@@ -951,6 +1010,7 @@ function discoverFromPath(params: {
     discoverInDirectory({
       dir: resolved,
       origin: params.origin,
+      env: params.env,
       ownershipUid: params.ownershipUid,
       workspaceDir: params.workspaceDir,
       candidates: params.candidates,
@@ -1024,6 +1084,7 @@ export function discoverOpenClawPlugins(params: {
         discoverInDirectory({
           dir: roots.workspace,
           origin: "workspace",
+          env,
           ownershipUid: params.ownershipUid,
           workspaceDir: workspaceRoot,
           candidates: result.candidates,
@@ -1076,6 +1137,7 @@ export function discoverOpenClawPlugins(params: {
         discoverInDirectory({
           dir: roots.stock,
           origin: "bundled",
+          env,
           ownershipUid: params.ownershipUid,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
@@ -1093,6 +1155,7 @@ export function discoverOpenClawPlugins(params: {
         discoverInDirectory({
           dir: sourceCheckoutExtensionsDir,
           origin: "bundled",
+          env,
           ownershipUid: params.ownershipUid,
           candidates: result.candidates,
           diagnostics: result.diagnostics,
@@ -1119,6 +1182,7 @@ export function discoverOpenClawPlugins(params: {
       discoverInDirectory({
         dir: roots.global,
         origin: "global",
+        env,
         ownershipUid: params.ownershipUid,
         candidates: result.candidates,
         diagnostics: result.diagnostics,

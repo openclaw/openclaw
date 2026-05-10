@@ -258,7 +258,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
 - Telegram is owned by the gateway process.
 - Routing is deterministic: Telegram inbound replies back to Telegram (the model does not pick channels).
-- Inbound messages normalize into the shared channel envelope with reply metadata and media placeholders.
+- Inbound messages normalize into the shared channel envelope with reply metadata, media placeholders, and persisted reply-chain context for Telegram replies the gateway has observed.
 - Group sessions are isolated by group ID. Forum topics append `:topic:<threadId>` to keep topics isolated.
 - DM messages can carry `message_thread_id`; OpenClaw preserves the thread ID for replies but keeps DMs on the flat session by default. Configure `channels.telegram.dm.threadReplies: "inbound"`, `channels.telegram.direct.<chatId>.threadReplies: "inbound"`, `requireTopic: true`, or a matching topic config when you intentionally want DM topic session isolation.
 - Long polling uses grammY runner with per-chat/per-thread sequencing. Overall runner sink concurrency uses `agents.defaults.maxConcurrent`.
@@ -278,8 +278,9 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Requirement:
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
-    - `progress` keeps one editable status draft and updates it with tool progress until final delivery
+    - `progress` keeps one editable status draft for tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
+    - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - legacy `channels.telegram.streamMode` and boolean `streaming` values are detected; run `openclaw doctor --fix` to migrate them to `channels.telegram.streaming.mode`
 
     Tool-progress preview updates are the short status lines shown while tools run, for example command execution, file reads, planning updates, or patch summaries. Telegram keeps these enabled by default to match released OpenClaw behavior from `v2026.4.22` and later. To keep the edited preview for answer text but hide tool-progress lines, set:
@@ -299,6 +300,41 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     }
     ```
 
+    To keep tool-progress visible but hide command/exec text, set:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "partial",
+            "preview": {
+              "commandText": "status"
+            }
+          }
+        }
+      }
+    }
+    ```
+
+    Use `progress` mode when you want visible tool progress without editing the final answer into that same message. Put the command-text policy under `streaming.progress`:
+
+    ```json
+    {
+      "channels": {
+        "telegram": {
+          "streaming": {
+            "mode": "progress",
+            "progress": {
+              "toolProgress": true,
+              "commandText": "status"
+            }
+          }
+        }
+      }
+    }
+    ```
+
     Use `streaming.mode: "off"` only when you want final-only delivery: Telegram preview edits are disabled and generic tool/progress chatter is suppressed instead of being sent as standalone status messages. Approval prompts, media payloads, and errors still route through normal final delivery. Use `streaming.preview.toolProgress: false` when you only want to keep answer preview edits while hiding the tool-progress status lines.
 
     <Note>
@@ -307,9 +343,10 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 
     For text-only replies:
 
-    - short DM/group/topic previews: OpenClaw keeps the same preview message and performs a final edit in place, unless a visible non-preview message was sent after the preview appeared
-    - previews followed by visible non-preview output: OpenClaw sends the completed reply as a fresh final message and cleans up the older preview, so the final answer appears after intermediate output
-    - previews older than about one minute: OpenClaw sends the completed reply as a fresh final message and then cleans up the preview, so Telegram's visible timestamp reflects completion time instead of the preview creation time
+    - short DM/group/topic previews: OpenClaw keeps the same preview message and performs the final edit in place
+    - long text finals that split into multiple Telegram messages reuse the existing preview as the first final chunk when possible, then send only the remaining chunks
+    - progress-mode finals clear the status draft and use normal final delivery instead of editing the draft into the answer
+    - if the final edit fails before the completed text is confirmed, OpenClaw uses normal final delivery and cleans up the stale preview
 
     For complex replies (for example media payloads), OpenClaw falls back to normal final delivery and then cleans up the preview message.
 
@@ -318,6 +355,7 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Telegram-only reasoning stream:
 
     - `/reasoning stream` sends reasoning to the live preview while generating
+    - the reasoning preview is deleted after final delivery; use `/reasoning on` when reasoning should remain visible
     - final answer is sent without reasoning text
 
   </Accordion>
@@ -718,6 +756,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   <Accordion title="Long polling vs webhook">
     Default is long polling. For webhook mode set `channels.telegram.webhookUrl` and `channels.telegram.webhookSecret`; optional `webhookPath`, `webhookHost`, `webhookPort` (defaults `/telegram-webhook`, `127.0.0.1`, `8787`).
 
+    In long-polling mode OpenClaw persists its restart watermark only after an update dispatches successfully. If a handler fails, that update remains retryable in the same process and is not written as completed for restart dedupe.
+
     The local listener binds to `127.0.0.1:8787`. For public ingress, either put a reverse proxy in front of the local port or set `webhookHost: "0.0.0.0"` intentionally.
 
     Webhook mode validates request guards, the Telegram secret token, and the JSON body before returning `200` to Telegram.
@@ -733,18 +773,19 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     - `channels.telegram.timeoutSeconds` overrides Telegram API client timeout (if unset, grammY default applies). Bot clients clamp configured values below the 60-second outbound text/typing request guard so grammY does not abort visible reply delivery before OpenClaw's transport guard and fallback can run. Long polling still uses a 45-second `getUpdates` request guard so idle polls are not abandoned indefinitely.
     - `channels.telegram.pollingStallThresholdMs` defaults to `120000`; tune between `30000` and `600000` only for false-positive polling-stall restarts.
     - group context history uses `channels.telegram.historyLimit` or `messages.groupChat.historyLimit` (default 50); `0` disables.
-    - reply/quote/forward supplemental context is currently passed as received.
+    - reply/quote/forward supplemental context is normalized into one selected conversation context window when the gateway has observed the parent messages; the observed-message cache is persisted beside the session store. Telegram only includes one shallow `reply_to_message` in updates, so chains older than the cache are limited to Telegram's current update payload.
     - Telegram allowlists primarily gate who can trigger the agent, not a full supplemental-context redaction boundary.
     - DM history controls:
       - `channels.telegram.dmHistoryLimit`
       - `channels.telegram.dms["<user_id>"].historyLimit`
     - `channels.telegram.retry` config applies to Telegram send helpers (CLI/tools/actions) for recoverable outbound API errors. Inbound final-reply delivery also uses a bounded safe-send retry for Telegram pre-connect failures, but it does not retry ambiguous post-send network envelopes that could duplicate visible messages.
 
-    CLI send target can be numeric chat ID or username:
+    CLI and message-tool send targets can be numeric chat ID, username, or a forum topic target:
 
 ```bash
 openclaw message send --channel telegram --target 123456789 --message "hi"
 openclaw message send --channel telegram --target @name --message "hi"
+openclaw message send --channel telegram --target -1001234567890:topic:42 --message "hi topic"
 ```
 
     Telegram polls use `openclaw message poll` and support forum topics:

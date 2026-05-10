@@ -7,12 +7,15 @@ import {
   clearPluginRegistryLoadCache,
   enablePluginInConfig,
   loadPluginManifestRegistry,
+  planPluginUninstall,
   replaceConfigFile,
   refreshPluginRegistry,
   resetPluginsCliTestState,
   runtimeLogs,
+  setInstalledPluginIndexInstallRecords,
   writeConfigFile,
   writePersistedInstalledPluginIndexInstallRecords,
+  applyPluginUninstallDirectoryRemoval,
 } from "./plugins-cli-test-helpers.js";
 
 describe("persistPluginInstall", () => {
@@ -120,9 +123,135 @@ describe("persistPluginInstall", () => {
 
     expect(next).toEqual(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalled();
-    expect(
-      runtimeLogs.some((line) => line.includes("Plugin runtime cache invalidation failed")),
-    ).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Plugin runtime cache invalidation failed")]),
+    );
+  });
+
+  it("removes a replaced managed install directory before refreshing the registry", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "clawhub",
+        spec: "clawhub:@openclaw/codex",
+        installPath: "/tmp/openclaw/extensions/codex",
+      },
+    });
+    planPluginUninstall.mockReturnValueOnce({
+      ok: true,
+      config: {} as OpenClawConfig,
+      pluginId: "codex",
+      actions: {
+        entry: false,
+        install: true,
+        allowlist: false,
+        denylist: false,
+        loadPath: false,
+        memorySlot: false,
+        contextEngineSlot: false,
+        channelConfig: false,
+        directory: false,
+      },
+      directoryRemoval: {
+        target: "/tmp/openclaw/extensions/codex",
+      },
+    });
+    applyPluginUninstallDirectoryRemoval.mockResolvedValueOnce({
+      directoryRemoved: true,
+      warnings: [],
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "codex",
+      install: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    expect(planPluginUninstall).toHaveBeenCalledWith({
+      config: {
+        plugins: {
+          installs: {
+            codex: {
+              source: "clawhub",
+              spec: "clawhub:@openclaw/codex",
+              installPath: "/tmp/openclaw/extensions/codex",
+            },
+          },
+        },
+      },
+      pluginId: "codex",
+      deleteFiles: true,
+    });
+    expect(applyPluginUninstallDirectoryRemoval).toHaveBeenCalledWith({
+      target: "/tmp/openclaw/extensions/codex",
+    });
+    const cleanupOrder =
+      applyPluginUninstallDirectoryRemoval.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
+    const refreshOrder = refreshPluginRegistry.mock.invocationCallOrder[0] ?? 0;
+    expect(cleanupOrder).toBeLessThan(refreshOrder);
+    expect(runtimeLogs.join("\n")).toContain(
+      "Removed previous plugin install directory: /tmp/openclaw/extensions/codex",
+    );
+  });
+
+  it("preserves replaced install directories when the new install path overlaps", async () => {
+    const { persistPluginInstall } = await import("./plugins-install-persist.js");
+    const baseConfig = {
+      plugins: {
+        entries: {},
+      },
+    } as OpenClawConfig;
+    const enabledConfig = {
+      plugins: {
+        entries: {
+          codex: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+    enablePluginInConfig.mockReturnValue({ config: enabledConfig });
+    setInstalledPluginIndexInstallRecords({
+      codex: {
+        source: "npm",
+        spec: "@openclaw/codex",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    await persistPluginInstall({
+      snapshot: {
+        config: baseConfig,
+        baseHash: "config-1",
+      },
+      pluginId: "codex",
+      install: {
+        source: "npm",
+        spec: "@openclaw/codex@latest",
+        installPath: "/tmp/openclaw/npm/node_modules/@openclaw/codex",
+      },
+    });
+
+    expect(planPluginUninstall).not.toHaveBeenCalled();
+    expect(applyPluginUninstallDirectoryRemoval).not.toHaveBeenCalled();
   });
 
   it("warns when an installed npm plugin remains shadowed by a config-selected source", async () => {
@@ -259,7 +388,9 @@ describe("persistPluginInstall", () => {
     expect(next).toEqual(enabledConfig);
     expect(refreshPluginRegistry).toHaveBeenCalled();
     expect(clearPluginRegistryLoadCache).toHaveBeenCalledTimes(1);
-    expect(runtimeLogs.some((line) => line.includes("Plugin registry refresh failed"))).toBe(true);
+    expect(runtimeLogs).toEqual(
+      expect.arrayContaining([expect.stringContaining("Plugin registry refresh failed")]),
+    );
   });
 
   it("removes stale denylist entries before enabling installed plugins", async () => {

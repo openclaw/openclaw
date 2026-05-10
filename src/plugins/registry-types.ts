@@ -44,7 +44,9 @@ import type {
   OpenClawGatewayDiscoveryService,
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteHandler,
+  OpenClawPluginHttpRouteUpgradeHandler,
   OpenClawPluginHttpRouteMatch,
+  OpenClawPluginHostedMediaResolver,
   OpenClawPluginReloadRegistration,
   OpenClawPluginSecurityAuditCollector,
   OpenClawPluginService,
@@ -62,6 +64,7 @@ import type {
   VideoGenerationProviderPlugin,
   WebFetchProviderPlugin,
   WebSearchProviderPlugin,
+  UnifiedModelCatalogProviderPlugin,
 } from "./types.js";
 
 export type PluginToolRegistration = {
@@ -79,6 +82,7 @@ export type PluginCliRegistration = {
   pluginId: string;
   pluginName?: string;
   register: OpenClawPluginCliRegistrar;
+  parentPath: string[];
   commands: string[];
   descriptors: OpenClawPluginCliCommandDescriptor[];
   source: string;
@@ -89,10 +93,23 @@ export type PluginHttpRouteRegistration = {
   pluginId?: string;
   path: string;
   handler: OpenClawPluginHttpRouteHandler;
+  handleUpgrade?: OpenClawPluginHttpRouteUpgradeHandler;
   auth: OpenClawPluginHttpRouteAuth;
   match: OpenClawPluginHttpRouteMatch;
   gatewayRuntimeScopeSurface?: OpenClawPluginGatewayRuntimeScopeSurface;
+  nodeCapability?: {
+    surface: string;
+    ttlMs?: number;
+  };
   source?: string;
+};
+
+export type PluginHostedMediaResolverRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  resolver: OpenClawPluginHostedMediaResolver;
+  source: string;
+  rootDir?: string;
 };
 
 export type PluginChannelRegistration = {
@@ -116,6 +133,14 @@ export type PluginProviderRegistration = {
   pluginId: string;
   pluginName?: string;
   provider: ProviderPlugin;
+  source: string;
+  rootDir?: string;
+};
+
+export type PluginModelCatalogProviderRegistration = {
+  pluginId: string;
+  pluginName?: string;
+  provider: UnifiedModelCatalogProviderPlugin;
   source: string;
   rootDir?: string;
 };
@@ -205,6 +230,7 @@ export type PluginServiceRegistration = {
   service: OpenClawPluginService;
   source: string;
   origin: PluginOrigin;
+  trustedOfficialInstall?: boolean;
   rootDir?: string;
 };
 
@@ -327,6 +353,7 @@ export type PluginRecord = {
   id: string;
   name: string;
   version?: string;
+  packageName?: string;
   description?: string;
   format?: PluginFormat;
   bundleFormat?: PluginBundleFormat;
@@ -336,6 +363,7 @@ export type PluginRecord = {
   rootDir?: string;
   origin: PluginOrigin;
   workspaceDir?: string;
+  trustedOfficialInstall?: boolean;
   enabled: boolean;
   explicitlyEnabled?: boolean;
   activated?: boolean;
@@ -389,6 +417,7 @@ export type PluginRegistry = {
   channels: PluginChannelRegistration[];
   channelSetups: PluginChannelSetupRegistration[];
   providers: PluginProviderRegistration[];
+  modelCatalogProviders: PluginModelCatalogProviderRegistration[];
   cliBackends?: PluginCliBackendRegistration[];
   textTransforms: PluginTextTransformsRegistration[];
   speechProviders: PluginSpeechProviderRegistration[];
@@ -409,6 +438,7 @@ export type PluginRegistry = {
   coreGatewayMethodNames?: string[];
   gatewayMethodScopes?: Partial<Record<string, OperatorScope>>;
   httpRoutes: PluginHttpRouteRegistration[];
+  hostedMediaResolvers?: PluginHostedMediaResolverRegistration[];
   cliRegistrars: PluginCliRegistration[];
   reloads?: PluginReloadRegistration[];
   nodeHostCommands?: PluginNodeHostCommandRegistration[];

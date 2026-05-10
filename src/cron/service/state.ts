@@ -1,13 +1,15 @@
 import type { CronConfig } from "../../config/types.cron.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
 import type {
+  CronAgentExecutionPhaseUpdate,
+  CronAgentExecutionStarted,
   CronDeliveryStatus,
   CronDeliveryTrace,
   CronJob,
   CronJobCreate,
   CronJobPatch,
+  CronRunDiagnostics,
   CronMessageChannel,
-  CronAgentExecutionStarted,
   CronRunOutcome,
   CronRunStatus,
   CronRunTelemetry,
@@ -24,6 +26,7 @@ export type CronEvent = {
   status?: CronRunStatus;
   error?: string;
   summary?: string;
+  diagnostics?: CronRunDiagnostics;
   delivered?: boolean;
   deliveryStatus?: CronDeliveryStatus;
   deliveryError?: string;
@@ -98,6 +101,7 @@ export type CronServiceDeps = {
     message: string;
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
+    onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
   }) => Promise<
     {
       summary?: string;

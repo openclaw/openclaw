@@ -3,6 +3,13 @@
 // register quickly inside gateway startup and Docker e2e runs.
 
 import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import {
+  abortEmbeddedPiRun,
+  clearActiveEmbeddedRun,
+  queueEmbeddedPiMessageWithOutcome,
+  setActiveEmbeddedRun,
+  type EmbeddedPiQueueMessageOptions,
+} from "../agents/pi-embedded-runner/runs.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
 import { redactToolDetail } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -86,18 +93,29 @@ export {
   filterToolResultMediaUrls,
 } from "../agents/pi-embedded-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
-export { resolveOpenClawAgentDir } from "../agents/agent-paths.js";
-export { resolveSessionAgentIds } from "../agents/agent-scope.js";
+export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
+export {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  resolveSessionAgentIds,
+} from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
 export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
 export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
-export {
-  abortEmbeddedPiRun as abortAgentHarnessRun,
-  clearActiveEmbeddedRun,
-  queueEmbeddedPiMessage as queueAgentHarnessMessage,
-  setActiveEmbeddedRun,
-} from "../agents/pi-embedded-runner/runs.js";
+export { abortEmbeddedPiRun as abortAgentHarnessRun, clearActiveEmbeddedRun, setActiveEmbeddedRun };
+
+/**
+ * @deprecated Active-run queueing is an internal runtime concern. Use current
+ * runtime hooks instead of steering a harness through this legacy boolean API.
+ */
+export function queueAgentHarnessMessage(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): boolean {
+  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+}
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,
@@ -154,8 +172,14 @@ export {
 /**
  * Derive the same compact user-facing tool detail that Pi uses for progress logs.
  */
-export function inferToolMetaFromArgs(toolName: string, args: unknown): string | undefined {
-  const display = resolveToolDisplay({ name: toolName, args });
+export type ToolProgressDetailMode = "explain" | "raw";
+
+export function inferToolMetaFromArgs(
+  toolName: string,
+  args: unknown,
+  options?: { detailMode?: ToolProgressDetailMode },
+): string | undefined {
+  const display = resolveToolDisplay({ name: toolName, args, detailMode: options?.detailMode });
   return formatToolDetail(display);
 }
 

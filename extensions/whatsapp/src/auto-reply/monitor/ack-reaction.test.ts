@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { WhatsAppSendResult } from "../../inbound/send-result.js";
 import type { WebInboundMessage } from "../../inbound/types.js";
@@ -16,7 +16,6 @@ function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendRes
   return {
     kind,
     messageId: id,
-    messageIds: [id],
     keys: [{ id }],
     providerAccepted: true,
   };

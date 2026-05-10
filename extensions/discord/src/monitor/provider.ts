@@ -2,8 +2,8 @@ import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract
 import {
   listNativeCommandSpecsForConfig,
   listSkillCommandsForAgents,
-} from "openclaw/plugin-sdk/command-auth";
-import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/command-auth-native";
+import type { OpenClawConfig, ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createConnectedChannelStatusPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   resolveNativeCommandsEnabled,
@@ -29,7 +29,6 @@ import {
 import { Client } from "../internal/discord.js";
 import { GatewayCloseCodes } from "../internal/gateway.js";
 import { fetchDiscordApplicationId, parseApplicationIdFromToken } from "../probe.js";
-import { resolveDiscordProxyFetchForAccount } from "../proxy-fetch.js";
 import { normalizeDiscordToken } from "../token.js";
 import { resolveDiscordVoiceEnabled } from "../voice/config.js";
 import { createDiscordAutoPresenceController } from "./auto-presence.js";
@@ -203,7 +202,6 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
   const discordAccountThreadBindings =
     cfg.channels?.discord?.accounts?.[account.accountId]?.threadBindings;
   const discordRestFetch = resolveDiscordRestFetch(rawDiscordCfg.proxy, runtime);
-  const discordProxyFetch = resolveDiscordProxyFetchForAccount(account, cfg, runtime);
   const dmConfig = rawDiscordCfg.dm;
   const configuredDmAllowFrom = resolveDiscordAccountAllowFrom({
     cfg,
@@ -281,6 +279,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
     token,
     guildEntries,
     allowFrom,
+    discordConfig: discordCfg,
     fetcher: discordRestFetch,
     runtime,
   });
@@ -429,7 +428,7 @@ export async function monitorDiscordProvider(opts: MonitorDiscordOpts = {}) {
       accountId: account.accountId,
       applicationId,
       token,
-      proxyFetch: discordProxyFetch,
+      restFetch: discordRestFetch,
       commands,
       components,
       modals,

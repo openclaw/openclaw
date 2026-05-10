@@ -5,7 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
-import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node.mjs";
+import { isRestartRelevantRunNodePath, runNodeWatchedPaths } from "./run-node-watch-paths.mjs";
 
 const WATCH_NODE_RUNNER = "scripts/run-node.mjs";
 const WATCH_RESTART_SIGNAL = "SIGTERM";
@@ -255,19 +255,6 @@ const releaseWatchLock = (lockHandle) => {
  * }} [params]
  */
 export async function runWatchMain(params = {}) {
-  let createWatcher = params.createWatcher;
-  if (!createWatcher) {
-    try {
-      const chokidarModule = await (params.loadChokidar ?? loadChokidar)();
-      createWatcher = (watchPaths, options) => chokidarModule.watch(watchPaths, options);
-    } catch (err) {
-      if (isInvalidPackageConfigError(err)) {
-        printFriendlyWatchStartupError(err);
-      }
-      throw err;
-    }
-  }
-
   const deps = {
     spawn: params.spawn ?? spawn,
     process: params.process ?? process,
@@ -278,7 +265,8 @@ export async function runWatchMain(params = {}) {
     sleep: params.sleep ?? sleep,
     signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
     lockDisabled: params.lockDisabled === true,
-    createWatcher,
+    createWatcher: params.createWatcher,
+    loadChokidar: params.loadChokidar ?? loadChokidar,
     watchPaths: params.watchPaths ?? runNodeWatchedPaths,
   };
 
@@ -293,21 +281,16 @@ export async function runWatchMain(params = {}) {
     childEnv.OPENCLAW_WATCH_COMMAND = deps.args.join(" ");
   }
 
-  return await new Promise((resolve) => {
+  return await new Promise((resolve, reject) => {
     let settled = false;
     let shuttingDown = false;
     let restartRequested = false;
     let watchProcess = null;
+    let watcher = null;
     let lockHandle = null;
     let autoDoctorAttempted = false;
     let onSigInt;
     let onSigTerm;
-
-    const watcher = deps.createWatcher(deps.watchPaths, {
-      ignoreInitial: true,
-      ignored: (watchPath, stats) =>
-        isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
-    });
 
     const settle = (code) => {
       if (settled) {
@@ -321,7 +304,7 @@ export async function runWatchMain(params = {}) {
         deps.process.off("SIGTERM", onSigTerm);
       }
       releaseWatchLock(lockHandle);
-      watcher.close?.().catch?.(() => {});
+      watcher?.close?.().catch?.(() => {});
       resolve(code);
     };
 
@@ -352,6 +335,46 @@ export async function runWatchMain(params = {}) {
         }
         settle(exitSignal ? 1 : (exitCode ?? 1));
       });
+    };
+
+    const handleWatcherError = () => {
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      settle(1);
+    };
+
+    const rejectWatcherStartupError = (err) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      shuttingDown = true;
+      if (watchProcess && typeof watchProcess.kill === "function") {
+        watchProcess.kill(WATCH_RESTART_SIGNAL);
+      }
+      releaseWatchLock(lockHandle);
+      watcher?.close?.().catch?.(() => {});
+      if (onSigInt) {
+        deps.process.off("SIGINT", onSigInt);
+      }
+      if (onSigTerm) {
+        deps.process.off("SIGTERM", onSigTerm);
+      }
+      reject(err);
+    };
+
+    const resolveCreateWatcher = async () => {
+      try {
+        const chokidarModule = await deps.loadChokidar();
+        return (watchPaths, options) => chokidarModule.watch(watchPaths, options);
+      } catch (err) {
+        if (isInvalidPackageConfigError(err)) {
+          printFriendlyWatchStartupError(err);
+        }
+        throw err;
+      }
     };
 
     const runAutoDoctorAndRestart = () => {
@@ -402,16 +425,28 @@ export async function runWatchMain(params = {}) {
       }
     };
 
-    watcher.on("add", requestRestart);
-    watcher.on("change", requestRestart);
-    watcher.on("unlink", requestRestart);
-    watcher.on("error", () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
+    const attachWatcher = (createWatcher) => {
+      if (settled) {
+        return;
       }
-      settle(1);
-    });
+      watcher = createWatcher(deps.watchPaths, {
+        ignoreInitial: true,
+        ignored: (watchPath, stats) =>
+          isIgnoredWatchPath(watchPath, deps.cwd, deps.watchPaths, stats),
+      });
+      watcher.on("add", requestRestart);
+      watcher.on("change", requestRestart);
+      watcher.on("unlink", requestRestart);
+      watcher.on("error", handleWatcherError);
+    };
+
+    const startWatcher = () => {
+      if (deps.createWatcher) {
+        attachWatcher(deps.createWatcher);
+        return;
+      }
+      void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
+    };
 
     onSigInt = () => {
       shuttingDown = true;
@@ -434,6 +469,7 @@ export async function runWatchMain(params = {}) {
     if (deps.lockDisabled) {
       lockHandle = { lockPath: "", pid: deps.process.pid };
       startRunner();
+      startWatcher();
       return;
     }
 
@@ -445,6 +481,7 @@ export async function runWatchMain(params = {}) {
         }
         lockHandle = handle;
         startRunner();
+        startWatcher();
       })
       .catch((error) => {
         logWatcher(`Failed to acquire watcher lock: ${error?.message ?? "unknown error"}`, deps);

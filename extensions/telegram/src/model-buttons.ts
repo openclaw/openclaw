@@ -63,7 +63,7 @@ export function parseModelCallbackData(data: string): ParsedModelCallback | null
   }
 
   // mdl_list_{provider}_{page}
-  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_-]+)_(\d+)$/i);
+  const listMatch = trimmed.match(/^mdl_list_([a-z0-9_.-]+)_(\d+)$/i);
   if (listMatch) {
     const [, provider, pageStr] = listMatch;
     const page = Number.parseInt(pageStr ?? "1", 10);
@@ -217,7 +217,8 @@ export function buildModelsKeyboard(params: ModelsKeyboardParams): ButtonRow[] {
     }
 
     const isCurrentModel = isCurrentModelSelection({ currentModel, provider, model });
-    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? model;
+    const fallbackLabel = model.includes("/") ? `${provider}/${model}` : model;
+    const displayLabel = modelNames?.get(`${provider}/${model}`) ?? fallbackLabel;
     const displayText = truncateModelId(displayLabel, 38);
     const text = isCurrentModel ? `${displayText} ✓` : displayText;
 

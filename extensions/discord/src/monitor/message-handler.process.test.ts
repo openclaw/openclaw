@@ -96,14 +96,16 @@ type DispatchInboundParams = {
     sendFinalReply: (payload: ReplyPayload) => boolean | Promise<boolean>;
   };
   replyOptions?: {
-    onReasoningStream?: () => Promise<void> | void;
+    onReasoningStream?: (payload?: { text?: string }) => Promise<void> | void;
     onReasoningEnd?: () => Promise<void> | void;
     onToolStart?: (payload: {
       name?: string;
       phase?: string;
       args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
     }) => Promise<void> | void;
     onItemEvent?: (payload: {
+      kind?: string;
       progressText?: string;
       summary?: string;
       title?: string;
@@ -125,6 +127,10 @@ type DispatchInboundParams = {
       phase?: string;
       summary?: string;
       title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
@@ -138,9 +144,11 @@ type DispatchInboundParams = {
 };
 const dispatchInboundMessage = vi.hoisted(() =>
   vi.fn<
-    (
-      params?: DispatchInboundParams,
-    ) => Promise<{ queuedFinal: boolean; counts: { final: number; tool: number; block: number } }>
+    (params?: DispatchInboundParams) => Promise<{
+      queuedFinal: boolean;
+      counts: { final: number; tool: number; block: number };
+      failedCounts?: { final?: number; tool?: number; block?: number };
+    }>
   >(async (_params?: DispatchInboundParams) => ({
     queuedFinal: false,
     counts: { final: 0, tool: 0, block: 0 },
@@ -437,11 +445,34 @@ function getReactionEmojis(): string[] {
   ).map((call) => call[2]);
 }
 
-function expectAckReactionRuntimeOptions(params?: {
-  accountId?: string;
-  ackReaction?: string;
-  removeAckAfterReply?: boolean;
-}) {
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(typeof value).toBe("object");
+  expect(value).not.toBeNull();
+  if (typeof value !== "object" || value === null) {
+    throw new Error(`${label} was not an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function expectAckReactionRuntimeOptions(
+  options: unknown,
+  params?: {
+    accountId?: string;
+    ackReaction?: string;
+    removeAckAfterReply?: boolean;
+  },
+) {
+  const optionRecord = requireRecord(options, "reaction runtime options");
+  requireRecord(optionRecord.rest, "reaction REST client");
+  if (params?.accountId) {
+    expect(optionRecord.accountId).toBe(params.accountId);
+  }
   const messages: Record<string, unknown> = {};
   if (params?.ackReaction) {
     messages.ackReaction = params.ackReaction;
@@ -449,13 +480,52 @@ function expectAckReactionRuntimeOptions(params?: {
   if (params?.removeAckAfterReply !== undefined) {
     messages.removeAckAfterReply = params.removeAckAfterReply;
   }
-  return expect.objectContaining({
-    rest: expect.anything(),
-    ...(Object.keys(messages).length > 0
-      ? { cfg: expect.objectContaining({ messages: expect.objectContaining(messages) }) }
-      : {}),
-    ...(params?.accountId ? { accountId: params.accountId } : {}),
-  });
+  if (Object.keys(messages).length > 0) {
+    const cfg = requireRecord(optionRecord.cfg, "reaction config");
+    expectRecordFields(requireRecord(cfg.messages, "reaction message config"), messages);
+  }
+}
+
+function requireReactionCall(
+  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
+  index: number,
+) {
+  const call = mock.mock.calls[index] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error(`missing reaction call ${index + 1}`);
+  }
+  return call;
+}
+
+function expectReactionCallAt(
+  mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
+  index: number,
+  emoji: string,
+  params?: {
+    accountId?: string;
+    ackReaction?: string;
+    removeAckAfterReply?: boolean;
+    channelId?: string;
+    messageId?: string;
+  },
+) {
+  const call = requireReactionCall(mock, index);
+  expect(call[0]).toBe(params?.channelId ?? "c1");
+  expect(call[1]).toBe(params?.messageId ?? "m1");
+  expect(call[2]).toBe(emoji);
+  expectAckReactionRuntimeOptions(call[3], params);
+}
+
+function expectReactionCallsContain(channelId: string, messageId: string, emoji: string) {
+  const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
+    [string, string, string]
+  >;
+  const hasCall = calls.some(
+    ([actualChannelId, actualMessageId, actualEmoji]) =>
+      actualChannelId === channelId && actualMessageId === messageId && actualEmoji === emoji,
+  );
+  expect(hasCall).toBe(true);
 }
 
 function expectReactAckCallAt(
@@ -469,13 +539,7 @@ function expectReactAckCallAt(
     removeAckAfterReply?: boolean;
   },
 ) {
-  expect(sendMocks.reactMessageDiscord).toHaveBeenNthCalledWith(
-    index + 1,
-    params?.channelId ?? "c1",
-    params?.messageId ?? "m1",
-    emoji,
-    expectAckReactionRuntimeOptions(params),
-  );
+  expectReactionCallAt(sendMocks.reactMessageDiscord, index, emoji, params);
 }
 
 function expectRemoveAckCallAt(
@@ -489,13 +553,7 @@ function expectRemoveAckCallAt(
     removeAckAfterReply?: boolean;
   },
 ) {
-  expect(sendMocks.removeReactionDiscord).toHaveBeenNthCalledWith(
-    index + 1,
-    params?.channelId ?? "c1",
-    params?.messageId ?? "m1",
-    emoji,
-    expectAckReactionRuntimeOptions(params),
-  );
+  expectReactionCallAt(sendMocks.removeReactionDiscord, index, emoji, params);
 }
 
 function createMockDraftStreamForTest() {
@@ -504,13 +562,20 @@ function createMockDraftStreamForTest() {
   return draftStream;
 }
 
+function expectPreviewEditContent(content: string) {
+  const call = editMessageDiscord.mock.calls[0] as unknown[] | undefined;
+  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error("missing preview edit call");
+  }
+  expect(call[0]).toBe("c1");
+  expect(call[1]).toBe("preview-1");
+  expect(call[2]).toEqual({ content });
+  requireRecord(requireRecord(call[3], "preview edit options").rest, "preview edit REST client");
+}
+
 function expectSinglePreviewEdit() {
-  expect(editMessageDiscord).toHaveBeenCalledWith(
-    "c1",
-    "preview-1",
-    { content: "Hello\nWorld" },
-    expect.objectContaining({ rest: expect.anything() }),
-  );
+  expectPreviewEditContent("Hello\nWorld");
   expect(deliverDiscordReply).not.toHaveBeenCalled();
 }
 
@@ -593,12 +658,13 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
-    expect(sendMocks.reactMessageDiscord.mock.calls[0]?.[3]).toEqual(
-      expect.objectContaining({ rest: feedbackRest }),
+    const feedbackOptions = requireRecord(
+      sendMocks.reactMessageDiscord.mock.calls[0]?.[3],
+      "feedback reaction options",
     );
-    expect(deliverDiscordReply).toHaveBeenCalledWith(
-      expect.objectContaining({ rest: deliveryRest }),
-    );
+    expect(feedbackOptions.rest).toBe(feedbackRest);
+    const deliveryParams = requireRecord(deliverDiscordReply.mock.calls[0]?.[0], "delivery params");
+    expect(deliveryParams.rest).toBe(deliveryRest);
     expect(feedbackRest).not.toBe(deliveryRest);
   });
 
@@ -618,6 +684,22 @@ describe("processDiscordMessage ack reactions", () => {
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.thinking);
     expect(emojis).not.toContain(DEFAULT_EMOJIS.coding);
+  });
+
+  it("marks automatic visible replies as failed when final Discord delivery fails", async () => {
+    dispatchInboundMessage.mockResolvedValueOnce({
+      queuedFinal: false,
+      counts: { final: 0, tool: 0, block: 0 },
+      failedCounts: { final: 1 },
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext();
+
+    await runProcessDiscordMessage(ctx);
+
+    const emojis = getReactionEmojis();
+    expect(emojis).toContain(DEFAULT_EMOJIS.error);
+    expect(emojis).not.toContain(DEFAULT_EMOJIS.done);
   });
 
   it("can bind status reactions to an explicitly tracked reaction target", async () => {
@@ -645,12 +727,9 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
     await vi.runAllTimersAsync();
 
-    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
-      [string, string, string]
-    >;
-    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "📈"]));
-    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", "✉️"]));
-    expect(calls).toContainEqual(expect.arrayContaining(["c1", "m1", DEFAULT_EMOJIS.done]));
+    expectReactionCallsContain("c1", "m1", "📈");
+    expectReactionCallsContain("c1", "m1", "✉️");
+    expectReactionCallsContain("c1", "m1", DEFAULT_EMOJIS.done);
   });
 
   it("resolves tracked reaction to targets like the Discord reaction action", async () => {
@@ -678,21 +757,25 @@ describe("processDiscordMessage ack reactions", () => {
     await runProcessDiscordMessage(ctx);
     await vi.runAllTimersAsync();
 
-    expect(discordTargetMocks.resolveDiscordTargetChannelId).toHaveBeenCalledWith(
-      "user:u1",
-      expect.objectContaining({ accountId: "default" }),
+    const resolveCall = discordTargetMocks.resolveDiscordTargetChannelId.mock.calls[0] as
+      | unknown[]
+      | undefined;
+    expect(resolveCall).toBeDefined();
+    if (!resolveCall) {
+      throw new Error("missing Discord target resolve call");
+    }
+    expect(resolveCall[0]).toBe("user:u1");
+    expect(requireRecord(resolveCall[1], "Discord target resolve options").accountId).toBe(
+      "default",
     );
-    const calls = sendMocks.reactMessageDiscord.mock.calls as unknown as Array<
-      [string, string, string]
-    >;
-    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "📈"]));
-    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", "✉️"]));
-    expect(calls).toContainEqual(expect.arrayContaining(["dm-u1", "m1", DEFAULT_EMOJIS.done]));
+    expectReactionCallsContain("dm-u1", "m1", "📈");
+    expectReactionCallsContain("dm-u1", "m1", "✉️");
+    expectReactionCallsContain("dm-u1", "m1", DEFAULT_EMOJIS.done);
   });
 
   it("shows stall emojis for long no-progress runs", async () => {
     vi.useFakeTimers();
-    let releaseDispatch!: () => void;
+    let releaseDispatch: (() => void) | undefined;
     const dispatchGate = new Promise<void>((resolve) => {
       releaseDispatch = () => resolve();
     });
@@ -705,6 +788,9 @@ describe("processDiscordMessage ack reactions", () => {
     const runPromise = runProcessDiscordMessage(ctx);
 
     await vi.advanceTimersByTimeAsync(30_001);
+    if (!releaseDispatch) {
+      throw new Error("Expected Discord dispatch release callback to be initialized");
+    }
     releaseDispatch();
     await vi.runAllTimersAsync();
 
@@ -884,7 +970,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       BodyForAgent: "hello from discord voice",
       CommandBody: "hello from discord voice",
       Transcript: "hello from discord voice",
@@ -912,7 +998,7 @@ describe("processDiscordMessage session routing", () => {
       to: "user:U1",
       accountId: "default",
     });
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       ChatType: "direct",
       From: "discord:U1",
       To: "user:U1",
@@ -951,16 +1037,22 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastRouteUpdate()).toMatchObject({
+    expectRecordFields(requireRecord(getLastRouteUpdate(), "last route update"), {
       sessionKey: "agent:main:main",
       channel: "discord",
       to: "user:222",
       accountId: "default",
-      mainDmOwnerPin: {
+    });
+    expectRecordFields(
+      requireRecord(
+        requireRecord(getLastRouteUpdate(), "last route update").mainDmOwnerPin,
+        "main DM owner pin",
+      ),
+      {
         ownerRecipient: "111",
         senderRecipient: "222",
       },
-    });
+    );
   });
 
   it("stores group lastRoute with channel target", async () => {
@@ -989,7 +1081,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchReplyOptions()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
       disableBlockStreaming: true,
     });
@@ -1071,7 +1163,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       MessageSid: "orig-123",
       MessageSidFull: "proxy-456",
     });
@@ -1116,7 +1208,7 @@ describe("processDiscordMessage session routing", () => {
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = createThreadBindingManager({
-      cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+      cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1142,7 +1234,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:subagent:child",
       MessageThreadId: "thread-1",
     });
@@ -1175,7 +1267,7 @@ describe("processDiscordMessage session routing", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: "agent:main:discord:channel:thread-1",
       MessageThreadId: "thread-1",
       ModelParentSessionKey: "agent:main:discord:channel:parent-1",
@@ -1219,7 +1311,7 @@ describe("processDiscordMessage session routing", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(rest.get).toHaveBeenCalled();
-    expect(getLastDispatchCtx()).toMatchObject({
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
       SessionKey: threadSessionKey,
       MessageThreadId: "thread-1",
     });
@@ -1268,8 +1360,38 @@ describe("processDiscordMessage draft streaming", () => {
     expectSinglePreviewEdit();
   });
 
-  it("keeps preview streaming off by default when streaming is unset", async () => {
+  it("defaults unset Discord preview streaming to progress mode without drafting text-only turns", async () => {
     await runSingleChunkFinalScenario({ maxLinesPerMessage: 5 });
+    expect(createDiscordDraftStream).toHaveBeenCalledTimes(1);
+    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams Discord tool progress by default when streaming is unset", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
+      await params?.dispatcher.sendFinalReply({ text: "done" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: { maxLinesPerMessage: 5 },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates).toEqual(["Pinching...\n🛠️ Exec\n• exec done"]);
+    expectPreviewEditContent("done");
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("keeps Discord preview streaming off when explicitly disabled", async () => {
+    await runSingleChunkFinalScenario({ streaming: { mode: "off" }, maxLinesPerMessage: 5 });
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
     expect(editMessageDiscord).not.toHaveBeenCalled();
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
@@ -1303,12 +1425,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(editMessageDiscord).toHaveBeenCalledWith(
-      "c1",
-      "preview-1",
-      { content: longReply },
-      expect.objectContaining({ rest: expect.anything() }),
-    );
+    expectPreviewEditContent(longReply);
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -1473,9 +1590,12 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledTimes(1);
     expect(draftStream.update).toHaveBeenCalledWith("Shelling");
     expect(draftStream.flush).toHaveBeenCalledTimes(1);
-    expect(dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions).toMatchObject({
-      suppressDefaultToolProgressMessages: true,
-    });
+    expect(
+      requireRecord(
+        dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions,
+        "dispatch reply options",
+      ).suppressDefaultToolProgressMessages,
+    ).toBe(true);
   });
 
   it("does not start Discord progress drafts for text-only accepted turns", async () => {
@@ -1524,14 +1644,200 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: exec\n• exec done");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• exec done");
     expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).toHaveBeenCalledWith(
-      "c1",
-      "preview-1",
-      { content: "done" },
-      expect.objectContaining({ rest: expect.anything() }),
+    expectPreviewEditContent("done");
+  });
+
+  it("uses raw tool-progress detail in Discord progress drafts", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
     );
+  });
+
+  it("can hide raw command progress text in Discord progress drafts by config", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({
+        name: "exec",
+        phase: "start",
+        args: { command: "pnpm test -- --watch=false" },
+        detailMode: "raw",
+      });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "done" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+            commandText: "status",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
+  });
+
+  it("keeps Discord progress lines below the configured label", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "first", phase: "start" });
+      await params?.replyOptions?.onToolStart?.({ name: "second", phase: "start" });
+      await params?.replyOptions?.onToolStart?.({ name: "third", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+            maxLines: 3,
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenNthCalledWith(1, "Clawing...\n🧩 First\n🧩 Second");
+    expect(draftStream.update).toHaveBeenNthCalledWith(2, "🧩 First\n🧩 Second\n🧩 Third");
+  });
+
+  it("skips empty apply_patch starts and renders the patch summary", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "apply_patch", phase: "start" });
+      await params?.replyOptions?.onPatchSummary?.({
+        phase: "end",
+        name: "apply_patch",
+        summary: "1 modified",
+        modified: ["extensions/discord/src/monitor/message-handler.draft-preview.ts"],
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n🩹 1 modified; extensions/discord/src/monitor/message-handler.draft-prev…",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.every((update) => !update.includes("Apply Patch"))).toBe(true);
+  });
+
+  it("shows reasoning text instead of a bare Reasoning progress line", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({
+        kind: "analysis",
+        title: "Reasoning",
+      });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Reading the event projector" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n🛠️ Exec\n• _Reading the event projector_",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.every((update) => !update.includes("Reasoning"))).toBe(true);
+  });
+
+  it("replaces reasoning snapshots instead of appending duplicates", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onReasoningStream?.({ text: "Checking files" });
+      await params?.replyOptions?.onReasoningStream?.({
+        text: "Checking files and tests",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Clawing...",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Clawing...\n🛠️ Exec\n• _Checking files and tests_",
+    );
+    const updates = draftStream.update.mock.calls.map((call) => call[0]);
+    expect(updates.some((update) => update.includes("_Checking files_Reasoning:"))).toBe(false);
   });
 
   it("keeps Discord progress lines across assistant boundaries", async () => {
@@ -1557,11 +1863,11 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n• tool: first\n• tool: second");
+    expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🧩 First\n🧩 Second");
     expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
   });
 
-  it("keeps standalone Discord tool progress when partial preview lines are disabled", async () => {
+  it("suppresses standalone Discord tool progress when partial preview lines are disabled", async () => {
     createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async () => createNoQueuedDispatchResult());
@@ -1581,7 +1887,7 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(
       dispatchInboundMessage.mock.calls[0]?.[0]?.replyOptions?.suppressDefaultToolProgressMessages,
-    ).toBeUndefined();
+    ).toBe(true);
   });
 
   it("strips reply tags from preview partials", async () => {

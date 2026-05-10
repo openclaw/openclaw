@@ -80,37 +80,38 @@ describe("agentsListCommand", () => {
 
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
     const summary = (runtime.json[0] as Array<Record<string, unknown>>)[0];
-    expect(summary).toMatchObject({ id: "main" });
+    expect(summary?.id).toBe("main");
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
   });
 
   it("keeps provider details available for JSON callers that request bindings", async () => {
     const runtime = createRuntime();
+    const cfg = createConfig();
+    const providerStatus = new Map();
+    requireValidConfigMock.mockResolvedValueOnce(cfg);
+    buildProviderStatusIndexMock.mockResolvedValueOnce(providerStatus);
 
     await agentsListCommand({ json: true, bindings: true }, runtime);
 
     expect(buildProviderStatusIndexMock).toHaveBeenCalledOnce();
     expect(buildProviderSummaryMetadataIndexMock).toHaveBeenCalledOnce();
     expect(summarizeBindingsMock).toHaveBeenCalledWith(
-      expect.objectContaining({ agents: expect.any(Object) }),
-      [expect.objectContaining({ agentId: "main" })],
+      cfg,
+      cfg.bindings,
       providerSummaryMetadataMock,
     );
-    expect(listProvidersForAgentMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: expect.objectContaining({ agents: expect.any(Object) }),
-        bindings: [expect.objectContaining({ agentId: "main" })],
-        providerMetadata: providerSummaryMetadataMock,
-      }),
-    );
-    expect(runtime.json[0]).toEqual([
-      expect.objectContaining({
-        id: "main",
-        routes: ["Telegram default"],
-        providers: ["Telegram default: configured"],
-      }),
-    ]);
+    expect(listProvidersForAgentMock).toHaveBeenCalledWith({
+      summaryIsDefault: true,
+      cfg,
+      bindings: cfg.bindings,
+      providerStatus,
+      providerMetadata: providerSummaryMetadataMock,
+    });
+    const [summary] = runtime.json[0] as Array<Record<string, unknown>>;
+    expect(summary?.id).toBe("main");
+    expect(summary?.routes).toEqual(["Telegram default"]);
+    expect(summary?.providers).toEqual(["Telegram default: configured"]);
   });
 
   it("keeps human output enriched from read-only provider metadata", async () => {
