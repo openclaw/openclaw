@@ -899,7 +899,7 @@ describe("package artifact reuse", () => {
       const workflow = readWorkflow(workflowPath);
       expect(workflow.env?.NODE_VERSION, workflowPath).toBe("24.15.0");
       if (workflow.env?.PNPM_VERSION !== undefined) {
-        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("10.33.0");
+        expect(workflow.env.PNPM_VERSION, workflowPath).toBe("11.0.8");
       }
     }
 
