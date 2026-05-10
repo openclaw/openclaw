@@ -46,6 +46,7 @@ export const supportedBundledFacadeSdkEntrypoints = [
   "matrix",
   "mattermost",
   "memory-core-engine-runtime",
+  "provider-zai-endpoint",
   "qa-runner-runtime",
   "telegram-account",
   "tts-runtime",

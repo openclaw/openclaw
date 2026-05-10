@@ -500,7 +500,7 @@ releases.
   | `plugin-sdk/channel-core` | Focused channel entry definitions and builders | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase` |
   | `plugin-sdk/setup` | Shared setup wizard helpers | Allowlist prompts, setup status builders |
   | `plugin-sdk/setup-runtime` | Setup-time runtime helpers | Import-safe setup patch adapters, lookup-note helpers, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-  | `plugin-sdk/setup-adapter-runtime` | Setup adapter helpers | `createEnvPatchedAccountSetupAdapter` |
+  | `plugin-sdk/setup-adapter-runtime` | Deprecated setup adapter alias | Use `plugin-sdk/setup-runtime` |
   | `plugin-sdk/setup-tools` | Setup tooling helpers | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
   | `plugin-sdk/account-core` | Multi-account helpers | Account list/config/action-gate helpers |
   | `plugin-sdk/account-id` | Account-id helpers | `DEFAULT_ACCOUNT_ID`, account-id normalization |
@@ -635,7 +635,7 @@ releases.
   | `plugin-sdk/direct-dm` | Direct-DM helpers | Shared direct-DM auth/guard helpers |
   | `plugin-sdk/extension-shared` | Shared extension helpers | Passive-channel/status and ambient proxy helper primitives |
   | `plugin-sdk/webhook-targets` | Webhook target helpers | Webhook target registry and route-install helpers |
-  | `plugin-sdk/webhook-path` | Webhook path helpers | Webhook path normalization helpers |
+  | `plugin-sdk/webhook-path` | Deprecated webhook path alias | Use `plugin-sdk/webhook-ingress` |
   | `plugin-sdk/web-media` | Shared web media helpers | Remote/local media loading helpers |
   | `plugin-sdk/zod` | Deprecated Zod compatibility re-export | Import `zod` from `zod` directly |
   | `plugin-sdk/memory-core` | Bundled memory-core helpers | Memory manager/config/file/CLI helper surface |
@@ -647,17 +647,17 @@ releases.
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |
   | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers | Memory host secret helpers |
-  | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers | Memory host event journal helpers |
+  | `plugin-sdk/memory-core-host-events` | Deprecated memory event alias | Use `plugin-sdk/memory-host-events` |
   | `plugin-sdk/memory-core-host-status` | Memory host status helpers | Memory host status helpers |
   | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime | Memory host CLI runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime | Memory host core runtime helpers |
   | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers | Memory host file/runtime helpers |
   | `plugin-sdk/memory-host-core` | Memory host core runtime alias | Vendor-neutral alias for memory host core runtime helpers |
   | `plugin-sdk/memory-host-events` | Memory host event journal alias | Vendor-neutral alias for memory host event journal helpers |
-  | `plugin-sdk/memory-host-files` | Memory host file/runtime alias | Vendor-neutral alias for memory host file/runtime helpers |
+  | `plugin-sdk/memory-host-files` | Deprecated memory file/runtime alias | Use `plugin-sdk/memory-core-host-runtime-files` |
   | `plugin-sdk/memory-host-markdown` | Managed markdown helpers | Shared managed-markdown helpers for memory-adjacent plugins |
   | `plugin-sdk/memory-host-search` | Active memory search facade | Lazy active-memory search-manager runtime facade |
-  | `plugin-sdk/memory-host-status` | Memory host status alias | Vendor-neutral alias for memory host status helpers |
+  | `plugin-sdk/memory-host-status` | Deprecated memory host status alias | Use `plugin-sdk/memory-core-host-status` |
   | `plugin-sdk/testing` | Test utilities | Repo-local deprecated compatibility barrel; use focused repo-local test subpaths such as `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/channel-target-testing`, `plugin-sdk/test-env`, and `plugin-sdk/test-fixtures` |
 </Accordion>
 

@@ -44,7 +44,7 @@ export type {
 export { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 export { resolveInboundMentionDecision } from "openclaw/plugin-sdk/channel-inbound";
 export { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
-export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-path";
+export { resolveWebhookPath } from "openclaw/plugin-sdk/webhook-ingress";
 export {
   registerWebhookTargetWithPluginRoute,
   resolveWebhookTargetWithAuthOrReject,

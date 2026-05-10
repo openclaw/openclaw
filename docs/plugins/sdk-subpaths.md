@@ -86,7 +86,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/channel-setup` | `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/setup` | Shared setup wizard helpers, allowlist prompts, setup status builders |
     | `plugin-sdk/setup-runtime` | `createPatchedAccountSetupAdapter`, `createEnvPatchedAccountSetupAdapter`, `createSetupInputPresenceValidator`, `noteChannelLookupFailure`, `noteChannelLookupSummary`, `promptResolvedAllowFrom`, `splitSetupEntries`, `createAllowlistSetupWizardProxy`, `createDelegatedSetupWizardProxy` |
-    | `plugin-sdk/setup-adapter-runtime` | `createEnvPatchedAccountSetupAdapter` |
+    | `plugin-sdk/setup-adapter-runtime` | Deprecated compatibility alias; use `plugin-sdk/setup-runtime` |
     | `plugin-sdk/setup-tools` | `formatCliCommand`, `detectBinary`, `extractArchive`, `resolveBrewExecutable`, `formatDocsLink`, `CONFIG_DIR` |
     | `plugin-sdk/account-core` | Multi-account config/action-gate helpers, default-account fallback helpers |
     | `plugin-sdk/account-id` | `DEFAULT_ACCOUNT_ID`, account-id normalization helpers |
@@ -269,7 +269,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/skill-commands-runtime` | Skill command listing helpers |
     | `plugin-sdk/native-command-registry` | Native command registry/build/serialize helpers |
     | `plugin-sdk/agent-harness` | Experimental trusted-plugin surface for low-level agent harnesses: harness types, active-run steer/abort helpers, OpenClaw tool bridge helpers, runtime-plan tool policy helpers, terminal outcome classification, tool progress formatting/detail helpers, and attempt result utilities |
-    | `plugin-sdk/provider-zai-endpoint` | Z.AI endpoint detection helpers |
+    | `plugin-sdk/provider-zai-endpoint` | Deprecated Z.AI provider-owned endpoint detection facade; use the Z.AI plugin public API |
     | `plugin-sdk/async-lock-runtime` | Process-local async lock helper for small runtime state files |
     | `plugin-sdk/channel-activity-runtime` | Channel activity telemetry helper |
     | `plugin-sdk/concurrency-runtime` | Bounded async task concurrency helper |
@@ -320,7 +320,7 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/video-generation` | Video generation provider/request/result types |
     | `plugin-sdk/video-generation-core` | Shared video-generation types, failover helpers, provider lookup, and model-ref parsing |
     | `plugin-sdk/webhook-targets` | Webhook target registry and route-install helpers |
-    | `plugin-sdk/webhook-path` | Webhook path normalization helpers |
+    | `plugin-sdk/webhook-path` | Deprecated compatibility alias; use `plugin-sdk/webhook-ingress` |
     | `plugin-sdk/web-media` | Shared remote/local media loading helpers |
     | `plugin-sdk/zod` | Deprecated compatibility re-export; import `zod` from `zod` directly |
     | `plugin-sdk/testing` | Repo-local deprecated compatibility barrel for legacy OpenClaw tests. New repo tests should import focused local test subpaths such as `plugin-sdk/agent-runtime-test-contracts`, `plugin-sdk/plugin-test-runtime`, `plugin-sdk/channel-test-helpers`, `plugin-sdk/test-env`, or `plugin-sdk/test-fixtures` instead |
@@ -347,17 +347,17 @@ focused channel/runtime subpaths, `config-contracts`, `string-coerce-runtime`,
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |
     | `plugin-sdk/memory-core-host-query` | Memory host query helpers |
     | `plugin-sdk/memory-core-host-secret` | Memory host secret helpers |
-    | `plugin-sdk/memory-core-host-events` | Memory host event journal helpers |
+    | `plugin-sdk/memory-core-host-events` | Deprecated compatibility alias; use `plugin-sdk/memory-host-events` |
     | `plugin-sdk/memory-core-host-status` | Memory host status helpers |
     | `plugin-sdk/memory-core-host-runtime-cli` | Memory host CLI runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-core` | Memory host core runtime helpers |
     | `plugin-sdk/memory-core-host-runtime-files` | Memory host file/runtime helpers |
     | `plugin-sdk/memory-host-core` | Vendor-neutral alias for memory host core runtime helpers |
     | `plugin-sdk/memory-host-events` | Vendor-neutral alias for memory host event journal helpers |
-    | `plugin-sdk/memory-host-files` | Vendor-neutral alias for memory host file/runtime helpers |
+    | `plugin-sdk/memory-host-files` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-runtime-files` |
     | `plugin-sdk/memory-host-markdown` | Shared managed-markdown helpers for memory-adjacent plugins |
     | `plugin-sdk/memory-host-search` | Active memory runtime facade for search-manager access |
-    | `plugin-sdk/memory-host-status` | Vendor-neutral alias for memory host status helpers |
+    | `plugin-sdk/memory-host-status` | Deprecated compatibility alias; use `plugin-sdk/memory-core-host-status` |
   </Accordion>
 
   <Accordion title="Reserved bundled-helper subpaths">

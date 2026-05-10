@@ -635,7 +635,7 @@ barrel when authoring new plugins. Core subpaths:
 | `openclaw/plugin-sdk/config-schema` | Root `openclaw.json` Zod schema (`OpenClawSchema`) |
 
 Channel plugins pick from a family of narrow seams — `channel-setup`,
-`setup-runtime`, `setup-adapter-runtime`, `setup-tools`, `channel-pairing`,
+`setup-runtime`, `setup-tools`, `channel-pairing`,
 `channel-contract`, `channel-feedback`, `channel-inbound`, `channel-lifecycle`,
 `channel-reply-pipeline`, `command-auth`, `secret-input`, `webhook-ingress`,
 `channel-targets`, and `channel-actions`. Approval behavior should consolidate

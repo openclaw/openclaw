@@ -346,7 +346,7 @@ export async function maybeRepairTelegramAllowFromUsernames(cfg: OpenClawConfig)
   }
 
   const { getChannelsCommandSecretTargetIds, resolveCommandSecretRefsViaGateway } =
-    await import("openclaw/plugin-sdk/runtime-secret-resolution");
+    await import("openclaw/plugin-sdk/runtime");
 
   const { resolvedConfig } = await resolveCommandSecretRefsViaGateway({
     config: cfg,
