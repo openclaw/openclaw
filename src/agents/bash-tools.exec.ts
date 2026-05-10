@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
@@ -1177,36 +1178,151 @@ function stripEnvAssignmentsForHeavyDetection(argv: string[]): string[] {
   return argv.slice(index);
 }
 
-function isOpenClawHeavyRunWrapper(argv: string[]): boolean {
+const EXEC_HEAVY_APPROVED_WRAPPERS_ENV = "OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS";
+
+function shellQuoteCommandCandidateArg(arg: string): string {
+  return /^[A-Za-z0-9_@%+=:,./-]+$/u.test(arg) ? arg : `'${arg.replace(/'/gu, "'\\''")}'`;
+}
+
+function joinCommandCandidateArgv(argv: string[]): string {
+  return argv.map(shellQuoteCommandCandidateArg).join(" ");
+}
+
+function parseApprovedHeavyWrapperPaths(): Set<string> {
+  const raw = process.env[EXEC_HEAVY_APPROVED_WRAPPERS_ENV]?.trim();
+  if (!raw) {
+    return new Set();
+  }
+  const approved = new Set<string>();
+  for (const candidate of raw.split(/[,\n]/u).map((value) => value.trim())) {
+    if (!candidate) {
+      continue;
+    }
+    try {
+      approved.add(fs.realpathSync.native(path.resolve(candidate)));
+    } catch {
+      // Missing or unreadable allowlist entries are deliberately not trusted.
+    }
+  }
+  return approved;
+}
+
+function resolveExecutableRealpath(token: string | undefined): string | null {
+  if (!token) {
+    return null;
+  }
+  const candidates =
+    path.isAbsolute(token) || token.includes("/") || token.includes("\\")
+      ? [path.resolve(token)]
+      : (process.env.PATH ?? "")
+          .split(path.delimiter)
+          .filter(Boolean)
+          .map((dir) => path.join(dir, token));
+  for (const candidate of candidates) {
+    try {
+      return fs.realpathSync.native(candidate);
+    } catch {
+      // Keep looking through PATH; absence means the wrapper is not verified.
+    }
+  }
+  return null;
+}
+
+function openClawHeavyRunWrapperDetails(
+  argv: string[],
+): { wrapperToken: string; payload: string[] } | null {
   const stripped = stripEnvAssignmentsForHeavyDetection(argv);
   const executable = normalizeCommandBaseName(stripped[0]);
+  let wrapperIndex = -1;
   if (executable === "openclaw-heavy-run") {
-    return true;
+    wrapperIndex = 0;
+  } else if (
+    (executable === "python" || executable === "python3" || executable === "node") &&
+    normalizeCommandBaseName(stripped[1]) === "openclaw-heavy-run"
+  ) {
+    wrapperIndex = 1;
   }
-  if (executable === "python" || executable === "python3" || executable === "node") {
-    return normalizeCommandBaseName(stripped[1]) === "openclaw-heavy-run";
+  if (wrapperIndex < 0) {
+    return null;
   }
-  return false;
+  let payloadIndex = wrapperIndex + 1;
+  if (stripped[payloadIndex] === "--") {
+    payloadIndex += 1;
+  }
+  return { wrapperToken: stripped[wrapperIndex] ?? "", payload: stripped.slice(payloadIndex) };
+}
+
+function isOpenClawHeavyRunWrapper(argv: string[]): boolean {
+  const details = openClawHeavyRunWrapperDetails(argv);
+  if (!details) {
+    return false;
+  }
+  const wrapperRealpath = resolveExecutableRealpath(details.wrapperToken);
+  if (!wrapperRealpath) {
+    return false;
+  }
+  return parseApprovedHeavyWrapperPaths().has(wrapperRealpath);
+}
+
+function unapprovedOpenClawHeavyRunPayload(argv: string[]): string | null {
+  const details = openClawHeavyRunWrapperDetails(argv);
+  if (!details || isOpenClawHeavyRunWrapper(argv) || details.payload.length === 0) {
+    return null;
+  }
+  return joinCommandCandidateArgv(details.payload);
+}
+
+type SystemdRunMemoryScopeAnalysis = {
+  hasMemoryScope: boolean;
+  payload: string[];
+};
+
+function analyzeSystemdRunMemoryScope(argv: string[]): SystemdRunMemoryScopeAnalysis | null {
+  const stripped = stripEnvAssignmentsForHeavyDetection(argv);
+  if (normalizeCommandBaseName(stripped[0]) !== "systemd-run") {
+    return null;
+  }
+  const separatorIndex = stripped.indexOf("--");
+  const wrapperArgs = separatorIndex >= 0 ? stripped.slice(1, separatorIndex) : stripped.slice(1);
+  const payload = separatorIndex >= 0 ? stripped.slice(separatorIndex + 1) : [];
+  let hasScope = false;
+  let hasMemoryMax = false;
+  for (let index = 0; index < wrapperArgs.length; index += 1) {
+    const arg = wrapperArgs[index] ?? "";
+    if (arg === "--scope") {
+      hasScope = true;
+      continue;
+    }
+    if (/^MemoryMax=/u.test(arg)) {
+      hasMemoryMax = true;
+      continue;
+    }
+    if (arg === "-p" || arg === "--property") {
+      const value = wrapperArgs[index + 1] ?? "";
+      if (/^MemoryMax=/u.test(value)) {
+        hasMemoryMax = true;
+      }
+      index += 1;
+      continue;
+    }
+    const propertyValue = arg.match(/^--property=(.+)$/u)?.[1] ?? "";
+    if (/^MemoryMax=/u.test(propertyValue)) {
+      hasMemoryMax = true;
+    }
+  }
+  return { hasMemoryScope: hasScope && hasMemoryMax, payload };
 }
 
 function isExplicitSystemdMemoryScope(argv: string[]): boolean {
-  const stripped = stripEnvAssignmentsForHeavyDetection(argv);
-  if (normalizeCommandBaseName(stripped[0]) !== "systemd-run") {
-    return false;
+  return analyzeSystemdRunMemoryScope(argv)?.hasMemoryScope ?? false;
+}
+
+function unapprovedSystemdRunPayload(argv: string[]): string | null {
+  const analysis = analyzeSystemdRunMemoryScope(argv);
+  if (!analysis || analysis.hasMemoryScope || analysis.payload.length === 0) {
+    return null;
   }
-  return (
-    stripped.includes("--scope") &&
-    stripped.some(
-      (arg) => arg === "-p" || /^--property(?:=|$)/u.test(arg) || /^MemoryMax=/u.test(arg),
-    ) &&
-    stripped.some((arg, index) => {
-      if (/^MemoryMax=/u.test(arg)) {
-        return true;
-      }
-      const prev = stripped[index - 1];
-      return (prev === "-p" || prev === "--property") && /^MemoryMax=/u.test(arg);
-    })
-  );
+  return joinCommandCandidateArgv(analysis.payload);
 }
 
 const PACKAGE_MANAGER_LEADING_VALUE_OPTIONS = new Set([
@@ -1366,6 +1482,12 @@ function analyzeHeavyExecCommand(command: string): HeavyExecCommandAnalysis {
       sawHeavyRunWrapper = true;
       continue;
     }
+    const unapprovedWrapperPayload =
+      unapprovedOpenClawHeavyRunPayload(argv) ?? unapprovedSystemdRunPayload(argv);
+    if (unapprovedWrapperPayload && !seen.has(unapprovedWrapperPayload.trim())) {
+      queue.push(unapprovedWrapperPayload);
+      continue;
+    }
     const hit = classifyHeavyArgv(argv);
     if (hit) {
       return { heavy: true, wrapped: sawHeavyRunWrapper, hit };
@@ -1397,6 +1519,7 @@ function rejectUnisolatedHeavyExecCommand(command: string): void {
       `Matched command: ${truncateMiddle(analysis.hit.candidate, 180)}`,
       "Run heavy OpenClaw/upstream validation through a configured resource-isolation wrapper, for example:",
       "openclaw-heavy-run -- <command>",
+      `Approved wrapper paths must resolve from ${EXEC_HEAVY_APPROVED_WRAPPERS_ENV}.`,
       "If the guard exits 75/defer, stop and report instead of bypassing.",
       "Set OPENCLAW_EXEC_HEAVY_ENFORCEMENT=off only for an explicitly approved emergency bypass.",
     ].join("\n"),

@@ -21,6 +21,8 @@ vi.mock("../utils/delivery-context.js", () => ({
 }));
 
 const isWin = process.platform === "win32";
+const originalApprovedHeavyWrappers = process.env.OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS;
+const originalPath = process.env.PATH;
 
 const describeNonWin = isWin ? describe.skip : describe;
 const describeWin = isWin ? describe : describe.skip;
@@ -32,6 +34,16 @@ const createPreflightTool = () =>
 
 afterEach(() => {
   __setFsSafeTestHooksForTest();
+  if (originalApprovedHeavyWrappers === undefined) {
+    delete process.env.OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS;
+  } else {
+    process.env.OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS = originalApprovedHeavyWrappers;
+  }
+  if (originalPath === undefined) {
+    delete process.env.PATH;
+  } else {
+    process.env.PATH = originalPath;
+  }
 });
 
 async function expectSymlinkSwapDuringPreflightToAvoidErrors(params: {
@@ -135,17 +147,56 @@ describe("exec heavy-command guard", () => {
     expect(analyzeHeavyExecCommand("grep error src/file.ts")).toMatchObject({ heavy: false });
   });
 
-  it("allows light commands and explicitly isolated heavy commands", () => {
-    expect(analyzeHeavyExecCommand("git status --short")).toMatchObject({ heavy: false });
+  it("allows light commands and verified explicitly isolated heavy commands", async () => {
+    await withTempDir("openclaw-heavy-run-wrapper-", async (tmp) => {
+      const wrapperPath = path.join(tmp, "openclaw-heavy-run");
+      await fs.writeFile(wrapperPath, '#!/bin/sh\nexec "$@"\n', "utf-8");
+      await fs.chmod(wrapperPath, 0o755);
+      process.env.OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS = wrapperPath;
+      process.env.PATH = `${tmp}${path.delimiter}${originalPath ?? ""}`;
+
+      expect(analyzeHeavyExecCommand("git status --short")).toMatchObject({ heavy: false });
+      expect(
+        analyzeHeavyExecCommand("openclaw-heavy-run -- corepack pnpm lint:core"),
+      ).toMatchObject({
+        heavy: false,
+        wrapped: true,
+      });
+      expect(
+        analyzeHeavyExecCommand(`python3 ${wrapperPath} -- corepack pnpm lint:core`),
+      ).toMatchObject({
+        heavy: false,
+        wrapped: true,
+      });
+      expect(
+        analyzeHeavyExecCommand(
+          "systemd-run --user --scope -p MemoryMax=6G -- corepack pnpm lint:core",
+        ),
+      ).toMatchObject({ heavy: false, wrapped: true });
+    });
+  });
+
+  it("classifies payloads behind unverified wrapper-shaped commands", () => {
+    delete process.env.OPENCLAW_EXEC_HEAVY_APPROVED_WRAPPERS;
+
     expect(analyzeHeavyExecCommand("openclaw-heavy-run -- corepack pnpm lint:core")).toMatchObject({
-      heavy: false,
-      wrapped: true,
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm lint:core" },
     });
     expect(
       analyzeHeavyExecCommand(
-        "systemd-run --user --scope -p MemoryMax=6G -- corepack pnpm lint:core",
+        "systemd-run --user --scope -p TimeoutStopSec=60 -- corepack pnpm lint:core",
       ),
-    ).toMatchObject({ heavy: false, wrapped: true });
+    ).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm lint:core" },
+    });
+    expect(
+      analyzeHeavyExecCommand("systemd-run --user --scope -- MemoryMax=6G corepack pnpm lint:core"),
+    ).toMatchObject({
+      heavy: true,
+      hit: { classification: "always", reason: "corepack pnpm lint:core" },
+    });
   });
 
   it("blocks unisolated always-heavy commands before execution", async () => {
