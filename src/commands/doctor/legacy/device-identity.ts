@@ -36,7 +36,8 @@ function exportRawEd25519PublicKeyPem(publicKey: string): string | null {
         type: "spki",
         format: "der",
       })
-      .export({ type: "spki", format: "pem" });
+      .export({ type: "spki", format: "pem" })
+      .toString();
   } catch {
     return null;
   }
@@ -54,7 +55,8 @@ function exportRawEd25519PrivateKeyPem(privateKey: string): string | null {
         type: "pkcs8",
         format: "der",
       })
-      .export({ type: "pkcs8", format: "pem" });
+      .export({ type: "pkcs8", format: "pem" })
+      .toString();
   } catch {
     return null;
   }
@@ -147,7 +149,7 @@ export function importLegacyDeviceIdentityFileToSqlite(env: NodeJS.ProcessEnv = 
   if (!stored) {
     return { imported: false };
   }
-  writeStoredDeviceIdentitySnapshot(stored, { env });
+  writeStoredDeviceIdentitySnapshot(filePath, stored);
   try {
     fs.rmSync(filePath, { force: true });
   } catch {
