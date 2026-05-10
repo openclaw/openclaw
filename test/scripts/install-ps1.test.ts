@@ -47,7 +47,8 @@ function createFailingNodeFixture(source: string): string {
     "",
     "function Write-Banner { }",
     "function Ensure-ExecutionPolicy { return $true }",
-    "function Ensure-Node { return $false }",
+    "function Check-Node { return $false }",
+    "function Install-Node { return $false }",
     "",
     "$mainResults = @(Main)",
     "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
@@ -103,36 +104,6 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).not.toContain("Remove-LegacySubmodule");
   });
 
-  runIfPowerShell("creates a temp npm working directory", () => {
-    const tempDir = harness.createTempDir("openclaw-install-ps1-");
-    const scriptPath = join(tempDir, "install.ps1");
-    const scriptWithoutEntryPoint = source.replace(ENTRYPOINT_RE, "");
-    writeFileSync(
-      scriptPath,
-      [
-        scriptWithoutEntryPoint,
-        "",
-        "$result = Get-NpmWorkingDirectory",
-        'if (!(Test-Path -LiteralPath $result)) { throw "missing $result" }',
-        'if ($result -notmatch "openclaw-installer") { throw "unexpected $result" }',
-        "",
-      ].join("\n"),
-    );
-    chmodSync(scriptPath, 0o755);
-
-    const result = runPowerShell([
-      "-NoLogo",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-File",
-      scriptPath,
-    ]);
-
-    expect(result.status).toBe(0);
-    expect(result.stderr).toBe("");
-  });
-
   runIfPowerShell("exits non-zero when run as a script file", () => {
     const tempDir = harness.createTempDir("openclaw-install-ps1-");
     const scriptPath = join(tempDir, "install.ps1");
@@ -183,12 +154,13 @@ describe("install.ps1 failure handling", () => {
         "",
         "function Write-Banner { }",
         "function Ensure-ExecutionPolicy { return $true }",
-        "function Ensure-Node { return $true }",
+        "function Check-Node { return $true }",
+        "function Check-ExistingOpenClaw { return $false }",
         "function Add-ToPath { param([string]$Path) }",
-        "function Invoke-NativeCommandCapture {",
-        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
-        "  return @{ ExitCode = 0; Stdout = 'npm stdout'; Stderr = 'npm stderr' }",
-        "}",
+        "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
+        "function Ensure-OpenClawOnPath { return $true }",
+        "function Refresh-GatewayServiceIfLoaded { }",
+        "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
         "$NoOnboard = $true",
         "$result = Main",
         "if ($result -is [array]) { throw 'Main returned an array' }",
@@ -222,18 +194,16 @@ describe("install.ps1 failure handling", () => {
         "",
         "function Write-Banner { }",
         "function Ensure-ExecutionPolicy { return $true }",
-        "function Ensure-Node { return $true }",
-        "function Ensure-Git { return $true }",
+        "function Check-Node { return $true }",
+        "function Check-ExistingOpenClaw { return $false }",
         "function Add-ToPath { param([string]$Path) }",
-        "function Install-OpenClawNpm {",
-        "  param([string]$Target = 'latest')",
+        "function Install-OpenClaw {",
         "  Write-Output 'native chatter'",
         "  return $true",
         "}",
-        "function Invoke-NativeCommandCapture {",
-        "  param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory = '')",
-        "  return @{ ExitCode = 0; Stdout = 'npm prefix'; Stderr = '' }",
-        "}",
+        "function Ensure-OpenClawOnPath { return $true }",
+        "function Refresh-GatewayServiceIfLoaded { }",
+        "function Invoke-OpenClawCommand { return 'OpenClaw test-version' }",
         "$NoOnboard = $true",
         "$mainResults = @(Main)",
         "$installSucceeded = $mainResults.Count -gt 0 -and $mainResults[-1] -eq $true",
