@@ -1143,7 +1143,7 @@ describe("CodexAppServerEventProjector", () => {
         item: {
           type: "webSearch",
           id: "search-observed",
-          query: "opik openclaw codex",
+          query: "native tool observability",
           status: "completed",
           durationMs: 5,
         },
@@ -1157,7 +1157,7 @@ describe("CodexAppServerEventProjector", () => {
     );
     expect(event).toMatchObject({
       toolName: "web_search",
-      params: { query: "opik openclaw codex" },
+      params: { query: "native tool observability" },
       runId: "run-1",
       toolCallId: "search-observed",
       result: { status: "completed" },
