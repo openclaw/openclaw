@@ -150,12 +150,6 @@ export function createCronPromptExecutor(params: {
         const bootstrapPromptWarningSignature =
           bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
         if (isCliProvider(executionProvider, params.cfgWithAgentDefaults)) {
-          params.onExecutionPhase?.({
-            phase: "model_call_started",
-            provider: executionProvider,
-            model: modelOverride,
-            firstModelCallStarted: true,
-          });
           const cliSessionId = params.cronSession.isNewSession
             ? undefined
             : await getCliSessionId(params.cronSession.sessionEntry, executionProvider);
@@ -180,6 +174,7 @@ export function createCronPromptExecutor(params: {
             messageChannel: params.messageChannel,
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
+            onExecutionPhase: params.onExecutionPhase,
             bootstrapPromptWarningSignaturesSeen,
             bootstrapPromptWarningSignature,
             senderIsOwner: true,
