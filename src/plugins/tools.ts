@@ -440,6 +440,14 @@ function resolvePluginToolRuntimePluginIds(params: {
       workspaceDir: params.workspaceDir,
       env: params.env,
     });
+  // Check if allowlist is explicitly listing tool names (not wildcard/group:plugins)
+  // When tools are explicitly listed in alsoAllow, treat them as explicit opt-in
+  // that bypasses channel-based availability checks for isolated cron/subagent runs.
+  const hasExplicitToolAllowlist =
+    !allowlist.has("*") &&
+    !allowlist.has("group:plugins") &&
+    !allowlistIncludesDefaultPluginTools(allowlist) &&
+    allowlist.size > 0;
   for (const plugin of snapshot.plugins) {
     if (
       !isManifestPluginAvailableForControlPlane({
@@ -473,8 +481,21 @@ function resolvePluginToolRuntimePluginIds(params: {
           denylist,
         }),
     );
+    if (selectedToolNames.length === 0) {
+      continue;
+    }
+    // For explicitly allowed tool names, bypass availability check.
+    // This allows isolated cron/subagent runs to use plugin tools that are
+    // explicitly opted-in via tools.alsoAllow, even without channel context.
+    const explicitlyAllowedTools = selectedToolNames.filter((toolName) =>
+      allowlist.has(normalizeToolName(toolName)),
+    );
+    if (hasExplicitToolAllowlist && explicitlyAllowedTools.length > 0) {
+      pluginIds.add(plugin.id);
+      continue;
+    }
+    // For non-explicitly-allowed tools (wildcard/group:plugins), check availability.
     if (
-      selectedToolNames.length > 0 &&
       hasManifestToolAvailability({
         plugin,
         toolNames: selectedToolNames,

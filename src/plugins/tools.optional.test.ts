@@ -490,6 +490,88 @@ describe("resolvePluginTools optional tools", () => {
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
+  it("loads explicitly allowed plugin tools even when manifest metadata has no available signal (#80186)", () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createXaiToolManifest(),
+    });
+    const factory = vi.fn(() => makeTool("x_search"));
+    loadOpenClawPluginsMock.mockImplementation((params) =>
+      Array.isArray((params as { onlyPluginIds?: string[] }).onlyPluginIds) &&
+      (params as { onlyPluginIds?: string[] }).onlyPluginIds?.length === 0
+        ? { tools: [], diagnostics: [] }
+        : {
+            tools: [
+              {
+                pluginId: "xai",
+                optional: false,
+                source: "/tmp/xai.js",
+                names: ["x_search"],
+                factory,
+              },
+            ],
+            diagnostics: [],
+          },
+    );
+
+    // Explicitly list x_search in allowlist - should bypass availability check
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config,
+      } as never,
+      env: {}, // No auth evidence
+      toolAllowlist: ["x_search"], // Explicitly allowed
+    });
+
+    expectResolvedToolNames(tools, ["x_search"]);
+    expect(factory).toHaveBeenCalledTimes(1);
+    expectLoaderSelectedOnlyPluginIds(["xai"]);
+  });
+
+  it("does not load plugin tools via wildcard when manifest metadata has no available signal", () => {
+    const config = createContext().config;
+    installToolManifestSnapshot({
+      config,
+      env: {},
+      plugin: createXaiToolManifest(),
+    });
+    const factory = vi.fn(() => makeTool("x_search"));
+    loadOpenClawPluginsMock.mockImplementation((params) =>
+      Array.isArray((params as { onlyPluginIds?: string[] }).onlyPluginIds) &&
+      (params as { onlyPluginIds?: string[] }).onlyPluginIds?.length === 0
+        ? { tools: [], diagnostics: [] }
+        : {
+            tools: [
+              {
+                pluginId: "xai",
+                optional: false,
+                source: "/tmp/xai.js",
+                names: ["x_search"],
+                factory,
+              },
+            ],
+            diagnostics: [],
+          },
+    );
+
+    // Wildcard/group:plugins should still require availability check
+    const tools = resolvePluginTools({
+      context: {
+        ...createContext(),
+        config,
+      } as never,
+      env: {}, // No auth evidence
+      toolAllowlist: ["*"], // Wildcard - should still check availability
+    });
+
+    expect(tools).toStrictEqual([]);
+    expect(factory).not.toHaveBeenCalled();
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
   it("standalone bootstrap loads configured plugin tools before resolution", () => {
     const config = createContext().config;
     const registry = createToolRegistry([createOptionalDemoEntry()]);
