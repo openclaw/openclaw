@@ -292,6 +292,7 @@
   "telegram-account",
   "telegram-command-config",
   "text-autolink-runtime",
+  "transcript.runtime",
   "tool-payload",
   "tool-send",
   "webhook-ingress",

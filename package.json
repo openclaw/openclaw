@@ -1262,6 +1262,10 @@
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
+    "./plugin-sdk/transcript.runtime": {
+      "types": "./dist/plugin-sdk/transcript.runtime.d.ts",
+      "default": "./dist/plugin-sdk/transcript.runtime.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
