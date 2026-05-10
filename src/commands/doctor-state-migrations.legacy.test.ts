@@ -6,7 +6,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { loadSqliteSessionEntries } from "../config/sessions/session-entries.sqlite.js";
 import { loadSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
-import { resolveChannelAllowFromPath } from "../pairing/pairing-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -18,6 +17,7 @@ import {
   detectLegacyStateMigrations,
   runLegacyStateMigrations,
 } from "./doctor-state-migrations.js";
+import { resolveLegacyChannelAllowFromPath } from "./doctor/legacy/channel-pairing-files.js";
 
 type DeliveryQueueTestDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
 type CurrentConversationBindingsTestDatabase = Pick<
@@ -190,7 +190,7 @@ async function createLegacyStateFixture(params?: { includePreKey?: boolean }) {
     );
   }
   await fs.writeFile(path.join(stateDir, "credentials", "oauth.json"), '{"oauth":true}\n', "utf8");
-  await fs.writeFile(resolveChannelAllowFromPath("chatapp", env), '["123","456"]\n', "utf8");
+  await fs.writeFile(resolveLegacyChannelAllowFromPath("chatapp", env), '["123","456"]\n', "utf8");
 
   return {
     root,
@@ -224,7 +224,7 @@ describe("state migrations", () => {
     expect(detected.channelPlans.hasLegacy).toBe(true);
     expect(detected.channelPlans.plans.map((plan) => plan.targetPath)).toEqual([
       path.join(stateDir, "credentials", "mobileauth", "default", "creds.json"),
-      resolveChannelAllowFromPath("chatapp", env, "alpha"),
+      resolveLegacyChannelAllowFromPath("chatapp", env, "alpha"),
     ]);
     expect(detected.preview).toEqual([
       `- Sessions: ${path.join(stateDir, "sessions")} → ${path.join(stateDir, "agents", "worker-1", "sessions")}`,
@@ -232,7 +232,7 @@ describe("state migrations", () => {
       `- Sessions: import ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")} into SQLite`,
       `- Agent dir: ${path.join(stateDir, "agent")} → ${path.join(stateDir, "agents", "worker-1", "agent")}`,
       `- MobileAuth auth creds.json: ${path.join(stateDir, "credentials", "creds.json")} → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
-      `- ChatApp pairing allowFrom: ${resolveChannelAllowFromPath("chatapp", env)} → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
+      `- ChatApp pairing allowFrom: ${resolveLegacyChannelAllowFromPath("chatapp", env)} → ${resolveLegacyChannelAllowFromPath("chatapp", env, "alpha")}`,
     ]);
   });
 
@@ -258,7 +258,7 @@ describe("state migrations", () => {
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
-      `Copied ChatApp pairing allowFrom → ${resolveChannelAllowFromPath("chatapp", env, "alpha")}`,
+      `Copied ChatApp pairing allowFrom → ${resolveLegacyChannelAllowFromPath("chatapp", env, "alpha")}`,
     ]);
 
     await expect(
@@ -305,13 +305,13 @@ describe("state migrations", () => {
       fs.readFile(path.join(stateDir, "credentials", "oauth.json"), "utf8"),
     ).resolves.toContain('"oauth":true');
     await expect(
-      fs.readFile(resolveChannelAllowFromPath("chatapp", env, "alpha"), "utf8"),
+      fs.readFile(resolveLegacyChannelAllowFromPath("chatapp", env, "alpha"), "utf8"),
     ).resolves.toBe('["123","456"]\n');
     await expect(
-      fs.stat(resolveChannelAllowFromPath("chatapp", env, "default")),
+      fs.stat(resolveLegacyChannelAllowFromPath("chatapp", env, "default")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(
-      fs.stat(resolveChannelAllowFromPath("chatapp", env, "beta")),
+      fs.stat(resolveLegacyChannelAllowFromPath("chatapp", env, "beta")),
     ).rejects.toMatchObject({ code: "ENOENT" });
 
     const database = openOpenClawStateDatabase({ env });

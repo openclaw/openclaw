@@ -3,12 +3,10 @@ import path from "node:path";
 import { CHANNEL_IDS } from "../../../channels/ids.js";
 import { getPairingAdapter } from "../../../channels/plugins/pairing.js";
 import {
-  readAllowFromFileWithExists,
   resolveAllowFromAccountId,
-  resolvePairingCredentialsDir,
   safeChannelKey,
   type AllowFromStore,
-} from "../../../pairing/allow-from-store-file.js";
+} from "../../../pairing/pairing-store-keys.js";
 import type { PairingChannel } from "../../../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
@@ -18,6 +16,10 @@ import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
 } from "../../../state/openclaw-state-kv.js";
+import {
+  readAllowFromFileWithExists,
+  resolveLegacyPairingCredentialsDir,
+} from "./channel-pairing-files.js";
 
 const CHANNEL_PAIRING_SCOPE = "pairing.channel";
 const LEGACY_PAIRING_SUFFIX = "-pairing.json";
@@ -153,7 +155,7 @@ function writeChannelPairingState(
 export async function legacyChannelPairingFilesExist(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  const dir = resolvePairingCredentialsDir(env);
+  const dir = resolveLegacyPairingCredentialsDir(env);
   const entries = await fs.readdir(dir).catch(() => []);
   return entries.some(
     (entry) => entry.endsWith(LEGACY_PAIRING_SUFFIX) || entry.endsWith(LEGACY_ALLOW_FROM_SUFFIX),
@@ -215,7 +217,7 @@ async function readAllowFromStateForPath(
 export async function importLegacyChannelPairingFilesToSqlite(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<{ files: number; requests: number; allowFrom: number }> {
-  const dir = resolvePairingCredentialsDir(env);
+  const dir = resolveLegacyPairingCredentialsDir(env);
   const entries = await fs.readdir(dir).catch(() => []);
   let files = 0;
   let requests = 0;

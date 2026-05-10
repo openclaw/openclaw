@@ -27,10 +27,9 @@ import {
 import {
   dedupePreserveOrder,
   resolveAllowFromAccountId,
-  resolveAllowFromFilePath,
   safeChannelKey,
   type AllowFromStore,
-} from "./allow-from-store-file.js";
+} from "./pairing-store-keys.js";
 import type { PairingChannel } from "./pairing-store.types.js";
 export type { PairingChannel } from "./pairing-store.types.js";
 
@@ -63,14 +62,6 @@ type PairingStore = {
 type ChannelPairingState = PairingStore & {
   allowFrom?: Record<string, string[]>;
 };
-
-export function resolveChannelAllowFromPath(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-  accountId?: string,
-): string {
-  return resolveAllowFromFilePath(channel, env, accountId);
-}
 
 function parseTimestamp(value: string | undefined): number | null {
   if (!value) {
@@ -380,26 +371,12 @@ async function updateAllowFromStoreEntry(params: {
   }, sqliteOptionsForEnv(env));
 }
 
-export async function readLegacyChannelAllowFromStore(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): Promise<string[]> {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
-}
-
 export async function readChannelAllowFromStore(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv = process.env,
   accountId?: string,
 ): Promise<string[]> {
   return readAllowFromState(channel, env, accountId);
-}
-
-export function readLegacyChannelAllowFromStoreSync(
-  channel: PairingChannel,
-  env: NodeJS.ProcessEnv = process.env,
-): string[] {
-  return readAllowFromState(channel, env, DEFAULT_ACCOUNT_ID);
 }
 
 export function readChannelAllowFromStoreSync(

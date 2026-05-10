@@ -28,8 +28,6 @@ import {
   approveChannelPairingCode,
   listChannelPairingRequests,
   readChannelAllowFromStore,
-  readLegacyChannelAllowFromStore,
-  readLegacyChannelAllowFromStoreSync,
   readChannelAllowFromStoreSync,
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
@@ -172,7 +170,11 @@ async function seedTelegramAllowFromFixtures(params: {
 
 async function expectAccountScopedEntryIsolated(entry: string, accountId = "yy") {
   const accountScoped = await readChannelAllowFromStore("telegram", process.env, accountId);
-  const channelScoped = await readLegacyChannelAllowFromStore("telegram");
+  const channelScoped = await readChannelAllowFromStore(
+    "telegram",
+    process.env,
+    DEFAULT_ACCOUNT_ID,
+  );
   expect(accountScoped).toContain(entry);
   expect(channelScoped).not.toContain(entry);
 }
@@ -217,8 +219,12 @@ async function expectAllowFromReadConsistencyCase(params: {
   expect(asyncScoped).toEqual(params.expected);
   expect(syncScoped).toEqual(params.expected);
   if (params.expectedLegacy) {
-    expect(await readLegacyChannelAllowFromStore("telegram")).toEqual(params.expectedLegacy);
-    expect(readLegacyChannelAllowFromStoreSync("telegram")).toEqual(params.expectedLegacy);
+    expect(await readChannelAllowFromStore("telegram", process.env, DEFAULT_ACCOUNT_ID)).toEqual(
+      params.expectedLegacy,
+    );
+    expect(readChannelAllowFromStoreSync("telegram", process.env, DEFAULT_ACCOUNT_ID)).toEqual(
+      params.expectedLegacy,
+    );
   }
 }
 

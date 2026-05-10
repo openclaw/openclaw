@@ -795,6 +795,9 @@ sessionId}` and session key context.
 - The bundled command-logger hook now writes command audit rows to the shared
   SQLite `command_log_entries` table instead of appending
   `logs/commands.log`.
+- Channel pairing allowlists now expose only SQLite-backed read/write helpers at
+  runtime and in the plugin SDK. The old `*-allowFrom.json` path resolver and
+  file reader live only under doctor legacy import code.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,

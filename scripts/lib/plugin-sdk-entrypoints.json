@@ -190,7 +190,6 @@
   "channel-message",
   "channel-message-runtime",
   "channel-pairing",
-  "channel-pairing-paths",
   "channel-policy",
   "channel-send-result",
   "channel-route",
