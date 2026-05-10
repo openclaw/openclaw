@@ -399,7 +399,10 @@ function isGeminiAcpCommand(command: string | undefined): boolean {
     return false;
   }
   const commandName = basename(parts[0] ?? "");
-  return /^gemini(?:\.exe)?$/i.test(commandName) && parts.some((part) => part === "--acp");
+  return (
+    /^gemini(?:\.exe)?$/i.test(commandName) &&
+    parts.some((part) => part === "--acp" || part === "--experimental-acp")
+  );
 }
 
 function shouldIgnoreTimeoutConfigOption(command: string | undefined): boolean {
