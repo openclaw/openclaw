@@ -5,9 +5,9 @@ import path from "node:path";
 import { resolveRepoRoot, runAsScript } from "./lib/ts-guard-utils.mjs";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
-const sourceRoots = ["src", "extensions", "packages"];
+const sourceRoots = ["src", "extensions", "packages", "ui", "apps"];
 const bridgeContractRoots = [...sourceRoots, "test"];
-const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs"]);
+const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs", ".swift"]);
 
 const legacyStoreMarkers = [
   { label: "sessions.json", pattern: /\bsessions\.json\b/u },
@@ -284,7 +284,12 @@ async function collectSourceFiles(root, options = {}) {
   for (const entry of entries) {
     const entryPath = path.join(root, entry.name);
     if (entry.isDirectory()) {
-      if (entry.name === "node_modules" || entry.name === "dist" || entry.name === ".turbo") {
+      if (
+        entry.name === "node_modules" ||
+        entry.name === "dist" ||
+        entry.name === ".turbo" ||
+        entry.name === ".build"
+      ) {
         continue;
       }
       files.push(...(await collectSourceFiles(entryPath)));
