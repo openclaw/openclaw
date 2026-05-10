@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config.js";
 import type { SessionConfig } from "../types.base.js";
 import { resolveSessionLifecycleTimestamps } from "./lifecycle.js";
 import {
+  resolveRotatedGeneratedSessionFilePath,
   resolveSessionFilePath,
   resolveSessionFilePathOptions,
   resolveSessionTranscriptPathInDir,
@@ -39,6 +40,86 @@ describe("session path safety", () => {
     const resolved = resolveSessionTranscriptPathInDir("sess-1", sessionsDir, "topic/a+b");
 
     expect(resolved).toBe(path.resolve(sessionsDir, "sess-1-topic-topic%2Fa%2Bb.jsonl"));
+  });
+
+  it("resolves rotated generated transcript paths safely", () => {
+    withTempDirSync({ prefix: "openclaw-rotated-session-file-" }, (tmpDir) => {
+      const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
+      fs.mkdirSync(sessionsDir, { recursive: true });
+      const previousSessionId = "11111111-1111-4111-8111-111111111111";
+      const nextSessionId = "22222222-2222-4222-8222-222222222222";
+      const driftedUuid = "33333333-3333-4333-8333-333333333333";
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: path.join(sessionsDir, `${previousSessionId}.jsonl`),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBe(path.join(sessionsDir, `${nextSessionId}.jsonl`));
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: path.join(sessionsDir, `${previousSessionId}-topic-ops.jsonl`),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBe(path.join(sessionsDir, `${nextSessionId}-topic-ops.jsonl`));
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: path.join(sessionsDir, `${driftedUuid}.jsonl`),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBe(path.join(sessionsDir, `${nextSessionId}.jsonl`));
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: path.join(sessionsDir, "custom-transcript.jsonl"),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: "../outside/11111111-1111-4111-8111-111111111111.jsonl",
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId,
+          previousSessionFile: path.join(tmpDir, "outside", `${previousSessionId}.jsonl`),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBeUndefined();
+
+      expect(
+        resolveRotatedGeneratedSessionFilePath({
+          previousSessionId,
+          nextSessionId: previousSessionId,
+          previousSessionFile: path.join(sessionsDir, `${previousSessionId}.jsonl`),
+          sessionsDir,
+          agentId: "main",
+        }),
+      ).toBeUndefined();
+    });
   });
 
   it("falls back to derived path when sessionFile is outside known agent sessions dirs", () => {

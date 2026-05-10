@@ -53,6 +53,122 @@ test("sessions.reset recomputes model from defaults instead of stale runtime mod
   expect((await fs.stat(sessionFile)).isFile()).toBe(true);
 });
 
+test("sessions.reset rotates generated transcript path and clears compaction state", async () => {
+  const { dir, storePath } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  const oldSessionId = "11111111-1111-4111-8111-111111111111";
+  const oldSessionFile = path.join(dir, `${oldSessionId}.jsonl`);
+  await fs.writeFile(
+    oldSessionFile,
+    `${JSON.stringify({ role: "user", content: "old" })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(oldSessionId, {
+        sessionFile: oldSessionFile,
+        compactionCount: 7,
+        compactionCheckpoints: [
+          {
+            checkpointId: "checkpoint-1",
+            sessionKey: "agent:main:main",
+            sessionId: oldSessionId,
+            createdAt: Date.now(),
+            reason: "auto-threshold",
+            preCompaction: {
+              sessionId: "sess-before-compaction",
+              sessionFile: path.join(dir, "sess-before-compaction.jsonl"),
+            },
+            postCompaction: {
+              sessionId: oldSessionId,
+              sessionFile: oldSessionFile,
+            },
+          },
+        ],
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    key: string;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+      compactionCount?: number;
+      compactionCheckpoints?: unknown[];
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionId).not.toBe(oldSessionId);
+  expect(nextSessionFile).toBe(path.join(dir, `${nextSessionId}.jsonl`));
+  expect(reset.payload?.entry.compactionCount).toBe(0);
+  expect(reset.payload?.entry.compactionCheckpoints).toBeUndefined();
+  expect((await fs.stat(nextSessionFile)).isFile()).toBe(true);
+
+  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
+    string,
+    { sessionFile?: string; compactionCount?: number; compactionCheckpoints?: unknown[] }
+  >;
+  expect(store["agent:main:main"]?.sessionFile).toBe(nextSessionFile);
+  expect(store["agent:main:main"]?.compactionCount).toBe(0);
+  expect(store["agent:main:main"]?.compactionCheckpoints).toBeUndefined();
+});
+
+test("sessions.reset preserves generated topic transcript suffix", async () => {
+  const { dir } = await createSessionStoreDir();
+  testState.agentConfig = {
+    model: {
+      primary: "openai/gpt-test-a",
+    },
+  };
+
+  const oldSessionId = "33333333-3333-4333-8333-333333333333";
+  const oldSessionFile = path.join(dir, `${oldSessionId}-topic-ops.jsonl`);
+  await fs.writeFile(
+    oldSessionFile,
+    `${JSON.stringify({ role: "user", content: "old topic" })}\n`,
+    "utf-8",
+  );
+
+  await writeSessionStore({
+    entries: {
+      main: sessionStoreEntry(oldSessionId, {
+        sessionFile: oldSessionFile,
+      }),
+    },
+  });
+
+  const reset = await directSessionReq<{
+    ok: true;
+    entry: {
+      sessionId: string;
+      sessionFile?: string;
+    };
+  }>("sessions.reset", { key: "main" });
+
+  expect(reset.ok).toBe(true);
+  const nextSessionId = reset.payload?.entry.sessionId;
+  const nextSessionFile = reset.payload?.entry.sessionFile;
+  if (!nextSessionId || !nextSessionFile) {
+    throw new Error("expected reset session id and file");
+  }
+  expect(nextSessionFile).toBe(path.join(dir, `${nextSessionId}-topic-ops.jsonl`));
+  expect((await fs.stat(nextSessionFile)).isFile()).toBe(true);
+});
+
 test("sessions.reset drops cached skills snapshot so /new rebuilds visible skills", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentConfig = {
