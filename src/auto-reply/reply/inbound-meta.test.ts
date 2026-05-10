@@ -763,6 +763,48 @@ describe("buildInboundUserContextPrefix", () => {
     expect(text).not.toContain('"message_id": "34273"');
   });
 
+  it("does not duplicate reply chain or history when a chat window already covers them", () => {
+    const text = buildInboundUserContextPrefix({
+      ChatType: "group",
+      ReplyToId: "34273",
+      ReplyToBody: "Expected",
+      ReplyChain: [
+        {
+          messageId: "34273",
+          sender: "Sam",
+          body: "Expected",
+        },
+      ],
+      InboundHistory: [{ sender: "Sam", timestamp: 1_736_380_700_000, body: "Expected" }],
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "34273",
+                sender: "Sam",
+                timestamp_ms: 1_736_380_700_000,
+                body: "Expected",
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain("Conversation context (untrusted, chronological");
+    expect(text).toContain("#34273");
+    expect(text).not.toContain("Reply chain of current user message");
+    expect(text).not.toContain("Reply target of current user message");
+    expect(text).not.toContain("Chat history since last reply");
+  });
+
   it("omits forwarded metadata blocks unless ForwardedFrom is present", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",

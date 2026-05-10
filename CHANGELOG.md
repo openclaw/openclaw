@@ -150,9 +150,11 @@ Docs: https://docs.openclaw.ai
 - Security/audit: honor `tools.byProvider["provider/model"].deny` when reporting small-model web/browser exposure, so per-model OpenRouter mitigations clear the `models.small_params` exposure signal. Fixes #80118.
 - Models/Moonshot: accept direct `moonshotai/...` and `moonshot-ai/...` refs as aliases for canonical `moonshot/...`, so copied OpenRouter Kimi ids no longer fail as unknown direct models. Fixes #73876. (#74946) Thanks @jeffrey701.
 - Kimi Code: use Kimi's stable `kimi-for-coding` API model id in bundled catalog, onboarding, and docs while normalizing legacy `kimi-code` and `k2p5` refs. Fixes #79965.
+- Telegram: render cached reply targets and nearby group chatter as one selected conversation context window, so stale replies no longer split JSON reply chains from local chat context.
 - Volcengine/Kimi: strip provider-unsupported tool schema length and item constraint keywords for direct and coding-plan models so hosted Kimi runs do not reject message tools with `minLength`. Fixes #38817.
 - DeepSeek: backfill V4 `reasoning_content` replay fields for unowned OpenAI-compatible proxy providers, preventing follow-up request failures outside the bundled DeepSeek and OpenRouter routes. Fixes #79608.
 - iMessage: emit a WARN log when an action is blocked because the imsg private API bridge is not attached, so operators see the silent-drop in `~/.openclaw/logs/openclaw.log` instead of having to read per-session trajectory JSONL `tool.result` payloads. Common after a gateway restart un-injects the dylib from Messages.app. (#80035) Thanks @omarshahine.
+- Codex: cross-fill missing `thread.id` and `thread.sessionId` before schema validation so live Codex app-server responses that omit `sessionId` no longer fail `thread/start` or `thread/resume`. Fixes #80124. (#80137) Thanks @kagura-agent.
 
 ## 2026.5.9
 
@@ -428,6 +430,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/runtime: share MIME and JSON Schema helpers across bundled plugins while preserving canonical media MIME inference, browser URL wildcard semantics, migration home-path resolution, QA request-limit responses, and extensionless text file previews.
 - Agents/memory flush: persist the pre-increment compaction counter after flush-triggered compaction so consecutive eligible compaction cycles run memoryFlush instead of alternating. Fixes #12590. Refs #12760, #26145, and #46513. Thanks @Kaspre, @lailoo, @drvoss, @Br1an67, and @dial481.
 - Status: treat CLI runtime aliases such as `claude-cli/<model>` as the canonical selected provider route in `/status`, avoiding spurious fallback/unknown-auth display and preserving fresh context usage from CLI usage snapshots. Fixes #79015. Thanks @ItsThierry.
+- Agents/subagents: stop the `sessions_spawn` accepted note from recommending `sessions_yield` as the default wait path in push-based chat and CLI flows. Fixes #78913. Thanks @oiGaDio.
 - Compute plugin callback authorization dynamically [AI]. (#78866) Thanks @pgondhi987.
 - Telegram: deduplicate media attachments in non-streaming mode so block-delivered images are not resent in the final reply, and clear legacy `mediaUrl` fallback when all media URLs are filtered. Fixes #78372.
 - Gateway/auth: allow `gateway.auth.mode: "none"` loopback backend RPC clients to skip device identity only for local non-browser backend connections, restoring subagent spawns and gateway tools without opening remote or browser-origin bypasses. Fixes #75780. Thanks @yozakura-ava.
