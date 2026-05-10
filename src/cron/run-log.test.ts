@@ -227,6 +227,43 @@ describe("cron run log", () => {
     });
   });
 
+  it("filters warning run-log entries", async () => {
+    await withRunLogDir("openclaw-cron-log-warning-", async (dir) => {
+      const logPath = path.join(dir, "runs", "job-1.jsonl");
+      await fs.mkdir(path.dirname(logPath), { recursive: true });
+      await fs.writeFile(
+        logPath,
+        [
+          JSON.stringify({
+            ts: 1,
+            jobId: "job-1",
+            action: "finished",
+            status: "ok",
+          }),
+          JSON.stringify({
+            ts: 2,
+            jobId: "job-1",
+            action: "finished",
+            status: "warning",
+            summary: "done",
+            deliveryStatus: "not-delivered",
+            deliveryError: "announce failed",
+          }),
+        ].join("\n") + "\n",
+        "utf-8",
+      );
+
+      const page = await readCronRunLogEntriesPage(logPath, {
+        limit: 10,
+        jobId: "job-1",
+        status: "warning",
+      });
+      expect(page.entries).toHaveLength(1);
+      expect(page.entries[0]?.status).toBe("warning");
+      expect(page.entries[0]?.deliveryError).toBe("announce failed");
+    });
+  });
+
   it("ignores invalid and non-finished lines while preserving delivery fields", async () => {
     await withRunLogDir("openclaw-cron-log-filter-", async (dir) => {
       const logPath = path.join(dir, "runs", "job-1.jsonl");

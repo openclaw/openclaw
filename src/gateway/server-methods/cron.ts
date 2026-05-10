@@ -485,8 +485,8 @@ export const cronHandlers: GatewayRequestHandlers = {
       jobId?: string;
       limit?: number;
       offset?: number;
-      statuses?: Array<"ok" | "error" | "skipped">;
-      status?: "all" | "ok" | "error" | "skipped";
+      statuses?: Array<"ok" | "error" | "skipped" | "warning">;
+      status?: "all" | "ok" | "error" | "skipped" | "warning";
       deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
       deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
       query?: string;

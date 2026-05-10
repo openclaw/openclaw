@@ -6,7 +6,7 @@ import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import { createCronServiceState, type CronServiceState } from "./service/state.js";
-import type { CronJob } from "./types.js";
+import type { CronJob, CronRunStatus } from "./types.js";
 
 type NoopLogger = {
   debug: MockFn;
@@ -101,22 +101,26 @@ export function setupCronServiceSuite(options?: { prefix?: string; baseTimeIso?:
 }
 
 export function createFinishedBarrier() {
-  const resolvers = new Map<string, (evt: CronEvent) => void>();
+  const resolvers = new Map<string, { status: CronRunStatus; resolve: (evt: CronEvent) => void }>();
   return {
     waitForOk: (jobId: string) =>
       new Promise<CronEvent>((resolve) => {
-        resolvers.set(jobId, resolve);
+        resolvers.set(jobId, { status: "ok", resolve });
+      }),
+    waitForStatus: (jobId: string, status: CronRunStatus) =>
+      new Promise<CronEvent>((resolve) => {
+        resolvers.set(jobId, { status, resolve });
       }),
     onEvent: (evt: CronEvent) => {
-      if (evt.action !== "finished" || evt.status !== "ok") {
+      if (evt.action !== "finished") {
         return;
       }
-      const resolve = resolvers.get(evt.jobId);
-      if (!resolve) {
+      const resolver = resolvers.get(evt.jobId);
+      if (!resolver || evt.status !== resolver.status) {
         return;
       }
       resolvers.delete(evt.jobId);
-      resolve(evt);
+      resolver.resolve(evt);
     },
   };
 }

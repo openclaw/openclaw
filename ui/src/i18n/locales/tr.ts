@@ -1189,6 +1189,7 @@ export const tr: TranslationMap = {
       runStatusOk: "Tamam",
       runStatusError: "Hata",
       runStatusSkipped: "Atlandı",
+      runStatusWarning: "Warning",
       runStatusUnknown: "Bilinmiyor",
       deliveryDelivered: "Teslim edildi",
       deliveryNotDelivered: "Teslim edilmedi",

@@ -1192,6 +1192,7 @@ export const it: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Errore",
       runStatusSkipped: "Saltato",
+      runStatusWarning: "Warning",
       runStatusUnknown: "Sconosciuto",
       deliveryDelivered: "Consegnato",
       deliveryNotDelivered: "Non consegnato",

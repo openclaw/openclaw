@@ -46,6 +46,7 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
+  status?: "ok" | "error" | "skipped" | "warning";
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
@@ -58,7 +59,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({
-      status: "ok" as const,
+      status: params.status ?? ("ok" as const),
       summary: "done",
       ...(params.error === undefined ? {} : { error: params.error }),
       ...(params.delivered === undefined ? {} : { delivered: params.delivered }),
@@ -81,11 +82,12 @@ async function runSingleJobAndReadState(params: {
   cron: CronService;
   finished: ReturnType<typeof createFinishedBarrier>;
   job: CronAddInput;
+  expectedStatus?: "ok" | "error" | "skipped" | "warning";
 }) {
   const job = await params.cron.add(params.job);
   vi.setSystemTime(new Date(job.state.nextRunAtMs! + 5));
   await vi.runOnlyPendingTimersAsync();
-  await params.finished.waitForOk(job.id);
+  await params.finished.waitForStatus(job.id, params.expectedStatus ?? "ok");
 
   const jobs = await params.cron.list({ includeDisabled: true });
   return { job, updated: jobs.find((entry) => entry.id === job.id) };
@@ -125,6 +127,7 @@ function expectDeliveryNotRequested(
 
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
+  status?: "ok" | "error" | "skipped" | "warning";
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: { jobId: string; delivered?: boolean; deliveryStatus?: string }) => void;
@@ -132,6 +135,7 @@ async function runIsolatedJobAndReadState(params: {
   const store = await makeStorePath();
   const { cron, finished } = createIsolatedCronWithFinishedBarrier({
     storePath: store.storePath,
+    ...(params.status !== undefined ? { status: params.status } : {}),
     ...(params.delivered !== undefined ? { delivered: params.delivered } : {}),
     ...(params.error !== undefined ? { error: params.error } : {}),
     ...(params.onFinished ? { onFinished: params.onFinished } : {}),
@@ -143,6 +147,7 @@ async function runIsolatedJobAndReadState(params: {
       cron,
       finished,
       job: params.job,
+      expectedStatus: params.status,
     });
     return updated;
   } finally {
@@ -189,6 +194,22 @@ describe("CronService persists delivered status", () => {
       error: "Message failed",
     });
     expectSuccessfulCronRun(updated);
+    expect(updated?.state.lastDelivered).toBe(false);
+    expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(updated?.state.lastDeliveryError).toBe("Message failed");
+  });
+
+  it("persists warning status for delivery-only failures without execution error state", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("delivery-warning"),
+      status: "warning",
+      delivered: false,
+      error: "Message failed",
+    });
+    expect(updated?.state.lastStatus).toBe("warning");
+    expect(updated?.state.lastRunStatus).toBe("warning");
+    expect(updated?.state.lastError).toBeUndefined();
+    expect(updated?.state.consecutiveErrors).toBe(0);
     expect(updated?.state.lastDelivered).toBe(false);
     expect(updated?.state.lastDeliveryStatus).toBe("not-delivered");
     expect(updated?.state.lastDeliveryError).toBe("Message failed");

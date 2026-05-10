@@ -522,7 +522,7 @@ export type {
   SessionUsageTimeSeries,
 } from "./usage-types.ts";
 
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = "ok" | "error" | "skipped" | "warning";
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
 export type CronJobsEnabledFilter = "all" | "enabled" | "disabled";
 export type CronJobsSortBy = "nextRunAtMs" | "updatedAtMs" | "name";

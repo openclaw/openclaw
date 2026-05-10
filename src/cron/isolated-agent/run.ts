@@ -995,6 +995,7 @@ async function finalizeCronRun(params: {
     skipHeartbeatDelivery,
     skipMessagingToolDelivery,
     unverifiedMessagingToolDelivery: didSendViaMessagingTool && !prepared.resolvedDelivery.ok,
+    deliveryFailureStatus: hasFatalErrorPayload ? "error" : "warning",
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
@@ -1025,8 +1026,11 @@ async function finalizeCronRun(params: {
       diagnostics: mergeCronRunDiagnostics(
         agentDiagnostics,
         deliveryResult.result.diagnostics,
-        deliveryResult.result.status === "error" && deliveryResult.result.error
-          ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error)
+        (deliveryResult.result.status === "error" || deliveryResult.result.status === "warning") &&
+          deliveryResult.result.error
+          ? createCronRunDiagnosticsFromError("delivery", deliveryResult.result.error, {
+              severity: deliveryResult.result.status === "warning" ? "warn" : "error",
+            })
           : undefined,
       ),
     };

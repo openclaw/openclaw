@@ -1152,6 +1152,7 @@ export const th: TranslationMap = {
       runStatusOk: "ตกลง",
       runStatusError: "ข้อผิดพลาด",
       runStatusSkipped: "ข้ามแล้ว",
+      runStatusWarning: "Warning",
       runStatusUnknown: "ไม่ทราบ",
       deliveryDelivered: "ส่งแล้ว",
       deliveryNotDelivered: "ยังไม่ส่ง",

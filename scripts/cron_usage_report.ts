@@ -13,7 +13,7 @@ type CronRunLogEntry = {
   ts: number;
   jobId: string;
   action: "finished";
-  status?: "ok" | "error" | "skipped";
+  status?: "ok" | "error" | "skipped" | "warning";
   model?: string;
   provider?: string;
   usage?: Usage;

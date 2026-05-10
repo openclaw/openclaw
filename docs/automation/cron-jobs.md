@@ -149,6 +149,8 @@ If an isolated run hits a live model-switch handoff, cron retries with the switc
 
 Before an isolated cron run enters the agent runner, OpenClaw checks reachable local provider endpoints for configured `api: "ollama"` and `api: "openai-completions"` providers whose `baseUrl` is loopback, private-network, or `.local`. If that endpoint is down, the run is recorded as `skipped` with a clear provider/model error instead of starting a model call. The endpoint result is cached for 5 minutes, so many due jobs using the same dead local Ollama, vLLM, SGLang, or LM Studio server share one small probe instead of creating a request storm. Skipped provider-preflight runs do not increment execution-error backoff; enable `failureAlert.includeSkipped` when you want repeated skip notifications.
 
+If the agent run succeeds but the runner cannot deliver the final reply, cron records the run as `warning` instead of `error`. The run state still keeps `deliveryStatus: "not-delivered"` and `deliveryError` for inspection, but execution-error counters, retry backoff, and failure alerts are not triggered by the delivery-only failure.
+
 ## Delivery and output
 
 | Mode       | What happens                                                        |
@@ -426,6 +428,8 @@ Disable cron: `cron.enabled: false` or `OPENCLAW_SKIP_CRON=1`.
     **One-shot retry**: transient errors (rate limit, overload, network, server error) retry up to 3 times with exponential backoff. Permanent errors disable immediately.
 
     **Recurring retry**: exponential backoff (30s to 60m) between retries. Backoff resets after the next successful run.
+
+    **Delivery warnings**: successful runs whose final reply could not be delivered are terminal `warning` runs. They keep delivery error details but do not retry as execution failures.
 
   </Accordion>
   <Accordion title="Maintenance">

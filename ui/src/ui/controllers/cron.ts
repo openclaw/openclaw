@@ -42,7 +42,7 @@ export type CronFieldKey =
 export type CronFieldErrors = Partial<Record<CronFieldKey, string>>;
 
 export type CronJobsScheduleKindFilter = "all" | "at" | "every" | "cron";
-export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped";
+export type CronJobsLastStatusFilter = "all" | "ok" | "error" | "skipped" | "warning";
 export type CronRunsLoadStatus = "ok" | "error" | "skipped";
 
 export type CronState = {

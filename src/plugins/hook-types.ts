@@ -624,7 +624,7 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
-export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
+export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped" | "warning";
 
 export type PluginHookGatewayCronDeliveryStatus =
   | "not-requested"

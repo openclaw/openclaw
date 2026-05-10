@@ -141,6 +141,7 @@ describe("cron view", () => {
     expect(container.textContent).toContain("Latest runs across all jobs.");
     expect(container.textContent).toContain("Status");
     expect(container.textContent).toContain("All statuses");
+    expect(container.textContent).toContain("Warning");
     expect(container.textContent).toContain("Delivery");
     expect(container.textContent).toContain("All delivery");
     expect(container.textContent).not.toContain("multi-select");
@@ -177,6 +178,7 @@ describe("cron view", () => {
     lastRunSelect.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onJobsFiltersChange).toHaveBeenCalledWith({ cronJobsLastStatusFilter: "error" });
+    expect(Array.from(lastRunSelect.options).map((option) => option.value)).toContain("warning");
 
     render(
       renderCron(

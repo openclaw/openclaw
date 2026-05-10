@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 
 type QaCronRunLogEntry = {
   ts?: number;
-  status?: "ok" | "error" | "skipped";
+  status?: "ok" | "error" | "skipped" | "warning";
   summary?: string;
   error?: string;
   deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
@@ -42,9 +42,10 @@ export async function waitForCronRunCompletion(params: {
     lastEntries = entries;
     const completed = entries.find(
       (entry) =>
-        typeof entry.ts === "number" &&
-        entry.ts >= params.afterTs &&
-        (entry.status === "ok" || entry.status === "error" || entry.status === "skipped"),
+        (typeof entry.ts === "number" && entry.ts >= params.afterTs && entry.status === "ok") ||
+        entry.status === "error" ||
+        entry.status === "skipped" ||
+        entry.status === "warning",
     );
     if (completed) {
       return completed;

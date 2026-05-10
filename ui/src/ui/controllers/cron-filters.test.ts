@@ -46,6 +46,7 @@ describe("getVisibleCronJobs", () => {
     const jobs = [
       job("ok", { state: { lastStatus: "ok", lastRunAtMs: 1 } }),
       job("error", { state: { lastStatus: "error", lastRunAtMs: 2 } }),
+      job("warning", { state: { lastStatus: "warning", lastRunAtMs: 3 } }),
       job("unknown"),
     ];
     const visible = getVisibleCronJobs({
@@ -54,6 +55,13 @@ describe("getVisibleCronJobs", () => {
       cronJobsLastStatusFilter: "error",
     });
     expect(visible.map((entry) => entry.id)).toEqual(["error"]);
+
+    const warnings = getVisibleCronJobs({
+      cronJobs: jobs,
+      cronJobsScheduleKindFilter: "all",
+      cronJobsLastStatusFilter: "warning",
+    });
+    expect(warnings.map((entry) => entry.id)).toEqual(["warning"]);
   });
 
   it("combines schedule and last-status filters", () => {

@@ -572,7 +572,11 @@ function tryFinishManualTaskRun(
     return;
   }
   try {
-    if (params.coreResult.status === "ok" || params.coreResult.status === "skipped") {
+    if (
+      params.coreResult.status === "ok" ||
+      params.coreResult.status === "skipped" ||
+      params.coreResult.status === "warning"
+    ) {
       completeTaskRunByRunId({
         runId: params.taskRunId,
         runtime: "cron",

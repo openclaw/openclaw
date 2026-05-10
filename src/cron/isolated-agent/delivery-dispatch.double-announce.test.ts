@@ -813,7 +813,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(getCompletedDirectCronDeliveriesCountForTests()).toBe(2000);
   });
 
-  it("does not retry permanent direct announce failures", async () => {
+  it("records permanent direct announce failures as delivery warnings", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
@@ -825,14 +825,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(state.result).toEqual(
       expect.objectContaining({
-        status: "error",
+        status: "warning",
         error: "Error: chat not found",
+        delivered: false,
         deliveryAttempted: true,
       }),
     );
   });
 
-  it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
+  it("surfaces structured direct delivery failures as warnings when best-effort is disabled", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(0);
     vi.mocked(isLikelyInterimCronMessage).mockReturnValue(false);
     vi.mocked(deliverOutboundPayloads).mockRejectedValue(new Error("boom"));
@@ -844,8 +845,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expect(state.result).toEqual(
       expect.objectContaining({
-        status: "error",
+        status: "warning",
         error: "Error: boom",
+        delivered: false,
         deliveryAttempted: true,
       }),
     );
@@ -1026,8 +1028,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(false);
     expect(state.result).toEqual(
       expect.objectContaining({
-        status: "error",
+        status: "warning",
         errorKind: "delivery-target",
+        delivered: false,
         deliveryAttempted: false,
       }),
     );

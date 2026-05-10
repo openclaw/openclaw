@@ -70,6 +70,11 @@ Note: isolated cron runs treat run-level agent failures as job errors even when
 no reply payload is produced, so model/provider failures still increment error
 counters and trigger failure notifications.
 
+Delivery-only failures after a successful isolated run are recorded as
+`warning` runs with `deliveryStatus: "not-delivered"` and `deliveryError`
+details. They do not increment execution-error counters or trigger retry
+backoff.
+
 ## Scheduling
 
 ### One-shot jobs
@@ -220,7 +225,7 @@ openclaw cron runs --id <job-id> --limit 50
 
 `openclaw cron list` shows all matching jobs by default. Pass `--agent <id>` to show only jobs whose effective normalized agent id matches; jobs without a stored agent id count as the configured default agent.
 
-`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
+`cron list --json` and `cron show <job-id> --json` include a top-level `status` field on each job, computed from `enabled`, `state.runningAtMs`, and `state.lastRunStatus`. Values: `disabled`, `running`, `ok`, `error`, `skipped`, `warning`, or `idle`. This mirrors the human-readable status column so external tooling can read job state without re-deriving it.
 
 `cron runs` entries include delivery diagnostics with the intended cron target, the resolved target, message-tool sends, fallback use, and delivered state.
 

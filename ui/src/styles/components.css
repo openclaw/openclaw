@@ -2263,6 +2263,12 @@
   background: var(--warn-subtle);
 }
 
+.cron-job-status-warning {
+  color: var(--warn);
+  border-color: rgba(245, 158, 11, 0.35);
+  background: var(--warn-subtle);
+}
+
 .cron-job-status-na {
   color: var(--muted);
 }

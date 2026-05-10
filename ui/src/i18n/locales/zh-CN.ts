@@ -1148,6 +1148,7 @@ export const zh_CN: TranslationMap = {
       runStatusOk: "成功",
       runStatusError: "错误",
       runStatusSkipped: "已跳过",
+      runStatusWarning: "Warning",
       runStatusUnknown: "未知",
       deliveryDelivered: "已投递",
       deliveryNotDelivered: "未投递",

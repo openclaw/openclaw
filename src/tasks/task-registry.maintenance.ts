@@ -318,7 +318,7 @@ function isTimeoutCronError(error: string | undefined): boolean {
 }
 
 function mapCronTerminalStatus(status: unknown, error?: string): CronTerminalRecovery["status"] {
-  if (status === "ok" || status === "skipped") {
+  if (status === "ok" || status === "skipped" || status === "warning") {
     return "succeeded";
   }
   return isTimeoutCronError(error) ? "timed_out" : "failed";
@@ -368,7 +368,10 @@ function resolveCronRunLogRecovery(
       candidate.jobId === execution.jobId &&
       candidate.action === "finished" &&
       candidate.runAtMs === execution.startedAt &&
-      (candidate.status === "ok" || candidate.status === "skipped" || candidate.status === "error"),
+      (candidate.status === "ok" ||
+        candidate.status === "skipped" ||
+        candidate.status === "warning" ||
+        candidate.status === "error"),
   );
   if (!entry) {
     return undefined;
@@ -397,7 +400,7 @@ function resolveCronJobStateRecovery(
     return undefined;
   }
   const status = job.state.lastRunStatus ?? job.state.lastStatus;
-  if (status !== "ok" && status !== "skipped" && status !== "error") {
+  if (status !== "ok" && status !== "skipped" && status !== "warning" && status !== "error") {
     return undefined;
   }
   const durationMs =

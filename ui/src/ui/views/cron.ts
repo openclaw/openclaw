@@ -106,6 +106,7 @@ function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: strin
     { value: "ok", label: t("cron.runs.runStatusOk") },
     { value: "error", label: t("cron.runs.runStatusError") },
     { value: "skipped", label: t("cron.runs.runStatusSkipped") },
+    { value: "warning", label: t("cron.runs.runStatusWarning") },
   ];
 }
 
@@ -519,6 +520,7 @@ export function renderCron(props: CronProps) {
                 <option value="ok">${t("cron.runs.runStatusOk")}</option>
                 <option value="error">${t("cron.runs.runStatusError")}</option>
                 <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+                <option value="warning">${t("cron.runs.runStatusWarning")}</option>
               </select>
             </label>
             <label class="field">
@@ -1685,7 +1687,9 @@ function renderJobState(job: CronJob) {
         ? "cron-job-status-error"
         : rawStatus === "skipped"
           ? "cron-job-status-skipped"
-          : "cron-job-status-na";
+          : rawStatus === "warning"
+            ? "cron-job-status-warning"
+            : "cron-job-status-na";
   const statusLabel =
     rawStatus === "ok"
       ? t("cron.runs.runStatusOk")
@@ -1693,9 +1697,13 @@ function renderJobState(job: CronJob) {
         ? t("cron.runs.runStatusError")
         : rawStatus === "skipped"
           ? t("cron.runs.runStatusSkipped")
-          : t("common.na");
+          : rawStatus === "warning"
+            ? t("cron.runs.runStatusWarning")
+            : t("common.na");
   const nextRunAtMs = job.state?.nextRunAtMs;
   const lastRunAtMs = job.state?.lastRunAtMs;
+  const deliveryStatus = job.state?.lastDeliveryStatus;
+  const deliveryError = job.state?.lastDeliveryError;
 
   return html`
     <div class="cron-job-state">
@@ -1715,6 +1723,14 @@ function renderJobState(job: CronJob) {
           ${formatStateRelative(lastRunAtMs)}
         </span>
       </div>
+      ${deliveryStatus && deliveryStatus !== "not-requested"
+        ? html`<div class="cron-job-state-row">
+            <span class="cron-job-state-key">${t("cron.runs.delivery")}</span>
+            <span class="cron-job-state-value" title=${deliveryError ?? ""}>
+              ${runDeliveryLabel(deliveryStatus)}
+            </span>
+          </div>`
+        : nothing}
     </div>
   `;
 }
@@ -1727,6 +1743,8 @@ function runStatusLabel(value: string): string {
       return t("cron.runs.runStatusError");
     case "skipped":
       return t("cron.runs.runStatusSkipped");
+    case "warning":
+      return t("cron.runs.runStatusWarning");
     default:
       return t("cron.runs.runStatusUnknown");
   }

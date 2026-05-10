@@ -1167,6 +1167,7 @@ export const ar: TranslationMap = {
       runStatusOk: "حسنًا",
       runStatusError: "خطأ",
       runStatusSkipped: "تم التخطي",
+      runStatusWarning: "Warning",
       runStatusUnknown: "غير معروف",
       deliveryDelivered: "تم التسليم",
       deliveryNotDelivered: "لم يتم التسليم",

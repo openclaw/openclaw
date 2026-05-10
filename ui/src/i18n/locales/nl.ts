@@ -1187,6 +1187,7 @@ export const nl: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Fout",
       runStatusSkipped: "Overgeslagen",
+      runStatusWarning: "Warning",
       runStatusUnknown: "Onbekend",
       deliveryDelivered: "Geleverd",
       deliveryNotDelivered: "Niet geleverd",

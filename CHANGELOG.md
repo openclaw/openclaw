@@ -41,6 +41,7 @@ Docs: https://docs.openclaw.ai
 - ACPX/Claude ACP: keep foreground prompts waiting for their own result when autonomous task-notification results arrive during the same session, and retarget the patch for Claude Agent ACP `0.33.1`.
 - WhatsApp: keep Baileys media uploads from passing non-Dispatcher agents to undici in `7.0.0-rc10`, and patch the bundled Baileys declaration so the latest tsdown build stays warning-clean.
 - Build: keep tsdown `0.22.0` warning-clean by externalizing known third-party declaration edges and replacing relative channel config module augmentations with explicit built-in channel fields.
+- Cron: record successful isolated runs with failed final delivery as warning runs so notification failures keep delivery diagnostics without triggering execution backoff or failure state. Fixes #49190. Thanks @NorthernDream.
 - ACP sessions: map canonical runtime options to backend-advertised ACP config keys like Claude's `effort` while keeping persisted OpenClaw state canonical. (#79926) Thanks @InTheCloudDan.
 - Models/Discord: support `provider/*` entries in `agents.defaults.models` so `/model`, `/models`, and model pickers can show dynamically discovered models for selected providers without exact model allowlists. Fixes #79485. Thanks @rendrag-git.
 - Gateway/watch: rebuild or restage missing bundled-plugin dist and runtime-postbuild outputs before launching the Gateway from a source checkout, preventing incomplete watch-mode runtime trees. (#70805) Thanks @rubencu.

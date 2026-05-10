@@ -118,6 +118,7 @@ type DispatchCronDeliveryParams = {
   skipHeartbeatDelivery: boolean;
   skipMessagingToolDelivery?: boolean;
   unverifiedMessagingToolDelivery?: boolean;
+  deliveryFailureStatus?: "error" | "warning";
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
@@ -498,17 +499,19 @@ export async function dispatchCronDelivery(
   let delivered = skipMessagingToolDelivery;
   let deliveryAttempted = skipMessagingToolDelivery;
   let directCronSessionDeleted = false;
+  const deliveryFailureStatus = params.deliveryFailureStatus ?? "warning";
   const formatDeliveryTargetError = (error: string) =>
     params.unverifiedMessagingToolDelivery === true
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
       : error;
-  const failDeliveryTarget = (error: string) =>
+  const buildDeliveryTargetFailure = (error: string) =>
     params.withRunSession({
-      status: "error",
+      status: deliveryFailureStatus,
       error: formatDeliveryTargetError(error),
       errorKind: "delivery-target",
       summary,
       outputText,
+      ...(deliveryFailureStatus === "warning" ? { delivered: false } : {}),
       deliveryAttempted,
       ...params.telemetry,
     });
@@ -730,10 +733,11 @@ export async function dispatchCronDelivery(
     } catch (err) {
       if (!params.deliveryBestEffort) {
         return params.withRunSession({
-          status: "error",
+          status: deliveryFailureStatus,
           summary,
           outputText,
           error: String(err),
+          ...(deliveryFailureStatus === "warning" ? { delivered: false } : {}),
           deliveryAttempted,
           ...params.telemetry,
         });
@@ -874,7 +878,7 @@ export async function dispatchCronDelivery(
     if (!params.resolvedDelivery.ok) {
       if (!params.deliveryBestEffort) {
         return {
-          result: failDeliveryTarget(params.resolvedDelivery.error.message),
+          result: buildDeliveryTargetFailure(params.resolvedDelivery.error.message),
           delivered,
           deliveryAttempted,
           summary,

@@ -1387,6 +1387,46 @@ describe("cron service timer regressions", () => {
     expect(job.enabled).toBe(true);
   });
 
+  it("treats one-shot warning runs as terminal without deleting inspection state", () => {
+    const startedAt = Date.parse("2026-03-02T12:02:00.000Z");
+    const endedAt = startedAt + 75;
+    const state = createCronServiceState({
+      cronEnabled: true,
+      storePath: "/tmp/cron-warning-one-shot.json",
+      log: noopLogger,
+      nowMs: () => endedAt,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: createDefaultIsolatedRunner(),
+    });
+    const job = createIsolatedRegressionJob({
+      id: "apply-result-warning-one-shot",
+      name: "apply-result-warning-one-shot",
+      scheduledAt: startedAt,
+      schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+      payload: { kind: "agentTurn", message: "ping" },
+      state: { nextRunAtMs: startedAt - 1_000, runningAtMs: startedAt - 500 },
+    });
+    job.deleteAfterRun = true;
+
+    const shouldDelete = applyJobResult(state, job, {
+      status: "warning",
+      error: "announce failed",
+      delivered: false,
+      startedAt,
+      endedAt,
+    });
+
+    expect(shouldDelete).toBe(false);
+    expect(job.enabled).toBe(false);
+    expect(job.state.nextRunAtMs).toBeUndefined();
+    expect(job.state.lastStatus).toBe("warning");
+    expect(job.state.lastError).toBeUndefined();
+    expect(job.state.consecutiveErrors).toBe(0);
+    expect(job.state.lastDeliveryStatus).toBe("not-delivered");
+    expect(job.state.lastDeliveryError).toBe("announce failed");
+  });
+
   it("keeps state updates when cron next-run computation throws on error path (#30905)", () => {
     const startedAt = Date.parse("2026-03-02T12:05:00.000Z");
     const endedAt = startedAt + 25;

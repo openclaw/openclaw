@@ -260,7 +260,7 @@ export function createCronRunDiagnosticsFromExecDetails(
 
 export function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
-  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
+  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" | "warning" },
 ): CronRunDiagnostics | undefined {
   if (!isRecord(payload)) {
     return undefined;
@@ -285,7 +285,7 @@ export function createCronRunDiagnosticsFromToolPayload(
 
 export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
-  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
+  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" | "warning" },
 ): CronRunDiagnostics | undefined {
   const record = isRecord(result) ? result : {};
   const meta =

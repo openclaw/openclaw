@@ -138,7 +138,7 @@ describe("cron protocol validators", () => {
         id: "job-1",
         limit: 50,
         offset: 0,
-        status: "error",
+        status: "warning",
         query: "timeout",
         sortDir: "desc",
       }),
@@ -151,7 +151,7 @@ describe("cron protocol validators", () => {
       validateCronRunsParams({
         scope: "all",
         limit: 25,
-        statuses: ["ok", "error"],
+        statuses: ["ok", "error", "warning"],
         deliveryStatuses: ["delivered", "not-requested"],
         query: "fail",
         sortDir: "desc",

@@ -367,6 +367,9 @@ export function printCronList(
       if (statusRaw === "running") {
         return colorize(rich, theme.warn, statusLabel);
       }
+      if (statusRaw === "warning") {
+        return colorize(rich, theme.warn, statusLabel);
+      }
       if (statusRaw === "skipped") {
         return colorize(rich, theme.muted, statusLabel);
       }

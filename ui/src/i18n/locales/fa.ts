@@ -1185,6 +1185,7 @@ export const fa: TranslationMap = {
       runStatusOk: "تأیید",
       runStatusError: "خطا",
       runStatusSkipped: "ردشده",
+      runStatusWarning: "Warning",
       runStatusUnknown: "نامشخص",
       deliveryDelivered: "تحویل‌شده",
       deliveryNotDelivered: "تحویل‌نشده",

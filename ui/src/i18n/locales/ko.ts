@@ -1176,6 +1176,7 @@ export const ko: TranslationMap = {
       runStatusOk: "확인",
       runStatusError: "오류",
       runStatusSkipped: "건너뜀",
+      runStatusWarning: "Warning",
       runStatusUnknown: "알 수 없음",
       deliveryDelivered: "전달됨",
       deliveryNotDelivered: "전달되지 않음",

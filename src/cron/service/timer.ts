@@ -266,7 +266,7 @@ function tryFinishCronTaskRun(
     return;
   }
   try {
-    if (result.status === "ok" || result.status === "skipped") {
+    if (result.status === "ok" || result.status === "skipped" || result.status === "warning") {
       completeTaskRunByRunId({
         runId: result.taskRunId,
         runtime: "cron",
@@ -552,7 +552,7 @@ export function applyJobResult(
   job.state.lastRunStatus = result.status;
   job.state.lastStatus = result.status;
   job.state.lastDurationMs = Math.max(0, result.endedAt - result.startedAt);
-  job.state.lastError = result.error;
+  job.state.lastError = result.status === "warning" ? undefined : result.error;
   job.state.lastDiagnostics = normalizeCronRunDiagnostics(result.diagnostics);
   job.state.lastDiagnosticSummary = summarizeCronRunDiagnostics(job.state.lastDiagnostics);
   job.state.lastErrorReason =
@@ -568,6 +568,16 @@ export function applyJobResult(
         diagnosticsSummary: job.state.lastDiagnosticSummary,
       },
       "cron: job run returned error status",
+    );
+  } else if (result.status === "warning") {
+    state.deps.log.warn(
+      {
+        jobId: job.id,
+        jobName: job.name,
+        warning: result.error,
+        diagnosticsSummary: job.state.lastDiagnosticSummary,
+      },
+      "cron: job run returned warning status",
     );
   }
   const deliveryState = resolveDeliveryState({ job, delivered: result.delivered });
@@ -615,8 +625,8 @@ export function applyJobResult(
 
   if (!shouldDelete) {
     if (job.schedule.kind === "at") {
-      if (result.status === "ok" || result.status === "skipped") {
-        // One-shot done or skipped: disable to prevent tight-loop (#11452).
+      if (result.status === "ok" || result.status === "skipped" || result.status === "warning") {
+        // One-shot done, skipped, or warning: disable to prevent tight-loop (#11452).
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {
@@ -1631,7 +1641,7 @@ function emitJobFinished(
     action: "finished",
     job,
     status: result.status,
-    error: result.error,
+    error: result.status === "warning" ? undefined : result.error,
     summary: result.summary,
     diagnostics: result.diagnostics,
     delivered: result.delivered,
