@@ -221,6 +221,65 @@ describe("signal outbound", () => {
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
   });
 
+  it("forwards quote overrides through formatted text and media sends", async () => {
+    const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
+      const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";
+      return {
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({
+          results: [{ channel: "signal", messageId }],
+          kind: opts.mediaUrl ? "media" : "text",
+        }),
+      };
+    });
+    const deps = { signal: send };
+    const textFormatter = signalPlugin.outbound?.sendFormattedText;
+    const mediaFormatter = signalPlugin.outbound?.sendFormattedMedia;
+    if (!textFormatter || !mediaFormatter) {
+      throw new Error("signal formatted outbound senders unavailable");
+    }
+
+    await textFormatter({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "**hello**",
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps,
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      "signal:+15555550123",
+      expect.any(String),
+      expect.objectContaining({
+        replyTo: "1700000000000",
+        quoteAuthor: "uuid:sender-1",
+      }),
+    );
+
+    send.mockClear();
+
+    await mediaFormatter({
+      cfg: {} as OpenClawConfig,
+      to: "signal:+15555550123",
+      text: "**photo**",
+      mediaUrl: "https://example.com/image.png",
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps,
+    });
+
+    expect(send).toHaveBeenCalledWith(
+      "signal:+15555550123",
+      expect.any(String),
+      expect.objectContaining({
+        mediaUrl: "https://example.com/image.png",
+        replyTo: "1700000000000",
+        quoteAuthor: "uuid:sender-1",
+      }),
+    );
+  });
+
   it("declares message adapter durable text and media with receipt proofs", async () => {
     const send = vi.fn(async (_to: string, _text: string, opts: { mediaUrl?: string } = {}) => {
       const messageId = opts.mediaUrl ? "signal-media-1" : "signal-text-1";

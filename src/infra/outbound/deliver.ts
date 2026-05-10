@@ -188,6 +188,7 @@ type ChannelHandlerParams = {
   accountId?: string;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
+  quoteAuthor?: string | null;
   formatting?: OutboundDeliveryFormattingOptions;
   threadId?: string | number | null;
   identity?: OutboundIdentity;
@@ -1206,6 +1207,7 @@ export async function deliverOutboundPayloadsInternal(
         threadId: params.threadId,
         replyToId: params.replyToId,
         replyToMode: params.replyToMode,
+        quoteAuthor: params.quoteAuthor,
         formatting: params.formatting,
         identity: params.identity,
         bestEffort: params.bestEffort,
@@ -1605,9 +1607,7 @@ async function deliverOutboundPayloadsCore(
         effectivePayload.replyToId !== null &&
         typeof effectivePayload.replyToId !== "string";
       const resolvedReplyToId = suppressInheritedReply ? null : replyToResolution.replyToId;
-      const resolvedReplyToIdSource = suppressInheritedReply
-        ? undefined
-        : replyToResolution.source;
+      const resolvedReplyToIdSource = suppressInheritedReply ? undefined : replyToResolution.source;
       const effectiveQuoteAuthor =
         resolvedReplyToId && typeof resolvedReplyToId === "string"
           ? (params.quoteAuthor ?? undefined)

@@ -50,6 +50,7 @@ export type QueuedDeliveryPayload = {
   threadId?: string | number | null;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
+  quoteAuthor?: string | null;
   formatting?: OutboundDeliveryFormattingOptions;
   identity?: OutboundIdentity;
   bestEffort?: boolean;
@@ -159,6 +160,7 @@ export async function enqueueDelivery(
     threadId: params.threadId,
     replyToId: params.replyToId,
     replyToMode: params.replyToMode,
+    quoteAuthor: params.quoteAuthor,
     formatting: params.formatting,
     identity: params.identity,
     bestEffort: params.bestEffort,

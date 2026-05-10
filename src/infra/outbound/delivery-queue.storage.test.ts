@@ -38,6 +38,9 @@ describe("delivery-queue storage", () => {
           },
           bestEffort: true,
           gifPlayback: true,
+          replyToId: "1700000000000",
+          replyToMode: "first",
+          quoteAuthor: "uuid:sender-1",
           silent: true,
           gatewayClientScopes: ["operator.write"],
           mirror: {
@@ -74,6 +77,9 @@ describe("delivery-queue storage", () => {
         },
         bestEffort: true,
         gifPlayback: true,
+        replyToId: "1700000000000",
+        replyToMode: "first",
+        quoteAuthor: "uuid:sender-1",
         silent: true,
         gatewayClientScopes: ["operator.write"],
         mirror: {

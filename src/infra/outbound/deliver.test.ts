@@ -2564,6 +2564,30 @@ describe("deliverOutboundPayloads", () => {
     expect(queuedDelivery?.renderedBatchPlan).toBe(renderedBatchPlan);
   });
 
+  it("persists Signal quote author metadata with queued deliveries", async () => {
+    const sendSignal = vi.fn().mockResolvedValue({ messageId: "s-quote", timestamp: 1 });
+
+    await deliverOutboundPayloads({
+      cfg: { channels: { signal: {} } },
+      channel: "signal",
+      to: "group:test-group",
+      payloads: [{ text: "quoted reply" }],
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+      deps: { sendSignal },
+    });
+
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<
+        [{ replyToId?: unknown; quoteAuthor?: unknown }]
+      >
+    )[0]?.[0];
+    expect(queuedDelivery).toMatchObject({
+      replyToId: "1700000000000",
+      quoteAuthor: "uuid:sender-1",
+    });
+  });
+
   it("applies silent-reply rewrite policy from the outbound session", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-silent", roomId: "!room" });
     const cfg: OpenClawConfig = {

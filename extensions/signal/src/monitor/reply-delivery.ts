@@ -34,7 +34,10 @@ export function resolveSignalReplyDelivery(params: {
 
   if (explicitReplyTo === undefined) {
     return {
-      payload: params.payload,
+      payload:
+        "replyToId" in params.payload && params.payload.replyToId !== undefined
+          ? { ...params.payload, replyToId: undefined }
+          : params.payload,
       effectiveReplyTo,
     };
   }

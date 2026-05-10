@@ -62,6 +62,28 @@ describe("resolveSignalReplyDelivery", () => {
     expect(inherited.effectiveReplyTo).toBe("1700000000000");
   });
 
+  it("treats blank explicit reply targets as unset so inherited quotes still apply", () => {
+    const state: SignalReplyDeliveryState = { consumed: false };
+
+    const resolved = resolveSignalReplyDelivery({
+      payload: { text: "first", replyToId: "   " },
+      inheritedReplyToId: "1700000000000",
+      state,
+    });
+    markSignalReplyConsumed(state, resolved.effectiveReplyTo);
+
+    const next = resolveSignalReplyDelivery({
+      payload: { text: "second" },
+      inheritedReplyToId: "1700000000000",
+      state,
+    });
+
+    expect(resolved.payload.replyToId).toBeUndefined();
+    expect(resolved.effectiveReplyTo).toBe("1700000000000");
+    expect(state.consumed).toBe(true);
+    expect(next.effectiveReplyTo).toBeUndefined();
+  });
+
   it("does not consume inherited reply state for non-decimal reply ids", () => {
     const state: SignalReplyDeliveryState = { consumed: false };
 

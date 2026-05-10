@@ -226,6 +226,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           entry.quoteTarget.id ? ` id:${entry.quoteTarget.id}` : ""
         }]\n"${entry.quoteTarget.body}"\n[/Quoting]`
       : "";
+    const bodyForAgent = entry.bodyText || entry.quoteTarget?.body || "";
     const bodyWithQuote = [entry.bodyText, quoteBlock].filter(Boolean).join("\n\n");
     const body = formatInboundEnvelope({
       channel: "Signal",
@@ -273,7 +274,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         : undefined;
     const ctxPayload = finalizeInboundContext({
       Body: combinedBody,
-      BodyForAgent: entry.bodyText,
+      BodyForAgent: bodyForAgent,
       InboundHistory: inboundHistory,
       RawBody: entry.bodyText,
       CommandBody: entry.commandBody,
@@ -475,10 +476,14 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return `signal:${deps.accountId}:${conversationId}:${entry.senderPeerId}`;
     },
     shouldDebounce: (entry) => {
+      const hasMedia = Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length);
+      if (entry.quoteTarget && !hasMedia) {
+        return true;
+      }
       return shouldDebounceTextInbound({
         text: entry.bodyText,
         cfg: deps.cfg,
-        hasMedia: Boolean(entry.mediaPath || entry.mediaType || entry.mediaPaths?.length),
+        hasMedia,
       });
     },
     onFlush: async (entries) => {

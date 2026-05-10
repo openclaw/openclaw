@@ -144,6 +144,7 @@ export type ChannelMessageSendTextContext<TConfig = OpenClawConfig> = {
   replyToId?: string | null;
   replyToIdSource?: "explicit" | "implicit";
   replyToMode?: ReplyToMode;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
   signal?: AbortSignal;
@@ -217,6 +218,7 @@ export type ChannelMessageUnknownSendContext<TConfig = OpenClawConfig> = {
   renderedBatchPlan?: RenderedMessageBatchPlan;
   replyToId?: string | null;
   replyToMode?: ReplyToMode;
+  quoteAuthor?: string | null;
   threadId?: string | number | null;
   silent?: boolean;
 };

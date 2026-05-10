@@ -349,7 +349,7 @@ async function fetchAttachment(params: {
   return { path: saved.path, contentType: saved.contentType };
 }
 
-async function deliverReplies(params: {
+export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
   target: string;
@@ -387,7 +387,11 @@ async function deliverReplies(params: {
       : undefined;
     const text = resolvedPayload.text ?? "";
     const resolvedMediaList =
-      resolvedPayload.mediaUrls ?? (resolvedPayload.mediaUrl ? [resolvedPayload.mediaUrl] : []);
+      resolvedPayload.mediaUrls && resolvedPayload.mediaUrls.length > 0
+        ? resolvedPayload.mediaUrls
+        : resolvedPayload.mediaUrl
+          ? [resolvedPayload.mediaUrl]
+          : [];
     if (!text && resolvedMediaList.length === 0) {
       continue;
     }

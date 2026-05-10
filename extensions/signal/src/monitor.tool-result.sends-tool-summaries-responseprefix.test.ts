@@ -14,7 +14,7 @@ import {
 installSignalToolResultTestHooks();
 
 // Import after the harness registers `vi.mock(...)` for Signal internals.
-const { monitorSignalProvider } = await import("./monitor.js");
+const { deliverReplies, monitorSignalProvider } = await import("./monitor.js");
 
 const {
   replyMock,
@@ -141,6 +141,31 @@ describe("monitorSignalProvider tool results", () => {
       expect(sendMock).toHaveBeenCalledTimes(1);
     });
     expect(sendMock.mock.calls[0][1]).toBe("PFX final reply");
+  });
+
+  it("falls back to mediaUrl when mediaUrls is an empty reply list", async () => {
+    await deliverReplies({
+      cfg: config as OpenClawConfig,
+      replies: [
+        {
+          text: "caption",
+          mediaUrl: "https://example.com/fallback.png",
+          mediaUrls: [],
+        },
+      ],
+      target: "+15550001111",
+      baseUrl: SIGNAL_BASE_URL,
+      runtime: {} as never,
+      maxBytes: 4 * 1024 * 1024,
+      textLimit: 4000,
+      chunkMode: "length",
+    });
+
+    expect(sendMock).toHaveBeenCalledWith(
+      "+15550001111",
+      "caption",
+      expect.objectContaining({ mediaUrl: "https://example.com/fallback.png" }),
+    );
   });
 
   it("replies with pairing code when dmPolicy is pairing and no allowFrom is set", async () => {
