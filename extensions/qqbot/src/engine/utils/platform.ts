@@ -39,12 +39,27 @@ export function getHomeDir(): string {
   return getPlatformAdapter().getTempDir();
 }
 
-/** Return a path under `~/.openclaw/qqbot` without creating it. */
-export function getQQBotDataPath(...subPaths: string[]): string {
-  return path.join(getHomeDir(), ".openclaw", "qqbot", ...subPaths);
+/**
+ * Resolve the base directory for QQBot data.
+ *
+ * Priority:
+ * 1. `QQBOT_DATA_DIR` environment variable (with `~` expansion)
+ * 2. Fallback to `~/.openclaw/qqbot`
+ */
+function getQQBotDataBaseDir(): string {
+  const envDir = process.env.QQBOT_DATA_DIR;
+  if (envDir && envDir.trim()) {
+    return normalizePath(envDir.trim());
+  }
+  return path.join(getHomeDir(), ".openclaw", "qqbot");
 }
 
-/** Return a path under `~/.openclaw/qqbot`, creating it on demand. */
+/** Return a path under the QQBot data directory without creating it. */
+export function getQQBotDataPath(...subPaths: string[]): string {
+  return path.join(getQQBotDataBaseDir(), ...subPaths);
+}
+
+/** Return a path under the QQBot data directory, creating it on demand. */
 export function getQQBotDataDir(...subPaths: string[]): string {
   const dir = getQQBotDataPath(...subPaths);
   if (!fs.existsSync(dir)) {
@@ -54,16 +69,26 @@ export function getQQBotDataDir(...subPaths: string[]): string {
 }
 
 /**
- * Return a path under `~/.openclaw/media/qqbot` without creating it.
+ * Resolve the base directory for QQBot media.
  *
- * Unlike `getQQBotDataPath`, this lives under OpenClaw's core media allowlist so
- * downloaded images and audio can be accessed by framework media tooling.
+ * Priority:
+ * 1. `QQBOT_DATA_DIR` environment variable (with `~` expansion)
+ * 2. Fallback to `~/.openclaw/media/qqbot`
  */
-export function getQQBotMediaPath(...subPaths: string[]): string {
-  return path.join(getHomeDir(), ".openclaw", "media", "qqbot", ...subPaths);
+function getQQBotMediaBaseDir(): string {
+  const envDir = process.env.QQBOT_DATA_DIR;
+  if (envDir && envDir.trim()) {
+    return path.join(normalizePath(envDir.trim()), "media");
+  }
+  return path.join(getHomeDir(), ".openclaw", "media", "qqbot");
 }
 
-/** Return a path under `~/.openclaw/media/qqbot`, creating it on demand. */
+/** Return a path under the QQBot media directory without creating it. */
+export function getQQBotMediaPath(...subPaths: string[]): string {
+  return path.join(getQQBotMediaBaseDir(), ...subPaths);
+}
+
+/** Return a path under the QQBot media directory, creating it on demand. */
 export function getQQBotMediaDir(...subPaths: string[]): string {
   const dir = getQQBotMediaPath(...subPaths);
   if (!fs.existsSync(dir)) {
