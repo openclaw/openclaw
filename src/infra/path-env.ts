@@ -30,6 +30,73 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
+function expandHomeDir(candidate: string, homeDir: string): string {
+  const withHomeEnv = candidate.replace(/\$\{HOME\}/g, homeDir);
+  if (withHomeEnv !== candidate) {
+    return withHomeEnv;
+  }
+  if (candidate === "~") {
+    return homeDir;
+  }
+  if (candidate.startsWith("~/") || candidate.startsWith("~\\")) {
+    return path.join(homeDir, candidate.slice(2));
+  }
+  return candidate;
+}
+
+function resolveNpmPrefixBinDir(
+  prefix: string | undefined,
+  homeDir: string,
+  platform: NodeJS.Platform,
+): string | undefined {
+  const trimmed = prefix?.trim().replace(/^['"]|['"]$/g, "");
+  if (!trimmed) {
+    return undefined;
+  }
+  const expanded = expandHomeDir(trimmed, homeDir);
+  if (!path.isAbsolute(expanded)) {
+    return undefined;
+  }
+  return platform === "win32" ? path.normalize(expanded) : path.join(expanded, "bin");
+}
+
+function readUserNpmPrefix(homeDir: string): string | undefined {
+  try {
+    const npmrc = fs.readFileSync(path.join(homeDir, ".npmrc"), "utf8");
+    let prefix: string | undefined;
+    for (const line of npmrc.split(/\r?\n/)) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith(";")) {
+        continue;
+      }
+      const match = /^prefix\s*=\s*(.+)$/i.exec(trimmed);
+      if (match) {
+        prefix = match[1]?.trim();
+      }
+    }
+    return prefix;
+  } catch {
+    return undefined;
+  }
+}
+
+function resolveNpmGlobalBinDirs(opts: { homeDir: string; platform: NodeJS.Platform }): string[] {
+  const dirs: string[] = [];
+  for (const prefix of [
+    process.env.NPM_CONFIG_PREFIX,
+    process.env.npm_config_prefix,
+    readUserNpmPrefix(opts.homeDir),
+    path.join(opts.homeDir, ".openclaw", "tools", "node", "npm"),
+  ]) {
+    const binDir = resolveNpmPrefixBinDir(prefix, opts.homeDir, opts.platform);
+    if (binDir) {
+      dirs.push(binDir);
+    }
+  }
+  dirs.push(path.join(opts.homeDir, ".npm-global", "bin"));
+  return dirs;
+}
+
 function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
   const partsExisting = params.existing
     .split(path.delimiter)
@@ -113,6 +180,7 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
     append.push(process.env.XDG_BIN_HOME);
   }
   append.push(path.join(homeDir, ".local", "bin"));
+  append.push(...resolveNpmGlobalBinDirs({ homeDir, platform }));
   append.push(path.join(homeDir, ".local", "share", "pnpm"));
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));

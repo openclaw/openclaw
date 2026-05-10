@@ -1,3 +1,4 @@
+import type { PathLike } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureOpenClawCliOnPath } from "./path-env.js";
@@ -12,32 +13,46 @@ const setDir = (p: string) => state.dirs.add(abs(p));
 const setExe = (p: string) => state.executables.add(abs(p));
 
 vi.mock("node:fs", async () => {
+  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const pathMod = await import("node:path");
-  const absInMock = (p: string) => pathMod.resolve(p);
+  const absInMock = (p: PathLike) =>
+    pathMod.resolve(typeof p === "string" ? p : p instanceof URL ? p.pathname : p.toString());
+  const actualReadFileSync = actual.readFileSync.bind(actual);
 
-  const wrapped = {
-    ...actual,
-    constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
-    accessSync: (p: string, mode?: number) => {
-      const resolved = absInMock(p);
-      if (state.executables.has(resolved)) {
-        return;
-      }
-      actual.accessSync(p, mode);
+  return mockNodeBuiltinModule(
+    () => vi.importActual<typeof import("node:fs")>("node:fs"),
+    {
+      constants: { ...actual.constants, X_OK: actual.constants.X_OK ?? 1 },
+      accessSync: ((p: PathLike, mode?: number) => {
+        const resolved = absInMock(p);
+        if (state.executables.has(resolved)) {
+          return;
+        }
+        actual.accessSync(p, mode);
+      }) as typeof actual.accessSync,
+      statSync: ((p: PathLike) => {
+        const resolved = absInMock(p);
+        if (state.dirs.has(resolved)) {
+          return {
+            isDirectory: () => true,
+          };
+        }
+        return actual.statSync(p);
+      }) as typeof actual.statSync,
+      readFileSync: ((
+        p: PathLike | number,
+        options?: BufferEncoding | { encoding?: BufferEncoding | null },
+      ) => {
+        const resolved = typeof p === "number" ? "" : absInMock(p);
+        if (resolved.endsWith(pathMod.join("case-npmrc-prefix", ".npmrc"))) {
+          return "prefix=~/.npm-packages\n";
+        }
+        return actualReadFileSync(p, options as never);
+      }) as typeof actual.readFileSync,
     },
-    statSync: (p: string) => {
-      const resolved = absInMock(p);
-      if (state.dirs.has(resolved)) {
-        return {
-          isDirectory: () => true,
-        };
-      }
-      return actual.statSync(p);
-    },
-  };
-
-  return { ...wrapped, default: wrapped };
+    { mirrorToDefault: true },
+  );
 });
 
 vi.mock("./env.js", () => ({
@@ -53,6 +68,8 @@ describe("ensureOpenClawCliOnPath", () => {
     "HOMEBREW_PREFIX",
     "HOMEBREW_BREW_FILE",
     "XDG_BIN_HOME",
+    "NPM_CONFIG_PREFIX",
+    "npm_config_prefix",
   ] as const;
   let envSnapshot: Record<(typeof envKeys)[number], string | undefined>;
 
@@ -105,6 +122,8 @@ describe("ensureOpenClawCliOnPath", () => {
     delete process.env.HOMEBREW_PREFIX;
     delete process.env.HOMEBREW_BREW_FILE;
     delete process.env.XDG_BIN_HOME;
+    delete process.env.NPM_CONFIG_PREFIX;
+    delete process.env.npm_config_prefix;
   }
 
   function expectPathsAfter(parts: string[], anchor: string, expectedPaths: string[]) {
@@ -271,11 +290,14 @@ describe("ensureOpenClawCliOnPath", () => {
   it("places all user-writable home dirs after system dirs", () => {
     const { tmp, appCli } = setupAppCliRoot("case-user-writable-after-system");
     const localBin = path.join(tmp, ".local", "bin");
+    const npmGlobalBin = path.join(tmp, ".npm-global", "bin");
     const pnpmBin = path.join(tmp, ".local", "share", "pnpm");
     const bunBin = path.join(tmp, ".bun", "bin");
     const yarnBin = path.join(tmp, ".yarn", "bin");
     setDir(path.join(tmp, ".local"));
     setDir(localBin);
+    setDir(path.join(tmp, ".npm-global"));
+    setDir(npmGlobalBin);
     setDir(path.join(tmp, ".local", "share"));
     setDir(pnpmBin);
     setDir(path.join(tmp, ".bun"));
@@ -291,7 +313,64 @@ describe("ensureOpenClawCliOnPath", () => {
       homeDir: tmp,
       platform: "linux",
     });
-    expectPathsAfter(updated, "/usr/bin", [localBin, pnpmBin, bunBin, yarnBin]);
+    expectPathsAfter(updated, "/usr/bin", [localBin, npmGlobalBin, pnpmBin, bunBin, yarnBin]);
+  });
+
+  it("appends npm global prefix bin dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-npm-prefix");
+    const npmPrefix = path.join(tmp, "npm-prefix");
+    const npmPrefixBin = path.join(npmPrefix, "bin");
+    const npmConfigPrefix = path.join(tmp, "npm-config-prefix");
+    const npmConfigPrefixBin = path.join(npmConfigPrefix, "bin");
+    const managedNpmBin = path.join(tmp, ".openclaw", "tools", "node", "npm", "bin");
+    const npmGlobalBin = path.join(tmp, ".npm-global", "bin");
+    setDir(npmPrefix);
+    setDir(npmPrefixBin);
+    setDir(npmConfigPrefix);
+    setDir(npmConfigPrefixBin);
+    setDir(path.join(tmp, ".openclaw"));
+    setDir(path.join(tmp, ".openclaw", "tools"));
+    setDir(path.join(tmp, ".openclaw", "tools", "node"));
+    setDir(path.join(tmp, ".openclaw", "tools", "node", "npm"));
+    setDir(managedNpmBin);
+    setDir(path.join(tmp, ".npm-global"));
+    setDir(npmGlobalBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+    process.env.NPM_CONFIG_PREFIX = npmPrefix;
+    process.env.npm_config_prefix = npmConfigPrefix;
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expectPathsAfter(updated, "/usr/bin", [
+      npmPrefixBin,
+      npmConfigPrefixBin,
+      managedNpmBin,
+      npmGlobalBin,
+    ]);
+  });
+
+  it("appends user .npmrc prefix bin dirs after system dirs", () => {
+    const { tmp, appCli } = setupAppCliRoot("case-npmrc-prefix");
+    const npmrcPrefixBin = path.join(tmp, ".npm-packages", "bin");
+    setDir(path.join(tmp, ".npm-packages"));
+    setDir(npmrcPrefixBin);
+
+    resetBootstrapEnv("/usr/bin:/bin");
+
+    const updated = bootstrapPath({
+      execPath: appCli,
+      cwd: tmp,
+      homeDir: tmp,
+      platform: "darwin",
+    });
+
+    expectPathsAfter(updated, "/usr/bin", [npmrcPrefixBin]);
   });
 
   it.each([
