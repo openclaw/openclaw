@@ -321,11 +321,13 @@ function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
       continue;
     }
     const configuredAccountIds = listConfiguredChannelAccountIds(cfg, channel);
+    const coveredAccounts = coveredAccountsByChannel.get(channel);
     if (configuredAccountIds.length === 0) {
-      add(defaultAgentId, channel);
+      if (!coveredAccounts?.has(DEFAULT_ACCOUNT_ID)) {
+        add(defaultAgentId, channel);
+      }
       continue;
     }
-    const coveredAccounts = coveredAccountsByChannel.get(channel);
     if (configuredAccountIds.some((accountId) => !coveredAccounts?.has(accountId))) {
       add(defaultAgentId, channel);
     }

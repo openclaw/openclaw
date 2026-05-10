@@ -574,7 +574,7 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("defaults");
   });
 
-  it("warns for default-routed configured channels when other routes exist", () => {
+  it("warns only for configured channels not covered by channel routes", () => {
     const warnings = collectChannelBoundMessageToolPolicyWarnings({
       channels: {
         discord: {},
@@ -608,8 +608,9 @@ describe("doctor preview warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('Agent "main" is routed from channel "discord" and "telegram"'),
+      expect.stringContaining('Agent "main" is routed from channel "telegram"'),
     ]);
+    expect(warnings.join("\n")).not.toContain("discord");
     expect(warnings.join("\n")).not.toContain("commander");
   });
 
