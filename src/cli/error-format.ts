@@ -48,6 +48,39 @@ export function formatUnsupportedChannelActionMessage(params: {
   )} to inspect supported actions.`;
 }
 
+export function formatStrictJsonParseFailure(params: { value: string; cause: unknown }): string {
+  const rawCause = params.cause instanceof Error ? params.cause.message : String(params.cause);
+  const cause = rawCause.trim().replace(/[.。]+$/u, "");
+  const preview =
+    params.value.length > 48 ? `${params.value.slice(0, 45).trimEnd()}...` : params.value;
+  return [
+    `Could not parse ${JSON.stringify(preview)} as JSON for --strict-json.`,
+    `${cause}.`,
+    `Use valid JSON, for example ${formatInlineCliCommand(
+      "openclaw config set gateway.port 18789 --strict-json",
+    )}.`,
+    "For plain strings, omit --strict-json.",
+  ].join(" ");
+}
+
+export function formatGatewayCommandFailure(params: {
+  action: string;
+  error: unknown;
+  inspectCommand?: string;
+}): string {
+  const raw = params.error instanceof Error ? params.error.message : String(params.error);
+  const message = raw
+    .replace(/\s*Run [`"]?openclaw doctor[`"]? for diagnostics\.?/gi, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.。]+$/u, "");
+  const inspectCommand = params.inspectCommand ?? "openclaw gateway status --deep";
+  const detail = message ? `: ${message}` : "";
+  return `Could not ${params.action} because the Gateway did not respond${detail}. Run ${formatInlineCliCommand(
+    inspectCommand,
+  )} to inspect the active Gateway.`;
+}
+
 export function formatLookupMiss(params: {
   noun: string;
   value: string;

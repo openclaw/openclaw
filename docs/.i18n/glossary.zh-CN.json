@@ -862,5 +862,25 @@
   {
     "source": "fs-safe Cleanup Plan",
     "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Tool Search",
+    "target": "工具搜索"
+  },
+  {
+    "source": "Tools and plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Multi-agent sandbox and tools",
+    "target": "多 Agent 沙盒和工具"
+  },
+  {
+    "source": "Exec tool",
+    "target": "Exec 工具"
+  },
+  {
+    "source": "ACP agents setup",
+    "target": "ACP Agents 设置"
   }
 ]

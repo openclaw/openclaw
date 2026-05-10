@@ -1214,7 +1214,7 @@ Notes:
 - If `voice.autoJoin` has multiple entries for the same guild, OpenClaw joins the last configured channel for that guild.
 - `voice.daveEncryption` and `voice.decryptionFailureTolerance` pass through to `@discordjs/voice` join options.
 - `@discordjs/voice` defaults are `daveEncryption=true` and `decryptionFailureTolerance=24` if unset.
-- OpenClaw defaults to the pure-JS `opusscript` decoder for Discord voice receive. The optional native `@discordjs/opus` package is ignored by the repo pnpm install policy so normal installs and tests do not compile a native addon; only opt into a native opus build in a dedicated voice-performance or live-lane environment.
+- OpenClaw defaults to the pure-JS `opusscript` decoder for Discord voice receive. The optional native `@discordjs/opus` package is ignored by the repo pnpm install policy so normal installs, Docker lanes, and unrelated tests do not compile a native addon. Dedicated voice-performance hosts can opt in with `OPENCLAW_DISCORD_OPUS_DECODER=native` after installing the native addon.
 - `voice.connectTimeoutMs` controls the initial `@discordjs/voice` Ready wait for `/vc join` and auto-join attempts. Default: `30000`.
 - `voice.reconnectGraceMs` controls how long OpenClaw waits for a disconnected voice session to begin reconnecting before destroying it. Default: `15000`.
 - In `stt-tts` mode, voice playback does not stop just because another user starts speaking. To avoid feedback loops, OpenClaw ignores new voice capture while TTS is playing; speak after playback finishes for the next turn. Realtime modes forward speaker starts as barge-in signals to the realtime provider.
@@ -1225,6 +1225,24 @@ Notes:
 - If receive logs repeatedly show `DecryptionFailed(UnencryptedWhenPassthroughDisabled)` after updating, collect a dependency report and logs. The bundled `@discordjs/voice` line includes the upstream padding fix from discord.js PR #11449, which closed discord.js issue #11419.
 - `The operation was aborted` receive events are expected when OpenClaw finalizes a captured speaker segment; they are verbose diagnostics, not warnings.
 - Verbose Discord voice logs include a bounded one-line STT transcript preview for each accepted speaker segment, so debugging shows both the user side and the agent reply side without dumping unbounded transcript text.
+- In `agent-proxy` mode, forced consult fallback skips likely incomplete transcript fragments such as text ending in `...` or a trailing connector like `and`, plus obvious non-actionable closings like “be right back” or “bye”. Logs show `forced agent consult skipped reason=...` when this prevents a stale queued answer.
+
+Native opus setup for source checkouts:
+
+```bash
+pnpm install
+mise exec node@22 -- pnpm discord:opus:install
+```
+
+Use Node 22 for the gateway when you want the upstream macOS arm64 prebuilt native addon. If you use another Node runtime, the opt-in installer may need a local `node-gyp` source-build toolchain.
+
+After installing the native addon, start the Gateway with:
+
+```bash
+OPENCLAW_DISCORD_OPUS_DECODER=native pnpm gateway:watch
+```
+
+Verbose voice logs should show `discord voice: opus decoder: @discordjs/opus`. Without the env opt-in, or if the native addon is missing or cannot load on the host, OpenClaw logs `discord voice: opus decoder: opusscript` and keeps receiving voice through the pure-JS fallback.
 
 STT plus TTS pipeline:
 
@@ -1371,6 +1389,7 @@ Expected voice logs:
 - On join: `discord voice: joining ... voiceSession=... supervisorSession=... agentSessionMode=... voiceModel=... realtimeModel=...`
 - On realtime start: `discord voice: realtime bridge starting ... autoRespond=false interruptResponse=false bargeIn=false minBargeInAudioEndMs=...`
 - On speaker audio: `discord voice: realtime speaker turn opened ...`, `discord voice: realtime input audio started ... outputAudioMs=... outputActive=...`, and `discord voice: realtime speaker turn closed ... chunks=... discordBytes=... realtimeBytes=... interruptedPlayback=...`
+- On skipped stale speech: `discord voice: realtime forced agent consult skipped reason=incomplete-transcript ...` or `reason=non-actionable-closing ...`
 - On realtime response completion: `discord voice: realtime audio playback finishing reason=response.done ... audioMs=... chunks=...`
 - On playback stop/reset: `discord voice: realtime audio playback stopped reason=... audioMs=... elapsedMs=... chunks=...`
 - On realtime consult: `discord voice: realtime consult requested ... voiceSession=... supervisorSession=... question=...`

@@ -155,6 +155,121 @@ describe("createOpenClawCodingTools", () => {
     expectListIncludes([...values], ["restart", "config.get", "config.patch", "config.apply"]);
   });
 
+  it("does not add Tool Search control tools from the shared factory by default", () => {
+    const tools = createOpenClawCodingTools({
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(false);
+    expect(names.has("tool_search")).toBe(false);
+    expect(names.has("tool_describe")).toBe(false);
+    expect(names.has("tool_call")).toBe(false);
+  });
+
+  it("adds PI Tool Search control tools when explicitly requested", () => {
+    const tools = createOpenClawCodingTools({
+      includeToolSearchControls: true,
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(true);
+    expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_describe")).toBe(true);
+    expect(names.has("tool_call")).toBe(true);
+  });
+
+  it("keeps PI Tool Search controls available under restrictive tool profiles", () => {
+    const tools = createOpenClawCodingTools({
+      includeToolSearchControls: true,
+      config: {
+        tools: {
+          profile: "coding",
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(true);
+    expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_describe")).toBe(true);
+    expect(names.has("tool_call")).toBe(true);
+    expect(names.has("message")).toBe(false);
+  });
+
+  it("keeps PI Tool Search controls available under restrictive tool allowlists", () => {
+    const tools = createOpenClawCodingTools({
+      includeToolSearchControls: true,
+      config: {
+        tools: {
+          allow: ["read"],
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("read")).toBe(true);
+    expect(names.has("exec")).toBe(false);
+    expect(names.has("tool_search_code")).toBe(true);
+    expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_describe")).toBe(true);
+    expect(names.has("tool_call")).toBe(true);
+  });
+
+  it("lets explicit deny policies remove PI Tool Search controls", () => {
+    const tools = createOpenClawCodingTools({
+      includeToolSearchControls: true,
+      config: {
+        tools: {
+          profile: "coding",
+          deny: ["tool_search_code"],
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(false);
+    expect(names.has("read")).toBe(true);
+  });
+
+  it("keeps PI Tool Search controls when core OpenClaw tools are not materialized", () => {
+    const tools = createOpenClawCodingTools({
+      includeCoreTools: false,
+      includeToolSearchControls: true,
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: false,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: true,
+      },
+      config: {
+        tools: {
+          toolSearch: true,
+        },
+      },
+    });
+    const names = new Set(tools.map((tool) => tool.name));
+
+    expect(names.has("tool_search_code")).toBe(true);
+    expect(names.has("tool_search")).toBe(true);
+    expect(names.has("tool_describe")).toBe(true);
+    expect(names.has("tool_call")).toBe(true);
+    expect(names.has("message")).toBe(false);
+  });
+
   it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
     const tools = createOpenClawCodingTools({
       config: testConfig,

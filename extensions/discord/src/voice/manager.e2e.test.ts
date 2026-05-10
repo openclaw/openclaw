@@ -1,4 +1,4 @@
-import type { Readable } from "node:stream";
+import { PassThrough, type Readable } from "node:stream";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType } from "../internal/discord.js";
 import { createVoiceCaptureState } from "./capture-state.js";
@@ -1223,9 +1223,70 @@ describe("DiscordVoiceManager", () => {
     );
   });
 
+  it("skips incomplete and non-actionable forced agent-proxy transcripts", async () => {
+    agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "valid answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const incompleteTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    incompleteTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "Get this working and...", true);
+
+    const closingTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    closingTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "I'll be right back. See you guys. Bye-bye.", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(agentCommandMock).not.toHaveBeenCalled();
+
+    const validTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    validTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "ship it.", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(agentCommandMock).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("ship it.") }),
+      expect.anything(),
+    );
+    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("valid answer"),
+    );
+  });
+
   it("queues forced agent-proxy answers until current realtime playback idles", async () => {
     let resolveFirst: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
     let resolveSecond: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
+    let resolveThird: ((value: { payloads: Array<{ text: string }> }) => void) | undefined;
     agentCommandMock
       .mockImplementationOnce(
         () =>
@@ -1237,6 +1298,12 @@ describe("DiscordVoiceManager", () => {
         () =>
           new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
             resolveSecond = resolve;
+          }),
+      )
+      .mockImplementationOnce(
+        () =>
+          new Promise<{ payloads: Array<{ text: string }> }>((resolve) => {
+            resolveThird = resolve;
           }),
       );
     const manager = createManager({
@@ -1263,6 +1330,7 @@ describe("DiscordVoiceManager", () => {
     const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
       | {
           audioSink?: { sendAudio: (audio: Buffer) => void };
+          onEvent?: (event: { direction: "server"; type: string }) => void;
           onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
         }
       | undefined;
@@ -1279,6 +1347,12 @@ describe("DiscordVoiceManager", () => {
     );
     secondTurn?.sendInputAudio(Buffer.alloc(8));
     bridgeParams?.onTranscript?.("user", "second question", true);
+    const thirdTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    thirdTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "third question", true);
     await new Promise((resolve) => setTimeout(resolve, 260));
 
     resolveFirst?.({ payloads: [{ text: "first answer" }] });
@@ -1290,6 +1364,18 @@ describe("DiscordVoiceManager", () => {
     bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
 
     resolveSecond?.({ payloads: [{ text: "second answer" }] });
+    resolveThird?.({ payloads: [{ text: "third answer" }] });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("second answer"),
+    );
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("third answer"),
+    );
+
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
       expect.stringContaining("second answer"),
@@ -1301,6 +1387,23 @@ describe("DiscordVoiceManager", () => {
     idleHandler?.();
     expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
       expect.stringContaining("second answer"),
+    );
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("third answer"),
+    );
+
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    const secondStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    await vi.waitFor(() => expect(secondStream?.writableEnded).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(realtimeSessionMock.sendUserMessage).not.toHaveBeenCalledWith(
+      expect.stringContaining("third answer"),
+    );
+
+    idleHandler?.();
+    expect(realtimeSessionMock.sendUserMessage).toHaveBeenCalledWith(
+      expect.stringContaining("third answer"),
     );
   });
 

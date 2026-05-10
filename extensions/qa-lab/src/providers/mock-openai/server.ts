@@ -172,6 +172,7 @@ const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
+const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -670,6 +671,11 @@ function decodeXmlEntities(text: string) {
 function extractActiveMemorySummary(text: string) {
   const match = /<active_memory_plugin>\s*([\s\S]*?)\s*<\/active_memory_plugin>/i.exec(text);
   return match?.[1] ? decodeXmlEntities(match[1]).trim() : null;
+}
+
+function extractToolSearchTarget(text: string): string | null {
+  const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
+  return match?.[1]?.trim() || null;
 }
 
 function isActiveMemorySubagentPrompt(text: string) {
@@ -1416,6 +1422,22 @@ async function buildResponsesPayload(
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
   };
+  if (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) && !toolOutput) {
+    const targetTool = extractToolSearchTarget(allInputText);
+    if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
+      return buildToolCallEventsWithArgs("tool_search_code", {
+        code: [
+          `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
+          "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
+          "if (!match) throw new Error('target tool not found');",
+          "return await openclaw.tools.call(match.id, { marker: 'code-mode' });",
+        ].join("\n"),
+      });
+    }
+    if (targetTool && hasDeclaredTool(body, targetTool)) {
+      return buildToolCallEventsWithArgs(targetTool, { marker: "normal" });
+    }
+  }
   if (
     allInputText.includes(QA_SUBAGENT_DIRECT_FALLBACK_MARKER) &&
     /Internal task completion event/i.test(allInputText)

@@ -1042,6 +1042,59 @@ describe("resolveModel", () => {
     });
   });
 
+  it("resolves direct moonshotai refs through the Moonshot provider alias", () => {
+    const cfg = {
+      models: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-completions",
+            models: [
+              {
+                ...makeModel("kimi-k2.6"),
+                name: "Kimi K2.6",
+                input: ["text", "image"],
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("moonshotai", "kimi-k2.6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+      api: "openai-completions",
+      baseUrl: "https://api.moonshot.ai/v1",
+      input: ["text", "image"],
+    });
+  });
+
+  it("resolves direct moonshot-ai refs through the Moonshot provider alias", () => {
+    const cfg = {
+      models: {
+        providers: {
+          moonshot: {
+            baseUrl: "https://api.moonshot.ai/v1",
+            api: "openai-completions",
+            models: [makeModel("kimi-k2.6")],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveModelForTest("moonshot-ai", "kimi-k2.6", "/tmp/agent", cfg);
+
+    expect(result.error).toBeUndefined();
+    expectRecordFields(result.model, {
+      provider: "moonshot",
+      id: "kimi-k2.6",
+    });
+  });
+
   it("does not treat arbitrary namespaced model ids as provider prefixes", () => {
     const cfg = {
       models: {

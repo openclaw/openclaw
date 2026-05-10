@@ -28,7 +28,10 @@ import {
   resolveCodexAppServerHomeDir,
 } from "./auth-bridge.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
-import { CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE } from "./dynamic-tools.js";
+import {
+  CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+  createCodexDynamicToolBridge,
+} from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import type { CodexServerNotification } from "./protocol.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
@@ -633,6 +636,44 @@ describe("runCodexAppServerAttempt", () => {
     }
   });
 
+  it("does not expose OpenClaw Tool Search controls through Codex dynamic tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(sessionFile, workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        toolSearch: true,
+      },
+    };
+    const sandboxSessionKey = params.sessionKey;
+    if (!sandboxSessionKey) {
+      throw new Error("createParams must provide a sessionKey for Codex dynamic tool tests.");
+    }
+
+    const tools = await __testing.buildDynamicTools({
+      params,
+      resolvedWorkspace: workspaceDir,
+      effectiveWorkspace: workspaceDir,
+      sandboxSessionKey,
+      sandbox: null as never,
+      runAbortController: new AbortController(),
+      sessionAgentId: "main",
+      pluginConfig: {},
+      onYieldDetected: () => undefined,
+    });
+    const bridge = createCodexDynamicToolBridge({
+      tools,
+      signal: new AbortController().signal,
+      loading: "searchable",
+    });
+    const dynamicToolNames = bridge.specs.map((tool) => tool.name);
+
+    expect(dynamicToolNames).not.toEqual(
+      expect.arrayContaining(["tool_search_code", "tool_search", "tool_describe", "tool_call"]),
+    );
+  });
+
   it("normalizes Codex dynamic toolsAllow entries before filtering", () => {
     const tools = ["exec", "apply_patch", "read", "message"].map((name) => ({ name }));
 
@@ -691,6 +732,89 @@ describe("runCodexAppServerAttempt", () => {
     expect(webSearch?.deferLoading).toBe(true);
     expect(heartbeat?.namespace).toBe(CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE);
     expect(heartbeat?.deferLoading).toBe(true);
+  });
+
+  it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("wiki_status"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["wiki_status"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        codexDynamicToolsLoading: "searchable",
+        appServer: { mode: "yolo" },
+      },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-tool-wiki-status",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-wiki-status-1",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        tool: "wiki_status",
+        arguments: { topic: "README.md" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "wiki_status done" }],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-wiki-status-1",
+          name: "wiki_status",
+          arguments: { topic: "README.md" },
+          input: { topic: "README.md" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-wiki-status-1",
+      toolName: "wiki_status",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          id: "call-wiki-status-1",
+          name: "wiki_status",
+          toolName: "wiki_status",
+          toolCallId: "call-wiki-status-1",
+          toolUseId: "call-wiki-status-1",
+          tool_use_id: "call-wiki-status-1",
+          content: "wiki_status done",
+        }),
+      ],
+    });
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tool_search");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("function_call_output");
   });
 
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
@@ -2547,6 +2671,43 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.assistantTexts).toEqual(["done from response"]);
     expect(result.aborted).toBe(false);
     expect(result.timedOut).toBe(false);
+  });
+
+  it("surfaces Codex-native image generation saved paths as reply media", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [
+            {
+              type: "imageGeneration",
+              id: "ig_123",
+              status: "completed",
+              revisedPrompt: "A tiny blue square",
+              result: "Zm9v",
+              savedPath: "/tmp/codex-home/generated_images/session-1/ig_123.png",
+            },
+          ],
+        },
+      },
+    });
+
+    await expect(run).resolves.toMatchObject({
+      assistantTexts: [],
+      toolMediaUrls: ["/tmp/codex-home/generated_images/session-1/ig_123.png"],
+    });
   });
 
   it("does not complete on unscoped turn/completed notifications", async () => {
