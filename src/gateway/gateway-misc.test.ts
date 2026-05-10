@@ -283,6 +283,19 @@ describe("GatewayClient", () => {
       expect(res.statusCode).toBe(200);
     });
   });
+
+  it("serves root-level static files under basePath (#80072)", async () => {
+    await withControlUiRoot({ faviconSvg: "<svg/>" }, async (tmp) => {
+      const { res } = makeControlUiResponse();
+      const handled = await handleControlUiHttpRequest(
+        { url: "/mybase/favicon.svg", method: "GET" } as IncomingMessage,
+        res,
+        { basePath: "/mybase", root: { kind: "resolved", path: tmp } },
+      );
+      expect(handled).toBe(true);
+      expect(res.statusCode).toBe(200);
+    });
+  });
 });
 
 type TestSocket = {
