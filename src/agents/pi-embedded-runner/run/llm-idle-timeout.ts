@@ -180,9 +180,37 @@ export function streamWithIdleTimeout(
   onIdleTimeout?: (error: Error) => void,
 ): StreamFn {
   return (model, context, options) => {
+    // Connection-establishment timeout: protects against `baseFn(...)`
+    // returning a promise that never resolves (e.g., the underlying HTTP
+    // request hangs at TCP/TLS handshake or before the first response byte).
+    // Without this, the inner streamIterator-level idle watchdog can never
+    // arm — its setTimeout only schedules once we have a stream to iterate —
+    // and the run hangs indefinitely (cf. zombie `model_call:started`
+    // subagents with `recovery=none`).
+    let connectTimer: NodeJS.Timeout | null = null;
+    const connectTimeoutPromise = new Promise<never>((_, reject) => {
+      connectTimer = setTimeout(() => {
+        const error = new Error(
+          `LLM idle timeout (${Math.floor(timeoutMs / 1000)}s): no response from model (initial stream not established)`,
+        );
+        onIdleTimeout?.(error);
+        reject(error);
+      }, timeoutMs);
+    });
+    // Mute unhandled-rejection noise when the connect timer wins because
+    // the stream was established in time and we never observe the loser.
+    connectTimeoutPromise.catch(() => {});
+    const clearConnectTimer = () => {
+      if (connectTimer) {
+        clearTimeout(connectTimer);
+        connectTimer = null;
+      }
+    };
+
     const maybeStream = baseFn(model, context, options);
 
     const wrapStream = (stream: ReturnType<typeof streamSimple>) => {
+      clearConnectTimer();
       const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
       (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
         function () {
@@ -244,8 +272,9 @@ export function streamWithIdleTimeout(
     };
 
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then(wrapStream);
+      return Promise.race([Promise.resolve(maybeStream).then(wrapStream), connectTimeoutPromise]);
     }
+    clearConnectTimer();
     return wrapStream(maybeStream);
   };
 }
