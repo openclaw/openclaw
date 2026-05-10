@@ -130,6 +130,49 @@ describe("buildCliArgs", () => {
     ).toEqual(["exec", "resume", "thread-123", "--model", "gpt-5.4"]);
   });
 
+  it("injects --append-system-prompt-file on resumed Claude CLI sessions", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptFileArg: "--append-system-prompt-file",
+        },
+        baseArgs: ["--resume", "session-uuid-123", "-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "You are a helpful assistant",
+        systemPromptFilePath: "/tmp/openclaw/system-prompt.md",
+        useResume: true,
+      }),
+    ).toEqual([
+      "--resume",
+      "session-uuid-123",
+      "-p",
+      "--append-system-prompt-file",
+      "/tmp/openclaw/system-prompt.md",
+    ]);
+  });
+
+  it("injects system prompt arg on resumed sessions when no file arg is configured", () => {
+    expect(
+      buildCliArgs({
+        backend: {
+          command: "claude",
+          systemPromptArg: "--append-system-prompt",
+        },
+        baseArgs: ["--resume", "session-uuid-123", "-p"],
+        modelId: "claude-sonnet-4-6",
+        systemPrompt: "You are a helpful assistant",
+        useResume: true,
+      }),
+    ).toEqual([
+      "--resume",
+      "session-uuid-123",
+      "-p",
+      "--append-system-prompt",
+      "You are a helpful assistant",
+    ]);
+  });
+
   it("strips the internal cache boundary from CLI system prompt args", () => {
     expect(
       buildCliArgs({

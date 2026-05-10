@@ -278,16 +278,15 @@ export async function executePreparedCliRun(
   );
   const systemPromptArg = resolveSystemPromptUsage({
     backend,
-    isNewSession: isNew,
+    isNewSession: isNew || useResume,
     systemPrompt: context.systemPrompt,
   });
-  const systemPromptFile =
-    !useResume && systemPromptArg
-      ? await writeCliSystemPromptFile({
-          backend,
-          systemPrompt: systemPromptArg,
-        })
-      : undefined;
+  const systemPromptFile = systemPromptArg
+    ? await writeCliSystemPromptFile({
+        backend,
+        systemPrompt: systemPromptArg,
+      })
+    : undefined;
 
   const basePrompt = cliSessionIdToUse
     ? params.prompt
