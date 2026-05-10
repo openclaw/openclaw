@@ -1,0 +1,63 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "environmentName": {
+      "value": "${AZURE_ENV_NAME}"
+    },
+    "location": {
+      "value": "westeurope"
+    },
+    "postgresAdminLogin": {
+      "value": "alpacoreadmin"
+    },
+    "postgresAdminPassword": {
+      "value": "${POSTGRES_ADMIN_PASSWORD}"
+    },
+    "postgresDatabaseName": {
+      "value": "alpacoredb"
+    },
+    "baseContainerImage": {
+      "value": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest"
+    },
+    "openClawImage": {
+      "value": ""
+    },
+    "alpaEngineImage": {
+      "value": "${ALPA_ENGINE_IMAGE}"
+    },
+    "alpaCoreServiceImage": {
+      "value": "${ALPACORE_SERVICE_IMAGE}"
+    },
+    "openWebUiImage": {
+      "value": "ghcr.io/open-webui/open-webui:main"
+    },
+    "externalOllamaUrl": {
+      "value": "${EXTERNAL_OLLAMA_URL}"
+    },
+    "openClawGatewayToken": {
+      "value": "${OPENCLAW_GATEWAY_TOKEN}"
+    },
+    "webUiSecretKey": {
+      "value": "${WEBUI_SECRET_KEY}"
+    },
+    "openAiApiKey": {
+      "value": "${OPENAI_API_KEY}"
+    },
+    "revolutClientId": {
+      "value": "${REVOLUT_CLIENT_ID}"
+    },
+    "revolutClientSecret": {
+      "value": "${REVOLUT_CLIENT_SECRET}"
+    },
+    "telegramBotToken": {
+      "value": "${TELEGRAM_BOT_TOKEN}"
+    },
+    "openClawTimezone": {
+      "value": "UTC"
+    },
+    "openClawDisableBonjour": {
+      "value": "1"
+    }
+  }
+}
