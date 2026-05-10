@@ -6,7 +6,7 @@ import {
   type ExecApprovalDecision,
   maxAsk,
   minSecurity,
-  resolveExecApprovalsFromFile,
+  resolveExecApprovalsDocument,
   type ExecApprovalsFile,
   type ExecAsk,
   type ExecSecurity,
@@ -226,8 +226,8 @@ export function resolveExecPolicyScopeSnapshot(params: {
     scopeExecConfig: params.scopeExecConfig,
     globalExecConfig: params.globalExecConfig,
   });
-  const resolved = resolveExecApprovalsFromFile({
-    file: params.approvals,
+  const resolved = resolveExecApprovalsDocument({
+    document: params.approvals,
     agentId: params.agentId,
     overrides: {
       security: requestedSecurity.value,

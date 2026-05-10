@@ -11,7 +11,7 @@ import {
   type SystemRunApprovalPlan,
   evaluateShellAllowlist,
   hasDurableExecApproval,
-  resolveExecApprovalsFromFile,
+  resolveExecApprovalsDocument,
 } from "../infra/exec-approvals.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import { parsePreparedSystemRunPayload } from "../infra/system-run-approval-context.js";
@@ -329,13 +329,13 @@ export async function analyzeNodeApprovalRequirement(params: {
         { timeoutMs: 10_000 },
         { nodeId: params.target.nodeId },
       );
-      const approvalsFile =
+      const approvalsDocument =
         approvalsSnapshot && typeof approvalsSnapshot === "object"
           ? approvalsSnapshot.file
           : undefined;
-      if (approvalsFile && typeof approvalsFile === "object") {
-        const resolved = resolveExecApprovalsFromFile({
-          file: approvalsFile as ExecApprovalsFile,
+      if (approvalsDocument && typeof approvalsDocument === "object") {
+        const resolved = resolveExecApprovalsDocument({
+          document: approvalsDocument as ExecApprovalsFile,
           agentId: params.request.agentId,
           overrides: { security: "full" },
         });

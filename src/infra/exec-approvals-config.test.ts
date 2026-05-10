@@ -7,7 +7,7 @@ import {
   normalizeExecApprovals,
   normalizeSafeBins,
   resolveExecApprovals,
-  resolveExecApprovalsFromFile,
+  resolveExecApprovalsDocument,
   saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
@@ -144,7 +144,7 @@ describe("exec approvals default agent migration", () => {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
     expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
@@ -158,7 +158,7 @@ describe("exec approvals default agent migration", () => {
         default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
@@ -167,8 +167,8 @@ describe("exec approvals default agent migration", () => {
 
 describe("exec approvals invalid explicit policy fallback", () => {
   it("treats invalid explicit agent fields as masked and falls back to defaults instead of wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
+    const resolved = resolveExecApprovalsDocument({
+      document: {
         version: 1,
         defaults: {
           security: "deny",
@@ -207,8 +207,8 @@ describe("exec approvals invalid explicit policy fallback", () => {
   });
 
   it("treats null explicit agent fields as unset and still considers wildcard", () => {
-    const resolved = resolveExecApprovalsFromFile({
-      file: {
+    const resolved = resolveExecApprovalsDocument({
+      document: {
         version: 1,
         defaults: {
           security: "full",
@@ -427,7 +427,7 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
         "*": { security: "none", ask: "off" },
       },
     } as unknown as ExecApprovalsFile;
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsDocument({ document: file });
     // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
     expect(resolved.defaults.security).toBe("full");
     // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")

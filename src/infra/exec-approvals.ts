@@ -652,8 +652,8 @@ export function resolveExecApprovals(
   overrides?: ExecApprovalsDefaultOverrides,
 ): ExecApprovalsResolved {
   const file = ensureExecApprovals();
-  return resolveExecApprovalsFromFile({
-    file,
+  return resolveExecApprovalsDocument({
+    document: file,
     agentId,
     overrides,
     path: resolveExecApprovalsStoreLocationForDisplay(),
@@ -662,22 +662,22 @@ export function resolveExecApprovals(
   });
 }
 
-export function resolveExecApprovalsFromFile(params: {
-  file: ExecApprovalsFile;
+export function resolveExecApprovalsDocument(params: {
+  document: ExecApprovalsFile;
   agentId?: string;
   overrides?: ExecApprovalsDefaultOverrides;
   path?: string;
   socketPath?: string;
   token?: string;
 }): ExecApprovalsResolved {
-  const rawFile = params.file;
-  const file = normalizeExecApprovals(params.file);
-  const defaults = file.defaults ?? {};
+  const rawDocument = params.document;
+  const document = normalizeExecApprovals(params.document);
+  const defaults = document.defaults ?? {};
   const agentKey = params.agentId ?? DEFAULT_AGENT_ID;
-  const agent = file.agents?.[agentKey] ?? {};
-  const wildcard = file.agents?.["*"] ?? {};
-  const rawAgent = rawFile.agents?.[agentKey] ?? {};
-  const rawWildcard = rawFile.agents?.["*"] ?? {};
+  const agent = document.agents?.[agentKey] ?? {};
+  const wildcard = document.agents?.["*"] ?? {};
+  const rawAgent = rawDocument.agents?.[agentKey] ?? {};
+  const rawWildcard = rawDocument.agents?.["*"] ?? {};
   const fallbackSecurity = params.overrides?.security ?? DEFAULT_SECURITY;
   const fallbackAsk = params.overrides?.ask ?? DEFAULT_ASK;
   const fallbackAskFallback = params.overrides?.askFallback ?? DEFAULT_EXEC_APPROVAL_ASK_FALLBACK;
@@ -734,9 +734,9 @@ export function resolveExecApprovalsFromFile(params: {
   return {
     path: params.path ?? resolveExecApprovalsStoreLocationForDisplay(),
     socketPath: expandHomePrefix(
-      params.socketPath ?? file.socket?.path ?? resolveExecApprovalsSocketPath(),
+      params.socketPath ?? document.socket?.path ?? resolveExecApprovalsSocketPath(),
     ),
-    token: params.token ?? file.socket?.token ?? "",
+    token: params.token ?? document.socket?.token ?? "",
     defaults: resolvedDefaults,
     agent: resolvedAgent,
     agentSources: {
@@ -745,7 +745,7 @@ export function resolveExecApprovalsFromFile(params: {
       askFallback: resolvedAgentAskFallback.source,
     },
     allowlist,
-    file,
+    file: document,
   };
 }
 
