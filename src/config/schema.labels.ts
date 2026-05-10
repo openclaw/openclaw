@@ -67,6 +67,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "diagnostics.cacheTrace.includeMessages": "Cache Trace Include Messages",
   "diagnostics.cacheTrace.includePrompt": "Cache Trace Include Prompt",
   "diagnostics.cacheTrace.includeSystem": "Cache Trace Include System",
+  "trainingExport.enabled": "Training Export Enabled",
+  "trainingExport.compat": "Training Export Compat Override",
   "agents.list.*.identity.avatar": "Identity Avatar",
   "agents.list.*.skills": "Agent Skill Filter",
   "agents.list[].runtime": "Agent Runtime",

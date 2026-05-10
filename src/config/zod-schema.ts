@@ -446,6 +446,13 @@ export const OpenClawSchema = z
       })
       .strict()
       .optional(),
+    trainingExport: z
+      .object({
+        enabled: z.boolean().optional(),
+        compat: z.object({}).passthrough().optional(),
+      })
+      .strict()
+      .optional(),
     logging: z
       .object({
         level: LoggingLevelSchema.optional(),

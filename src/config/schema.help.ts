@@ -667,6 +667,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Include full message payloads in trace output (default: true).",
   "diagnostics.cacheTrace.includePrompt": "Include prompt text in trace output (default: true).",
   "diagnostics.cacheTrace.includeSystem": "Include system prompt in trace output (default: true).",
+  "trainingExport.enabled":
+    "Enable or disable built-in training export at trigger points driven by session semantics and explicit trajectory export commands (compaction, reset, and trajectory export).",
+  "trainingExport.compat":
+    "Optional model-compat override applied only to training export when calling provider-owned converters from collected trajectory snapshots. Reuses the system ModelCompatConfig shape.",
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":

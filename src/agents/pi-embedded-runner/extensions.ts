@@ -3,6 +3,11 @@ import type { AgentToolResult } from "@mariozechner/pi-agent-core";
 import type { ExtensionFactory, SessionManager } from "@mariozechner/pi-coding-agent";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
+import {
+  compactionTrainingExportExtension,
+  getTrainingExportConfig,
+  setCompactionTrainingExportRuntime,
+} from "../../training-export.js";
 import { resolveContextWindowInfo } from "../context-window-guard.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { createAgentToolResultMiddlewareRunner } from "../harness/tool-result-middleware.js";
@@ -155,6 +160,11 @@ export function buildEmbeddedExtensionFactories(params: {
       provider: compactionCfg?.provider,
     });
     factories.push(compactionSafeguardExtension);
+  }
+  // Register compaction training export only when enabled.
+  if (getTrainingExportConfig(params.cfg)?.enabled === true) {
+    setCompactionTrainingExportRuntime(params.sessionManager, params.cfg ?? null);
+    factories.push(compactionTrainingExportExtension);
   }
   const pruningFactory = buildContextPruningFactory(params);
   if (pruningFactory) {

@@ -37,6 +37,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
 } from "../routing/session-key.js";
+import { getTrainingExportConfig, runTrainingExport } from "../training-export.js";
 import { ErrorCodes, errorShape } from "./protocol/index.js";
 import {
   archiveSessionTranscriptsDetailed,
@@ -451,6 +452,7 @@ export async function emitGatewayBeforeResetPluginHook(params: {
   const sessionFile = params.entry?.sessionFile;
   const agentId = normalizeAgentId(params.target.agentId ?? resolveDefaultAgentId(params.cfg));
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
+
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
@@ -636,6 +638,19 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
+  // Training export for before_reset trigger — independent of plugin hooks.
+  if (getTrainingExportConfig(cfg)?.enabled === true) {
+    runTrainingExport({
+      trigger: {
+        kind: "before_reset",
+        sessionId: resetSourceEntry?.sessionId,
+        sessionFile: resetSourceEntry?.sessionFile,
+        reason: params.reason,
+      },
+      config: cfg,
+    });
+  }
+
   await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
