@@ -780,7 +780,7 @@ describe("runCodexAppServerAttempt", () => {
     const turnStartResponse = new Promise<unknown>((resolve) => {
       resolveTurnStart = resolve;
     });
-    const harness = createStartedThreadHarness((method) => {
+    const harness = createStartedThreadHarness(async (method) => {
       if (method === "turn/start") {
         return turnStartResponse;
       }
