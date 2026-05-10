@@ -9,6 +9,10 @@ import {
   resolveOpencodeGoSupplementalModel,
 } from "./provider-catalog.js";
 import { createOpencodeGoDeepSeekV4Wrapper } from "./stream.js";
+import {
+  resolveOpencodeGoDeepSeekV4ThinkingProfile,
+  supportsOpencodeGoDeepSeekV4XHighThinking,
+} from "./thinking-policy.js";
 
 const PROVIDER_ID = "opencode-go";
 const OPENCODE_SHARED_PROFILE_IDS = ["opencode:default", "opencode-go:default"] as const;
@@ -86,6 +90,10 @@ export default definePluginEntry({
       resolveDynamicModel: ({ modelId }) => resolveOpencodeGoSupplementalModel(modelId),
       augmentModelCatalog: () => listOpencodeGoSupplementalModelCatalogEntries(),
       ...PASSTHROUGH_GEMINI_REPLAY_HOOKS,
+      supportsXHighThinking: ({ modelId }) =>
+        supportsOpencodeGoDeepSeekV4XHighThinking(modelId),
+      resolveThinkingProfile: ({ modelId }) =>
+        resolveOpencodeGoDeepSeekV4ThinkingProfile(modelId),
       wrapStreamFn: (ctx) => createOpencodeGoDeepSeekV4Wrapper(ctx.streamFn, ctx.thinkingLevel),
       isModernModelRef: () => true,
     });
