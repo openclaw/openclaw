@@ -71,6 +71,16 @@ describe("resolveSpawnedWorkspaceInheritance", () => {
     expect(resolved).toBe("/tmp/workspace-ops");
   });
 
+  it("honors explicit cwd over targetAgentId workspace for cross-agent spawns", () => {
+    const resolved = resolveSpawnedWorkspaceInheritance({
+      config,
+      targetAgentId: "ops",
+      requesterSessionKey: "agent:main:subagent:parent",
+      explicitWorkspaceDir: "/tmp/explicit-requester-ws",
+    });
+    expect(resolved).toBe("/tmp/explicit-requester-ws");
+  });
+
   it("falls back to requester session agent when targetAgentId is missing", () => {
     const resolved = resolveSpawnedWorkspaceInheritance({
       config,

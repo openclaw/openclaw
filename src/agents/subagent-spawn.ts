@@ -136,6 +136,7 @@ export type SpawnSubagentParams = {
     mimeType?: string;
   }>;
   attachMountPath?: string;
+  cwd?: string;
 };
 
 export type SpawnSubagentContext = {
@@ -1063,10 +1064,12 @@ export async function spawnSubagentDirect(
     workspaceDir: resolveSpawnedWorkspaceInheritance({
       config: cfg,
       targetAgentId,
-      // For cross-agent spawns, ignore the caller's inherited workspace;
-      // let targetAgentId resolve the correct workspace instead.
+      // Explicit cwd from the tool call takes precedence over workspace inheritance.
+      // For cross-agent spawns without an explicit cwd, ignore the caller's inherited
+      // workspace and let targetAgentId resolve the correct workspace instead.
       explicitWorkspaceDir:
-        targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir,
+        params.cwd ||
+        (targetAgentId !== requesterAgentId ? undefined : toolSpawnMetadata.workspaceDir),
     }),
   });
   const spawnLineagePatchError = await patchChildSession({

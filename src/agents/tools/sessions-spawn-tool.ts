@@ -460,6 +460,7 @@ export function createSessionsSpawnTool(
           lightContext,
           expectsCompletionMessage,
           attachments,
+          cwd: cwd || undefined,
           attachMountPath:
             params.attachAs && typeof params.attachAs === "object"
               ? readStringParam(params.attachAs as Record<string, unknown>, "mountPath")
