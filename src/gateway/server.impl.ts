@@ -9,6 +9,7 @@ import {
 import type { ChannelId } from "../channels/plugins/types.public.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.flags.js";
+import { replaceConfigFile } from "../config/config.js";
 import {
   getRuntimeConfig,
   promoteConfigSnapshotToLastKnownGood,
@@ -607,19 +608,30 @@ export async function startGatewayServer(
   // Unconditional startup migration: seed gateway.controlUi.allowedOrigins for existing
   // non-loopback installs that upgraded to v2026.2.26+ without required origins.
   const controlUiSeed = minimalTestGateway
-    ? { config: cfgAtStart, seededAllowedOrigins: false }
+    ? { config: cfgAtStart, seededAllowedOrigins: false, persistedAllowedOriginsSeed: false }
     : await startupTrace.measure("control-ui.seed", () =>
         maybeSeedControlUiAllowedOriginsAtStartup({
           config: cfgAtStart,
+          writeConfig: async (nextConfig) => {
+            await replaceConfigFile({
+              nextConfig,
+              afterWrite: { mode: "auto" },
+            });
+          },
           log,
           runtimeBind: opts.bind,
           runtimePort: port,
         }),
       );
   cfgAtStart = controlUiSeed.config;
-  // Keep the old startup-write suppression path intact for compatibility with
-  // callers that may still report a write, but startup itself no longer mutates config.
-  if (startupConfigLoad.wroteConfig || authBootstrap.persistedGeneratedToken) {
+  // Capture the final config hash only after startup writes (config recovery,
+  // auth token generation, control-UI origin seeding) so the config reloader can
+  // suppress its own persistence events without rereading config on every boot.
+  if (
+    startupConfigLoad.wroteConfig ||
+    authBootstrap.persistedGeneratedToken ||
+    controlUiSeed.persistedAllowedOriginsSeed
+  ) {
     const startupSnapshot = await startupTrace.measure("config.final-snapshot", () =>
       readConfigFileSnapshot(),
     );

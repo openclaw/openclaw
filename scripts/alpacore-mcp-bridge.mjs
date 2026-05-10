@@ -4,7 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 
-const ALPACORE_URL = normalizeBaseUrl(process.env.ALPACORE_URL ?? "http://127.0.0.1:5143");
+const ALPACORE_URL = normalizeBaseUrl(process.env.ALPACORE_URL ?? "http://127.0.0.1:8080");
 const REQUEST_TIMEOUT_MS = normalizeTimeout(process.env.ALPACORE_TIMEOUT_MS, 240_000);
 
 function normalizeBaseUrl(value) {
