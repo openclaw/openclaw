@@ -225,9 +225,8 @@ function formatChannelList(channels: string[]): string {
 function isUnscopedChannelRouteBinding(binding: AgentRouteBinding): boolean {
   const match = binding.match;
   const accountId = match.accountId?.trim();
-  const hasScopedAccount = Boolean(accountId && accountId !== "*");
   const hasRoles = Array.isArray(match.roles) && match.roles.length > 0;
-  return !hasScopedAccount && !match.peer && !match.guildId && !match.teamId && !hasRoles;
+  return accountId === "*" && !match.peer && !match.guildId && !match.teamId && !hasRoles;
 }
 
 function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{

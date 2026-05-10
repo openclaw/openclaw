@@ -608,10 +608,9 @@ describe("doctor preview warnings", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining('Agent "main" is routed from channel "telegram"'),
+      expect.stringContaining('Agent "main" is routed from channel "discord" and "telegram"'),
     ]);
     expect(warnings.join("\n")).not.toContain("commander");
-    expect(warnings.join("\n")).not.toContain("discord");
   });
 
   it("warns for default-routed traffic when a channel only has scoped routes", () => {
@@ -651,5 +650,41 @@ describe("doctor preview warnings", () => {
       expect.stringContaining('Agent "main" is routed from channel "discord"'),
     ]);
     expect(warnings.join("\n")).not.toContain("commander");
+  });
+
+  it("skips the default-agent warning when a wildcard account route covers the channel", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        discord: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "commander",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "commander",
+          match: {
+            channel: "discord",
+            accountId: "*",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toStrictEqual([]);
   });
 });
