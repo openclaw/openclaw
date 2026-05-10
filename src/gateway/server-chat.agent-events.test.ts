@@ -960,6 +960,44 @@ describe("agent event handler", () => {
     resetAgentRunContextForTest();
   });
 
+  it("suppresses heartbeat tool events for Control UI and verbose node subscribers", () => {
+    const {
+      broadcastToConnIds,
+      nodeSendToSession,
+      sessionEventSubscribers,
+      toolEventRecipients,
+      handler,
+    } = createHarness({
+      resolveSessionKeyForRun: () => "session-heartbeat",
+    });
+
+    registerAgentRunContext("run-heartbeat-tool", {
+      sessionKey: "session-heartbeat",
+      isHeartbeat: true,
+      verboseLevel: "on",
+    });
+    toolEventRecipients.add("run-heartbeat-tool", "conn-run");
+    sessionEventSubscribers.subscribe("conn-session");
+
+    handler({
+      runId: "run-heartbeat-tool",
+      seq: 1,
+      stream: "tool",
+      ts: 1_234,
+      data: {
+        phase: "start",
+        name: "read",
+        toolCallId: "tool-heartbeat-1",
+        args: { path: "HEARTBEAT.md" },
+      },
+    });
+
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+    const nodeToolCalls = nodeSendToSession.mock.calls.filter(([, event]) => event === "agent");
+    expect(nodeToolCalls).toHaveLength(0);
+    resetAgentRunContextForTest();
+  });
+
   it("hydrates run-scoped tool events with session ownership metadata", () => {
     const { broadcastToConnIds, toolEventRecipients, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-1",
