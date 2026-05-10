@@ -351,6 +351,22 @@ function modelSupportsImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+function normalizeResolvedSelectionModelRef(
+  selection:
+    | {
+        provider: string;
+        modelId: string;
+      }
+    | null
+    | undefined,
+): string | null {
+  if (!selection) {
+    return null;
+  }
+  const normalized = normalizeModelRef(selection.provider, selection.modelId);
+  return `${normalized.provider}/${normalized.model}`;
+}
+
 function normalizeAllowedModelRef(raw: string): string | null {
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -565,27 +581,34 @@ export function createRuntimeLlm(options: CreateRuntimeLlmOptions = {}): PluginR
       authorityPolicy,
       pluginPolicy,
     });
+    let effectiveRequestedModelRef = requestedModelRef;
     if (requestedModelRef) {
       const selection = resolveSimpleCompletionSelectionForAgent({
         cfg,
         agentId,
         modelRef: requestedModelRef,
       });
-      const normalizedSelection = selection
-        ? normalizeModelRef(selection.provider, selection.modelId)
-        : null;
-      const resolvedModelRef = normalizedSelection
-        ? `${normalizedSelection.provider}/${normalizedSelection.model}`
-        : null;
-      assertAllowedModelOverride({
-        resolvedModelRef,
-        pluginPolicyId,
-        authorityPolicy,
-        pluginPolicy,
+      const defaultSelection = resolveSimpleCompletionSelectionForAgent({
+        cfg,
+        agentId,
       });
+      const resolvedModelRef = normalizeResolvedSelectionModelRef(selection);
+      const defaultResolvedModelRef = normalizeResolvedSelectionModelRef(defaultSelection);
+      const changesTargetModel =
+        defaultResolvedModelRef === null || resolvedModelRef !== defaultResolvedModelRef;
+      if (changesTargetModel) {
+        assertAllowedModelOverride({
+          resolvedModelRef,
+          pluginPolicyId,
+          authorityPolicy,
+          pluginPolicy,
+        });
+      } else {
+        effectiveRequestedModelRef = undefined;
+      }
     }
 
-    let hostResolvedModelRef = requestedModelRef;
+    let hostResolvedModelRef = effectiveRequestedModelRef;
     if (!hostResolvedModelRef && params.preferImageModel) {
       const [{ resolveAutoImageModel }, { resolveAgentDir }] = await Promise.all([
         import("../../media-understanding/runner.js"),
