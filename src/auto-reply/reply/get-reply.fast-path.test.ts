@@ -323,7 +323,7 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     vi.mocked(resolveDefaultModelMock).mockReturnValueOnce({
       defaultProvider: "openai",
       defaultModel: "gpt-5.5",
-      aliasIndex: new Map(),
+      aliasIndex: emptyAliasIndex(),
     });
 
     const reply = await getReplyFromConfig(
