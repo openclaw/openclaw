@@ -45,6 +45,8 @@ function requireProviderUsageCall(): {
   timeoutMs?: number;
   config?: unknown;
   agentDir?: string;
+  skipPluginAuthWithoutCredentialSource?: boolean;
+  allowOAuthRefresh?: boolean;
 } {
   const call = mocks.loadProviderUsageSummary.mock.calls[0];
   if (!call) {
@@ -58,6 +60,8 @@ function requireProviderUsageCall(): {
     timeoutMs?: number;
     config?: unknown;
     agentDir?: string;
+    skipPluginAuthWithoutCredentialSource?: boolean;
+    allowOAuthRefresh?: boolean;
   };
 }
 
@@ -132,6 +136,8 @@ describe("status-runtime-shared", () => {
     expect(usageCall.timeoutMs).toBe(1234);
     expect(usageCall.config).toEqual({ gateway: {} });
     expect(usageCall.agentDir).toContain("main");
+    expect(usageCall.skipPluginAuthWithoutCredentialSource).toBe(true);
+    expect(usageCall.allowOAuthRefresh).toBe(false);
   });
 
   it("resolves usage summaries with explicit agent scope", async () => {
@@ -145,6 +151,8 @@ describe("status-runtime-shared", () => {
       timeoutMs: 2345,
       config: { gateway: {} },
       agentDir: "/tmp/status-agent",
+      skipPluginAuthWithoutCredentialSource: true,
+      allowOAuthRefresh: false,
     });
   });
 
@@ -250,6 +258,8 @@ describe("status-runtime-shared", () => {
     expect(usageCall.timeoutMs).toBe(1234);
     expect(usageCall.config).toEqual({ gateway: {} });
     expect(usageCall.agentDir).toContain("main");
+    expect(usageCall.skipPluginAuthWithoutCredentialSource).toBe(true);
+    expect(usageCall.allowOAuthRefresh).toBe(false);
     expect(mocks.callGateway).toHaveBeenNthCalledWith(1, {
       method: "health",
       params: { probe: true },
