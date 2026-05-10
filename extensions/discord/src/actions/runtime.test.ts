@@ -177,6 +177,17 @@ describe("handleDiscordMessagingAction", () => {
   });
 
   it("uses configured defaultAccount when cfg is provided and accountId is omitted", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          defaultAccount: "work",
+          accounts: {
+            work: { token: "token-work" },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
     await handleMessagingAction(
       "react",
       {
@@ -185,24 +196,16 @@ describe("handleDiscordMessagingAction", () => {
         emoji: "✅",
       },
       enableAllActions,
-      {
-        channels: {
-          discord: {
-            defaultAccount: "work",
-            accounts: {
-              work: { token: "token-work" },
-            },
-          },
-        },
-      } as OpenClawConfig,
+      cfg,
     );
 
-    expect(reactMessageDiscord).toHaveBeenCalledWith(
+    expect(reactMessageDiscord).toHaveBeenCalledTimes(1);
+    expect(reactMessageDiscord.mock.calls[0]).toEqual([
       "C1",
       "M1",
       "✅",
-      expect.objectContaining({ accountId: "work" }),
-    );
+      { cfg, accountId: "work" },
+    ]);
   });
 
   it("resolves Discord DM targets for reaction adds", async () => {
@@ -485,16 +488,14 @@ describe("handleDiscordMessagingAction", () => {
       DISCORD_TEST_CFG,
       { mediaAccess, mediaLocalRoots: ["/tmp/agent-root"], mediaReadFile },
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaAccess,
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-        mediaReadFile,
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const [, , sendOptions] = sendMessageDiscord.mock.calls[0] ?? [];
+    expect(sendMessageDiscord.mock.calls[0]?.[0]).toBe("channel:123");
+    expect(sendMessageDiscord.mock.calls[0]?.[1]).toBe("hello");
+    expect(sendOptions?.mediaAccess).toBe(mediaAccess);
+    expect(sendOptions?.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions?.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
+    expect(sendOptions?.mediaReadFile).toBe(mediaReadFile);
   });
 
   it("allows media-only message sends", async () => {
@@ -509,14 +510,12 @@ describe("handleDiscordMessagingAction", () => {
       DISCORD_TEST_CFG,
       { mediaLocalRoots: ["/tmp/agent-root"] },
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "",
-      expect.objectContaining({
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const [, content, sendOptions] = sendMessageDiscord.mock.calls[0] ?? [];
+    expect(sendMessageDiscord.mock.calls[0]?.[0]).toBe("channel:123");
+    expect(content).toBe("");
+    expect(sendOptions?.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions?.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
   it("ignores empty components objects for regular media sends", async () => {
@@ -537,14 +536,12 @@ describe("handleDiscordMessagingAction", () => {
     );
 
     expect(sendDiscordComponentMessage).not.toHaveBeenCalled();
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaUrl: "/tmp/image.png",
-        mediaLocalRoots: ["/tmp/agent-root"],
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const [, content, sendOptions] = sendMessageDiscord.mock.calls[0] ?? [];
+    expect(sendMessageDiscord.mock.calls[0]?.[0]).toBe("channel:123");
+    expect(content).toBe("hello");
+    expect(sendOptions?.mediaUrl).toBe("/tmp/image.png");
+    expect(sendOptions?.mediaLocalRoots).toEqual(["/tmp/agent-root"]);
   });
 
   it("forwards the optional filename into sendMessageDiscord", async () => {
@@ -559,14 +556,12 @@ describe("handleDiscordMessagingAction", () => {
       },
       enableAllActions,
     );
-    expect(sendMessageDiscord).toHaveBeenCalledWith(
-      "channel:123",
-      "hello",
-      expect.objectContaining({
-        mediaUrl: "/tmp/generated-image",
-        filename: "image.png",
-      }),
-    );
+    expect(sendMessageDiscord).toHaveBeenCalledTimes(1);
+    const [, content, sendOptions] = sendMessageDiscord.mock.calls[0] ?? [];
+    expect(sendMessageDiscord.mock.calls[0]?.[0]).toBe("channel:123");
+    expect(content).toBe("hello");
+    expect(sendOptions?.mediaUrl).toBe("/tmp/generated-image");
+    expect(sendOptions?.filename).toBe("image.png");
   });
 
   it("rejects voice messages that include content", async () => {
@@ -675,13 +670,9 @@ describe("handleDiscordGuildAction", () => {
       cfg,
       accountId: "work",
     });
-    expect(result.details).toEqual(
-      expect.objectContaining({
-        ok: true,
-        status: "online",
-        activities: [],
-      }),
-    );
+    expect(result.details?.ok).toBe(true);
+    expect(result.details?.status).toBe("online");
+    expect(result.details?.activities).toEqual([]);
   });
 });
 
@@ -971,14 +962,14 @@ describe("handleDiscordModerationAction", () => {
       },
       moderationEnabled,
     );
-    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({
-        guildId: "G1",
-        userId: "U1",
-        durationMinutes: 5,
-      }),
-      { cfg: DISCORD_TEST_CFG, accountId: "ops" },
-    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    expect(timeoutMemberDiscord.mock.calls[0]?.[0].guildId).toBe("G1");
+    expect(timeoutMemberDiscord.mock.calls[0]?.[0].userId).toBe("U1");
+    expect(timeoutMemberDiscord.mock.calls[0]?.[0].durationMinutes).toBe(5);
+    expect(timeoutMemberDiscord.mock.calls[0]?.[1]).toEqual({
+      cfg: DISCORD_TEST_CFG,
+      accountId: "ops",
+    });
   });
 });
 
@@ -998,10 +989,10 @@ describe("handleDiscordAction per-account gating", () => {
       { action: "timeout", guildId: "G1", userId: "U1", durationMinutes: 5, accountId: "ops" },
       cfg,
     );
-    expect(timeoutMemberDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "G1", userId: "U1" }),
-      { cfg, accountId: "ops" },
-    );
+    expect(timeoutMemberDiscord).toHaveBeenCalledTimes(1);
+    expect(timeoutMemberDiscord.mock.calls[0]?.[0].guildId).toBe("G1");
+    expect(timeoutMemberDiscord.mock.calls[0]?.[0].userId).toBe("U1");
+    expect(timeoutMemberDiscord.mock.calls[0]?.[1]).toEqual({ cfg, accountId: "ops" });
   });
 
   it("blocks moderation when account omits it", async () => {
@@ -1083,9 +1074,9 @@ describe("handleDiscordAction per-account gating", () => {
       cfg,
     );
 
-    expect(createChannelDiscord).toHaveBeenCalledWith(
-      expect.objectContaining({ guildId: "G1", name: "alerts" }),
-      { cfg, accountId: "ops" },
-    );
+    expect(createChannelDiscord).toHaveBeenCalledTimes(1);
+    expect(createChannelDiscord.mock.calls[0]?.[0].guildId).toBe("G1");
+    expect(createChannelDiscord.mock.calls[0]?.[0].name).toBe("alerts");
+    expect(createChannelDiscord.mock.calls[0]?.[1]).toEqual({ cfg, accountId: "ops" });
   });
 });
