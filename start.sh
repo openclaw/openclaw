@@ -16,5 +16,7 @@ cat > /home/node/.openclaw/config.json << EOF
   }
 }
 EOF
-echo "Config written!"
+echo "✅ Config written!"
+echo "📄 Config contents:"
+cat /home/node/.openclaw/config.json
 node openclaw.mjs gateway --allow-unconfigured
