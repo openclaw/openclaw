@@ -141,6 +141,17 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("keeps command loader failures on the Codex command surface", async () => {
+    const result = await handleCodexCommand(createContext("account"), {
+      loadSubcommandHandler: async () => {
+        throw new Error("<@U123> loader failed");
+      },
+    });
+
+    expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
+    expect(result.text).not.toContain("<@U123>");
+  });
+
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: unknown }> = [];
