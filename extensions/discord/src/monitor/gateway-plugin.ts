@@ -244,6 +244,24 @@ function createDiscordGatewayMetadataFetch(debugCaptureEnabled: boolean): Discor
     );
 }
 
+function createDiscordGatewayMetadataProxyFetch(params: {
+  debugCaptureEnabled: boolean;
+  proxyUrl: string;
+}): DiscordGatewayFetch {
+  return (input, init) =>
+    fetchDiscordGatewayMetadataDirect(
+      input,
+      init,
+      params.debugCaptureEnabled
+        ? false
+        : {
+            flowId: randomUUID(),
+            meta: { subsystem: "discord-gateway-metadata" },
+          },
+      { proxyUrl: params.proxyUrl },
+    );
+}
+
 export function waitForDiscordGatewayPluginRegistration(
   plugin: unknown,
 ): Promise<void> | undefined {
@@ -279,6 +297,10 @@ export function createDiscordGatewayPlugin(params: {
       const HttpsProxyAgentCtor =
         params.__testing?.HttpsProxyAgentCtor ?? httpsProxyAgent.HttpsProxyAgent;
       wsAgent = new HttpsProxyAgentCtor<string>(proxy);
+      fetchImpl = createDiscordGatewayMetadataProxyFetch({
+        debugCaptureEnabled: debugProxySettings.enabled,
+        proxyUrl: proxy,
+      });
       params.runtime.log?.("discord: gateway proxy enabled");
     } catch (err) {
       params.runtime.error?.(danger(`discord: invalid gateway proxy: ${String(err)}`));

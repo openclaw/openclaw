@@ -33,6 +33,7 @@ const {
   baseRegisterClientSpy,
   captureHttpExchangeSpy,
   captureWsEventSpy,
+  fetchWithSsrFGuardMock,
   GatewayPlugin,
   globalFetchMock,
   HttpsAgent,
@@ -52,6 +53,7 @@ const {
   const webSocketSpy = vi.fn();
   const captureHttpExchangeSpy = vi.fn();
   const captureWsEventSpy = vi.fn();
+  const fetchWithSsrFGuardMock = vi.fn();
   const resolveDebugProxySettingsMock = vi.fn(() => ({ enabled: false }));
 
   const GatewayIntents = {
@@ -116,6 +118,7 @@ const {
     HttpsProxyAgent,
     getLastAgent: () => HttpsAgent.lastCreated,
     getLastProxyAgent: () => HttpsProxyAgent.lastCreated,
+    fetchWithSsrFGuardMock,
     captureHttpExchangeSpy,
     captureWsEventSpy,
     httpsAgentSpy,
@@ -167,6 +170,7 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: vi.fn(async (params: { url: string; init?: RequestInit }) => {
+    fetchWithSsrFGuardMock(params);
     const source = (await globalFetchMock(params.url, params.init)) as Response;
     const body = await source.text();
     return {
@@ -309,6 +313,7 @@ describe("createDiscordGatewayPlugin", () => {
     webSocketSpy.mockClear();
     captureHttpExchangeSpy.mockClear();
     captureWsEventSpy.mockClear();
+    fetchWithSsrFGuardMock.mockClear();
     resolveDebugProxySettingsMock.mockReset().mockReturnValue({ enabled: false });
     resetLastAgent();
   });
@@ -488,7 +493,7 @@ describe("createDiscordGatewayPlugin", () => {
     expect(runtime.log).not.toHaveBeenCalled();
   });
 
-  it("keeps gateway metadata lookup on the guarded direct fetch when proxy is configured", async () => {
+  it("routes gateway metadata lookup through guarded explicit proxy when proxy is configured", async () => {
     const runtime = createRuntime();
     const plugin = createDiscordGatewayPlugin({
       discordConfig: { proxy: "http://127.0.0.1:8080" },
@@ -505,6 +510,21 @@ describe("createDiscordGatewayPlugin", () => {
     expect(globalFetchMock.mock.calls[0]?.[0]).toBe("https://discord.com/api/v10/gateway/bot");
     expect(fetchInit?.headers).toEqual({ Authorization: "Bot token-123" });
     expect(fetchInit?.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "https://discord.com/api/v10/gateway/bot",
+        init: expect.objectContaining({
+          headers: { Authorization: "Bot token-123" },
+        }),
+        policy: { allowedHostnames: ["discord.com"] },
+        mode: "trusted_explicit_proxy",
+        dispatcherPolicy: {
+          mode: "explicit-proxy",
+          proxyUrl: "http://127.0.0.1:8080",
+          allowPrivateProxy: true,
+        },
+      }),
+    );
     expect(baseRegisterClientSpy).toHaveBeenCalledTimes(1);
   });
 

@@ -24,6 +24,9 @@ export type DiscordGatewayFetch = (
   input: string,
   init?: DiscordGatewayFetchInit,
 ) => Promise<DiscordGatewayMetadataResponse>;
+export type DiscordGatewayMetadataFetchOptions = {
+  proxyUrl?: string;
+};
 
 type DiscordGatewayMetadataError = Error & { transient?: boolean };
 
@@ -269,11 +272,22 @@ export async function fetchDiscordGatewayMetadataDirect(
   input: string,
   init?: DiscordGatewayFetchInit,
   capture?: false | { flowId: string; meta: Record<string, unknown> },
+  options?: DiscordGatewayMetadataFetchOptions,
 ): Promise<Response> {
   const guarded = await fetchWithSsrFGuard({
     url: resolveFetchInputUrl(input),
     init: init as RequestInit,
     policy: { allowedHostnames: [DISCORD_API_HOST] },
+    ...(options?.proxyUrl
+      ? {
+          mode: "trusted_explicit_proxy",
+          dispatcherPolicy: {
+            mode: "explicit-proxy",
+            proxyUrl: options.proxyUrl,
+            allowPrivateProxy: true,
+          },
+        }
+      : {}),
     capture: false,
     auditContext: "discord.gateway.metadata",
   });
