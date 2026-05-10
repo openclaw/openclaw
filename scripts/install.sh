@@ -1349,6 +1349,23 @@ node_binary_is_at_least_required() {
     return 1
 }
 
+prepend_path_dir() {
+    local dir="${1%/}"
+    if [[ -z "$dir" || ! -d "$dir" ]]; then
+        return 1
+    fi
+    local current=":${PATH:-}:"
+    current="${current//:${dir}:/:}"
+    current="${current#:}"
+    current="${current%:}"
+    if [[ -n "$current" ]]; then
+        export PATH="${dir}:${current}"
+    else
+        export PATH="${dir}"
+    fi
+    refresh_shell_command_cache
+}
+
 promote_supported_node_binary() {
     local candidates=()
     local candidate dir seen_dirs=":"
@@ -1379,13 +1396,17 @@ promote_supported_node_binary() {
         fi
         seen_dirs="${seen_dirs}${dir}:"
         if node_binary_is_at_least_required "$candidate"; then
-            export PATH="$dir:$PATH"
-            refresh_shell_command_cache
+            prepend_path_dir "$dir" || continue
+            ui_info "Using Node.js runtime at ${candidate}"
             return 0
         fi
     done
 
     return 1
+}
+
+activate_supported_node_on_path() {
+    promote_supported_node_binary "$@"
 }
 
 print_active_node_paths() {
@@ -1440,6 +1461,10 @@ ensure_macos_default_node_active() {
     echo "Add this to your shell profile and restart shell:"
     echo "  export PATH=\"${brew_node_prefix}/bin:\$PATH\""
     return 1
+}
+
+ensure_macos_node22_active() {
+    ensure_macos_default_node_active "$@"
 }
 
 ensure_default_node_active_shell() {
@@ -1709,11 +1734,18 @@ fix_npm_permissions() {
 
     # shellcheck disable=SC2016
     local path_line='export PATH="$HOME/.npm-global/bin:$PATH"'
+    local wrote_rc=0
     for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
-        if [[ -f "$rc" ]] && ! grep -q ".npm-global" "$rc"; then
-            echo "$path_line" >> "$rc"
+        if [[ -f "$rc" ]]; then
+            if ! grep -q ".npm-global" "$rc"; then
+                echo "$path_line" >> "$rc"
+            fi
+            wrote_rc=1
         fi
     done
+    if [[ "$wrote_rc" -eq 0 ]]; then
+        printf '%s\n' "$path_line" >> "$HOME/.bashrc"
+    fi
 
     export PATH="$HOME/.npm-global/bin:$PATH"
     ui_success "npm configured for user installs"
