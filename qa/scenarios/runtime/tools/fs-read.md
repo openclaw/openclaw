@@ -8,11 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.read
-objective: Verify file reads preserve arguments and result shape across Pi and Codex.
+objective: Verify file read behavior is tracked across Pi and Codex while Codex owns read natively.
 successCriteria:
-  - Effective tools expose read.
-  - The mock provider plans exactly one happy-path read call.
-  - The mock provider plans one denied-input failure-path read call.
+  - Pi may expose OpenClaw read while Codex app-server mode may omit duplicate OpenClaw dynamic read.
+  - Mock provider read plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until failure-path injection proves native Codex read behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: fs.read
       actualTool: read
+      bucket: codex-native-workspace
+      expectedLayer: codex-native-workspace
+      required: true
       tracking: "#80312"
-      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
+      codexDefaultImpact: P4
+      qaImpact: P2
+      action: model native read behavior separately from provider-plan capture
+      reason: Codex app-server intentionally owns read natively; QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
     knownHarnessGap:
       issue: "#80312"
-      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
+      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex native read behavior.
     promptSnippet: "target=read"
     failurePromptSnippet: "failure target=read"
 ```

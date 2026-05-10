@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { readRuntimeToolCoverageMetadata } from "./runtime-tool-metadata.js";
 import { liveTurnTimeoutMs } from "./suite-runtime-agent-common.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
@@ -11,6 +12,7 @@ type QaRuntimeToolFixtureConfig = {
   failurePromptSnippet?: unknown;
   ensureImageGeneration?: unknown;
   expectedAvailable?: unknown;
+  toolCoverage?: unknown;
   knownBroken?: unknown;
   knownHarnessGap?: unknown;
 };
@@ -112,6 +114,28 @@ function formatExpectedUnavailableDetails(toolName: string, tools: Set<string>) 
   ].join("\n");
 }
 
+function formatCodexNativeWorkspaceDetails(params: {
+  toolName: string;
+  tools: Set<string>;
+  reason?: string;
+  happyRequest?: QaRuntimeToolFixtureRequest;
+  failureRequest?: QaRuntimeToolFixtureRequest;
+}) {
+  return [
+    `codex-native-workspace ${params.toolName}: OpenClaw dynamic exposure is intentionally omitted because Codex owns this workspace operation natively`,
+    params.reason ? `reason: ${params.reason}` : undefined,
+    `available OpenClaw dynamic tools: ${[...params.tools].toSorted().join(", ")}`,
+    params.happyRequest
+      ? `${params.toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(params.happyRequest.plannedToolArgs ?? {})}`
+      : undefined,
+    params.failureRequest
+      ? `${params.toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(params.failureRequest.plannedToolArgs ?? {})}`
+      : undefined,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
   const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap)
     ? (config.knownHarnessGap as Record<string, unknown>)
@@ -141,10 +165,25 @@ export async function runRuntimeToolFixture(
     "utf8",
   );
 
-  const sessionKey = await deps.createSession(env, `Runtime tool fixture: ${toolName}`);
-  const tools = await deps.readEffectiveTools(env, sessionKey);
+  const happySessionKey = await deps.createSession(
+    env,
+    `Runtime tool fixture: ${toolName} happy`,
+    `agent:qa:runtime-tool:${toolName}:happy`,
+  );
+  const failureSessionKey = await deps.createSession(
+    env,
+    `Runtime tool fixture: ${toolName} failure`,
+    `agent:qa:runtime-tool:${toolName}:failure`,
+  );
+  const tools = await deps.readEffectiveTools(env, happySessionKey);
+  const metadata = readRuntimeToolCoverageMetadata({
+    config: config as Record<string, unknown>,
+  });
+  const dynamicExposureIntentionallyExcluded =
+    env.gateway.runtimeEnv.OPENCLAW_QA_FORCE_RUNTIME === "codex" &&
+    metadata.expectedLayer === "codex-native-workspace";
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
-  if (!tools.has(toolName)) {
+  if (!tools.has(toolName) && !dynamicExposureIntentionallyExcluded) {
     if (!expectedAvailable) {
       return formatExpectedUnavailableDetails(toolName, tools);
     }
@@ -178,12 +217,12 @@ export async function runRuntimeToolFixture(
     : 0;
 
   await deps.runAgentPrompt(env, {
-    sessionKey: `agent:qa:runtime-tool:${toolName}:happy`,
+    sessionKey: happySessionKey,
     message: happyPrompt,
     timeoutMs: liveTurnTimeoutMs(env, 45_000),
   });
   await deps.runAgentPrompt(env, {
-    sessionKey: `agent:qa:runtime-tool:${toolName}:failure`,
+    sessionKey: failureSessionKey,
     message: failurePrompt,
     timeoutMs: liveTurnTimeoutMs(env, 45_000),
   });
@@ -202,6 +241,13 @@ export async function runRuntimeToolFixture(
     toolName,
   });
   if (!happyRequest) {
+    if (dynamicExposureIntentionallyExcluded) {
+      return formatCodexNativeWorkspaceDetails({
+        toolName,
+        tools,
+        reason: metadata.reason,
+      });
+    }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
@@ -214,14 +260,32 @@ export async function runRuntimeToolFixture(
     toolName,
   });
   if (!failureRequest) {
+    if (dynamicExposureIntentionallyExcluded) {
+      return formatCodexNativeWorkspaceDetails({
+        toolName,
+        tools,
+        reason: metadata.reason,
+        happyRequest,
+      });
+    }
     if (isKnownHarnessGap(config.knownHarnessGap)) {
       return formatKnownHarnessGapDetails(toolName, config);
     }
     throw new Error(`expected mock failure-path request for ${toolName}`);
   }
 
+  if (dynamicExposureIntentionallyExcluded) {
+    return formatCodexNativeWorkspaceDetails({
+      toolName,
+      tools,
+      reason: metadata.reason,
+      happyRequest,
+      failureRequest,
+    });
+  }
+
   return [
-    `${toolName} happy planned args: ${JSON.stringify(happyRequest.plannedToolArgs ?? {})}`,
-    `${toolName} failure planned args: ${JSON.stringify(failureRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider happy planned args (diagnostic only): ${JSON.stringify(happyRequest.plannedToolArgs ?? {})}`,
+    `${toolName} mock provider failure planned args (diagnostic only): ${JSON.stringify(failureRequest.plannedToolArgs ?? {})}`,
   ].join("\n");
 }

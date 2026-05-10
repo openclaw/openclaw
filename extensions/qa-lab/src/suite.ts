@@ -36,6 +36,7 @@ import {
   type RuntimeParityCell,
   type RuntimeParityResult,
 } from "./runtime-parity.js";
+import { runtimeToolComparisonModeForScenario } from "./runtime-tool-metadata.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
@@ -588,6 +589,7 @@ async function runQaRuntimeParitySuite(params: {
 
         const parity = await runRuntimeParityScenario({
           scenarioId: scenario.id,
+          comparisonMode: runtimeToolComparisonModeForScenario(scenario),
           runCell: async (runtime) => {
             const cellOutputDir = path.join(
               params.outputDir,

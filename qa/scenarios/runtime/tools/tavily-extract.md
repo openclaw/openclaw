@@ -25,7 +25,13 @@ execution:
     toolCoverage:
       family: tavily_extract
       actualTool: tavily_extract
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
       tracking: "#80173"
+      codexDefaultImpact: P4
+      qaImpact: P3
+      action: keep optional unless Tavily integration is explicitly enabled
       reason: Tavily tools are listed in the phase matrix but are not exposed by the current default tool surface.
     knownBroken:
       issue: "#80173"

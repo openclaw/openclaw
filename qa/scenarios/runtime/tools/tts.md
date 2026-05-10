@@ -26,7 +26,13 @@ execution:
     toolCoverage:
       family: tts
       actualTool: tts
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
       tracking: "#80173"
+      codexDefaultImpact: P4
+      qaImpact: P3
+      action: keep optional unless TTS is explicitly configured
       reason: TTS is configuration-dependent and is not exposed by every mock QA run.
     knownBroken:
       issue: "#80173"

@@ -8,11 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.grep
-objective: Verify grep-style search remains covered through the current shell execution surface.
+objective: Verify grep-style search behavior is tracked through command execution while Codex owns exec/process natively.
 successCriteria:
-  - Effective tools expose exec for grep-style shell searches.
-  - The mock provider plans exactly one happy-path exec call.
-  - The mock provider plans one denied-input failure-path exec call.
+  - Pi may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+  - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex search/command behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: grep
       actualTool: exec
+      bucket: codex-native-workspace
+      expectedLayer: codex-native-workspace
+      required: true
       tracking: "#80319"
-      reason: Current OpenClaw coding surface routes grep-style searches through exec; QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: split native search/command behavior from OpenClaw dynamic tool parity
+      reason: Codex app-server intentionally owns command execution natively; current OpenClaw coding surface routes grep-style searches through exec.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA tool-defaults currently needs native search/command behavior coverage instead of OpenClaw dynamic exec exposure.
     promptSnippet: "target=exec"
     failurePromptSnippet: "failure target=exec"
 ```

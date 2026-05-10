@@ -4,6 +4,11 @@ import type {
   RuntimeParityDrift,
   RuntimeParityResult,
 } from "./runtime-parity.js";
+import {
+  readScenarioRuntimeToolCoverageMetadata,
+  type QaRuntimeToolBucket,
+  type QaRuntimeToolExpectedLayer,
+} from "./runtime-tool-metadata.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
 type QaToolCoverageSuiteScenario = {
@@ -21,11 +26,13 @@ export type QaToolCoverageSuiteSummary = {
 
 export type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
 export type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
-export type QaToolCoverageBucket = "required-default" | "optional-plugin";
+export type QaToolCoverageBucket = QaRuntimeToolBucket;
 
 export type QaToolCoverageRow = {
   tool: string;
   bucket: QaToolCoverageBucket;
+  expectedLayer: QaRuntimeToolExpectedLayer;
+  required: boolean;
   fixtureCount: number;
   scenarios: string[];
   sourcePaths: string[];
@@ -33,6 +40,9 @@ export type QaToolCoverageRow = {
   codex: QaToolCoverageStatus;
   drift: QaToolCoverageDrift;
   tracking?: string;
+  codexDefaultImpact?: string;
+  qaImpact?: string;
+  action?: string;
   details?: string;
 };
 
@@ -42,6 +52,10 @@ export type QaToolCoverageReport = {
   evaluated: boolean;
   totalTools: number;
   requiredTools: number;
+  reportOnlyTools: number;
+  trackedTools: number;
+  nativeWorkspaceTools: number;
+  dynamicIntegrationTools: number;
   optionalTools: number;
   passingTools: number;
   failingTools: number;
@@ -116,36 +130,18 @@ function groupToolFixtures(scenarios: readonly QaSeedScenarioWithSource[]): Tool
 }
 
 function readScenarioTracking(scenario: QaSeedScenarioWithSource): string | undefined {
+  const metadata = readScenarioRuntimeToolCoverageMetadata(scenario);
   const config = scenario.execution.config;
-  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
   const knownBroken = isRecord(config?.knownBroken) ? config.knownBroken : undefined;
   const knownHarnessGap = isRecord(config?.knownHarnessGap) ? config.knownHarnessGap : undefined;
   const issue =
-    readString(toolCoverage?.tracking) ??
-    readString(toolCoverage?.issue) ??
-    readString(knownHarnessGap?.issue) ??
-    readString(knownBroken?.issue);
+    metadata.tracking ?? readString(knownHarnessGap?.issue) ?? readString(knownBroken?.issue);
   const reason =
-    readString(toolCoverage?.reason) ??
-    readString(knownHarnessGap?.reason) ??
-    readString(knownBroken?.reason);
+    metadata.reason ?? readString(knownHarnessGap?.reason) ?? readString(knownBroken?.reason);
   if (issue && reason) {
     return `${issue} ${reason}`;
   }
-  return issue ?? reason;
-}
-
-function readScenarioToolBucket(scenario: QaSeedScenarioWithSource): QaToolCoverageBucket {
-  const config = scenario.execution.config;
-  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
-  const explicit = readString(toolCoverage?.bucket);
-  if (explicit === "required-default" || explicit === "optional-plugin") {
-    return explicit;
-  }
-  if (scenario.runtimeParityTier === "optional" || config?.expectedAvailable === false) {
-    return "optional-plugin";
-  }
-  return "required-default";
+  return issue;
 }
 
 function summaryByScenarioId(
@@ -181,14 +177,16 @@ function buildRow(params: {
 }): QaToolCoverageRow {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
-  const bucket = params.group.scenarios.some(
-    (scenario) => readScenarioToolBucket(scenario) === "required-default",
-  )
-    ? "required-default"
-    : "optional-plugin";
+  const metadata = params.group.scenarios
+    .map(readScenarioRuntimeToolCoverageMetadata)
+    .find((entry) => entry.required);
+  const fallbackMetadata = readScenarioRuntimeToolCoverageMetadata(params.group.scenarios[0]!);
+  const rowMetadata = metadata ?? fallbackMetadata;
   return {
     tool: params.group.tool,
-    bucket,
+    bucket: rowMetadata.bucket,
+    expectedLayer: rowMetadata.expectedLayer,
+    required: rowMetadata.required,
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
     sourcePaths: params.group.scenarios.map((scenario) => scenario.sourcePath),
@@ -196,6 +194,11 @@ function buildRow(params: {
     codex: result ? cellStatus(result.cells.codex) : "not-run",
     drift: result?.drift ?? "not-run",
     ...(tracking ? { tracking } : {}),
+    ...(rowMetadata.codexDefaultImpact
+      ? { codexDefaultImpact: rowMetadata.codexDefaultImpact }
+      : {}),
+    ...(rowMetadata.qaImpact ? { qaImpact: rowMetadata.qaImpact } : {}),
+    ...(rowMetadata.action ? { action: rowMetadata.action } : {}),
     ...(result?.driftDetails ? { details: result.driftDetails } : {}),
   };
 }
@@ -216,10 +219,7 @@ export function buildQaToolCoverageReport(params: {
   const evaluated = Boolean(params.summary);
   const failures = evaluated
     ? rows
-        .filter(
-          (row) =>
-            row.bucket === "required-default" && !row.tracking && !PASSING_DRIFTS.has(row.drift),
-        )
+        .filter((row) => row.required && !row.tracking && !PASSING_DRIFTS.has(row.drift))
         .map((row) => `${row.tool} drift=${row.drift}${row.details ? ` (${row.details})` : ""}`)
     : [];
   return {
@@ -227,16 +227,14 @@ export function buildQaToolCoverageReport(params: {
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
-    requiredTools: rows.filter((row) => row.bucket === "required-default").length,
-    optionalTools: rows.filter((row) => row.bucket === "optional-plugin").length,
-    passingTools: evaluated
-      ? rows.filter(
-          (row) =>
-            row.bucket === "optional-plugin" ||
-            PASSING_DRIFTS.has(row.drift) ||
-            Boolean(row.tracking),
-        ).length
-      : 0,
+    requiredTools: rows.filter((row) => row.required).length,
+    reportOnlyTools: rows.filter((row) => !row.required || Boolean(row.tracking)).length,
+    trackedTools: rows.filter((row) => Boolean(row.tracking)).length,
+    nativeWorkspaceTools: rows.filter((row) => row.bucket === "codex-native-workspace").length,
+    dynamicIntegrationTools: rows.filter((row) => row.bucket === "openclaw-dynamic-integration")
+      .length,
+    optionalTools: rows.filter((row) => row.bucket === "optional-profile-or-plugin").length,
+    passingTools: evaluated ? rows.filter((row) => PASSING_DRIFTS.has(row.drift)).length : 0,
     failingTools: failures.length,
     rows,
     pass: failures.length === 0,
@@ -251,19 +249,23 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Generated at: ${report.generatedAt}`,
     `- Mode: ${report.evaluated ? "runtime summary" : "catalog inventory"}`,
     `- Tools: ${report.totalTools}`,
-    `- Required default tools: ${report.requiredTools}`,
-    `- Optional/plugin-dependent tools: ${report.optionalTools}`,
+    `- Required tools: ${report.requiredTools}`,
+    `- Report-only tools: ${report.reportOnlyTools}`,
+    `- Tracked issue rows: ${report.trackedTools}`,
+    `- Codex-native workspace tools: ${report.nativeWorkspaceTools}`,
+    `- OpenClaw dynamic integration tools: ${report.dynamicIntegrationTools}`,
+    `- Optional/profile/plugin-dependent tools: ${report.optionalTools}`,
     `- Passing tools: ${report.passingTools}`,
     `- Failing tools: ${report.failingTools}`,
     `- Verdict: ${report.pass ? "pass" : "fail"}`,
     "",
-    "| Tool | Bucket | Fixtures | Pi | Codex | Drift | Tracking |",
-    "| --- | --- | ---: | --- | --- | --- | --- |",
+    "| Tool | Bucket | Expected layer | Required | Fixtures | Pi | Codex | Drift | Codex default impact | QA impact | Action | Tracking |",
+    "| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
   ];
 
   for (const row of report.rows) {
     lines.push(
-      `| ${row.tool} | ${row.bucket} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.tracking ?? ""} |`,
+      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
     );
   }
 

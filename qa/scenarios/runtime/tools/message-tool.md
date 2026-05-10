@@ -28,7 +28,12 @@ execution:
     toolCoverage:
       family: message-tool
       actualTool: message
-      bucket: optional-plugin
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
+      codexDefaultImpact: P4
+      qaImpact: P4
+      action: keep report-only in coding profile
       reason: Direct message is not part of the coding-profile default surface; session messaging uses sessions_send.
     promptSnippet: "target=message"
     failurePromptSnippet: "failure target=message"

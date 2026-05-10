@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
+import type { RuntimeParityComparisonMode } from "./runtime-tool-metadata.js";
 
 export type RuntimeId = "pi" | "codex";
 
@@ -259,6 +260,18 @@ function normalizeToolCallId(value: unknown) {
   return readNonEmptyString(value);
 }
 
+function normalizeTranscriptRole(
+  value: string | undefined,
+): RuntimeParityTranscriptRecord["role"] | undefined {
+  if (value === "user" || value === "assistant" || value === "tool" || value === "toolResult") {
+    return value;
+  }
+  if (value === "tool_result" || value === "tool-result") {
+    return "toolResult";
+  }
+  return undefined;
+}
+
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
   if (!value.trim()) {
     return undefined;
@@ -336,9 +349,18 @@ function extractToolResults(message: Record<string, unknown>): Array<{
   if ((message.role === "tool" || message.role === "toolResult") && message.content !== undefined) {
     const contentText = extractAssistantText(message);
     results.push({
+      id:
+        normalizeToolCallId(message.toolCallId) ??
+        normalizeToolCallId(message.tool_call_id) ??
+        normalizeToolCallId(message.toolUseId) ??
+        normalizeToolCallId(message.tool_use_id),
       tool: toolName,
       result: message.content,
-      ...(TOOL_RESULT_ERROR_RE.test(contentText) ? { errorClass: "tool-result-error" } : {}),
+      ...(message.isError === true ||
+      message.is_error === true ||
+      TOOL_RESULT_ERROR_RE.test(contentText)
+        ? { errorClass: "tool-result-error" }
+        : {}),
     });
   }
   const rawContent = message.content;
@@ -350,7 +372,12 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       continue;
     }
     const type = readNonEmptyString(block.type)?.toLowerCase();
-    if (type !== "tool_result" && type !== "tool_result_error") {
+    if (
+      type !== "tool_result" &&
+      type !== "tool_result_error" &&
+      type !== "toolresult" &&
+      type !== "toolresulterror"
+    ) {
       continue;
     }
     const content = block.content ?? block.result ?? block.output ?? block.text ?? null;
@@ -369,7 +396,9 @@ function extractToolResults(message: Record<string, unknown>): Array<{
       tool: toolName,
       result: content,
       ...(block.is_error === true ||
+      block.isError === true ||
       type === "tool_result_error" ||
+      type === "toolresulterror" ||
       TOOL_RESULT_ERROR_RE.test(contentText)
         ? { errorClass: "tool-result-error" }
         : {}),
@@ -612,11 +641,8 @@ function buildTranscriptRecords(transcriptBytes: string): RuntimeParityTranscrip
     try {
       const parsed = JSON.parse(trimmed) as Record<string, unknown>;
       const message = isMessageRecord(parsed.message) ? parsed.message : undefined;
-      const role = readNonEmptyString(message?.role);
-      if (
-        !message ||
-        (role !== "user" && role !== "assistant" && role !== "tool" && role !== "toolResult")
-      ) {
+      const role = normalizeTranscriptRole(readNonEmptyString(message?.role));
+      if (!message || !role) {
         continue;
       }
       records.push({
@@ -788,6 +814,7 @@ function classifyRuntimeParityCells(params: {
   codex: RuntimeParityCell;
   piScenarioStatus: "pass" | "fail" | "skip";
   codexScenarioStatus: "pass" | "fail" | "skip";
+  comparisonMode?: RuntimeParityComparisonMode;
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.pi.runtimeErrorClass) ||
@@ -804,17 +831,19 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
-  const toolCallShapeDetails = compareToolCallShape(params.pi.toolCalls, params.codex.toolCalls);
-  if (toolCallShapeDetails) {
-    return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
-  }
+  if (params.comparisonMode !== "codex-native-workspace") {
+    const toolCallShapeDetails = compareToolCallShape(params.pi.toolCalls, params.codex.toolCalls);
+    if (toolCallShapeDetails) {
+      return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
+    }
 
-  const toolResultShapeDetails = compareToolResultShape(
-    params.pi.toolCalls,
-    params.codex.toolCalls,
-  );
-  if (toolResultShapeDetails) {
-    return { drift: "tool-result-shape", driftDetails: toolResultShapeDetails };
+    const toolResultShapeDetails = compareToolResultShape(
+      params.pi.toolCalls,
+      params.codex.toolCalls,
+    );
+    if (toolResultShapeDetails) {
+      return { drift: "tool-result-shape", driftDetails: toolResultShapeDetails };
+    }
   }
 
   const piTranscriptLines = params.pi.transcriptBytes.trim().length
@@ -823,15 +852,17 @@ function classifyRuntimeParityCells(params: {
   const codexTranscriptLines = params.codex.transcriptBytes.trim().length
     ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
     : 0;
-  if (
-    piTranscriptLines !== codexTranscriptLines ||
-    (!params.pi.finalText && !!params.codex.finalText) ||
-    (!!params.pi.finalText && !params.codex.finalText)
-  ) {
-    return {
-      drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${piTranscriptLines} lines vs ${codexTranscriptLines})`,
-    };
+  if (params.comparisonMode !== "codex-native-workspace") {
+    if (
+      piTranscriptLines !== codexTranscriptLines ||
+      (!params.pi.finalText && !!params.codex.finalText) ||
+      (!!params.pi.finalText && !params.codex.finalText)
+    ) {
+      return {
+        drift: "structural",
+        driftDetails: `transcript/final-text structure differs (${piTranscriptLines} lines vs ${codexTranscriptLines})`,
+      };
+    }
   }
 
   if (
@@ -1061,6 +1092,7 @@ export async function captureRuntimeParityCell(
 
 export async function runRuntimeParityScenario(params: {
   scenarioId: string;
+  comparisonMode?: RuntimeParityComparisonMode;
   runCell: (runtime: RuntimeId) => Promise<RuntimeParityScenarioExecution>;
 }): Promise<RuntimeParityResult> {
   const [pi, codex] = await Promise.all([params.runCell("pi"), params.runCell("codex")]);
@@ -1069,6 +1101,7 @@ export async function runRuntimeParityScenario(params: {
     codex: codex.cell,
     piScenarioStatus: pi.scenarioStatus,
     codexScenarioStatus: codex.scenarioStatus,
+    comparisonMode: params.comparisonMode,
   });
   return {
     scenarioId: params.scenarioId,

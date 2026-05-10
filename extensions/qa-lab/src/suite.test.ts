@@ -135,12 +135,12 @@ describe("qa suite", () => {
     ).toBe("openai/gpt-5.5");
   });
 
-  it("treats tracked harness-gap drift as report-only unless a runtime cell failed", () => {
+  it("treats tracked fixture drift as report-only unless a runtime cell failed", () => {
     const scenario = readQaScenarioById("runtime-tool-fs-read");
     const result: RuntimeParityResult = {
       scenarioId: scenario.id,
       drift: "tool-call-shape",
-      driftDetails: "Pi called read but Codex did not expose the mock fixture tool",
+      driftDetails: "Pi recorded OpenClaw dynamic read while Codex owns read natively",
       cells: {
         pi: {
           runtime: "pi",
@@ -168,7 +168,7 @@ describe("qa suite", () => {
         scenario,
         result,
       }),
-    ).toContain("QA mock failure-path capture");
+    ).toContain("Codex native read behavior");
     expect(
       qaSuiteProgressTesting.runtimeParityReportOnlyReason({
         scenario,

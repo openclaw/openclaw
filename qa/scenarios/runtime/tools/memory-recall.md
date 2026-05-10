@@ -26,7 +26,13 @@ execution:
     toolCoverage:
       family: memory.recall
       actualTool: memory_recall
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
       tracking: "#80173"
+      codexDefaultImpact: P4
+      qaImpact: P3
+      action: keep optional unless memory plugin coverage is explicitly enabled
       reason: memory_recall is plugin-dependent and absent from some mock QA runs.
     knownBroken:
       issue: "#80173"

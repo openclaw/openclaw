@@ -8,11 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.edit
-objective: Verify targeted file edits preserve arguments and result shape across Pi and Codex.
+objective: Verify targeted edit behavior is tracked across Pi and Codex while Codex owns edit natively.
 successCriteria:
-  - Effective tools expose edit.
-  - The mock provider plans exactly one happy-path edit call.
-  - The mock provider plans one denied-input failure-path edit call.
+  - Pi may expose OpenClaw edit while Codex app-server mode may omit duplicate OpenClaw dynamic edit.
+  - Mock provider edit plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex edit behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: edit
       actualTool: edit
+      bucket: codex-native-workspace
+      expectedLayer: codex-native-workspace
+      required: true
       tracking: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: split native edit behavior from OpenClaw dynamic tool parity
+      reason: Codex app-server intentionally owns edit natively; the fixture must not require OpenClaw dynamic edit exposure.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA tool-defaults currently needs native edit behavior coverage instead of OpenClaw dynamic edit exposure.
     promptSnippet: "target=edit"
     failurePromptSnippet: "failure target=edit"
 ```

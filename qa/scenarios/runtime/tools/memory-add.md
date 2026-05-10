@@ -26,7 +26,13 @@ execution:
     toolCoverage:
       family: memory.add
       actualTool: memory_add
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
       tracking: "#80173"
+      codexDefaultImpact: P4
+      qaImpact: P3
+      action: keep optional until memory_add exists in the configured default surface
       reason: The phase matrix includes memory.add, but the current plugin surface exposes recall/search contracts instead.
     knownBroken:
       issue: "#80173"

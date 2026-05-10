@@ -298,7 +298,7 @@ export function registerQaLabCli(program: Command) {
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
     .option(
       "--runtime-suite <name>",
-      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, or soak-100",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, or soak-100",
     )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
@@ -427,7 +427,7 @@ export function registerQaLabCli(program: Command) {
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--runtime-suite <name>",
-      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, or soak-100",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, openclaw-dynamic-tools, or soak-100",
     )
     .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
     .option("--model <ref>", "Primary provider/model ref")

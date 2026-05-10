@@ -3,6 +3,7 @@ import {
   assertQaRuntimeSuiteScenarioMembership,
   QA_RUNTIME_FIRST_HOUR_20_SCENARIO_IDS,
   QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
+  QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
   QA_RUNTIME_SOAK_100_SCENARIO_IDS,
   QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS,
   resolveQaRuntimeSuiteScenarioIds,
@@ -19,6 +20,9 @@ describe("runtime suite resolver", () => {
     ]);
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "tool-defaults" })).toEqual([
       ...QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS,
+    ]);
+    expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "openclaw-dynamic-tools" })).toEqual([
+      ...QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
     ]);
     expect(resolveQaRuntimeSuiteScenarioIds({ runtimeSuite: "soak-100" })).toEqual([
       ...QA_RUNTIME_SOAK_100_SCENARIO_IDS,
@@ -37,7 +41,13 @@ describe("runtime suite resolver", () => {
   it("validates catalog tier membership for all built-in suites", () => {
     const scenarios = readQaScenarioPack().scenarios;
 
-    for (const runtimeSuite of ["first-hour", "first-hour-20", "tool-defaults", "soak-100"]) {
+    for (const runtimeSuite of [
+      "first-hour",
+      "first-hour-20",
+      "tool-defaults",
+      "openclaw-dynamic-tools",
+      "soak-100",
+    ]) {
       expect(() =>
         assertQaRuntimeSuiteScenarioMembership({
           runtimeSuite,

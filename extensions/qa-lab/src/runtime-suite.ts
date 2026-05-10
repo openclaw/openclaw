@@ -1,11 +1,17 @@
 import type { QaRuntimeParityTier, QaSeedScenarioWithSource } from "./scenario-catalog.js";
 
-export type QaRuntimeSuiteName = "first-hour" | "first-hour-20" | "tool-defaults" | "soak-100";
+export type QaRuntimeSuiteName =
+  | "first-hour"
+  | "first-hour-20"
+  | "tool-defaults"
+  | "openclaw-dynamic-tools"
+  | "soak-100";
 
 export const QA_RUNTIME_SUITE_NAMES: readonly QaRuntimeSuiteName[] = [
   "first-hour",
   "first-hour-20",
   "tool-defaults",
+  "openclaw-dynamic-tools",
   "soak-100",
 ] as const;
 
@@ -57,12 +63,21 @@ export const QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS = [
   "runtime-tool-web-search",
 ] as const;
 
+export const QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS = [
+  "runtime-tool-image-generate",
+  "runtime-tool-session-status",
+  "runtime-tool-sessions-spawn",
+  "runtime-tool-web-fetch",
+  "runtime-tool-web-search",
+] as const;
+
 export const QA_RUNTIME_SOAK_100_SCENARIO_IDS = ["runtime-soak-100-turn"] as const;
 
 const RUNTIME_SUITE_SCENARIO_IDS: Record<QaRuntimeSuiteName, readonly string[]> = {
   "first-hour": QA_RUNTIME_FIRST_HOUR_SCENARIO_IDS,
   "first-hour-20": QA_RUNTIME_FIRST_HOUR_20_SCENARIO_IDS,
   "tool-defaults": QA_RUNTIME_TOOL_DEFAULT_SCENARIO_IDS,
+  "openclaw-dynamic-tools": QA_RUNTIME_OPENCLAW_DYNAMIC_TOOL_SCENARIO_IDS,
   "soak-100": QA_RUNTIME_SOAK_100_SCENARIO_IDS,
 };
 
@@ -70,6 +85,7 @@ const RUNTIME_SUITE_ALLOWED_TIERS: Record<QaRuntimeSuiteName, ReadonlySet<QaRunt
   "first-hour": new Set(["standard"]),
   "first-hour-20": new Set(["standard"]),
   "tool-defaults": new Set(["standard", "optional"]),
+  "openclaw-dynamic-tools": new Set(["standard"]),
   "soak-100": new Set(["soak"]),
 };
 

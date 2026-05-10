@@ -38,7 +38,15 @@ function makeScenario(
 describe("qa tool coverage report", () => {
   it("renders catalog-only tool fixture coverage", () => {
     const report = buildQaToolCoverageReport({
-      scenarios: [makeScenario("tool-read", "read")],
+      scenarios: [
+        makeScenario("tool-read", "read", {
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
+        }),
+      ],
       generatedAt: "2026-05-10T00:00:00.000Z",
     });
 
@@ -46,7 +54,9 @@ describe("qa tool coverage report", () => {
     expect(report.rows).toEqual([
       expect.objectContaining({
         tool: "read",
-        bucket: "required-default",
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+        required: true,
         fixtureCount: 1,
         pi: "not-run",
         codex: "not-run",
@@ -54,7 +64,7 @@ describe("qa tool coverage report", () => {
       }),
     ]);
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
-      "| read | required-default | 1 | not-run | not-run | not-run |",
+      "| read | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
     );
   });
 
@@ -63,6 +73,11 @@ describe("qa tool coverage report", () => {
       scenarios: [
         makeScenario("tool-read", "read"),
         makeScenario("tool-write", "write", {
+          toolCoverage: {
+            bucket: "codex-native-workspace",
+            expectedLayer: "codex-native-workspace",
+            required: true,
+          },
           knownBroken: {
             issue: "#80236",
             reason: "tracked runtime drift",
@@ -137,6 +152,8 @@ describe("qa tool coverage report", () => {
     });
 
     expect(report.pass).toBe(true);
+    expect(report.passingTools).toBe(1);
+    expect(report.trackedTools).toBe(1);
     expect(report.rows.find((row) => row.tool === "write")).toEqual(
       expect.objectContaining({
         drift: "tool-result-shape",
@@ -150,6 +167,11 @@ describe("qa tool coverage report", () => {
       scenarios: [
         makeScenario("tool-optional", "optional", {
           expectedAvailable: false,
+          toolCoverage: {
+            bucket: "optional-profile-or-plugin",
+            expectedLayer: "profile-or-plugin",
+            required: false,
+          },
         }),
       ],
       summary: {
@@ -191,10 +213,26 @@ describe("qa tool coverage report", () => {
     expect(report.failures).toEqual([]);
     expect(report.rows[0]).toEqual(
       expect.objectContaining({
-        bucket: "optional-plugin",
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
         drift: "tool-call-shape",
       }),
     );
+  });
+
+  it("rejects unknown runtime tool coverage buckets", () => {
+    expect(() =>
+      buildQaToolCoverageReport({
+        scenarios: [
+          makeScenario("tool-bad", "bad", {
+            toolCoverage: {
+              bucket: "required-default",
+            },
+          }),
+        ],
+      }),
+    ).toThrow("unknown runtime tool coverage bucket");
   });
 
   it("discovers the runtime tool fixture catalog", () => {
@@ -219,18 +257,25 @@ describe("qa tool coverage report", () => {
       ]),
     );
     const applyPatchRow = report.rows.find((row) => row.tool === "apply-patch");
-    expect(applyPatchRow).toEqual(expect.objectContaining({ bucket: "required-default" }));
+    expect(applyPatchRow).toEqual(
+      expect.objectContaining({
+        bucket: "codex-native-workspace",
+        expectedLayer: "codex-native-workspace",
+        required: true,
+      }),
+    );
     expect(applyPatchRow).toEqual(
       expect.objectContaining({
         tracking:
-          "#80320 QA mock apply_patch fixture still uses synthetic failure-path inputs; provider remap fixed tool exposure, but failure injection remains harness-only.",
+          "#80320 Codex app-server intentionally owns apply_patch natively; this fixture still needs valid patch-shaped fault injection before it can prove product behavior.",
       }),
     );
     expect(report.rows.find((row) => row.tool === "message-tool")).toEqual(
       expect.objectContaining({
-        bucket: "optional-plugin",
-        tracking:
-          "Direct message is not part of the coding-profile default surface; session messaging uses sessions_send.",
+        bucket: "optional-profile-or-plugin",
+        expectedLayer: "profile-or-plugin",
+        required: false,
+        action: "keep report-only in coding profile",
       }),
     );
     expect(report.rows.find((row) => row.tool === "tavily-search")).toEqual(

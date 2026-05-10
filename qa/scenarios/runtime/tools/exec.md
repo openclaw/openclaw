@@ -8,11 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.exec
-objective: Verify exec plans and completes with equivalent arguments and result shape under both runtimes.
+objective: Verify command execution behavior is tracked across Pi and Codex while Codex owns exec/process natively.
 successCriteria:
-  - Effective tools expose exec.
-  - The mock provider plans exactly one happy-path exec call.
-  - The mock provider plans one denied-input failure-path exec call.
+  - Pi may expose OpenClaw exec while Codex app-server mode may omit duplicate OpenClaw dynamic exec/process.
+  - Mock provider exec plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex command behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: exec
       actualTool: exec
+      bucket: codex-native-workspace
+      expectedLayer: codex-native-workspace
+      required: true
       tracking: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: split native command behavior from OpenClaw dynamic tool parity
+      reason: Codex app-server intentionally owns command execution natively; the fixture must not require OpenClaw dynamic exec exposure.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA tool-defaults currently needs native command behavior coverage instead of OpenClaw dynamic exec exposure.
     promptSnippet: "target=exec"
     failurePromptSnippet: "failure target=exec"
 ```

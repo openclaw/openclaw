@@ -139,6 +139,34 @@ describe("runtime parity", () => {
     ]);
   });
 
+  it("ignores Codex-native workspace dynamic call-shape differences", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "codex-native-workspace",
+      comparisonMode: "codex-native-workspace",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          transcriptBytes:
+            runtime === "pi"
+              ? '{"message":{"role":"assistant"}}\n{"message":{"role":"tool"}}\n'
+              : '{"message":{"role":"assistant"}}\n',
+          toolCalls: runtime === "pi" ? [makeToolCall({ tool: "read" })] : [],
+          finalText: runtime === "pi" ? "read completed" : "read completed",
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+    expect(result.toolBreakdown).toEqual([
+      expect.objectContaining({
+        tool: "read",
+        drift: "tool-call-shape",
+        piCount: 1,
+        codexCount: 0,
+      }),
+    ]);
+  });
+
   it("classifies tool result shape drift", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "tool-result-shape",
@@ -317,6 +345,53 @@ describe("runtime parity", () => {
           error: "permission denied",
         }),
         errorClass: "tool-result-error",
+      },
+    ]);
+  });
+
+  it("associates Codex-style toolResult records by toolCallId", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "web_search",
+                input: { query: "openclaw" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "web_search",
+            content: { status: "ok", results: [] },
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.toolCalls).toEqual([
+      {
+        tool: "web_search",
+        argsHash: stableHashForTest({ query: "openclaw" }),
+        resultHash: stableHashForTest({ status: "ok", results: [] }),
       },
     ]);
   });

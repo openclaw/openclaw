@@ -26,7 +26,13 @@ execution:
     toolCoverage:
       family: skill-invocation
       actualTool: skill_invoke
+      bucket: optional-profile-or-plugin
+      expectedLayer: profile-or-plugin
+      required: false
       tracking: "#80173"
+      codexDefaultImpact: P4
+      qaImpact: P3
+      action: keep optional until stable skill_invoke tool semantics exist
       reason: Skills are currently prompt/inventory-driven in QA, not exposed as a stable skill_invoke tool.
     knownBroken:
       issue: "#80173"

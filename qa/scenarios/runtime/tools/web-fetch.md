@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: web_fetch
       actualTool: web_fetch
+      bucket: openclaw-dynamic-integration
+      expectedLayer: openclaw-dynamic
+      required: true
       tracking: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: teach fixture/mock planner Codex searchable OpenClaw dynamic tool behavior
+      reason: web_fetch is an OpenClaw integration tool; QA mock provider does not yet model Codex searchable/deferred dynamic tool declarations for this fixture.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA mock provider does not yet model Codex searchable/deferred OpenClaw dynamic tool declarations for this fixture.
     promptSnippet: "target=web_fetch"
     failurePromptSnippet: "failure target=web_fetch"
 ```

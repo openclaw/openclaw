@@ -8,11 +8,11 @@ runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.write
-objective: Verify file writes preserve arguments and result shape across Pi and Codex.
+objective: Verify file write behavior is tracked across Pi and Codex while Codex owns write natively.
 successCriteria:
-  - Effective tools expose write.
-  - The mock provider plans exactly one happy-path write call.
-  - The mock provider plans one denied-input failure-path write call.
+  - Pi may expose OpenClaw write while Codex app-server mode may omit duplicate OpenClaw dynamic write.
+  - Mock provider write plans are reported as fixture intent, not as actual runtime tool calls.
+  - The row stays report-only until the fixture validates native Codex write behavior directly.
 docsRefs:
   - qa/scenarios/index.md
 codeRefs:
@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: fs.write
       actualTool: write
+      bucket: codex-native-workspace
+      expectedLayer: codex-native-workspace
+      required: true
       tracking: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: split native write behavior from OpenClaw dynamic tool parity
+      reason: Codex app-server intentionally owns write natively; the fixture must not require OpenClaw dynamic write exposure.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA tool-defaults currently needs native write behavior coverage instead of OpenClaw dynamic write exposure.
     promptSnippet: "target=write"
     failurePromptSnippet: "failure target=write"
 ```

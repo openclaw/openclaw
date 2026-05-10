@@ -26,11 +26,17 @@ execution:
     toolCoverage:
       family: session_status
       actualTool: session_status
+      bucket: openclaw-dynamic-integration
+      expectedLayer: openclaw-dynamic
+      required: true
       tracking: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      codexDefaultImpact: P4
+      qaImpact: P1
+      action: teach fixture/mock planner Codex searchable OpenClaw dynamic tool behavior
+      reason: session_status is an OpenClaw integration tool; QA mock provider does not yet model Codex searchable/deferred dynamic tool declarations for this fixture.
     knownHarnessGap:
       issue: "#80319"
-      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+      reason: QA mock provider does not yet model Codex searchable/deferred OpenClaw dynamic tool declarations for this fixture.
     promptSnippet: "target=session_status"
     failurePromptSnippet: "failure target=session_status"
 ```
