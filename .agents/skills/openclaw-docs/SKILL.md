@@ -46,15 +46,23 @@ Use this default topic page structure:
 3. Requirements: include only when setup needs specific accounts, versions,
    permissions, plugins, operating systems, or credentials.
 4. Quickstart: show the recommended setup path and smallest reliable verification.
-5. Subtopics: organize the entity's major concepts, workflows, and decisions by
+5. Configuration: show the minimum configuration needed to use the surface,
+   common variants users must choose between, and where each option is set:
+   CLI, config file, environment variable, plugin manifest, dashboard, or API.
+6. Subtopics: organize the entity's major concepts, workflows, and decisions by
    reader intent.
-6. Troubleshooting: diagnose common observable failures.
-7. Related: link to guides, references, commands, concepts, and adjacent topics.
+7. Troubleshooting: diagnose common observable failures.
+8. Related: link to guides, references, commands, concepts, and adjacent topics.
 
 Topic pages may be longer than quickstarts, but they should not become exhaustive
 references. Move field tables, API contracts, narrow internals, legacy details,
 and rare debugging workflows to linked reference or troubleshooting pages when
 they interrupt the end-to-end overview.
+
+For configuration, keep task-critical options inline. Link to reference docs for
+full option lists, defaults, enums, generated schemas, and advanced settings. Do
+not duplicate exhaustive config reference tables in topic pages unless the topic
+page is itself the reference.
 
 Use this default guide structure:
 

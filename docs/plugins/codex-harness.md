@@ -91,6 +91,33 @@ Restart the gateway after changing plugin config. If an existing chat already
 has a session, use `/new` or `/reset` before testing runtime changes so the next
 turn resolves the harness from current config.
 
+## Configuration
+
+The quickstart config is the minimum viable Codex harness config. Set Codex
+harness options in OpenClaw config, and use the CLI only for Codex auth:
+
+| Need                                   | Set                                                                | Where                          |
+| -------------------------------------- | ------------------------------------------------------------------ | ------------------------------ |
+| Enable the harness                     | `plugins.entries.codex.enabled: true`                              | OpenClaw config                |
+| Keep an allowlisted plugin install     | Include `codex` in `plugins.allow`                                 | OpenClaw config                |
+| Route OpenAI agent turns through Codex | `agents.defaults.model` or `agents.list[].model` as `openai/gpt-*` | OpenClaw agent config          |
+| Sign in with Codex OAuth               | `openclaw models auth login --provider openai-codex`               | CLI auth profile               |
+| Fail closed when Codex is unavailable  | Provider or model `agentRuntime.id: "codex"`                       | OpenClaw model/provider config |
+| Use direct OpenAI API traffic          | Provider or model `agentRuntime.id: "pi"` with normal OpenAI auth  | OpenClaw model/provider config |
+| Tune app-server behavior               | `plugins.entries.codex.config.appServer.*`                         | Codex plugin config            |
+| Enable native Codex plugin apps        | `plugins.entries.codex.config.codexPlugins.*`                      | Codex plugin config            |
+| Enable Codex Computer Use              | `plugins.entries.codex.config.computerUse.*`                       | Codex plugin config            |
+
+Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns.
+`openai-codex` is only the auth-profile provider name for Codex OAuth and
+Codex API-key profiles. Do not write new `openai-codex/gpt-*` model refs.
+
+The rest of this page covers common variants users must choose between:
+deployment shape, fail-closed routing, guardian approval policy, native Codex
+plugins, and Computer Use. For full option lists, defaults, enums, discovery,
+environment isolation, timeouts, and app-server transport fields, see
+[Codex harness reference](/plugins/codex-harness-reference).
+
 ## Verify Codex runtime
 
 Use `/status` in the chat where you expect Codex. A Codex-backed OpenAI agent
