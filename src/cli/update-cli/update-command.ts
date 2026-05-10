@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
+import { existsSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { confirm, isCancel } from "@clack/prompts";
@@ -19,6 +20,8 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../../config/types.plugins.js";
+import { createPreUpdateConfigSnapshot } from "../../config/backup-rotation.js";
+import { CONFIG_PATH } from "../../config/paths.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "../../daemon/constants.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import { resolveGatewayRestartLogPath } from "../../daemon/restart-logs.js";
@@ -1025,6 +1028,10 @@ async function runPackageInstallUpdate(params: {
     postVerifyStep: async (verifiedPackageRoot) => {
       const entryPath = await resolveGatewayInstallEntrypoint(verifiedPackageRoot);
       if (entryPath) {
+        await createPreUpdateConfigSnapshot({
+          configPath: CONFIG_PATH,
+          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        });
         return await runUpdateStep({
           name: `${CLI_NAME} doctor`,
           argv: [resolveNodeRunner(), entryPath, "doctor", "--non-interactive", "--fix"],
@@ -1684,6 +1691,10 @@ async function maybeRestartService(params: {
       if (!params.opts.json && restarted) {
         defaultRuntime.log(theme.success("Daemon restarted successfully."));
         defaultRuntime.log("");
+        await createPreUpdateConfigSnapshot({
+          configPath: CONFIG_PATH,
+          fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+        });
         process.env.OPENCLAW_UPDATE_IN_PROGRESS = "1";
         process.env[UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE_ENV] = "1";
         try {
