@@ -9,7 +9,6 @@ import {
   resolveApiKeyForProfile,
   resolveDefaultAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
-  saveAuthProfileStore,
   type AuthProfileCredential,
   type AuthProfileStore,
   type OAuthCredential,
@@ -271,10 +270,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexChatgptAuthTokensRefreshResponse> {
-  const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
-    ...params,
-    forceOAuthRefresh: true,
-  });
+  const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal(params);
   if (!loginParams || loginParams.type !== "chatgptAuthTokens") {
     throw new Error("Codex app-server ChatGPT token refresh requires an OAuth auth profile.");
   }
@@ -288,7 +284,6 @@ export async function refreshCodexAppServerAuthTokens(params: {
 async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   agentDir: string;
   authProfileId?: string;
-  forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexLoginAccountParams | undefined> {
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
@@ -311,7 +306,6 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   }
   const loginParams = await resolveLoginParamsForCredential(profileId, credential, {
     agentDir: params.agentDir,
-    forceOAuthRefresh: params.forceOAuthRefresh === true,
     config: params.config,
   });
   if (!loginParams) {
@@ -342,7 +336,7 @@ async function resolveCodexAppServerEnvApiKeyLoginParams(params: {
 async function resolveLoginParamsForCredential(
   profileId: string,
   credential: AuthProfileCredential,
-  params: { agentDir: string; forceOAuthRefresh: boolean; config?: AuthProfileOrderConfig },
+  params: { agentDir: string; config?: AuthProfileOrderConfig },
 ): Promise<CodexLoginAccountParams | undefined> {
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
@@ -369,7 +363,6 @@ async function resolveLoginParamsForCredential(
   }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
-    forceRefresh: params.forceOAuthRefresh,
     config: params.config,
   });
   const accessToken = resolvedCredential.access?.trim();
@@ -381,7 +374,7 @@ async function resolveLoginParamsForCredential(
 async function resolveOAuthCredentialForCodexAppServer(
   profileId: string,
   credential: OAuthCredential,
-  params: { agentDir: string; forceRefresh: boolean; config?: AuthProfileOrderConfig },
+  params: { agentDir: string; config?: AuthProfileOrderConfig },
 ): Promise<OAuthCredential> {
   const ownerAgentDir = resolvePersistedAuthProfileOwnerAgentDir({
     agentDir: params.agentDir,
@@ -394,10 +387,7 @@ async function resolveOAuthCredentialForCodexAppServer(
     isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
       ? ownerCredential
       : credential;
-  if (params.forceRefresh) {
-    store.profiles[profileId] = { ...credentialForOwner, expires: 0 };
-    saveAuthProfileStore(store, ownerAgentDir);
-  }
+  store.profiles[profileId] = credentialForOwner;
   const resolved = await resolveApiKeyForProfile({
     store,
     profileId,
