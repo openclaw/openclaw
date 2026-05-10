@@ -79,7 +79,7 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 
 ## Where to put things
 
-- Long-lived fork docs: `docs/polytropos/` (with this overview kept at repo root)
+- Long-lived fork docs: `docs/polytropos/`
 - Work-in-progress plans: `planning/polytropos/`
 - Plugins: **do not** land in this repo; they live in `polytropos-plugins`
 
