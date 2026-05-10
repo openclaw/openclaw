@@ -1,6 +1,11 @@
 # Polytropos Core Releases (Single-Gateway Strategy)
 
-This document defines how we build, install, and switch **core** (openclaw-polytropos) versions on a single machine **without** running a parallel dev gateway.
+This document defines the **release** mechanism for Polytropos core (openclaw-polytropos): how we build, install, and switch runnable `dist/` release directories on a single machine **without** running a parallel dev gateway.
+
+## Terms
+
+- **Release**: creating a versioned runnable directory under `~/polytropos/releases/<tag>/` and (optionally) switching `current`.
+- **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure.
 
 ## Goal
 
