@@ -5,16 +5,25 @@ import type {
   SandboxSshSettings,
 } from "./types.sandbox.js";
 
-export type AgentModelConfig =
+export type UserModelOverrideFallbackPolicy = "strict" | "resilient";
+
+export type AgentModelObjectConfig = {
+  /** Primary model (provider/model). */
+  primary?: string;
+  /** Per-agent model fallbacks (provider/model). */
+  fallbacks?: string[];
+  /** Optional provider request timeout in milliseconds for capabilities that support it. */
+  timeoutMs?: number;
+};
+
+export type AgentModelConfig = string | AgentModelObjectConfig;
+
+export type AgentChatModelConfig =
   | string
-  | {
-      /** Primary model (provider/model). */
-      primary?: string;
-      /** Per-agent model fallbacks (provider/model). */
-      fallbacks?: string[];
-      /** Optional provider request timeout in milliseconds for capabilities that support it. */
-      timeoutMs?: number;
-    };
+  | (AgentModelObjectConfig & {
+      /** Whether explicit user session model overrides may use configured fallbacks. */
+      userOverrideFallbackPolicy?: UserModelOverrideFallbackPolicy;
+    });
 
 export type AgentEmbeddedHarnessConfig = {
   /** Agent runtime id. Omitted uses "pi"; "auto" opts into plugin harness auto-selection. */

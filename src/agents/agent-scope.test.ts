@@ -381,6 +381,116 @@ describe("resolveAgentConfig", () => {
     ).toStrictEqual([]);
   });
 
+  it("allows user session model overrides to inherit configured fallbacks when opted in", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-haiku-3-5", "google/gemini-2.5-flash"],
+            userOverrideFallbackPolicy: "resilient",
+          },
+        },
+        list: [{ id: "linus" }],
+      },
+    };
+
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "linus",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toEqual(["anthropic/claude-haiku-3-5", "google/gemini-2.5-flash"]);
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "linus",
+        hasSessionModelOverride: true,
+      }),
+    ).toEqual(["anthropic/claude-haiku-3-5", "google/gemini-2.5-flash"]);
+  });
+
+  it("keeps explicit agent fallback overrides authoritative for resilient user selections", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["google/gemini-2.5-flash"],
+            userOverrideFallbackPolicy: "resilient",
+          },
+        },
+        list: [
+          {
+            id: "linus",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["openrouter/meta-llama/llama-3.3-70b-instruct"],
+            },
+          },
+          {
+            id: "strict",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "linus",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toEqual(["openrouter/meta-llama/llama-3.3-70b-instruct"]);
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "strict",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toStrictEqual([]);
+  });
+
+  it("lets an agent override the default user fallback policy", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["google/gemini-2.5-flash"],
+            userOverrideFallbackPolicy: "strict",
+          },
+        },
+        list: [
+          {
+            id: "linus",
+            model: {
+              primary: "anthropic/claude-sonnet-4-6",
+              fallbacks: ["openrouter/meta-llama/llama-3.3-70b-instruct"],
+              userOverrideFallbackPolicy: "resilient",
+            },
+          },
+        ],
+      },
+    };
+
+    expect(
+      resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "linus",
+        hasSessionModelOverride: true,
+        modelOverrideSource: "user",
+      }),
+    ).toEqual(["openrouter/meta-llama/llama-3.3-70b-instruct"]);
+  });
+
   it("updates the effective model primary at the winning config layer", () => {
     const cfg: OpenClawConfig = {
       agents: {

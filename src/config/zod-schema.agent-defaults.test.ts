@@ -5,7 +5,12 @@ import { AgentEntrySchema } from "./zod-schema.agent-runtime.js";
 
 type SchemaParseResult = {
   success: boolean;
-  error?: { issues: Array<{ path: Array<string | number | symbol> }> };
+  error?: { issues: Array<SchemaIssue> };
+};
+
+type SchemaIssue = {
+  path: Array<string | number | symbol>;
+  errors?: SchemaIssue[][];
 };
 
 function expectSchemaSuccess(result: SchemaParseResult): void {
@@ -17,12 +22,24 @@ function expectSchemaFailurePath(result: SchemaParseResult, expectedPathPrefix: 
   if (result.success || !result.error) {
     throw new Error(`Expected schema validation to fail at ${expectedPathPrefix}.`);
   }
-  const issuePaths = result.error.issues.map((issue) => issue.path.join("."));
+  const issuePaths = result.error.issues.flatMap((issue) => flattenIssuePaths(issue));
   expect(
     issuePaths.some(
       (path) => path === expectedPathPrefix || path.startsWith(`${expectedPathPrefix}.`),
     ),
   ).toBe(true);
+}
+
+function flattenIssuePaths(
+  issue: SchemaIssue,
+  prefix: Array<string | number | symbol> = [],
+): string[] {
+  const path = [...prefix, ...issue.path];
+  const ownPath = path.join(".");
+  const nestedPaths =
+    issue.errors?.flatMap((issues) => issues.flatMap((child) => flattenIssuePaths(child, path))) ??
+    [];
+  return ownPath ? [ownPath, ...nestedPaths] : nestedPaths;
 }
 
 describe("agent defaults schema", () => {
@@ -70,6 +87,58 @@ describe("agent defaults schema", () => {
           fallbacks: ["minimax/video-01"],
         },
       }),
+    );
+  });
+
+  it("accepts userOverrideFallbackPolicy on model configs", () => {
+    expect(
+      AgentDefaultsSchema.safeParse({
+        model: {
+          primary: "anthropic/claude-sonnet-4-6",
+          fallbacks: ["openai/gpt-5.4"],
+          userOverrideFallbackPolicy: "resilient",
+        },
+      }),
+    ).toMatchObject({ success: true });
+    expect(
+      AgentEntrySchema.safeParse({
+        id: "worker",
+        model: {
+          primary: "anthropic/claude-sonnet-4-6",
+          fallbacks: ["openai/gpt-5.4"],
+          userOverrideFallbackPolicy: "resilient",
+        },
+      }),
+    ).toMatchObject({ success: true });
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        model: {
+          primary: "anthropic/claude-sonnet-4-6",
+          userOverrideFallbackPolicy: "fallbacks",
+        },
+      }),
+      "model.userOverrideFallbackPolicy",
+    );
+    expectSchemaFailurePath(
+      AgentDefaultsSchema.safeParse({
+        imageGenerationModel: {
+          primary: "openai/gpt-image-2",
+          userOverrideFallbackPolicy: "resilient",
+        },
+      }),
+      "imageGenerationModel",
+    );
+    expectSchemaFailurePath(
+      AgentEntrySchema.safeParse({
+        id: "worker",
+        subagents: {
+          model: {
+            primary: "openai/gpt-5.4-mini",
+            userOverrideFallbackPolicy: "resilient",
+          },
+        },
+      }),
+      "subagents.model",
     );
   });
 
