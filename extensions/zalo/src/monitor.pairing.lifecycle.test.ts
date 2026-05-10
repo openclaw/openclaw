@@ -72,31 +72,23 @@ describe("Zalo pairing lifecycle", () => {
       );
 
       expect(readAllowFromStoreMock).toHaveBeenCalledTimes(1);
-      expect(readAllowFromStoreMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "zalo",
-          accountId: "acct-zalo-pairing",
-        }),
-      );
+      expect(readAllowFromStoreMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+      });
       expect(upsertPairingRequestMock).toHaveBeenCalledTimes(1);
-      expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "zalo",
-          accountId: "acct-zalo-pairing",
-          id: "user-unauthorized",
-        }),
-      );
+      expect(upsertPairingRequestMock).toHaveBeenCalledWith({
+        channel: "zalo",
+        accountId: "acct-zalo-pairing",
+        id: "user-unauthorized",
+        meta: { name: "Unauthorized User" },
+      });
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const sendMessageCall = sendMessageMock.mock.calls[0];
-      expect(sendMessageCall).toBeDefined();
-      expect(sendMessageCall?.[0]).toBe("zalo-token");
-      expect(sendMessageCall?.[1]).toEqual(
-        expect.objectContaining({
-          chat_id: "dm-pairing-1",
-          text: expect.stringContaining("PAIRCODE"),
-        }),
-      );
-      expect(sendMessageCall?.[2]).toBeUndefined();
+      const pairingTextCall = sendMessageMock.mock.calls[0];
+      expect(pairingTextCall?.[0]).toBe("zalo-token");
+      expect(pairingTextCall?.[1]?.chat_id).toBe("dm-pairing-1");
+      expect(pairingTextCall?.[1]?.text).toContain("PAIRCODE");
+      expect(pairingTextCall?.[2]).toBeUndefined();
     } finally {
       await monitor.stop();
     }

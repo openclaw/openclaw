@@ -77,14 +77,14 @@ Top tools (schema size):
 
 ### `/context map`
 
-Sends an image generated from the same report as `/context list` and `/context detail`. Rectangle area is proportional to tracked prompt characters:
+Sends an image generated from the latest cached run report. Before a normal message has produced a run report in the session, `/context map` returns an unavailable message instead of rendering an estimate. Rectangle area is proportional to tracked prompt characters:
 
 - injected workspace files
 - base system prompt text
 - skill prompt entries
 - tool JSON schemas
 
-The caption shows whether the map came from the latest run-built report or from an on-demand estimate.
+`/context list`, `/context detail`, and `/context json` can still inspect an on-demand estimate when no run report is cached.
 
 ## What counts toward the context window
 

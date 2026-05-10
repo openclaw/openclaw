@@ -98,29 +98,21 @@ describe("Zalo reply-once lifecycle", () => {
       );
 
       expect(recordInboundSessionMock).toHaveBeenCalledTimes(1);
-      const recordInboundSessionCall = recordInboundSessionMock.mock.calls[0];
-      expect(recordInboundSessionCall).toBeDefined();
-      expect(recordInboundSessionCall?.[0]).toEqual(
-        expect.objectContaining({
-          sessionKey: "agent:main:zalo:direct:dm-chat-1",
-          ctx: expect.objectContaining({
-            AccountId: "acct-zalo-lifecycle",
-            SessionKey: "agent:main:zalo:direct:dm-chat-1",
-            MessageSid: expect.stringContaining("zalo-replay-"),
-            From: "zalo:user-1",
-            To: "zalo:dm-chat-1",
-          }),
-        }),
-      );
+      const [recordArgs] = recordInboundSessionMock.mock.calls[0] ?? [];
+      expect(recordArgs?.sessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+      expect(recordArgs?.ctx?.AccountId).toBe("acct-zalo-lifecycle");
+      expect(recordArgs?.ctx?.SessionKey).toBe("agent:main:zalo:direct:dm-chat-1");
+      expect(recordArgs?.ctx?.From).toBe("zalo:user-1");
+      expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
+      expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const sendMessageCall = sendMessageMock.mock.calls[0];
-      expect(sendMessageCall).toBeDefined();
-      expect(sendMessageCall?.[0]).toBe("zalo-token");
-      expect(sendMessageCall?.[1]).toEqual(
-        expect.objectContaining({
+      expect(sendMessageMock).toHaveBeenCalledWith(
+        "zalo-token",
+        {
           chat_id: "dm-chat-1",
           text: "zalo reply once",
-        }),
+        },
+        undefined,
       );
       expect(sendMessageCall?.[2]).toBeUndefined();
     } finally {
