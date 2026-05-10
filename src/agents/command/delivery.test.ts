@@ -610,6 +610,35 @@ describe("normalizeAgentCommandReplyPayloads", () => {
     expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
   });
 
+  it("surfaces no-visible-payload deliveryStatus after payload normalization suppresses output", async () => {
+    const delivered = await deliverAgentCommandResult({
+      cfg: {} as OpenClawConfig,
+      deps: {} as CliDeps,
+      runtime: { log: vi.fn(), error: vi.fn() } as never,
+      opts: {
+        message: "go",
+        deliver: true,
+        replyChannel: "slack",
+        replyTo: "#general",
+      } as AgentCommandOpts,
+      outboundSession: undefined,
+      sessionEntry: undefined,
+      payloads: [{ text: "NO_REPLY" }],
+      result: createResult(),
+    });
+
+    expect(delivered.payloads).toEqual([]);
+    expect(delivered.deliverySucceeded).toBeUndefined();
+    expect(delivered.deliveryStatus).toMatchObject({
+      requested: true,
+      attempted: false,
+      status: "suppressed",
+      succeeded: true,
+      reason: "no_visible_payload",
+    });
+    expect(deliverOutboundPayloadsMock).not.toHaveBeenCalled();
+  });
+
   it("preserves preflight deliveryStatus when best-effort delivery has no payloads", async () => {
     const runtime = { log: vi.fn(), error: vi.fn() };
 

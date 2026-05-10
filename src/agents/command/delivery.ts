@@ -503,17 +503,17 @@ export async function deliverAgentCommandResult(params: {
     throw strictPreDeliveryError;
   }
 
-  if (!payloads || payloads.length === 0) {
+  const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
+  if (deliveryPayloads.length === 0) {
     deliveryStatus = deliver ? (deliveryStatus ?? noVisiblePayloadStatus()) : undefined;
     emitJsonEnvelope(deliveryStatus);
     return {
-      payloads: [],
+      payloads: normalizedPayloads,
       meta: resultMeta,
       ...(deliveryStatus ? { deliveryStatus } : {}),
     };
   }
 
-  const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
   let deliverySucceeded = false;
   const logPayload = (payload: NormalizedOutboundPayload) => {
     if (opts.json) {
