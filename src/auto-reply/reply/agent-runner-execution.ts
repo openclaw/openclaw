@@ -242,6 +242,24 @@ function buildFallbackSelectionState(params: {
   };
 }
 
+function resolveFallbackSelectionOrigin(params: { entry: SessionEntry; run: FollowupRun["run"] }): {
+  provider: string;
+  model: string;
+} {
+  if (params.entry.modelOverrideSource === "auto") {
+    const persistedOriginProvider = normalizeOptionalString(
+      params.entry.modelOverrideFallbackOriginProvider,
+    );
+    const persistedOriginModel = normalizeOptionalString(
+      params.entry.modelOverrideFallbackOriginModel,
+    );
+    if (persistedOriginProvider && persistedOriginModel) {
+      return { provider: persistedOriginProvider, model: persistedOriginModel };
+    }
+  }
+  return { provider: params.run.provider, model: params.run.model };
+}
+
 export function applyFallbackCandidateSelectionToEntry(params: {
   entry: SessionEntry;
   run: FollowupRun["run"];
@@ -253,11 +271,12 @@ export function applyFallbackCandidateSelectionToEntry(params: {
     return { updated: false };
   }
   const scopedAuthProfile = resolveRunAuthProfile(params.run, params.provider);
+  const origin = resolveFallbackSelectionOrigin({ entry: params.entry, run: params.run });
   const nextState = buildFallbackSelectionState({
     provider: params.provider,
     model: params.model,
-    originProvider: params.run.provider,
-    originModel: params.run.model,
+    originProvider: origin.provider,
+    originModel: origin.model,
     authProfileId: scopedAuthProfile.authProfileId,
     authProfileIdSource: scopedAuthProfile.authProfileIdSource,
   });

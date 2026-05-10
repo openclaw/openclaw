@@ -3658,4 +3658,39 @@ describe("runAgentTurnWithFallback", () => {
       authProfileOverrideSource: "user",
     });
   });
+
+  it("preserves original auto-fallback origin across chained fallbacks", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-b",
+      modelOverrideSource: "auto" as const,
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "openrouter",
+        model: "fallback-b",
+      } as FollowupRun["run"],
+      provider: "openrouter",
+      model: "fallback-c",
+      now: 123,
+    });
+
+    expect(updated).toBe(true);
+    expect(entry).toMatchObject({
+      updatedAt: 123,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-c",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
+    });
+  });
 });
