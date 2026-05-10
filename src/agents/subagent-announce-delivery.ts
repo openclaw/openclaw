@@ -63,7 +63,6 @@ const AGENT_MEDIATED_COMPLETION_TOOLS = new Set([
   "music_generate",
   "subagent_announce",
   "video_generate",
-  "subagent_announce",
 ]);
 
 type SubagentAnnounceDeliveryDeps = {
