@@ -244,6 +244,23 @@ export interface SandboxRegistryEntries {
   updated_at: number;
 }
 
+export interface SkillUploads {
+  actual_sha256: string | null;
+  archive_blob: Uint8Array;
+  committed: number;
+  committed_at: number | null;
+  created_at: number;
+  expires_at: number;
+  force: number;
+  idempotency_key_hash: string | null;
+  kind: string;
+  received_bytes: number;
+  sha256: string | null;
+  size_bytes: number;
+  slug: string;
+  upload_id: string;
+}
+
 export interface SubagentRuns {
   accumulated_runtime_ms: number | null;
   agent_dir: string | null;
@@ -357,6 +374,7 @@ export interface DB {
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
+  skill_uploads: SkillUploads;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;

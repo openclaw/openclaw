@@ -5,7 +5,7 @@ import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
-import { createAsyncLock } from "./json-files.js";
+import { createAsyncLock } from "./async-lock.js";
 
 // --- Types ---
 

@@ -10,9 +10,9 @@ import {
   writeOpenClawStateKvJson,
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
+import { createAsyncLock } from "./async-lock.js";
 import type { DeviceIdentity } from "./device-identity.js";
 import { formatErrorMessage } from "./errors.js";
-import { createAsyncLock } from "./json-files.js";
 import { APNS_HTTP2_CANCEL_CODE, connectApnsHttp2Session } from "./push-apns-http2.js";
 import {
   type ApnsRelayConfig,

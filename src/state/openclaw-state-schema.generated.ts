@@ -105,6 +105,30 @@ CREATE TABLE IF NOT EXISTS media_blobs (
 CREATE INDEX IF NOT EXISTS idx_media_blobs_created
   ON media_blobs(created_at);
 
+CREATE TABLE IF NOT EXISTS skill_uploads (
+  upload_id TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  slug TEXT NOT NULL,
+  force INTEGER NOT NULL,
+  size_bytes INTEGER NOT NULL,
+  sha256 TEXT,
+  actual_sha256 TEXT,
+  received_bytes INTEGER NOT NULL,
+  archive_blob BLOB NOT NULL,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  committed INTEGER NOT NULL,
+  committed_at INTEGER,
+  idempotency_key_hash TEXT UNIQUE
+);
+
+CREATE INDEX IF NOT EXISTS idx_skill_uploads_expiry
+  ON skill_uploads(expires_at);
+
+CREATE INDEX IF NOT EXISTS idx_skill_uploads_idempotency
+  ON skill_uploads(idempotency_key_hash)
+  WHERE idempotency_key_hash IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS capture_sessions (
   id TEXT NOT NULL PRIMARY KEY,
   started_at INTEGER NOT NULL,

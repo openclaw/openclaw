@@ -5,7 +5,7 @@ import {
   type OpenClawStateJsonValue,
 } from "../state/openclaw-state-kv.js";
 
-export { createAsyncLock } from "./json-files.js";
+export { createAsyncLock } from "./async-lock.js";
 
 const PAIRING_STATE_SCOPE_PREFIX = "pairing";
 

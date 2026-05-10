@@ -2,9 +2,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
+import { createAsyncLock } from "./async-lock.js";
 import {
   JsonFileReadError,
-  createAsyncLock,
   readDurableJsonFile,
   readJsonFile,
   writeJsonAtomic,

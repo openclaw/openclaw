@@ -157,12 +157,12 @@ The branch already has a real shared SQLite base:
   cascades from `task_runs`, and transcript identity rows cascade from
   transcript events.
 - Current shared tables include `kv`, `agents`, `agent_databases`,
-  `plugin_state_entries`, `plugin_blob_entries`, `capture_sessions`,
-  `capture_events`, `capture_blobs`, `sandbox_registry_entries`,
-  `cron_run_logs`, `cron_jobs`, `commitments`, `delivery_queue_entries`,
-  `current_conversation_bindings`, `tui_last_sessions`, `task_runs`,
-  `task_delivery_state`, `flow_runs`, `subagent_runs`, `migration_runs`, and
-  `backup_runs`.
+  `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
+  `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
+  `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
+  `delivery_queue_entries`, `current_conversation_bindings`,
+  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
+  `subagent_runs`, `migration_runs`, and `backup_runs`.
 - `src/state/openclaw-agent-db.ts` opens
   `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
   global DB, and owns agent-local session, transcript, VFS, artifact, and cache
@@ -625,6 +625,10 @@ sessionId}` and session key context.
   the canonical byte store. Local paths returned to channel and sandbox
   compatibility surfaces are temp materializations of the database row, not the
   durable media store.
+- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
+  metadata, idempotency keys, and archive bytes live in SQLite; the installer
+  only receives a temporary materialized archive path while an install is
+  running.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
   diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
   instead of `logs/*.jsonl` files.
@@ -800,6 +804,7 @@ tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
+skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 sandbox_registry_entries(registry_kind, container_name, entry_json, updated_at)
 cron_run_logs(...)
 commitments(id, agent_id, session_key, channel, status, due_earliest_ms, due_latest_ms, updated_at_ms, record_json)
