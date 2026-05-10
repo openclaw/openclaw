@@ -82,7 +82,7 @@ export function toAcpRuntimeError(params: {
  */
 export function formatAcpErrorChain(error: unknown): string {
   if (!(error instanceof Error)) {
-    return String(error);
+    return redactSensitiveText(String(error));
   }
   const segments: string[] = [renderSingleError(error)];
   let current: unknown = (error as unknown as { cause?: unknown }).cause;

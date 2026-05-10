@@ -74,6 +74,11 @@ describe("emitAcpLifecycleError preserves AcpRuntimeError detail (regression: op
     expect(formatAcpLifecycleError("just a string")).toBe("just a string");
     expect(formatAcpLifecycleError(42)).toBe("42");
     expect(formatAcpLifecycleError(undefined)).toBe("undefined");
+
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+    const text = formatAcpLifecycleError(`upstream rejected token=${token}`);
+    expect(text).toMatch(/upstream rejected/);
+    expect(text).not.toContain(token);
   });
 
   it("caps cause-chain depth so a self-referential cause cannot loop", () => {

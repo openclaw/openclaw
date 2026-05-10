@@ -63,6 +63,15 @@ describe("withAcpRuntimeErrorBoundary", () => {
 });
 
 describe("formatAcpErrorChain redaction", () => {
+  it("redacts secret-shaped tokens that arrive as top-level non-Error values", () => {
+    const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
+
+    const out = formatAcpErrorChain(`upstream rejected token=${token}`);
+
+    expect(out).toMatch(/upstream rejected/);
+    expect(out).not.toContain(token);
+  });
+
   it("redacts secret-shaped tokens that arrive in nested cause messages", () => {
     const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
     const inner = new Error(`upstream rejected token=${token}`);
