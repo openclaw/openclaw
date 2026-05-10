@@ -241,4 +241,60 @@ describe("auth profile store cache", () => {
       expect(persisted.profiles[profileId]?.refresh).toBe("fresh-cli-refresh");
     });
   });
+
+  it("preserves concurrent auth-store updates while persisting external CLI oauth", async () => {
+    await withAgentDirEnv("openclaw-auth-store-external-cli-concurrent-", (agentDir) => {
+      const profileId = "anthropic:claude-cli";
+      const authPath = writeOAuthStore(agentDir, profileId, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      mocks.resolveExternalCliAuthProfiles.mockImplementationOnce(() => {
+        const current = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+          profiles: Record<string, unknown>;
+        };
+        fs.writeFileSync(
+          authPath,
+          `${JSON.stringify(
+            {
+              ...current,
+              profiles: {
+                ...current.profiles,
+                "openai:default": {
+                  type: "api_key",
+                  provider: "openai",
+                  key: "sk-concurrent",
+                },
+              },
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+        return [
+          createPersistedOverlay(profileId, {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "fresh-cli-access",
+            refresh: "fresh-cli-refresh",
+            expires: Date.now() + 60_000,
+          }),
+        ];
+      });
+
+      ensureAuthProfileStore(agentDir);
+      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+        profiles: Record<string, unknown>;
+      };
+      const cliProfile = persisted.profiles[profileId] as OAuthCredential | undefined;
+      const openaiProfile = persisted.profiles["openai:default"] as { key?: string } | undefined;
+
+      expect(cliProfile?.access).toBe("fresh-cli-access");
+      expect(openaiProfile?.key).toBe("sk-concurrent");
+    });
+  });
 });
