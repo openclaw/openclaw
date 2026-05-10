@@ -550,7 +550,8 @@ describe("gateway server agent", () => {
       idempotencyKey: "idem-agent-acp-error-detail",
     });
 
-    const errorMessage = final.error?.message ?? "";
+    const finalError = final.error as { message?: string } | undefined;
+    const errorMessage = finalError?.message ?? "";
     expect(final.ok).toBe(false);
     expect(final.payload?.status).toBe("error");
     expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
