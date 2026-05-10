@@ -1,4 +1,5 @@
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
+import { isModelKeyAllowedBySet } from "../../agents/model-selection-shared.js";
 import {
   buildAllowedModelSet,
   buildModelAliasIndex,
@@ -267,7 +268,7 @@ export function prepareImageModelFallbacks(params: PrepareImageModelFallbacksPar
       }
 
       const key = modelKey(resolved.ref.provider, resolved.ref.model);
-      if (!allowAny && !allowedKeys.has(key) && !allowedKeys.has(trimmed)) {
+      if (!allowAny && !isModelKeyAllowedBySet(allowedKeys, key) && !allowedKeys.has(trimmed)) {
         return null;
       }
       return key;
