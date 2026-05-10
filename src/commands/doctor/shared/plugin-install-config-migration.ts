@@ -1,6 +1,6 @@
 import { z } from "zod";
-import type { PluginInstallRecord } from "./types.plugins.js";
-import { PluginInstallRecordShape } from "./zod-schema.installs.js";
+import type { PluginInstallRecord } from "../../../config/types.plugins.js";
+import { PluginInstallRecordShape } from "../../../config/zod-schema.installs.js";
 
 const PluginInstallRecordsSchema = z.record(
   z.string(),

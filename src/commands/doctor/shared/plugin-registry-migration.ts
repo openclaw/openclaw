@@ -1,9 +1,5 @@
 import fs from "node:fs";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
-import {
-  extractShippedPluginInstallConfigRecords,
-  stripShippedPluginInstallConfigRecords,
-} from "../../../config/plugin-install-config-migration.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../../plugins/installed-plugin-index-records.js";
 import type { InstalledPluginIndexStoreOptions } from "../../../plugins/installed-plugin-index-store-options.js";
@@ -22,6 +18,10 @@ import {
 import { loadPluginManifestRegistryForInstalledIndex } from "../../../plugins/manifest-registry-installed.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../legacy/installed-plugin-index-path.js";
+import {
+  extractShippedPluginInstallConfigRecords,
+  stripShippedPluginInstallConfigRecords,
+} from "./plugin-install-config-migration.js";
 
 export const DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_DISABLE_PLUGIN_REGISTRY_MIGRATION";
 export const FORCE_PLUGIN_REGISTRY_MIGRATION_ENV = "OPENCLAW_FORCE_PLUGIN_REGISTRY_MIGRATION";
