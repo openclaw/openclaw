@@ -113,6 +113,7 @@ describe("token efficiency report", () => {
       - Generated at: 2026-05-10T00:00:00.000Z
       - Provider mode: live-frontier
       - Verdict: fail
+      - Usage source: live-usage
       - Threshold: absolute delta > 15.0%
 
       ## Aggregate Metrics
@@ -125,15 +126,20 @@ describe("token efficiency report", () => {
 
       ## Scenario Efficiency
 
-      | Scenario | Pi in/out/total/tools | Codex in/out/total/tools | Delta | Flagged | Tools used |
-      | --- | ---: | ---: | ---: | --- | --- |
-      | delta-low | 40/60/100/1 | 55/55/110/1 | +10.0% | no | read_file |
-      | flagged-delta | 45/55/100/0 | 80/50/130/0 | +30.0% | yes |  |
-      | tool-difference | 120/80/200/1 | 100/90/190/2 | -5.0% | no | read_file, write_file |
+      | Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Delta | Flagged | Tools used |
+      | --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |
+      | delta-low | live-usage | 40/60/100/1 | 55/55/110/1 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +10.0% | no | read_file |
+      | flagged-delta | live-usage | 45/55/100/0 | 80/50/130/0 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | +30.0% | yes |  |
+      | tool-difference | live-usage | 120/80/200/1 | 100/90/190/2 | 0/0/0/0/0/21 | 0/0/0/0/0/21 | -5.0% | no | read_file, write_file |
 
       ## Gate Failures
 
       - flagged-delta delta=+30.0% exceeds 15.0% threshold
+
+      ## Notes
+
+      - Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage.
+      - The report does not inspect provider transport payload token counters.
       "
     `);
   });
@@ -172,7 +178,7 @@ describe("token efficiency report", () => {
     expect(report.aggregate.deltaPercent).toBeCloseTo(6.667, 3);
   });
 
-  it("skips mock summaries instead of producing a misleading efficiency verdict", () => {
+  it("emits clearly labeled mock estimates instead of live-token truth", () => {
     const report = buildTokenEfficiencyReport({
       generatedAt: "2026-05-10T00:00:00.000Z",
       summary: {
@@ -194,12 +200,19 @@ describe("token efficiency report", () => {
       },
     });
 
-    expect(report.status).toBe("skipped");
-    expect(report.rows).toEqual([]);
+    expect(report.status).toBe("estimated");
+    expect(report.rows).toEqual([
+      expect.objectContaining({
+        scenarioId: "mock-fixed",
+        usageSource: "mock-estimate",
+        pi: expect.objectContaining({ totalTokens: 7 }),
+        codex: expect.objectContaining({ totalTokens: 7 }),
+      }),
+    ]);
     expect(report.aggregate.flaggedScenarios).toEqual([]);
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Usage source: mock-estimate");
     expect(renderTokenEfficiencyMarkdownReport(report)).toContain(
-      "skipped - mock provider returns fixed counts",
+      "Mock token totals are algorithmic estimates",
     );
-    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: skipped");
   });
 });

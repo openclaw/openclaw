@@ -272,7 +272,8 @@ jobs:
 
           pnpm openclaw qa suite \
             --provider-mode live-frontier \
-            --scenario approval-turn-tool-followthrough \
+            --runtime-suite first-hour \
+            --scenario runtime-first-hour-20-turn \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_MODEL}" \

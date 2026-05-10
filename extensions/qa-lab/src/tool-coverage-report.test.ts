@@ -46,6 +46,7 @@ describe("qa tool coverage report", () => {
     expect(report.rows).toEqual([
       expect.objectContaining({
         tool: "read",
+        bucket: "required-default",
         fixtureCount: 1,
         pi: "not-run",
         codex: "not-run",
@@ -53,7 +54,7 @@ describe("qa tool coverage report", () => {
       }),
     ]);
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
-      "| read | 1 | not-run | not-run | not-run |",
+      "| read | required-default | 1 | not-run | not-run | not-run |",
     );
   });
 
@@ -140,6 +141,58 @@ describe("qa tool coverage report", () => {
       expect.objectContaining({
         drift: "tool-result-shape",
         tracking: "#80236 tracked runtime drift",
+      }),
+    );
+  });
+
+  it("keeps optional plugin-dependent tool drift report-only", () => {
+    const report = buildQaToolCoverageReport({
+      scenarios: [
+        makeScenario("tool-optional", "optional", {
+          expectedAvailable: false,
+        }),
+      ],
+      summary: {
+        scenarios: [
+          {
+            name: "tool optional",
+            status: "fail",
+            runtimeParity: {
+              scenarioId: "tool-optional",
+              drift: "tool-call-shape",
+              cells: {
+                pi: {
+                  runtime: "pi",
+                  transcriptBytes: "",
+                  toolCalls: [],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+                codex: {
+                  runtime: "codex",
+                  transcriptBytes: "",
+                  toolCalls: [{ tool: "optional", argsHash: "a", resultHash: "r" }],
+                  finalText: "",
+                  usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+                  wallClockMs: 1,
+                  bootStateLines: [],
+                },
+              },
+            },
+          },
+        ],
+      },
+      generatedAt: "2026-05-10T00:00:00.000Z",
+    });
+
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
+    expect(report.rows[0]).toEqual(
+      expect.objectContaining({
+        bucket: "optional-plugin",
+        drift: "tool-call-shape",
       }),
     );
   });

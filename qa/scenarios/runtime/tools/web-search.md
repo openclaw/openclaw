@@ -4,6 +4,7 @@
 id: runtime-tool-web-search
 title: Runtime tool fixture — web_search
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.web-search

@@ -4,6 +4,7 @@
 id: runtime-tool-sessions-spawn
 title: Runtime tool fixture — sessions_spawn
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.sessions-spawn

@@ -4,6 +4,7 @@
 id: runtime-tool-bash
 title: Runtime tool fixture — bash
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.bash

@@ -17,6 +17,14 @@ import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-h
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import {
+  buildHarnessParityCell,
+  buildHarnessParityResult,
+  renderHarnessParityMarkdownReport,
+  type HarnessParityCell,
+  type HarnessParityReport,
+  type HarnessVariant,
+} from "./harness-parity.js";
+import {
   createMockJsonlReplayCellRunner,
   renderJsonlReplayMarkdownReport,
   runJsonlReplay,
@@ -48,6 +56,10 @@ import {
   type QaProviderModeInput,
 } from "./run-config.js";
 import type { RuntimeId } from "./runtime-parity.js";
+import {
+  assertQaRuntimeSuiteScenarioMembership,
+  resolveQaRuntimeSuiteScenarioIds,
+} from "./runtime-suite.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
@@ -171,6 +183,75 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
   return ["pi", "codex"];
+}
+
+function parseHarnessProfile(profile: string, fallbackRuntime: RuntimeId = "pi"): HarnessVariant {
+  const normalized = profile.trim().toLowerCase();
+  switch (normalized) {
+    case "current":
+      return {
+        id: "current",
+        label: "Current harness",
+        runtime: fallbackRuntime,
+      };
+    case "prompt-overlay":
+      return {
+        id: "prompt-overlay",
+        label: "Prompt overlay",
+        runtime: fallbackRuntime,
+        systemPromptOverlay:
+          "QA harness parity overlay: answer concisely, cite concrete tool evidence, and do not change requested tool order.",
+        configPatch: {
+          agents: {
+            defaults: {
+              systemPromptOverride:
+                "QA harness parity overlay: answer concisely, cite concrete tool evidence, and do not change requested tool order.",
+            },
+          },
+        },
+      };
+    case "pi":
+      return {
+        id: "pi",
+        label: "Pi runtime harness",
+        runtime: "pi",
+      };
+    case "codex":
+      return {
+        id: "codex",
+        label: "Codex runtime harness",
+        runtime: "codex",
+      };
+    default:
+      throw new Error("--left/--right profile must be one of current, prompt-overlay, pi, codex.");
+  }
+}
+
+function fallbackHarnessCell(params: {
+  variant: HarnessVariant;
+  scenarioId: string;
+  runtime: RuntimeId;
+  details: string;
+  tokenUsageSource: HarnessParityCell["tokenUsageSource"];
+}): HarnessParityCell {
+  return buildHarnessParityCell({
+    variant: params.variant,
+    tokenUsageSource: params.tokenUsageSource,
+    cell: {
+      runtime: params.runtime,
+      transcriptBytes: "",
+      toolCalls: [],
+      finalText: "",
+      usage: {
+        inputTokens: 0,
+        outputTokens: 0,
+        totalTokens: 0,
+      },
+      wallClockMs: 1,
+      runtimeErrorClass: "capture-missing",
+      bootStateLines: [`${params.scenarioId}: ${params.details}`],
+    },
+  });
 }
 
 async function readQaFailedScenarioCountFromSummary(summaryPath: string) {
@@ -512,6 +593,7 @@ export async function runQaSuiteCommand(opts: {
   thinking?: string;
   cliAuthMode?: string;
   parityPack?: string;
+  runtimeSuite?: string;
   scenarioIds?: string[];
   concurrency?: number;
   allowFailures?: boolean;
@@ -526,9 +608,19 @@ export async function runQaSuiteCommand(opts: {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
   const runner = (opts.runner ?? "host").trim().toLowerCase();
-  const scenarioIds = resolveQaParityPackScenarioIds({
+  const parityScenarioIds = resolveQaParityPackScenarioIds({
     parityPack: opts.parityPack,
     scenarioIds: opts.scenarioIds,
+  });
+  if (opts.runtimeSuite?.trim()) {
+    assertQaRuntimeSuiteScenarioMembership({
+      runtimeSuite: opts.runtimeSuite,
+      scenarios: readQaScenarioPack().scenarios,
+    });
+  }
+  const scenarioIds = resolveQaRuntimeSuiteScenarioIds({
+    runtimeSuite: opts.runtimeSuite,
+    scenarioIds: parityScenarioIds,
   });
   const allowFailures = opts.allowFailures === true;
   if (runner !== "host" && runner !== "multipass") {
@@ -627,6 +719,132 @@ export async function runQaSuiteCommand(opts: {
   }
 }
 
+export async function runQaHarnessParityCommand(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  left: string;
+  right: string;
+  runtimeSuite?: string;
+  scenarioIds?: string[];
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  thinking?: string;
+  tokenEfficiency?: boolean;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const providerMode = normalizeQaProviderMode(opts.providerMode);
+  const catalog = readQaScenarioPack();
+  if (opts.runtimeSuite?.trim()) {
+    assertQaRuntimeSuiteScenarioMembership({
+      runtimeSuite: opts.runtimeSuite,
+      scenarios: catalog.scenarios,
+    });
+  }
+  const scenarioIds = resolveQaRuntimeSuiteScenarioIds({
+    runtimeSuite: opts.runtimeSuite,
+    scenarioIds: opts.scenarioIds,
+  });
+  if (scenarioIds.length === 0) {
+    throw new Error("qa harness-parity requires --scenario or --runtime-suite.");
+  }
+  const left = parseHarnessProfile(opts.left);
+  const right = parseHarnessProfile(opts.right, left.runtime ?? "pi");
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `harness-parity-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const tokenUsageSource = providerMode === "live-frontier" ? "live-usage" : "mock-estimate";
+  const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
+
+  async function runVariantCell(
+    variant: HarnessVariant,
+    scenarioId: string,
+    side: "left" | "right",
+  ) {
+    const runtime = variant.runtime ?? "pi";
+    const result = await runQaSuiteFromRuntimeWithInfraRetry({
+      repoRoot,
+      outputDir: path.join(outputDir, "cells", scenarioId, `${side}-${variant.id}`),
+      transportId: "qa-channel",
+      providerMode,
+      primaryModel:
+        normalizeQaOptionalModelRef(variant.model) ??
+        normalizeQaOptionalModelRef(opts.primaryModel),
+      alternateModel: normalizeQaOptionalModelRef(opts.alternateModel),
+      fastMode: opts.fastMode,
+      ...(thinkingDefault ? { thinkingDefault } : {}),
+      scenarioIds: [scenarioId],
+      concurrency: 1,
+      forcedRuntime: runtime,
+      captureRuntimeParityCell: true,
+      ...(variant.configPatch ? { gatewayConfigPatch: variant.configPatch } : {}),
+    });
+    const scenarioResult = result.scenarios[0];
+    if (!result.runtimeParityCell || !scenarioResult) {
+      return fallbackHarnessCell({
+        variant,
+        scenarioId,
+        runtime,
+        details: "harness variant did not produce a runtime parity cell",
+        tokenUsageSource,
+      });
+    }
+    return buildHarnessParityCell({
+      variant,
+      cell: {
+        ...result.runtimeParityCell,
+        ...(scenarioResult.status === "fail" && !result.runtimeParityCell.runtimeErrorClass
+          ? { runtimeErrorClass: "scenario-failure" }
+          : {}),
+      },
+      tokenUsageSource,
+    });
+  }
+
+  const results = [];
+  for (const scenarioId of scenarioIds) {
+    const [leftCell, rightCell] = await Promise.all([
+      runVariantCell(left, scenarioId, "left"),
+      runVariantCell(right, scenarioId, "right"),
+    ]);
+    results.push(
+      buildHarnessParityResult({
+        scenarioId,
+        left: leftCell,
+        right: rightCell,
+      }),
+    );
+  }
+  const failures = results
+    .filter((result) => result.drift !== "none" && result.drift !== "text-only")
+    .map(
+      (result) =>
+        `${result.scenarioId} drift=${result.drift}${result.driftDetails ? ` (${result.driftDetails})` : ""}`,
+    );
+  const reportPayload: HarnessParityReport = {
+    generatedAt: new Date().toISOString(),
+    providerMode,
+    left,
+    right,
+    results,
+    pass: failures.length === 0,
+    failures,
+  };
+  const report = renderHarnessParityMarkdownReport(reportPayload);
+  const reportPath = path.join(outputDir, "qa-harness-parity-report.md");
+  const summaryPath = path.join(outputDir, "qa-harness-parity-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(reportPayload, null, 2)}\n`, "utf8");
+  process.stdout.write(`QA harness parity report: ${reportPath}\n`);
+  process.stdout.write(`QA harness parity summary: ${summaryPath}\n`);
+  process.stdout.write(`QA harness parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
+  if (!reportPayload.pass) {
+    process.exitCode = 1;
+  }
+}
+
 export async function runQaParityReportCommand(opts: {
   repoRoot?: string;
   candidateSummary?: string;
@@ -635,6 +853,7 @@ export async function runQaParityReportCommand(opts: {
   baselineLabel?: string;
   outputDir?: string;
   runtimeAxis?: boolean;
+  harnessAxis?: boolean;
   summary?: string;
   tokenEfficiency?: boolean;
 }) {
@@ -643,6 +862,23 @@ export async function runQaParityReportCommand(opts: {
     resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
     path.join(repoRoot, ".artifacts", "qa-e2e", `parity-${Date.now().toString(36)}`);
   await fs.mkdir(outputDir, { recursive: true });
+
+  if (opts.harnessAxis === true) {
+    if (!opts.summary?.trim()) {
+      throw new Error("--harness-axis requires --summary.");
+    }
+    const summaryPath = path.resolve(repoRoot, opts.summary);
+    const reportPayload = JSON.parse(await fs.readFile(summaryPath, "utf8")) as HarnessParityReport;
+    const report = renderHarnessParityMarkdownReport(reportPayload);
+    const reportPath = path.join(outputDir, "qa-harness-parity-report.md");
+    await fs.writeFile(reportPath, report, "utf8");
+    process.stdout.write(`QA harness parity report: ${reportPath}\n`);
+    process.stdout.write(`QA harness parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
+    if (!reportPayload.pass) {
+      process.exitCode = 1;
+    }
+    return;
+  }
 
   if (opts.runtimeAxis === true) {
     if (!opts.summary?.trim()) {

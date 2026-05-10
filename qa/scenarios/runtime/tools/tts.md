@@ -4,6 +4,7 @@
 id: runtime-tool-tts
 title: Runtime tool fixture — tts
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.tts

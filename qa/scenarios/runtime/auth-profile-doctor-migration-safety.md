@@ -4,6 +4,7 @@
 id: auth-profile-doctor-migration-safety
 title: Codex doctor migration safety matrix
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.doctor-repair

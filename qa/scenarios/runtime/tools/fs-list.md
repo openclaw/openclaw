@@ -4,6 +4,7 @@
 id: runtime-tool-fs-list
 title: Runtime tool fixture — fs.list
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.list

@@ -4,6 +4,7 @@
 id: codex-plugin-cold-install
 title: Codex plugin cold install
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.codex-plugin.lifecycle

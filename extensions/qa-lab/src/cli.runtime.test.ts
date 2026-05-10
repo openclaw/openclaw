@@ -76,6 +76,7 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
+  runQaHarnessParityCommand,
   runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
@@ -261,6 +262,72 @@ describe("qa cli runtime", () => {
       scenarioIds: ["approval-turn-tool-followthrough"],
       runtimePair: ["pi", "codex"],
     });
+  });
+
+  it("expands named runtime suites before dispatching to the host runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      runtimeSuite: "first-hour-20",
+      runtimePair: "pi,codex",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        repoRoot: path.resolve("/tmp/openclaw-repo"),
+        providerMode: "mock-openai",
+        scenarioIds: expect.arrayContaining([
+          "approval-turn-tool-followthrough",
+          "runtime-first-hour-20-turn",
+        ]),
+        runtimePair: ["pi", "codex"],
+      }),
+    );
+  });
+
+  it("runs harness parity variants through forced runtime cells", async () => {
+    runQaSuiteFromRuntime.mockImplementation(
+      async (params: { forcedRuntime?: "pi" | "codex" }) => ({
+        watchUrl: "http://127.0.0.1:43124",
+        reportPath: suiteReportPath,
+        summaryPath: suiteSummaryPath,
+        scenarios: [{ name: "approval", status: "pass", steps: [] }],
+        runtimeParityCell: {
+          runtime: params.forcedRuntime ?? "pi",
+          transcriptBytes: '{"message":{"role":"assistant","content":"same"}}\n',
+          toolCalls: [],
+          finalText: "same",
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      }),
+    );
+
+    await runQaHarnessParityCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      outputDir: ".artifacts/harness-parity",
+      providerMode: "mock-openai",
+      left: "pi",
+      right: "codex",
+      scenarioIds: ["approval-turn-tool-followthrough"],
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forcedRuntime: "pi",
+        captureRuntimeParityCell: true,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+      }),
+    );
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith(
+      expect.objectContaining({
+        forcedRuntime: "codex",
+        captureRuntimeParityCell: true,
+        scenarioIds: ["approval-turn-tool-followthrough"],
+      }),
+    );
+    expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("QA harness parity report:"));
   });
 
   it("drops blank suite model refs so provider defaults apply", async () => {
@@ -862,7 +929,7 @@ describe("qa cli runtime", () => {
     }
   });
 
-  it("writes a skipped mock token-efficiency report for runtime-axis summaries", async () => {
+  it("writes a mock token-efficiency estimate report for runtime-axis summaries", async () => {
     const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-token-efficiency-"));
     const priorExitCode = process.exitCode;
     process.exitCode = undefined;
@@ -921,7 +988,7 @@ describe("qa cli runtime", () => {
 
       expect(process.exitCode).toBeUndefined();
       expect(stdoutWrite).toHaveBeenCalledWith(
-        expect.stringContaining("QA runtime token efficiency verdict: skipped"),
+        expect.stringContaining("QA runtime token efficiency verdict: pass"),
       );
     } finally {
       process.exitCode = priorExitCode;

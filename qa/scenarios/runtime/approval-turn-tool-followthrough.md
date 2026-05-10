@@ -4,6 +4,7 @@
 id: approval-turn-tool-followthrough
 title: Approval turn tool followthrough
 surface: harness
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.approvals

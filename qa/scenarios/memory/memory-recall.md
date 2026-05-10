@@ -35,6 +35,7 @@
 id: memory-recall
 title: Memory recall after context switch
 surface: memory
+runtimeParityTier: standard
 coverage:
   primary:
     - memory.recall

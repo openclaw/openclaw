@@ -133,6 +133,14 @@ describe("qa scenario catalog", () => {
     );
   });
 
+  it("loads runtime parity tier metadata for standard, optional, and soak lanes", () => {
+    expect(readQaScenarioById("approval-turn-tool-followthrough").runtimeParityTier).toBe(
+      "standard",
+    );
+    expect(readQaScenarioById("runtime-tool-tavily-search").runtimeParityTier).toBe("optional");
+    expect(readQaScenarioById("runtime-soak-100-turn").runtimeParityTier).toBe("soak");
+  });
+
   it("includes the GPT-5.5 thinking visibility switch scenario", () => {
     const scenario = readQaScenarioById("gpt55-thinking-visibility-switch");
     const config = readQaScenarioExecutionConfig("gpt55-thinking-visibility-switch") as

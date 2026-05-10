@@ -4,6 +4,7 @@
 id: runtime-tool-fs-read
 title: Runtime tool fixture — fs.read
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.read

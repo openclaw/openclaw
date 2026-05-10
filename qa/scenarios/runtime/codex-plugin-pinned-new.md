@@ -4,6 +4,7 @@
 id: codex-plugin-pinned-new
 title: Codex plugin pinned new
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.codex-plugin.version

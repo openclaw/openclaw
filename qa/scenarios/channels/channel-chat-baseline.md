@@ -4,6 +4,7 @@
 id: channel-chat-baseline
 title: Channel baseline conversation
 surface: channel
+runtimeParityTier: standard
 coverage:
   primary:
     - channels.group-messages

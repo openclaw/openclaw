@@ -4,6 +4,7 @@
 id: runtime-tool-skill-invocation
 title: Runtime tool fixture — skill invocation
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.skill-invocation

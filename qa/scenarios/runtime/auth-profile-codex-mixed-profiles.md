@@ -4,6 +4,7 @@
 id: auth-profile-codex-mixed-profiles
 title: Codex auth profile mixed profiles
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.codex-plugin.auth

@@ -4,6 +4,7 @@
 id: runtime-tool-exec
 title: Runtime tool fixture — exec
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.exec

@@ -4,6 +4,7 @@
 id: compaction-retry-mutating-tool
 title: Compaction retry after mutating tool
 surface: runtime
+runtimeParityTier: standard
 coverage:
   primary:
     - runtime.compaction

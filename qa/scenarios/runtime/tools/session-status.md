@@ -4,6 +4,7 @@
 id: runtime-tool-session-status
 title: Runtime tool fixture — session_status
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.session-status

@@ -4,6 +4,7 @@
 id: subagent-stale-child-links
 title: Subagent stale child links
 surface: subagents
+runtimeParityTier: standard
 coverage:
   primary:
     - agents.subagents

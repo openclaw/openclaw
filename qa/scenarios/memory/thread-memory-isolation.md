@@ -4,6 +4,7 @@
 id: thread-memory-isolation
 title: Thread memory isolation
 surface: memory
+runtimeParityTier: standard
 coverage:
   primary:
     - memory.thread-isolation

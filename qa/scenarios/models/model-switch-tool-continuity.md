@@ -4,6 +4,7 @@
 id: model-switch-tool-continuity
 title: Model switch with tool continuity
 surface: models
+runtimeParityTier: standard
 coverage:
   primary:
     - models.switching

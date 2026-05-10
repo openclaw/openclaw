@@ -4,6 +4,7 @@
 id: runtime-tool-tavily-search
 title: Runtime tool fixture — tavily_search
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.tavily-search

@@ -5,10 +5,17 @@ export type TokenEfficiencyRuntimeUsage = {
   outputTokens: number;
   totalTokens: number;
   toolCallCount: number;
+  promptChars: number;
+  projectContextChars: number;
+  skillPromptChars: number;
+  toolSummaryChars: number;
+  toolSchemaChars: number;
+  transcriptChars: number;
 };
 
 export type TokenEfficiencyRow = {
   scenarioId: string;
+  usageSource: "live-usage" | "mock-estimate";
   pi: TokenEfficiencyRuntimeUsage;
   codex: TokenEfficiencyRuntimeUsage;
   deltaPercent: number;
@@ -17,7 +24,7 @@ export type TokenEfficiencyRow = {
 };
 
 export type TokenEfficiencyReport = {
-  status: "evaluated" | "skipped";
+  status: "evaluated" | "estimated" | "skipped";
   runtimePair: [RuntimeId, RuntimeId];
   generatedAt: string;
   providerMode?: string;
@@ -54,6 +61,7 @@ export type BuildTokenEfficiencyReportParams = {
 };
 
 const LIVE_PROVIDER_MODE = "live-frontier";
+const MOCK_ESTIMATE_PROVIDER_RE = /\bmock\b/i;
 const DEFAULT_THRESHOLD_PERCENT = 15;
 const ZERO_AGGREGATE: TokenEfficiencyReport["aggregate"] = {
   pi: { totalTokens: 0, p50PerTurn: 0, p90PerTurn: 0 },
@@ -75,12 +83,60 @@ function normalizeTokenCount(value: number): number {
   return Number.isFinite(value) ? Math.max(0, value) : 0;
 }
 
-function cellUsage(cell: RuntimeParityCell): TokenEfficiencyRuntimeUsage {
+function readPromptReportNumber(value: unknown): number {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
+}
+
+function cellPromptStats(cell: RuntimeParityCell) {
+  const report = cell.systemPromptReport;
+  const toolEntries = Array.isArray(report?.tools?.entries) ? report.tools.entries : [];
+  return {
+    promptChars: readPromptReportNumber(report?.systemPrompt?.chars),
+    projectContextChars: readPromptReportNumber(report?.systemPrompt?.projectContextChars),
+    skillPromptChars: readPromptReportNumber(report?.skills?.promptChars),
+    toolSummaryChars: toolEntries.reduce(
+      (sum, entry) => sum + readPromptReportNumber(entry.summaryChars),
+      0,
+    ),
+    toolSchemaChars: readPromptReportNumber(report?.tools?.schemaChars),
+    transcriptChars: cell.transcriptBytes.length,
+  };
+}
+
+function estimateTokensFromChars(chars: number): number {
+  return Math.ceil(Math.max(0, chars) / 4);
+}
+
+function cellUsage(
+  cell: RuntimeParityCell,
+  usageSource: TokenEfficiencyRow["usageSource"],
+): TokenEfficiencyRuntimeUsage {
+  const stats = cellPromptStats(cell);
+  if (usageSource === "mock-estimate") {
+    const inputChars =
+      stats.promptChars +
+      stats.projectContextChars +
+      stats.skillPromptChars +
+      stats.toolSummaryChars +
+      stats.toolSchemaChars +
+      stats.transcriptChars;
+    const outputChars = cell.finalText.length + cell.toolCalls.length * 80;
+    const inputTokens = estimateTokensFromChars(inputChars);
+    const outputTokens = estimateTokensFromChars(outputChars);
+    return {
+      inputTokens,
+      outputTokens,
+      totalTokens: inputTokens + outputTokens,
+      toolCallCount: cell.toolCalls.length,
+      ...stats,
+    };
+  }
   return {
     inputTokens: normalizeTokenCount(cell.usage.inputTokens),
     outputTokens: normalizeTokenCount(cell.usage.outputTokens),
     totalTokens: normalizeTokenCount(cell.usage.totalTokens),
     toolCallCount: cell.toolCalls.length,
+    ...stats,
   };
 }
 
@@ -106,12 +162,17 @@ function toolNamesForCells(pi: RuntimeParityCell, codex: RuntimeParityCell): str
   );
 }
 
-function buildRow(result: RuntimeParityResult, thresholdPercent: number): TokenEfficiencyRow {
-  const pi = cellUsage(result.cells.pi);
-  const codex = cellUsage(result.cells.codex);
+function buildRow(
+  result: RuntimeParityResult,
+  thresholdPercent: number,
+  usageSource: TokenEfficiencyRow["usageSource"],
+): TokenEfficiencyRow {
+  const pi = cellUsage(result.cells.pi, usageSource);
+  const codex = cellUsage(result.cells.codex, usageSource);
   const delta = deltaPercent(pi.totalTokens, codex.totalTokens);
   return {
     scenarioId: result.scenarioId,
+    usageSource,
     pi,
     codex,
     deltaPercent: delta,
@@ -142,9 +203,6 @@ function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyRep
 }
 
 function skipReasonForProviderMode(providerMode: string | undefined): string {
-  if (providerMode?.toLowerCase().includes("mock")) {
-    return "skipped - mock provider returns fixed counts; token efficiency is only evaluated for live-frontier summaries";
-  }
   return `skipped - token efficiency is live-only; providerMode=${providerMode ?? "unknown"} is not live-frontier`;
 }
 
@@ -167,7 +225,7 @@ function buildSkippedReport(params: {
     skipReason: params.skipReason,
     notes: [
       "Token efficiency is evaluated only for live-frontier runtime summaries.",
-      "Mock provider usage totals are fixed and must not be used for efficiency verdicts.",
+      "Mock provider usage totals are estimated only when providerMode includes mock.",
     ],
   };
 }
@@ -179,7 +237,9 @@ export function buildTokenEfficiencyReport(
   const thresholdPercent = params.thresholdPercent ?? DEFAULT_THRESHOLD_PERCENT;
   const providerMode = params.summary.run?.providerMode;
 
-  if (providerMode !== LIVE_PROVIDER_MODE) {
+  const isLiveUsage = providerMode === LIVE_PROVIDER_MODE;
+  const isMockEstimate = providerMode ? MOCK_ESTIMATE_PROVIDER_RE.test(providerMode) : false;
+  if (!isLiveUsage && !isMockEstimate) {
     return buildSkippedReport({
       summary: params.summary,
       generatedAt,
@@ -191,27 +251,30 @@ export function buildTokenEfficiencyReport(
   const rows = params.summary.scenarios
     .map((scenario) => scenario.runtimeParity)
     .filter((result): result is RuntimeParityResult => Boolean(result))
-    .map((result) => buildRow(result, thresholdPercent));
+    .map((result) =>
+      buildRow(result, thresholdPercent, isLiveUsage ? "live-usage" : "mock-estimate"),
+    );
 
   if (rows.length === 0) {
     return buildSkippedReport({
       summary: params.summary,
       generatedAt,
       thresholdPercent,
-      skipReason: "skipped - no runtime parity cells were present in the live summary",
+      skipReason: "skipped - no runtime parity cells were present in the summary",
     });
   }
 
   const aggregate = buildAggregate(rows);
-  const failures = aggregate.flaggedScenarios.map((scenarioId) => {
+  const liveFailures = aggregate.flaggedScenarios.map((scenarioId) => {
     const row = rows.find((entry) => entry.scenarioId === scenarioId);
     return `${scenarioId} delta=${formatPercent(row?.deltaPercent ?? 0)} exceeds ${thresholdPercent.toFixed(
       1,
     )}% threshold`;
   });
+  const failures = isLiveUsage ? liveFailures : [];
 
   return {
-    status: "evaluated",
+    status: isLiveUsage ? "evaluated" : "estimated",
     runtimePair: normalizeRuntimePair(params.summary.run?.runtimePair),
     generatedAt,
     providerMode,
@@ -221,8 +284,11 @@ export function buildTokenEfficiencyReport(
     pass: failures.length === 0,
     failures,
     notes: [
-      "Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage.",
-      "The report does not inspect provider transport payloads or raw transcripts.",
+      isLiveUsage
+        ? "Token totals are read from RuntimeParityCell.usage, which is captured from normalized AssistantMessage.usage."
+        : "Mock token totals are algorithmic estimates from prompt/tool/schema/transcript byte counts, not live provider usage.",
+      ...(isLiveUsage ? [] : ["Mock estimate deltas are informational and do not fail the gate."]),
+      "The report does not inspect provider transport payload token counters.",
     ],
   };
 }
@@ -237,6 +303,10 @@ function formatRuntimeUsage(usage: TokenEfficiencyRuntimeUsage): string {
   return `${usage.inputTokens}/${usage.outputTokens}/${usage.totalTokens}/${usage.toolCallCount}`;
 }
 
+function formatCharStats(usage: TokenEfficiencyRuntimeUsage): string {
+  return `${usage.promptChars}/${usage.projectContextChars}/${usage.skillPromptChars}/${usage.toolSummaryChars}/${usage.toolSchemaChars}/${usage.transcriptChars}`;
+}
+
 function escapeTableCell(value: string): string {
   return value.replace(/\|/gu, "\\|").replace(/\s+/gu, " ").trim();
 }
@@ -248,6 +318,13 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
     `- Generated at: ${report.generatedAt}`,
     `- Provider mode: ${report.providerMode ?? "unknown"}`,
     `- Verdict: ${report.status === "skipped" ? "skipped" : report.pass ? "pass" : "fail"}`,
+    `- Usage source: ${
+      report.status === "estimated"
+        ? "mock-estimate"
+        : report.status === "evaluated"
+          ? "live-usage"
+          : "not-applicable"
+    }`,
   ];
 
   if (report.status === "skipped") {
@@ -268,13 +345,15 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
     "",
     "## Scenario Efficiency",
     "",
-    "| Scenario | Pi in/out/total/tools | Codex in/out/total/tools | Delta | Flagged | Tools used |",
-    "| --- | ---: | ---: | ---: | --- | --- |",
+    "| Scenario | Source | Pi in/out/total/tools | Codex in/out/total/tools | Pi prompt/project/skills/tool-summary/tool-schema/transcript chars | Codex prompt/project/skills/tool-summary/tool-schema/transcript chars | Delta | Flagged | Tools used |",
+    "| --- | --- | ---: | ---: | ---: | ---: | ---: | --- | --- |",
   );
 
   for (const row of report.rows) {
     lines.push(
-      `| ${escapeTableCell(row.scenarioId)} | ${formatRuntimeUsage(row.pi)} | ${formatRuntimeUsage(
+      `| ${escapeTableCell(row.scenarioId)} | ${escapeTableCell(row.usageSource)} | ${formatRuntimeUsage(row.pi)} | ${formatRuntimeUsage(
+        row.codex,
+      )} | ${formatCharStats(row.pi)} | ${formatCharStats(
         row.codex,
       )} | ${formatPercent(row.deltaPercent)} | ${row.flagged ? "yes" : "no"} | ${escapeTableCell(
         row.toolsUsed.join(", "),
@@ -286,6 +365,13 @@ export function renderTokenEfficiencyMarkdownReport(report: TokenEfficiencyRepor
     lines.push("", "## Gate Failures", "");
     for (const failure of report.failures) {
       lines.push(`- ${failure}`);
+    }
+  }
+
+  if (report.notes.length > 0) {
+    lines.push("", "## Notes", "");
+    for (const note of report.notes) {
+      lines.push(`- ${note}`);
     }
   }
 

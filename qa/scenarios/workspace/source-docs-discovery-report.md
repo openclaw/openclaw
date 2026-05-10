@@ -4,6 +4,7 @@
 id: source-docs-discovery-report
 title: Source and docs discovery report
 surface: discovery
+runtimeParityTier: standard
 coverage:
   primary:
     - workspace.repo-discovery

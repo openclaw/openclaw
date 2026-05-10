@@ -4,6 +4,7 @@
 id: runtime-tool-grep
 title: Runtime tool fixture — grep
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.grep

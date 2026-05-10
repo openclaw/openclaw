@@ -4,6 +4,7 @@
 id: subagent-fanout-synthesis
 title: Subagent fanout synthesis
 surface: subagents
+runtimeParityTier: standard
 coverage:
   primary:
     - agents.subagents

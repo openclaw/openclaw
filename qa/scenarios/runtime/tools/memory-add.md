@@ -4,6 +4,7 @@
 id: runtime-tool-memory-add
 title: Runtime tool fixture — memory.add
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.memory.add

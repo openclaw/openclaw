@@ -4,6 +4,7 @@
 id: runtime-tool-memory-recall
 title: Runtime tool fixture — memory.recall
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.memory.recall

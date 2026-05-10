@@ -28,6 +28,27 @@ export type RuntimeParityUsage = {
   cacheWrite?: number;
 };
 
+export type RuntimeParitySystemPromptReport = {
+  systemPrompt?: {
+    chars?: number;
+    projectContextChars?: number;
+    nonProjectContextChars?: number;
+  };
+  skills?: {
+    promptChars?: number;
+  };
+  tools?: {
+    listChars?: number;
+    schemaChars?: number;
+    entries?: Array<{
+      name?: string;
+      summaryChars?: number;
+      schemaChars?: number;
+      propertiesCount?: number | null;
+    }>;
+  };
+};
+
 export type RuntimeParityPluginState = {
   codex?: {
     installed: boolean;
@@ -42,6 +63,7 @@ export type RuntimeParityCell = {
   finalText: string;
   usage: RuntimeParityUsage;
   wallClockMs: number;
+  systemPromptReport?: RuntimeParitySystemPromptReport;
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
@@ -93,6 +115,7 @@ type RuntimeParitySessionEntry = {
   sessionId?: string;
   sessionFile?: string;
   updatedAt?: number;
+  systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
 type RuntimeParityTranscriptRecord = {
@@ -872,6 +895,18 @@ async function readRuntimeParitySessionEntries(params: {
   }
 }
 
+async function loadRuntimeParitySystemPromptReport(params: {
+  gateway: QaGatewayLike;
+  agentId: string;
+}): Promise<RuntimeParitySystemPromptReport | undefined> {
+  const sessionEntries = await readRuntimeParitySessionEntries({
+    stateDir: path.join(params.gateway.tempRoot, "state"),
+    agentId: params.agentId,
+  });
+  return sessionEntries.find((entry) => isMessageRecord(entry.systemPromptReport))
+    ?.systemPromptReport;
+}
+
 async function loadRuntimeParityTranscripts(params: {
   gateway: QaGatewayLike;
   agentId: string;
@@ -998,6 +1033,10 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const systemPromptReport = await loadRuntimeParitySystemPromptReport({
+    gateway: params.gateway,
+    agentId,
+  });
   const pluginState = await captureRuntimeParityPluginState({
     gateway: params.gateway,
     agentId,
@@ -1009,6 +1048,7 @@ export async function captureRuntimeParityCell(
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
+    ...(systemPromptReport ? { systemPromptReport } : {}),
     ...(classifyScenarioError(params.scenarioResult.details)
       ? { runtimeErrorClass: classifyScenarioError(params.scenarioResult.details) }
       : {}),

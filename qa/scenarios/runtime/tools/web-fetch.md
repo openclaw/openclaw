@@ -4,6 +4,7 @@
 id: runtime-tool-web-fetch
 title: Runtime tool fixture — web_fetch
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.web-fetch

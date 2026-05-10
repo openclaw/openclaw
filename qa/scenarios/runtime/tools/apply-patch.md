@@ -4,6 +4,7 @@
 id: runtime-tool-apply-patch
 title: Runtime tool fixture — apply-patch
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.apply-patch

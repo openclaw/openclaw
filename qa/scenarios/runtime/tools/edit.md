@@ -4,6 +4,7 @@
 id: runtime-tool-edit
 title: Runtime tool fixture — edit
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.edit

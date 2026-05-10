@@ -21,9 +21,11 @@ export type QaToolCoverageSuiteSummary = {
 
 export type QaToolCoverageStatus = "pass" | "fail" | "missing" | "not-run";
 export type QaToolCoverageDrift = RuntimeParityDrift | "not-run";
+export type QaToolCoverageBucket = "required-default" | "optional-plugin";
 
 export type QaToolCoverageRow = {
   tool: string;
+  bucket: QaToolCoverageBucket;
   fixtureCount: number;
   scenarios: string[];
   sourcePaths: string[];
@@ -39,6 +41,8 @@ export type QaToolCoverageReport = {
   generatedAt: string;
   evaluated: boolean;
   totalTools: number;
+  requiredTools: number;
+  optionalTools: number;
   passingTools: number;
   failingTools: number;
   rows: QaToolCoverageRow[];
@@ -126,6 +130,19 @@ function readScenarioTracking(scenario: QaSeedScenarioWithSource): string | unde
   return issue ?? reason;
 }
 
+function readScenarioToolBucket(scenario: QaSeedScenarioWithSource): QaToolCoverageBucket {
+  const config = scenario.execution.config;
+  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
+  const explicit = readString(toolCoverage?.bucket);
+  if (explicit === "required-default" || explicit === "optional-plugin") {
+    return explicit;
+  }
+  if (scenario.runtimeParityTier === "optional" || config?.expectedAvailable === false) {
+    return "optional-plugin";
+  }
+  return "required-default";
+}
+
 function summaryByScenarioId(
   summary: QaToolCoverageSuiteSummary | undefined,
 ): Map<string, RuntimeParityResult> {
@@ -159,8 +176,14 @@ function buildRow(params: {
 }): QaToolCoverageRow {
   const result = mergeScenarioResults(params.group.scenarios, params.results);
   const tracking = params.group.scenarios.map(readScenarioTracking).find(Boolean);
+  const bucket = params.group.scenarios.some(
+    (scenario) => readScenarioToolBucket(scenario) === "required-default",
+  )
+    ? "required-default"
+    : "optional-plugin";
   return {
     tool: params.group.tool,
+    bucket,
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
     sourcePaths: params.group.scenarios.map((scenario) => scenario.sourcePath),
@@ -188,7 +211,10 @@ export function buildQaToolCoverageReport(params: {
   const evaluated = Boolean(params.summary);
   const failures = evaluated
     ? rows
-        .filter((row) => !row.tracking && !PASSING_DRIFTS.has(row.drift))
+        .filter(
+          (row) =>
+            row.bucket === "required-default" && !row.tracking && !PASSING_DRIFTS.has(row.drift),
+        )
         .map((row) => `${row.tool} drift=${row.drift}${row.details ? ` (${row.details})` : ""}`)
     : [];
   return {
@@ -196,8 +222,15 @@ export function buildQaToolCoverageReport(params: {
     generatedAt: params.generatedAt ?? new Date().toISOString(),
     evaluated,
     totalTools: rows.length,
+    requiredTools: rows.filter((row) => row.bucket === "required-default").length,
+    optionalTools: rows.filter((row) => row.bucket === "optional-plugin").length,
     passingTools: evaluated
-      ? rows.filter((row) => PASSING_DRIFTS.has(row.drift) || Boolean(row.tracking)).length
+      ? rows.filter(
+          (row) =>
+            row.bucket === "optional-plugin" ||
+            PASSING_DRIFTS.has(row.drift) ||
+            Boolean(row.tracking),
+        ).length
       : 0,
     failingTools: failures.length,
     rows,
@@ -213,17 +246,19 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Generated at: ${report.generatedAt}`,
     `- Mode: ${report.evaluated ? "runtime summary" : "catalog inventory"}`,
     `- Tools: ${report.totalTools}`,
+    `- Required default tools: ${report.requiredTools}`,
+    `- Optional/plugin-dependent tools: ${report.optionalTools}`,
     `- Passing tools: ${report.passingTools}`,
     `- Failing tools: ${report.failingTools}`,
     `- Verdict: ${report.pass ? "pass" : "fail"}`,
     "",
-    "| Tool | Fixtures | Pi | Codex | Drift | Tracking |",
-    "| --- | ---: | --- | --- | --- | --- |",
+    "| Tool | Bucket | Fixtures | Pi | Codex | Drift | Tracking |",
+    "| --- | --- | ---: | --- | --- | --- | --- |",
   ];
 
   for (const row of report.rows) {
     lines.push(
-      `| ${row.tool} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.tracking ?? ""} |`,
+      `| ${row.tool} | ${row.bucket} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.tracking ?? ""} |`,
     );
   }
 

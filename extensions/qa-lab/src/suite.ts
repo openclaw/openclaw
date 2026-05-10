@@ -92,6 +92,7 @@ export type QaSuiteRunParams = {
   startLab?: QaSuiteStartLabFn;
   concurrency?: number;
   enabledPluginIds?: string[];
+  gatewayConfigPatch?: Record<string, unknown>;
   controlUiEnabled?: boolean;
   transportReadyTimeoutMs?: number;
   forcedRuntime?: RuntimeId;
@@ -780,7 +781,14 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       ...(params?.forcedRuntime && params.forcedRuntime !== "pi" ? [params.forcedRuntime] : []),
     ]),
   ];
-  const gatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const scenarioGatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const gatewayConfigPatch =
+    params?.gatewayConfigPatch && scenarioGatewayConfigPatch
+      ? (applyQaMergePatch(scenarioGatewayConfigPatch, params.gatewayConfigPatch) as Record<
+          string,
+          unknown
+        >)
+      : (params?.gatewayConfigPatch ?? scenarioGatewayConfigPatch);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,

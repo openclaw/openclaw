@@ -4,6 +4,7 @@
 id: runtime-tool-image-generate
 title: Runtime tool fixture — image_generate
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.image-generate

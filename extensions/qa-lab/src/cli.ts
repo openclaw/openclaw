@@ -41,6 +41,7 @@ async function runQaSuite(opts: {
   enabledPluginIds?: string[];
   cliAuthMode?: string;
   parityPack?: string;
+  runtimeSuite?: string;
   scenarioIds?: string[];
   concurrency?: number;
   runner?: string;
@@ -63,11 +64,30 @@ async function runQaParityReport(opts: {
   baselineLabel?: string;
   outputDir?: string;
   runtimeAxis?: boolean;
+  harnessAxis?: boolean;
   summary?: string;
   tokenEfficiency?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
+}
+
+async function runQaHarnessParity(opts: {
+  repoRoot?: string;
+  outputDir?: string;
+  left: string;
+  right: string;
+  runtimeSuite?: string;
+  scenarioIds?: string[];
+  providerMode?: QaProviderModeInput;
+  primaryModel?: string;
+  alternateModel?: string;
+  fastMode?: boolean;
+  thinking?: string;
+  tokenEfficiency?: boolean;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaHarnessParityCommand(opts);
 }
 
 async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
@@ -276,6 +296,10 @@ export function registerQaLabCli(program: Command) {
       "CLI backend auth mode for live Claude CLI runs: auto, api-key, or subscription",
     )
     .option("--parity-pack <name>", 'Preset scenario pack; currently only "agentic" is supported')
+    .option(
+      "--runtime-suite <name>",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, or soak-100",
+    )
     .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
     .option(
       "--enable-plugin <id>",
@@ -313,6 +337,7 @@ export function registerQaLabCli(program: Command) {
         altModel?: string;
         cliAuthMode?: string;
         parityPack?: string;
+        runtimeSuite?: string;
         scenario?: string[];
         enablePlugin?: string[];
         concurrency?: number;
@@ -338,6 +363,7 @@ export function registerQaLabCli(program: Command) {
           thinking: opts.thinking,
           cliAuthMode: opts.cliAuthMode,
           parityPack: opts.parityPack,
+          runtimeSuite: opts.runtimeSuite,
           scenarioIds: opts.scenario,
           enabledPluginIds: opts.enablePlugin,
           concurrency: opts.concurrency,
@@ -357,6 +383,7 @@ export function registerQaLabCli(program: Command) {
     .option("--candidate-summary <path>", "Candidate qa-suite-summary.json path")
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
+    .option("--harness-axis", "Interpret --summary as a qa-harness-parity-summary.json", false)
     .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
     .option(
       "--token-efficiency",
@@ -380,10 +407,66 @@ export function registerQaLabCli(program: Command) {
         baselineLabel?: string;
         outputDir?: string;
         runtimeAxis?: boolean;
+        harnessAxis?: boolean;
         summary?: string;
         tokenEfficiency?: boolean;
       }) => {
         await runQaParityReport(opts);
+      },
+    );
+
+  qa.command("harness-parity")
+    .description("Compare two runtime harness profiles for the same scenario set")
+    .requiredOption("--left <profile>", "Left harness profile: current, prompt-overlay, pi, codex")
+    .requiredOption(
+      "--right <profile>",
+      "Right harness profile: current, prompt-overlay, pi, codex",
+    )
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option("--output-dir <path>", "Artifact directory for the harness parity report")
+    .option("--scenario <id>", "Run only the named QA scenario (repeatable)", collectString, [])
+    .option(
+      "--runtime-suite <name>",
+      "Runtime parity suite: first-hour, first-hour-20, tool-defaults, or soak-100",
+    )
+    .option("--provider-mode <mode>", formatQaProviderModeHelp(), DEFAULT_QA_LIVE_PROVIDER_MODE)
+    .option("--model <ref>", "Primary provider/model ref")
+    .option("--alt-model <ref>", "Alternate provider/model ref")
+    .option("--fast", "Enable provider fast mode where supported", false)
+    .option(
+      "--thinking <level>",
+      "Suite thinking default: off|minimal|low|medium|high|xhigh|adaptive|max",
+    )
+    .option("--token-efficiency", "Include token usage or mock estimates in the report", false)
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        outputDir?: string;
+        left: string;
+        right: string;
+        runtimeSuite?: string;
+        scenario?: string[];
+        providerMode?: QaProviderModeInput;
+        model?: string;
+        altModel?: string;
+        fast?: boolean;
+        thinking?: string;
+        tokenEfficiency?: boolean;
+      }) => {
+        await runQaHarnessParity({
+          repoRoot: opts.repoRoot,
+          outputDir: opts.outputDir,
+          left: opts.left,
+          right: opts.right,
+          runtimeSuite: opts.runtimeSuite,
+          scenarioIds: opts.scenario,
+          providerMode: opts.providerMode,
+          primaryModel: opts.model,
+          alternateModel: opts.altModel,
+          fastMode: opts.fast,
+          thinking: opts.thinking,
+          tokenEfficiency: opts.tokenEfficiency,
+        });
       },
     );
 

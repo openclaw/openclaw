@@ -4,6 +4,7 @@
 id: runtime-tool-tavily-extract
 title: Runtime tool fixture — tavily_extract
 surface: runtime-tools
+runtimeParityTier: optional
 coverage:
   primary:
     - tools.tavily-extract

@@ -4,6 +4,7 @@
 id: instruction-followthrough-repo-contract
 title: Instruction followthrough repo contract
 surface: repo-contract
+runtimeParityTier: standard
 coverage:
   primary:
     - agents.instructions

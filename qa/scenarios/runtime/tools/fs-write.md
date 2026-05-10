@@ -4,6 +4,7 @@
 id: runtime-tool-fs-write
 title: Runtime tool fixture — fs.write
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.fs.write

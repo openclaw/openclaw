@@ -4,6 +4,7 @@
 id: runtime-tool-message-tool
 title: Runtime tool fixture — message-tool
 surface: runtime-tools
+runtimeParityTier: standard
 coverage:
   primary:
     - tools.message-tool
