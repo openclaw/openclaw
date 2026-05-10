@@ -532,11 +532,11 @@ export type AgentCompactionConfig = {
    * transcript stays available as a checkpoint snapshot.
    * Default: false (existing behavior preserved).
    */
-  truncateAfterCompaction?: boolean;
+  rotateAfterCompaction?: boolean;
   /**
    * Trigger a normal local compaction when the active SQLite transcript reaches
    * this size (bytes, or byte-size string like "20mb"). Set to 0/unset to
-   * disable. Requires truncateAfterCompaction so successful compaction can
+   * disable. Requires rotateAfterCompaction so successful compaction can
    * rotate to a smaller successor transcript. This does not split raw
    * transcript events.
    */

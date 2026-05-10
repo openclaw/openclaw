@@ -447,7 +447,7 @@ describe("shouldRotateCompactionTranscript", () => {
     expect(shouldRotateCompactionTranscript()).toBe(false);
     expect(
       shouldRotateCompactionTranscript({
-        agents: { defaults: { compaction: { truncateAfterCompaction: true } } },
+        agents: { defaults: { compaction: { rotateAfterCompaction: true } } },
       }),
     ).toBe(true);
   });

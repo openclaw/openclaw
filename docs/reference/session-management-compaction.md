@@ -300,7 +300,7 @@ OpenClaw can also trigger a preflight local compaction before opening the next
 run when `agents.defaults.compaction.maxActiveTranscriptBytes` is set and the
 active SQLite transcript reaches that size. This is a transcript-size guard for
 local reopen cost, not raw archival: OpenClaw still runs normal semantic
-compaction, and it requires `truncateAfterCompaction` so the compacted summary
+compaction, and it requires `rotateAfterCompaction` so the compacted summary
 can become a new successor transcript.
 
 For embedded Pi runs, `agents.defaults.compaction.midTurnPrecheck.enabled: true`
@@ -351,9 +351,9 @@ OpenClaw also enforces a safety floor for embedded runs:
 - Set `agents.defaults.compaction.maxActiveTranscriptBytes` to a byte value or
   string such as `"20mb"` to run local compaction before a turn when the active
   transcript gets large. This guard is active only when
-  `truncateAfterCompaction` is also enabled. Leave it unset or set `0` to
+  `rotateAfterCompaction` is also enabled. Leave it unset or set `0` to
   disable.
-- When `agents.defaults.compaction.truncateAfterCompaction` is enabled,
+- When `agents.defaults.compaction.rotateAfterCompaction` is enabled,
   OpenClaw rewrites the active SQLite transcript to the compacted successor
   after compaction. The old full transcript is available only through the
   SQLite pre-compaction checkpoint snapshot while retained.

@@ -929,7 +929,7 @@ describe("runMemoryFlushIfNeeded", () => {
           defaults: {
             compaction: {
               memoryFlush: {},
-              truncateAfterCompaction: true,
+              rotateAfterCompaction: true,
               maxActiveTranscriptBytes: "10mb",
             },
           },
@@ -981,7 +981,7 @@ describe("runMemoryFlushIfNeeded", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
+              rotateAfterCompaction: true,
               maxActiveTranscriptBytes: "10b",
             },
           },
@@ -1042,7 +1042,7 @@ describe("runMemoryFlushIfNeeded", () => {
         agents: {
           defaults: {
             compaction: {
-              truncateAfterCompaction: true,
+              rotateAfterCompaction: true,
               maxActiveTranscriptBytes: "10b",
             },
           },

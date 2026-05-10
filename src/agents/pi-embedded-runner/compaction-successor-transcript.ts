@@ -29,7 +29,7 @@ export type CompactionTranscriptRotation = {
 };
 
 export function shouldRotateCompactionTranscript(config?: OpenClawConfig): boolean {
-  return config?.agents?.defaults?.compaction?.truncateAfterCompaction === true;
+  return config?.agents?.defaults?.compaction?.rotateAfterCompaction === true;
 }
 
 export async function rotateTranscriptAfterCompaction(params: {
