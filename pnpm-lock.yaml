@@ -314,6 +314,9 @@ importers:
       acpx:
         specifier: 0.7.0
         version: 0.7.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -336,6 +339,9 @@ importers:
       '@aws-sdk/credential-provider-node':
         specifier: 3.972.39
         version: 3.972.39
+      '@mariozechner/pi-ai':
+        specifier: 0.73.1
+        version: 0.73.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(ws@8.20.0)(zod@4.4.3)
       '@smithy/shared-ini-file-loader':
         specifier: 4.4.9
         version: 4.4.9
@@ -490,6 +496,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -518,6 +527,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -613,6 +625,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -694,6 +709,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -785,6 +803,9 @@ importers:
       google-auth-library:
         specifier: 10.6.2
         version: 10.6.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -830,6 +851,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/irc:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -856,6 +881,9 @@ importers:
       '@line/bot-sdk':
         specifier: ^11.0.0
         version: 11.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -925,6 +953,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -938,6 +969,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1002,6 +1036,9 @@ importers:
       yaml:
         specifier: ^2.8.4
         version: 2.8.4
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1101,6 +1138,10 @@ importers:
         version: link:../..
 
   extensions/nextcloud-talk:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1114,6 +1155,9 @@ importers:
       nostr-tools:
         specifier: ^2.23.3
         version: 2.23.3(typescript@6.0.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1202,6 +1246,9 @@ importers:
       openshell:
         specifier: 0.1.0
         version: 0.1.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1218,6 +1265,9 @@ importers:
       typebox:
         specifier: 1.1.38
         version: 1.1.38
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1240,6 +1290,9 @@ importers:
       yaml:
         specifier: ^2.8.4
         version: 2.8.4
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/discord':
         specifier: workspace:*
@@ -1293,6 +1346,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1386,6 +1442,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/synology-chat:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1449,6 +1509,9 @@ importers:
       '@urbit/aura':
         specifier: ^3.0.0
         version: 3.0.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1490,6 +1553,9 @@ importers:
       '@twurple/chat':
         specifier: ^8.1.3
         version: 8.1.3(@twurple/auth@8.1.3)
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1530,6 +1596,9 @@ importers:
       ws:
         specifier: ^8.20.0
         version: 8.20.0
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1570,6 +1639,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/webhooks:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1629,6 +1702,10 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/zalo:
+    dependencies:
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -1645,6 +1722,9 @@ importers:
       zca-js:
         specifier: 2.1.2
         version: 2.1.2
+      zod:
+        specifier: ^4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
