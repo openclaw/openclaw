@@ -109,7 +109,11 @@ export async function cleanOrphanBackups(
 }
 
 interface PreUpdateSnapshotFs {
-  writeFile: (path: string, content: string, options: { encoding: "utf-8"; mode: number; flag: "w" }) => Promise<void>;
+  writeFile: (
+    path: string,
+    content: string,
+    options: { encoding: "utf-8"; mode: number; flag: "w" | "wx" },
+  ) => Promise<void>;
   readFile: (path: string, encoding: "utf-8") => Promise<string>;
   existsSync: (path: string) => boolean;
 }
@@ -118,12 +122,21 @@ export async function createPreUpdateConfigSnapshot(params: {
   configPath: string;
   fs: PreUpdateSnapshotFs;
 }): Promise<void> {
-  if (!params.fs.existsSync(params.configPath)) return;
+  if (!params.fs.existsSync(params.configPath)) {
+    return;
+  }
   const snapshotPath = `${params.configPath}.pre-update`;
   try {
     const content = await params.fs.readFile(params.configPath, "utf-8");
-    await params.fs.writeFile(snapshotPath, content, { encoding: "utf-8", mode: 0o600, flag: "w" });
-  } catch {
+    await params.fs.writeFile(snapshotPath, content, {
+      encoding: "utf-8",
+      mode: 0o600,
+      flag: "wx",
+    });
+  } catch (err: unknown) {
+    if (err && typeof err === "object" && "code" in err && err.code === "EEXIST") {
+      return;
+    }
     // best-effort, do not block update
   }
 }

@@ -188,7 +188,7 @@ describe("doctor health contributions", () => {
         configPath: "/tmp/fake-openclaw.json",
         sourceConfigValid: true,
         prompter: { shouldRepair: true },
-        runtime: { log: vi.fn() },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
         options: {},
         env,
       } as Parameters<(typeof writeConfigContribution)["run"]>[0];

@@ -194,6 +194,30 @@ describe("config backup rotation", () => {
     });
   });
 
+  it("createPreUpdateConfigSnapshot is first-write-wins — second call does not overwrite", async () => {
+    await withTempHome(async () => {
+      const configPath = resolveConfigPathFromTempState();
+      const original = JSON.stringify({ snapshot: "first" });
+      await fs.writeFile(configPath, original, { mode: 0o600 });
+
+      const { existsSync } = await import("node:fs");
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      // Mutate config and call again
+      await fs.writeFile(configPath, JSON.stringify({ snapshot: "second" }));
+      await createPreUpdateConfigSnapshot({
+        configPath,
+        fs: { writeFile: fs.writeFile, readFile: fs.readFile, existsSync },
+      });
+
+      const snapshotPath = `${configPath}.pre-update`;
+      await expect(fs.readFile(snapshotPath, "utf-8")).resolves.toBe(original);
+    });
+  });
+
   it("createPreUpdateConfigSnapshot is a no-op when config does not exist", async () => {
     await withTempHome(async () => {
       const configPath = resolveConfigPathFromTempState();
