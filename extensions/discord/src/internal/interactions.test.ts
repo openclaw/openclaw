@@ -240,10 +240,13 @@ describe("BaseInteraction", () => {
 
     const result = await wait;
     expect(result.success).toBe(true);
+    if (!result.success) {
+      return;
+    }
     expect(result.customId).toBe("button1");
     expect(result.message).toBeInstanceOf(Message);
-    expect(result.message?.id).toBe("message1");
-    expect(result.message?.channelId).toBe("channel1");
+    expect(result.message.id).toBe("message1");
+    expect(result.message.channelId).toBe("channel1");
     expect(result.values).toBeUndefined();
     expect(post).toHaveBeenNthCalledWith(
       2,
