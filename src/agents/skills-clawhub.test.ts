@@ -107,7 +107,7 @@ describe("skills-clawhub", () => {
   it.each(["skill.md", "skills.md", "SKILL.MD"])(
     "installs ClawHub archives whose packed root uses legacy marker %s",
     async (marker) => {
-      fileExistsMock.mockImplementation(async (input: string) => input.endsWith(marker));
+      pathExistsMock.mockImplementation(async (input: string) => input.endsWith(marker));
 
       const result = await installSkillFromClawHub({
         workspaceDir: "/tmp/workspace",
