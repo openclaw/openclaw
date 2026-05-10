@@ -67,6 +67,9 @@ describe("gateway config mutation guard coverage", () => {
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("channels.*.requireMention");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.visibleReplies");
     expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain("messages.groupChat.visibleReplies");
+    expect(ALLOWED_GATEWAY_CONFIG_PATHS_FOR_TEST).toContain(
+      "plugins.entries.*.hooks.allowConversationAccess",
+    );
   });
 
   it("allows documented subagent thinking default edits via config.patch", () => {
@@ -573,6 +576,50 @@ describe("gateway config mutation guard coverage", () => {
         agents: {
           defaults: { systemPromptOverride: "You are a terse assistant." },
           list: [{ id: "worker", model: "opus-4.6" }],
+        },
+      },
+    );
+  });
+
+  it("allows plugins.entries.*.hooks.allowConversationAccess edits via config.patch", () => {
+    // Community/local plugins lose this flag after every upgrade because the upgrade
+    // tooling only knows bundled plugins and rewrites entries from scratch.
+    // Users must be able to restore it via config.patch without editing openclaw.json.
+    expectAllowed(
+      { plugins: { entries: { "rl-training-headers": { enabled: true, config: {} } } } },
+      {
+        plugins: {
+          entries: {
+            "rl-training-headers": {
+              enabled: true,
+              config: {},
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+    );
+    expectAllowed(
+      {
+        plugins: {
+          entries: {
+            "rl-training-headers": {
+              enabled: true,
+              config: {},
+              hooks: { allowConversationAccess: true },
+            },
+          },
+        },
+      },
+      {
+        plugins: {
+          entries: {
+            "rl-training-headers": {
+              enabled: true,
+              config: {},
+              hooks: { allowConversationAccess: false },
+            },
+          },
         },
       },
     );

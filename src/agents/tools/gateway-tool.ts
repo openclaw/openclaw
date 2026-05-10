@@ -57,6 +57,12 @@ const ALLOWED_GATEWAY_CONFIG_PATHS = [
   // or privilege boundary. Let agents repair silent group/channel rooms.
   "messages.visibleReplies",
   "messages.groupChat.visibleReplies",
+  // Plugin hook policy — allowConversationAccess gates agent_end / llm_input /
+  // llm_output hooks for community/local plugins. The field is intentionally
+  // excluded from the automated upgrade path (upgrade tooling only knows
+  // bundled plugins), so users must be able to set it via config.patch after
+  // each upgrade without having to edit openclaw.json manually.
+  "plugins.entries.*.hooks.allowConversationAccess",
 ] as const;
 
 /** @internal Exposed for regression tests only; do not import from runtime code. */
