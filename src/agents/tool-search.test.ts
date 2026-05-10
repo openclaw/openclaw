@@ -357,7 +357,7 @@ describe("Tool Search", () => {
       agentId: "agent-main",
       sessionId: "session-hooks-abort",
       sessionKey: "agent:main:main",
-    }) as AnyAgentTool;
+    });
     const abortWrapped = wrapToolWithAbortSignal(hooked, new AbortController().signal);
 
     applyToolSearchCatalog({

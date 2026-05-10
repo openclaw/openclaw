@@ -385,7 +385,7 @@ function isToolSearchCodeModeSupported(): boolean {
   if (toolSearchCodeModeSupportedForTest !== undefined) {
     return toolSearchCodeModeSupportedForTest;
   }
-  return process.allowedNodeEnvironmentFlags?.has("--permission") === true;
+  return process.allowedNodeEnvironmentFlags.has("--permission");
 }
 
 export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConfig {
