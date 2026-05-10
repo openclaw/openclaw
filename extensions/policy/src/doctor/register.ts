@@ -19,6 +19,9 @@ const CHECK_IDS = {
   policyHashMismatch: "policy/policy-hash-mismatch",
   policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
+  policyMissingToolRisk: "policy/tools-missing-risk-level",
+  policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
+  policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
 } as const;
 
 export const POLICY_CHECK_IDS = [
@@ -27,7 +30,12 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyHashMismatch,
   CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
+  CHECK_IDS.policyMissingToolRisk,
+  CHECK_IDS.policyMissingToolSensitivity,
+  CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
+
+const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
@@ -58,6 +66,9 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyHashMismatchCheck);
   registerHealthCheck(policyAttestationMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
+  registerHealthCheck(policyToolsMissingRiskCheck);
+  registerHealthCheck(policyToolsMissingSensitivityCheck);
+  registerHealthCheck(policyToolsUnknownSensitivityCheck);
   registered = true;
 }
 
@@ -150,10 +161,44 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
   },
 };
 
+const policyToolsMissingRiskCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolRisk,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare explicit risk levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
+  },
+};
+
+const policyToolsMissingSensitivityCheck: HealthCheck = {
+  id: CHECK_IDS.policyMissingToolSensitivity,
+  kind: "plugin",
+  description: "TOOLS.md policy entries declare default artifact sensitivity.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolSensitivity);
+  },
+};
+
+const policyToolsUnknownSensitivityCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnknownToolSensitivity,
+  kind: "plugin",
+  description: "TOOLS.md policy entries use known sensitivity levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolSensitivity);
+  },
+};
+
 async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEvaluation> {
   const settings = policySettings(ctx);
   const policyPath = policyDisplayName(ctx);
-  const evidence = collectPolicyEvidence(ctx.cfg as Record<string, unknown>);
+  const toolsFile = await readWorkspaceFile(ctx, "TOOLS.md");
+  const evidence = collectPolicyEvidence(
+    ctx.cfg as Record<string, unknown>,
+    toolsFile === null ? {} : { toolsRaw: toolsFile.raw },
+  );
   const findings: HealthFinding[] = [];
 
   if (!policyChecksEnabled(ctx, settings)) {
@@ -225,12 +270,20 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     };
   }
 
-  const policyFindings = channelFindings(
+  const policyFindings: HealthFinding[] = [
+    ...channelFindings(
     policy,
     policyFile.displayName,
     policyFile.ocDocName,
     evidence,
-  );
+    ),
+  ];
+  if (policyRequirementEnabled(settings, policy, "requireRisk")) {
+    policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
+  }
+  if (policyRequirementEnabled(settings, policy, "requireSensitivity")) {
+    policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
+  }
   const attestationFindings = policyAttestationFindings(
     policyFile.displayName,
     policyHash,
@@ -413,6 +466,74 @@ function invalidChannelDenyRuleFindings(
   ];
 }
 
+function toolRiskFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return evidence.tools
+    .filter((tool) => tool.risk === undefined)
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyMissingToolRisk,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' has no explicit risk classification.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.ocPath,
+        target: tool.ocPath,
+        requirement: `oc://${policyDocName}/tools/settings/requireRisk`,
+        fixHint:
+          "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+      };
+    });
+}
+
+function toolSensitivityFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return evidence.tools.flatMap((tool): HealthFinding[] => {
+    if (tool.sensitivity === undefined) {
+      return [
+        {
+          checkId: CHECK_IDS.policyMissingToolSensitivity,
+          severity: "error",
+          message: `TOOLS.md tool '${tool.id}' has no declared artifact sensitivity.`,
+          source: "policy",
+          path: "TOOLS.md",
+          line: tool.line,
+          ocPath: tool.ocPath,
+          target: tool.ocPath,
+          requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
+          fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+        },
+      ];
+    }
+    if (
+      KNOWN_SENSITIVITY_LEVELS.includes(
+        tool.sensitivity as (typeof KNOWN_SENSITIVITY_LEVELS)[number],
+      )
+    ) {
+      return [];
+    }
+    return [
+      {
+        checkId: CHECK_IDS.policyUnknownToolSensitivity,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' declares unknown sensitivity '${tool.sensitivity}'.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.ocPath,
+        target: tool.ocPath,
+        requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
+        fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
+      },
+    ];
+  });
+}
+
 async function readPolicyFile(
   ctx: HealthCheckContext,
 ): Promise<{ raw: string; path: string; displayName: string; ocDocName: string } | null> {
@@ -426,6 +547,22 @@ async function readPolicyFile(
       displayName,
       ocDocName: basename(displayName),
     };
+  } catch (err) {
+    if (isNotFound(err)) {
+      return null;
+    }
+    throw err;
+  }
+}
+
+async function readWorkspaceFile(
+  ctx: HealthCheckContext,
+  fileName: string,
+): Promise<{ raw: string; path: string } | null> {
+  const path = resolveWorkspacePath(ctx, fileName);
+  try {
+    const fs = await import("node:fs/promises");
+    return { raw: await fs.readFile(path, "utf-8"), path };
   } catch (err) {
     if (isNotFound(err)) {
       return null;
@@ -581,6 +718,8 @@ function disableChannels(
 
 type PolicySettings = {
   readonly enabled?: boolean;
+  readonly requireRisk?: boolean;
+  readonly requireSensitivity?: boolean;
   readonly workspaceRepairs?: boolean;
   readonly expectedHash?: string;
   readonly expectedAttestationHash?: string;
@@ -603,6 +742,34 @@ function policyChecksEnabled(ctx: HealthCheckContext, settings: PolicySettings):
   return settings.enabled !== false;
 }
 
+function policyRequirementEnabled(
+  settings: ReturnType<typeof policySettings>,
+  policy: unknown,
+  setting: "requireRisk" | "requireSensitivity",
+): boolean {
+  const configured = settings[setting];
+  if (typeof configured === "boolean") {
+    return configured;
+  }
+  return (
+    readPolicyBoolean(policy, ["tools", "settings", setting]) ??
+    readPolicyBoolean(policy, ["settings", setting]) ??
+    readPolicyBoolean(policy, ["policy", setting]) ??
+    readPolicyBoolean(policy, [setting]) ??
+    false
+  );
+}
+
+function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
+  let current: unknown = policy;
+  for (const part of path) {
+    if (!isRecord(current)) {
+      return undefined;
+    }
+    current = current[part];
+  }
+  return typeof current === "boolean" ? current : undefined;
+}
 function policyPathSetting(ctx: HealthCheckContext): string {
   const configured = policySettings(ctx).path;
   return typeof configured === "string" && configured.trim() !== ""
