@@ -62,5 +62,6 @@ Minimum setup required:
 
 If there is a failure:
 
-- Either point `~/polytropos/releases/current` back to a known-good release and restart, **or**
-- Revert `ExecStart` to the prior installed-package path and restart.
+1) **Preferred rollback (symlink flip):** during setup, ensure you keep a known-good release available (e.g. `~/polytropos/releases/<known-good>/`) and optionally a `previous` symlink. Then rollback by flipping `current` back to the known-good release and restarting the gateway.
+
+2) **Hard rollback (service ExecStart revert):** revert `ExecStart` to the prior installed-package path and restart.
