@@ -4,8 +4,8 @@ import { createConfigRuntimeEnv } from "../config/env-vars.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { unsetEnv, withTempEnv } from "./models-config.e2e-harness.js";
 import {
-  planOpenClawModelsJsonWithDeps,
-  resolveProvidersForModelsJsonWithDeps,
+  planOpenClawModelCatalogWithDeps,
+  resolveProvidersForModelCatalogWithDeps,
 } from "./models-config.plan.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 
@@ -35,7 +35,7 @@ async function resolveProvidersForConfigEnvTest(params: {
   onResolveImplicitProviders: (env: NodeJS.ProcessEnv) => void;
 }) {
   const env = createConfigRuntimeEnv(params.cfg);
-  return await resolveProvidersForModelsJsonWithDeps(
+  return await resolveProvidersForModelCatalogWithDeps(
     {
       cfg: params.cfg,
       agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -86,7 +86,7 @@ describe("models-config", () => {
       | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
       | undefined;
 
-    await resolveProvidersForModelsJsonWithDeps(
+    await resolveProvidersForModelCatalogWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -107,7 +107,7 @@ describe("models-config", () => {
   it("threads workspace scope into implicit provider discovery", async () => {
     let observedWorkspaceDir: string | undefined;
 
-    await resolveProvidersForModelsJsonWithDeps(
+    await resolveProvidersForModelCatalogWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -130,7 +130,7 @@ describe("models-config", () => {
     let observedEntriesOnly: boolean | undefined;
     let observedTimeoutMs: number | undefined;
 
-    await resolveProvidersForModelsJsonWithDeps(
+    await resolveProvidersForModelCatalogWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",
@@ -168,7 +168,7 @@ describe("models-config", () => {
       | Pick<PluginMetadataSnapshot, "index" | "manifestRegistry" | "owners">
       | undefined;
 
-    await planOpenClawModelsJsonWithDeps(
+    await planOpenClawModelCatalogWithDeps(
       {
         cfg: { models: { providers: {} } },
         agentDir: "/tmp/openclaw-models-config-env-vars-test",

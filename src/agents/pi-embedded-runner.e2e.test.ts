@@ -29,7 +29,7 @@ const resolveStoredSessionKeyForSessionIdMock = vi.fn();
 const resolveModelAsyncMock = vi.fn(async (provider: string, modelId: string) =>
   createResolvedEmbeddedRunnerModel(provider, modelId),
 );
-const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
+const ensureOpenClawModelCatalogMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
@@ -148,8 +148,8 @@ const installRunEmbeddedMocks = () => {
     const mod = await vi.importActual<typeof import("./models-config.js")>("./models-config.js");
     return {
       ...mod,
-      ensureOpenClawModelCatalog: (...args: Parameters<typeof ensureOpenClawModelsJsonMock>) =>
-        ensureOpenClawModelsJsonMock(...args),
+      ensureOpenClawModelCatalog: (...args: Parameters<typeof ensureOpenClawModelCatalogMock>) =>
+        ensureOpenClawModelCatalogMock(...args),
     };
   });
 };
@@ -195,8 +195,8 @@ beforeEach(() => {
   resolveModelAsyncMock.mockImplementation(async (provider: string, modelId: string) =>
     createResolvedEmbeddedRunnerModel(provider, modelId),
   );
-  ensureOpenClawModelsJsonMock.mockReset();
-  ensureOpenClawModelsJsonMock.mockResolvedValue({ wrote: false });
+  ensureOpenClawModelCatalogMock.mockReset();
+  ensureOpenClawModelCatalogMock.mockResolvedValue({ wrote: false });
   loggerWarnMock.mockReset();
   refreshRuntimeAuthOnFirstPromptError = false;
   runEmbeddedAttemptMock.mockImplementation(async () => {
@@ -370,7 +370,7 @@ describe("runEmbeddedPiAgent", () => {
     expect(
       (resolveModelCall?.[4] as { skipPiDiscovery?: boolean } | undefined)?.skipPiDiscovery,
     ).toBe(true);
-    expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
+    expect(ensureOpenClawModelCatalogMock).not.toHaveBeenCalled();
   });
 
   it("backfills a trimmed session key from sessionId when the embedded run omits it", async () => {

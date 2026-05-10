@@ -89,8 +89,8 @@ installModelsConfigTestHooks();
 let clearConfigCache: typeof import("../config/config.js").clearConfigCache;
 let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
 let clearRuntimeAuthProfileStoreSnapshots: typeof import("./auth-profiles/store.js").clearRuntimeAuthProfileStoreSnapshots;
-let ensureOpenClawModelsJson: typeof import("./models-config.js").ensureOpenClawModelsJson;
-let resetModelsJsonReadyCacheForTest: typeof import("./models-config.js").resetModelsJsonReadyCacheForTest;
+let ensureOpenClawModelCatalog: typeof import("./models-config.js").ensureOpenClawModelCatalog;
+let resetModelCatalogReadyCacheForTest: typeof import("./models-config.js").resetModelCatalogReadyCacheForTest;
 
 type ParsedProviderConfig = {
   baseUrl?: string;
@@ -117,7 +117,7 @@ async function runEnvProviderCase(params: {
   const previousValue = process.env[params.envVar];
   process.env[params.envVar] = params.envValue;
   try {
-    await ensureOpenClawModelsJson({});
+    await ensureOpenClawModelCatalog({});
 
     const parsed = readStoredProviderConfig();
     const provider = parsed.providers[params.providerKey];
@@ -135,7 +135,7 @@ describe("models-config", () => {
   beforeAll(async () => {
     ({ clearConfigCache, clearRuntimeConfigSnapshot } = await import("../config/config.js"));
     ({ clearRuntimeAuthProfileStoreSnapshots } = await import("./auth-profiles/store.js"));
-    ({ ensureOpenClawModelsJson, resetModelsJsonReadyCacheForTest } =
+    ({ ensureOpenClawModelCatalog, resetModelCatalogReadyCacheForTest } =
       await import("./models-config.js"));
   });
 
@@ -143,14 +143,14 @@ describe("models-config", () => {
     clearRuntimeAuthProfileStoreSnapshots();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    resetModelsJsonReadyCacheForTest();
+    resetModelCatalogReadyCacheForTest();
   });
 
   afterEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
-    resetModelsJsonReadyCacheForTest();
+    resetModelCatalogReadyCacheForTest();
   });
 
   it("writes marker-backed defaults but skips env-gated providers when no env token or profile exists", async () => {
@@ -163,7 +163,7 @@ describe("models-config", () => {
         process.env.OPENCLAW_AGENT_DIR = agentDir;
         process.env.PI_CODING_AGENT_DIR = agentDir;
 
-        const result = await ensureOpenClawModelsJson(
+        const result = await ensureOpenClawModelCatalog(
           {
             models: { providers: {} },
           },
@@ -188,7 +188,7 @@ describe("models-config", () => {
 
   it("writes stored model catalog for configured providers", async () => {
     await withTempHome(async () => {
-      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG);
+      await ensureOpenClawModelCatalog(CUSTOM_PROXY_MODELS_CONFIG);
 
       const parsed = readStoredProviderConfig() as {
         providers: Record<

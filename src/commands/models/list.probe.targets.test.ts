@@ -155,7 +155,7 @@ async function withClearedZaiEnv<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
-async function buildAnthropicPlanFromModelsJsonApiKey(apiKey: string) {
+async function buildAnthropicPlanFromModelCatalogApiKey(apiKey: string) {
   return await buildProbeTargets({
     cfg: {
       models: {
@@ -292,7 +292,7 @@ describe("buildProbeTargets reason codes", () => {
       order: {},
     };
     await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ollama-local");
+      const plan = await buildAnthropicPlanFromModelCatalogApiKey("ollama-local");
       expect(plan.targets).toStrictEqual([]);
       expect(plan.results).toStrictEqual([]);
     });
@@ -305,7 +305,7 @@ describe("buildProbeTargets reason codes", () => {
       order: {},
     };
     await withClearedAnthropicEnv(async () => {
-      const plan = await buildAnthropicPlanFromModelsJsonApiKey("ALLCAPS_SAMPLE");
+      const plan = await buildAnthropicPlanFromModelCatalogApiKey("ALLCAPS_SAMPLE");
       expect(plan.results).toStrictEqual([]);
       expect(plan.targets).toHaveLength(1);
       expect(plan.targets[0]).toEqual(

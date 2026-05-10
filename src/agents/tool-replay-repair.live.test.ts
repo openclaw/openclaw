@@ -5,7 +5,7 @@ import { getRuntimeConfig } from "../config/config.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelCatalog } from "./models-config.js";
 import { completeSimple, type Api, type Context, type Model } from "./pi-ai-contract.js";
 import { sanitizeSessionHistory } from "./pi-embedded-runner/replay-history.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
@@ -205,7 +205,7 @@ describeLive("tool replay repair live", () => {
       `accepts repaired displaced and missing tool results with ${target.ref}`,
       async () => {
         const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg);
+        await ensureOpenClawModelCatalog(cfg);
 
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);
@@ -316,7 +316,7 @@ describeLive("tool replay repair live", () => {
       `accepts transport replay after dropping aborted assistant tool calls with ${target.ref}`,
       async () => {
         const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg);
+        await ensureOpenClawModelCatalog(cfg);
 
         const agentDir = resolveDefaultAgentDir(cfg);
         const authStorage = discoverAuthStorage(agentDir);

@@ -27,7 +27,7 @@ type WorkerCleanupHelpers = {
   drainFileLockStateForTest: typeof import("../src/infra/file-lock.js").drainFileLockStateForTest;
   resetContextWindowCacheForTest: typeof import("../src/agents/context-runtime-state.js").resetContextWindowCacheForTest;
   resetFileLockStateForTest: typeof import("../src/infra/file-lock.js").resetFileLockStateForTest;
-  resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelsJsonReadyCacheForTest;
+  resetModelCatalogReadyCacheForTest: typeof import("../src/agents/models-config-state.js").resetModelCatalogReadyCacheForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -80,7 +80,7 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
     drainFileLockStateForTest: fileLock.drainFileLockStateForTest,
     resetContextWindowCacheForTest: contextRuntimeState.resetContextWindowCacheForTest,
     resetFileLockStateForTest: fileLock.resetFileLockStateForTest,
-    resetModelsJsonReadyCacheForTest: modelsConfigState.resetModelsJsonReadyCacheForTest,
+    resetModelCatalogReadyCacheForTest: modelsConfigState.resetModelCatalogReadyCacheForTest,
   }));
   return globalState[WORKER_CLEANUP_HELPERS];
 }
@@ -374,13 +374,13 @@ afterEach(async () => {
     drainFileLockStateForTest,
     resetContextWindowCacheForTest,
     resetFileLockStateForTest,
-    resetModelsJsonReadyCacheForTest,
+    resetModelCatalogReadyCacheForTest,
   } = await loadWorkerCleanupHelpers();
   await drainFileLockStateForTest();
   resetFileLockStateForTest();
   closeOpenClawAgentDatabasesForTest();
   resetContextWindowCacheForTest();
-  resetModelsJsonReadyCacheForTest();
+  resetModelCatalogReadyCacheForTest();
   await installDefaultPluginRegistry();
 });
 

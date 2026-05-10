@@ -17,7 +17,7 @@ import {
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { getApiKeyForModel, requireApiKey } from "./model-auth.js";
 import { normalizeProviderId, parseModelRef } from "./model-selection.js";
-import { ensureOpenClawModelsJson } from "./models-config.js";
+import { ensureOpenClawModelCatalog } from "./models-config.js";
 import { type Api, completeSimple, type Model } from "./pi-ai-contract.js";
 import { discoverAuthStorage, discoverModels } from "./pi-model-discovery.js";
 
@@ -185,7 +185,7 @@ describeLive("live anthropic setup-token", () => {
       const tokenSource = await resolveTokenSource();
       try {
         const cfg = getRuntimeConfig();
-        await ensureOpenClawModelsJson(cfg, tokenSource.agentDir);
+        await ensureOpenClawModelCatalog(cfg, tokenSource.agentDir);
 
         const authStorage = discoverAuthStorage(tokenSource.agentDir);
         const modelRegistry = discoverModels(authStorage, tokenSource.agentDir);

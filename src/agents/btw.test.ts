@@ -6,7 +6,7 @@ const readFileMock = vi.fn();
 const parseSessionEntriesMock = vi.fn();
 const migrateSessionEntriesMock = vi.fn();
 const buildSessionContextMock = vi.fn();
-const ensureOpenClawModelsJsonMock = vi.fn();
+const ensureOpenClawModelCatalogMock = vi.fn();
 const discoverAuthStorageMock = vi.fn();
 const discoverModelsMock = vi.fn();
 const resolveModelWithRegistryMock = vi.fn();
@@ -56,7 +56,7 @@ vi.mock("./transcript/session-transcript-contract.js", () => ({
 }));
 
 vi.mock("./models-config.js", () => ({
-  ensureOpenClawModelCatalog: (...args: unknown[]) => ensureOpenClawModelsJsonMock(...args),
+  ensureOpenClawModelCatalog: (...args: unknown[]) => ensureOpenClawModelCatalogMock(...args),
 }));
 
 vi.mock("./pi-model-discovery.js", () => ({
@@ -364,7 +364,7 @@ describe("runBtwSideQuestion", () => {
     parseSessionEntriesMock.mockReset();
     migrateSessionEntriesMock.mockReset();
     buildSessionContextMock.mockReset();
-    ensureOpenClawModelsJsonMock.mockReset();
+    ensureOpenClawModelCatalogMock.mockReset();
     discoverAuthStorageMock.mockReset();
     discoverModelsMock.mockReset();
     resolveModelWithRegistryMock.mockReset();
@@ -500,9 +500,13 @@ describe("runBtwSideQuestion", () => {
     const result = await runSideQuestion();
 
     expect(result).toEqual({ text: "Final answer." });
-    const ensureArgs = mockCall(ensureOpenClawModelsJsonMock);
-    expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
-    expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+    expect(ensureOpenClawModelCatalogMock).toHaveBeenCalledWith(
+      expect.any(Object),
+      DEFAULT_AGENT_DIR,
+      {
+        workspaceDir: "/tmp/workspace",
+      },
+    );
   });
 
   it("routes Codex-selected BTW questions through the harness side-question hook", async () => {

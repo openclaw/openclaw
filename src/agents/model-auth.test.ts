@@ -420,7 +420,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     expect(resolved).toBeNull();
   });
 
-  it("does not treat the Vertex ADC marker as a usable models.json credential", () => {
+  it("does not treat the Vertex ADC marker as a usable model catalog credential", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {
@@ -676,7 +676,7 @@ describe("resolveUsableCustomProviderApiKey", () => {
     }
   });
 
-  it("does not treat non-env SecretRefs as usable models.json credentials", () => {
+  it("does not treat non-env SecretRefs as usable model catalog credentials", () => {
     const resolved = resolveUsableCustomProviderApiKey({
       cfg: {
         models: {

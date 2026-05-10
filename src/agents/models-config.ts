@@ -19,7 +19,7 @@ import { MODEL_CATALOG_STATE } from "./models-config-state.js";
 import { readStoredModelsConfigRaw, writeStoredModelsConfigRaw } from "./models-config-store.js";
 import { planOpenClawModelCatalog } from "./models-config.plan.js";
 
-export { resetModelsJsonReadyCacheForTest } from "./models-config-state.js";
+export { resetModelCatalogReadyCacheForTest } from "./models-config-state.js";
 
 async function readFileMtimeMs(pathname: string): Promise<number | null> {
   try {
@@ -271,5 +271,3 @@ export async function ensureOpenClawModelCatalog(
     throw error;
   }
 }
-
-export const ensureOpenClawModelsJson = ensureOpenClawModelCatalog;

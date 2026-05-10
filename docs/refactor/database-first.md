@@ -733,10 +733,10 @@ sessionId}` and session key context.
   record count, target table, run id, status, and source-removal state.
 - `backup_runs` records backup archive paths, status, and JSON manifests.
 - Generated model catalog config is stored in the global SQLite KV store keyed
-  by agent directory. Runtime callers use `ensureOpenClawModelCatalog`; the old
-  `ensureOpenClawModelsJson` export is a compatibility alias only. The
-  implementation writes SQLite and the embedded PI registry is hydrated from
-  that stored payload without creating a `models.json` file.
+  by agent directory. Runtime callers use `ensureOpenClawModelCatalog`; there is
+  no `models.json` compatibility API in runtime code. The implementation writes
+  SQLite and the embedded PI registry is hydrated from that stored payload
+  without creating a `models.json` file.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
   source that reintroduces transcript bridge contracts such as

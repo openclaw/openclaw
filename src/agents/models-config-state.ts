@@ -28,5 +28,3 @@ export function resetModelCatalogReadyCacheForTest(): void {
   MODEL_CATALOG_STATE.writeLocks.clear();
   MODEL_CATALOG_STATE.readyCache.clear();
 }
-
-export const resetModelsJsonReadyCacheForTest = resetModelCatalogReadyCacheForTest;

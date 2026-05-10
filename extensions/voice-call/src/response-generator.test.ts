@@ -20,7 +20,6 @@ type EmbeddedAgentArgs = {
   agentDir?: string;
   agentId?: string;
   workspaceDir?: string;
-  sessionFile?: string;
   toolsAllow?: string[];
 };
 

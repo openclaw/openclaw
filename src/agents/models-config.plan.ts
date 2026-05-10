@@ -195,9 +195,3 @@ export async function planOpenClawModelCatalog(
 ): Promise<ModelCatalogPlan> {
   return planOpenClawModelCatalogWithDeps(params);
 }
-
-export type ResolveImplicitProvidersForModelsJson = ResolveImplicitProvidersForModelCatalog;
-export type ModelsJsonPlan = ModelCatalogPlan;
-export const resolveProvidersForModelsJsonWithDeps = resolveProvidersForModelCatalogWithDeps;
-export const planOpenClawModelsJsonWithDeps = planOpenClawModelCatalogWithDeps;
-export const planOpenClawModelsJson = planOpenClawModelCatalog;
