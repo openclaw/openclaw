@@ -7,10 +7,13 @@ dashboard view consumes this plugin via the OpenClaw gateway.
 Tracking plan: [`docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md`](../../docs/plans/2026-05-10-002-feat-home-assistant-kiosk-dashboard-plan.md).
 Cross-plan dependency: [`docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md`](../../docs/plans/2026-05-10-001-feat-jarvis-the-butler-home-migration-plan.md).
 
-> **Status: scaffold (Unit 1).** This package currently ships only the plugin
-> manifest, config schema, and credential-reference defaults. No HA WebSocket
-> client, state store, or gateway bridge yet -- those land in Units 2, 3, and
-> 4 of the kiosk plan.
+> **Status: WS client landed (Units 1 + 2).** This package now ships the
+> manifest, config schema, defaults, the long-lived HA WebSocket client
+> (auth handshake, state-changed subscription, heartbeat, exponential
+> reconnect), and the entity state store with allow-list filtering.
+> The allow-list / service deny-list gate (Unit 3) and the gateway bridge
+> (Unit 4) are not yet wired -- the WS client is unreferenced from
+> `register.runtime.ts` until Unit 4 plumbs it in.
 
 ## Configuration
 
@@ -64,13 +67,37 @@ is a credentials-store update, no code change.
 
 ## What lands in later units
 
-- **Unit 2:** `ws-client.ts` + `state-store.ts` -- HA WebSocket connection
-  lifecycle and entity state cache.
-- **Unit 3:** `allowlist.ts` -- centralized allow-list / deny-list gate that
-  every consumer (kiosk + future agent path) goes through.
+- **Unit 3:** `allowlist.ts` -- centralized service deny-list gate that every
+  service-call consumer (kiosk + future agent path) goes through.
 - **Unit 4:** `gateway-bridge.ts` + `src/gateway/protocol/ha-events.ts` --
   bridges HA state and service calls onto the OpenClaw gateway WS via new
-  additive `ha:state` and `ha:service-call` topics.
+  additive `ha:state` and `ha:service-call` topics, and starts the WS client
+  on plugin register.
+
+## WS client overview (`ws-client.ts`)
+
+```text
+idle -> connecting -> authenticating -> subscribed
+                                          | (heartbeat miss / drop)
+                                          v
+                                       degraded -- reconnect (1s..30s exp) --> connecting
+```
+
+- **Server-relayed transport.** The browser never holds the HA token; only
+  this client does. Future Unit 4 publishes filtered state onto the OpenClaw
+  gateway WS.
+- **Reconnect.** Exponential backoff `min(maxDelayMs, baseDelayMs * 2^(n-1))`.
+  Defaults: base 1s, cap 30s. Counter resets on successful subscribe.
+- **Heartbeat.** Application-level `ping`/`pong` with id matching. Default
+  interval 30s, timeout 10s. Pong timeout recycles the socket.
+- **State store reset on resubscribe.** After a connection drop, the next
+  successful subscribe flushes the store so downstream consumers see a clean
+  refill rather than a stale cache.
+- **Auth invalid is terminal.** `auth_invalid` transitions to `degraded`
+  without scheduling a reconnect -- the operator must rotate the credential.
+- **Injectable everything.** WS factory, store, clock, timers, and logger
+  are all options so tests are deterministic and the same module works under
+  Node 22 (`globalThis.WebSocket`) and the `ws` package.
 
 ## Tests
 

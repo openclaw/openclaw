@@ -10,4 +10,25 @@ export {
   DEFAULT_TOKEN_REF,
   DEFAULT_DENY_SERVICE_LIST,
 } from "./config-defaults.js";
+export {
+  HomeAssistantStateStore,
+  type EntityState,
+  type StateChangedEvent,
+  type StateDiff,
+  type StateDiffListener,
+  type ListenerErrorListener,
+  type StateStoreOptions,
+  type Unsubscribe,
+} from "./state-store.js";
+export {
+  HomeAssistantClient,
+  type ConnectionState,
+  type HomeAssistantClientOptions,
+  type LogEntry,
+  type LogLevel,
+  type Logger,
+  type StateChangeListener,
+  type WebSocketLike,
+  type WebSocketLikeFactory,
+} from "./ws-client.js";
 export { registerHomeAssistantPlugin } from "./register.runtime.js";
