@@ -157,6 +157,7 @@ vi.mock("./sticker-cache.js", () => ({
 }));
 
 let dispatchTelegramMessage: typeof import("./bot-message-dispatch.js").dispatchTelegramMessage;
+let getTelegramReplyFenceSizeForTests: typeof import("./bot-message-dispatch.js").getTelegramReplyFenceSizeForTests;
 let resetTelegramReplyFenceForTests: typeof import("./bot-message-dispatch.js").resetTelegramReplyFenceForTests;
 
 const telegramDepsForTest: TelegramBotDeps = {
@@ -196,7 +197,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
   type TelegramMessageContext = Parameters<typeof dispatchTelegramMessage>[0]["context"];
 
   beforeAll(async () => {
-    ({ dispatchTelegramMessage, resetTelegramReplyFenceForTests } =
+    ({ dispatchTelegramMessage, getTelegramReplyFenceSizeForTests, resetTelegramReplyFenceForTests } =
       await import("./bot-message-dispatch.js"));
   });
 
