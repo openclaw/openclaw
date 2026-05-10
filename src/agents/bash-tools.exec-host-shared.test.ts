@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  consumeExecApprovalFollowupElevatedDefaults,
+  resetExecApprovalFollowupElevatedDefaultsForTests,
+} from "./bash-tools.exec-approval-followup-state.js";
+import {
   buildExecApprovalPendingToolResult,
   enforceStrictInlineEvalApprovalBoundary,
   MAX_EXEC_APPROVAL_FOLLOWUP_FAILURE_LOG_KEYS as maxExecApprovalFollowupFailureLogKeys,
@@ -7,10 +11,6 @@ import {
   resolveExecHostApprovalContext,
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
-import {
-  consumeExecApprovalFollowupElevatedDefaults,
-  resetExecApprovalFollowupElevatedDefaultsForTests,
-} from "./bash-tools.exec-approval-followup-state.js";
 
 const mocks = vi.hoisted(() => ({
   resolveExecApprovals: vi.fn(() => ({
