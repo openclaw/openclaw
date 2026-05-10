@@ -35,6 +35,16 @@ const TS_PATHS = {
 
 const OS_TS_PATHS = [TS_PATHS.linux, TS_PATHS.macos, TS_PATHS.windows];
 
+function countNonEmptyLines(value: string): number {
+  let count = 0;
+  for (const line of value.split("\n")) {
+    if (line) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 function runTsEval(source: string, env: Record<string, string> = {}) {
   return execFileSync("node", ["--import", "tsx", "--input-type=module", "--eval", source], {
     encoding: "utf8",
@@ -79,7 +89,7 @@ describe("Parallels smoke model selection", () => {
       } else {
         expect(wrapper, wrapperPath).toContain(TS_PATHS[platform as "linux" | "macos" | "windows"]);
       }
-      expect(wrapper.split("\n").filter(Boolean).length).toBeLessThanOrEqual(5);
+      expect(countNonEmptyLines(wrapper)).toBeLessThanOrEqual(5);
     }
   });
 
@@ -110,9 +120,11 @@ console.log(result);
 `;
     const batch = JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" })) as Array<{
       path: string;
+      value: unknown;
     }>;
 
     expect(batch.map((entry) => entry.path)).toContain('agents.defaults.models["openai/gpt-5.5"]');
+    expect(JSON.stringify(batch)).not.toContain("agentRuntime");
   });
 
   it("keeps snapshot, host, package, and quote helpers shared", () => {
@@ -265,8 +277,11 @@ const result = resolveWindowsProviderAuth({
 });
 console.log(JSON.stringify(result));
 `;
-    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toMatchObject({
+    expect(JSON.parse(runTsEval(source, { OPENAI_API_KEY: "sk-openai" }))).toEqual({
       apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/gpt-5.5",
     });
 
@@ -277,7 +292,11 @@ console.log(JSON.stringify(result));
           OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL: "openai/custom-windows",
         }),
       ),
-    ).toMatchObject({
+    ).toEqual({
+      apiKeyEnv: "OPENAI_API_KEY",
+      apiKeyValue: "sk-openai",
+      authChoice: "openai-api-key",
+      authKeyFlag: "openai-api-key",
       modelId: "openai/custom-windows",
     });
   });
@@ -481,7 +500,7 @@ console.log(JSON.stringify(result));
     ) as { status: number; stdout: string };
 
     expect(result.status).toBe(124);
-    expect(result.stdout).toEqual(expect.any(String));
+    expect(result.stdout).toBeTypeOf("string");
   });
 
   it("runs the Windows agent turn through the detached done-file runner", () => {
@@ -565,6 +584,10 @@ console.log(JSON.stringify({
     expect(powershell).toContain("providerTimeoutConfigJson");
     expect(powershell).toContain("models.providers.${providerId}");
     expect(powershell).toContain("agents.defaults.models${configPathMapKey(modelId)}");
+    expect(powershell).toContain("OPENCLAW_PARALLELS_AGENT_RUNTIME_POLICY_SUPPORTED");
+    expect(powershell).toContain('selectedModelEntry.agentRuntime = { id: "pi" }');
+    expect(powershell).toContain("delete selectedModelEntry.agentRuntime");
+    expect(powershell).toContain("delete providerEntry.agentRuntime");
     expect(powershell).toContain("configPathMapKey");
     expect(powershell).toContain('transport: "sse"');
     expect(powershell).toContain("Resolve-OpenClawCommand");

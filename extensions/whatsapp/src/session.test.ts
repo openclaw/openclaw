@@ -39,10 +39,9 @@ function createTempAuthDir(prefix: string) {
 function mockFsOpenForCredsWrites(params?: {
   onTempWrite?: (filePath: string) => Promise<void> | void;
 }) {
-  const open = fs.open.bind(fs);
+  const writeFile = fs.writeFile.bind(fs);
   const tempHandles: Array<{
     filePath: string;
-    writeFile: ReturnType<typeof vi.fn>;
     sync: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }> = [];
@@ -51,13 +50,20 @@ function mockFsOpenForCredsWrites(params?: {
     sync: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
   }> = [];
+  const tempWrites: string[] = [];
+  const writeFileSpy = vi
+    .spyOn(fs, "writeFile")
+    .mockImplementation(async (filePath, data, opts) => {
+      if (typeof filePath === "string" && filePath.includes(".creds.")) {
+        tempWrites.push(filePath);
+        await params?.onTempWrite?.(filePath);
+      }
+      return await writeFile(filePath as never, data as never, opts as never);
+    });
   const openSpy = vi.spyOn(fs, "open").mockImplementation(async (filePath, flags, mode) => {
-    if (typeof filePath === "string" && flags === "w" && filePath.includes(".creds.")) {
+    if (typeof filePath === "string" && flags === "r+" && filePath.includes(".creds.")) {
       const handle = {
         filePath,
-        writeFile: vi.fn(async () => {
-          await params?.onTempWrite?.(filePath);
-        }),
         sync: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
       };
@@ -73,13 +79,18 @@ function mockFsOpenForCredsWrites(params?: {
       dirHandles.push(handle);
       return handle as never;
     }
-    return open(filePath as never, flags as never, mode as never);
+    throw new Error(
+      `unexpected fs.open call: ${String(filePath)} ${String(flags)} ${String(mode)}`,
+    );
   });
   return {
     openSpy,
+    writeFileSpy,
+    tempWrites,
     tempHandles,
     dirHandles,
     restore() {
+      writeFileSpy.mockRestore();
       openSpy.mockRestore();
     },
   };
@@ -139,6 +150,21 @@ function mockLogWebSelfIdCreds(me: Record<string, string>) {
   };
 }
 
+function readLastSocketOptions(): { agent?: unknown; fetchAgent?: unknown } {
+  const options = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+  if (typeof options !== "object" || options === null) {
+    throw new Error("expected Baileys socket options");
+  }
+  return options as { agent?: unknown; fetchAgent?: unknown };
+}
+
+function requireValue<T>(value: T | undefined, label: string): T {
+  if (value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
 describe("web session", () => {
   beforeAll(async () => {
     ({
@@ -181,13 +207,16 @@ describe("web session", () => {
     const passed = makeWASocket.mock.calls[0][0];
     const passedLogger = (passed as { logger?: { level?: string; trace?: unknown } }).logger;
     expect(passedLogger?.level).toBe("silent");
-    expect(typeof passedLogger?.trace).toBe("function");
+    if (typeof passedLogger?.trace !== "function") {
+      throw new Error("expected WhatsApp socket logger trace no-op");
+    }
+    passedLogger.trace("ignored");
     await emitCredsUpdate(authDir);
 
-    expect(openMock.openSpy).toHaveBeenCalledWith(
+    expect(openMock.writeFileSpy).toHaveBeenCalledWith(
       expect.stringContaining(path.join(authDir, ".creds.")),
-      "w",
-      0o600,
+      expect.any(String),
+      expect.objectContaining({ mode: 0o600, flag: "wx" }),
     );
     openMock.restore();
   });
@@ -213,16 +242,11 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: unknown;
-      fetchAgent?: unknown;
-    };
-    expect(passed.agent).toBeDefined();
-    expect(passed.fetchAgent).toBeDefined();
-    expect(passed.fetchAgent).not.toBe(passed.agent);
-    expect(typeof (passed.fetchAgent as { dispatch?: unknown } | undefined)?.dispatch).toBe(
-      "function",
-    );
+    const passed = readLastSocketOptions();
+    const agent = requireValue(passed.agent, "WebSocket proxy agent");
+    const fetchAgent = requireValue(passed.fetchAgent, "fetch proxy agent");
+    expect(fetchAgent).not.toBe(agent);
+    expect(typeof (fetchAgent as { dispatch?: unknown }).dispatch).toBe("function");
   });
 
   it("uses lowercase HTTPS proxy before uppercase for WA WebSocket connection", async () => {
@@ -231,11 +255,11 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: { proxy?: URL };
-    };
-    expect(passed.agent).toBeDefined();
-    expect(passed.agent?.proxy?.href).toContain("lower-proxy.test");
+    const agent = requireValue(
+      readLastSocketOptions().agent as { proxy?: URL } | undefined,
+      "WebSocket proxy agent",
+    );
+    expect(agent.proxy?.href).toContain("lower-proxy.test");
   });
 
   it("skips WA WebSocket env proxy agent when NO_PROXY covers WhatsApp Web", async () => {
@@ -244,12 +268,9 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
 
-    const passed = (baileys.makeWASocket as ReturnType<typeof vi.fn>).mock.calls[0]?.[0] as {
-      agent?: unknown;
-      fetchAgent?: unknown;
-    };
+    const passed = readLastSocketOptions();
     expect(passed.agent).toBeUndefined();
-    expect(passed.fetchAgent).toBeDefined();
+    requireValue(passed.fetchAgent, "fetch proxy agent");
   });
 
   it("does not create a proxy agent when no env proxy is configured", async () => {
@@ -355,6 +376,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     await emitCredsUpdate();
+    await waitForCredsSaveQueue();
 
     expect(creds.copySpy).not.toHaveBeenCalled();
     expect(openMock.tempHandles).toHaveLength(1);
@@ -470,6 +492,7 @@ describe("web session", () => {
 
     await createWaSocket(false, false);
     await emitCredsUpdate();
+    await waitForCredsSaveQueue();
 
     expect(creds.copySpy).toHaveBeenCalledTimes(1);
     const args = creds.copySpy.mock.calls[0] ?? [];
@@ -487,31 +510,42 @@ describe("web session", () => {
     const rmSpy = vi.spyOn(fs, "rm").mockResolvedValue(undefined);
     const chmodSpy = vi.spyOn(fs, "chmod").mockResolvedValue(undefined);
 
-    await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
-      me: { id: "123@s.whatsapp.net" },
-    });
+    try {
+      await writeCredsJsonAtomically("/tmp/openclaw-oauth/whatsapp/default", {
+        me: { id: "123@s.whatsapp.net" },
+      });
 
-    expect(openMock.tempHandles).toHaveLength(1);
-    expect(openMock.tempHandles[0]?.writeFile).toHaveBeenCalledTimes(1);
-    expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
-    expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
-    expect(renameSpy).toHaveBeenCalledTimes(1);
-    expect(rmSpy).not.toHaveBeenCalled();
-    expect(chmodSpy).toHaveBeenCalledOnce();
-    expect(openMock.dirHandles).toHaveLength(1);
-    expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
-    const writePath = openMock.tempHandles[0]?.filePath;
-    const renameArgs = renameSpy.mock.calls[0] ?? [];
-    expect(typeof writePath).toBe("string");
-    expect(writePath).toContain(".creds.");
-    expect(String(renameArgs[1] ?? "")).toContain(
-      path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
-    );
-
-    openMock.restore();
-    renameSpy.mockRestore();
-    rmSpy.mockRestore();
-    chmodSpy.mockRestore();
+      expect(openMock.writeFileSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          path.join("/tmp", "openclaw-oauth", "whatsapp", "default", ".creds."),
+        ),
+        expect.any(String),
+        expect.objectContaining({ mode: 0o600, flag: "wx" }),
+      );
+      expect(openMock.tempHandles).toHaveLength(1);
+      expect(openMock.tempHandles[0]?.sync).toHaveBeenCalledTimes(1);
+      expect(openMock.tempHandles[0]?.close).toHaveBeenCalledTimes(1);
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      expect(rmSpy).not.toHaveBeenCalled();
+      expect(chmodSpy).toHaveBeenCalledWith(
+        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
+        0o600,
+      );
+      expect(openMock.dirHandles).toHaveLength(1);
+      expect(openMock.dirHandles[0]?.sync).toHaveBeenCalledTimes(1);
+      const writePath = openMock.tempHandles[0]?.filePath;
+      const renameArgs = renameSpy.mock.calls[0] ?? [];
+      expect(typeof writePath).toBe("string");
+      expect(writePath).toContain(".creds.");
+      expect(String(renameArgs[1] ?? "")).toContain(
+        path.join("/tmp", "openclaw-oauth", "whatsapp", "default", "creds.json"),
+      );
+    } finally {
+      openMock.restore();
+      renameSpy.mockRestore();
+      rmSpy.mockRestore();
+      chmodSpy.mockRestore();
+    }
   });
 
   it("keeps the previous creds.json valid if the atomic rename fails", async () => {
@@ -550,8 +584,8 @@ describe("web session", () => {
       .filter((entry) => entry.startsWith(".creds.") && entry.endsWith(".tmp"));
 
     expect(renameSpy).toHaveBeenCalledOnce();
-    expect(() => JSON.parse(raw)).not.toThrow();
-    expect(JSON.parse(raw)).toMatchObject(originalCreds);
+    const parsedCreds = JSON.parse(raw) as unknown;
+    expect(parsedCreds).toMatchObject(originalCreds);
     expect(tempEntries).toHaveLength(0);
 
     renameSpy.mockRestore();

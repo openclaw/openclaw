@@ -70,6 +70,7 @@ let resolveProviderStreamFn: typeof import("./provider-runtime.js").resolveProvi
 let resolveProviderCacheTtlEligibility: typeof import("./provider-runtime.js").resolveProviderCacheTtlEligibility;
 let resolveProviderBinaryThinking: typeof import("./provider-runtime.js").resolveProviderBinaryThinking;
 let createProviderEmbeddingProvider: typeof import("./provider-runtime.js").createProviderEmbeddingProvider;
+let resolveProviderThinkingProfile: typeof import("./provider-runtime.js").resolveProviderThinkingProfile;
 let resolveProviderDefaultThinkingLevel: typeof import("./provider-runtime.js").resolveProviderDefaultThinkingLevel;
 let resolveProviderModernModelRef: typeof import("./provider-runtime.js").resolveProviderModernModelRef;
 let resolveProviderReasoningOutputModeWithPlugin: typeof import("./provider-runtime.js").resolveProviderReasoningOutputModeWithPlugin;
@@ -295,6 +296,7 @@ describe("provider-runtime", () => {
       resolveProviderCacheTtlEligibility,
       resolveProviderBinaryThinking,
       createProviderEmbeddingProvider,
+      resolveProviderThinkingProfile,
       resolveProviderDefaultThinkingLevel,
       resolveProviderModernModelRef,
       resolveProviderReasoningOutputModeWithPlugin,
@@ -599,7 +601,7 @@ describe("provider-runtime", () => {
           store: { version: 1, profiles: {} },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -955,7 +957,7 @@ describe("provider-runtime", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("lets provider-owned prompt overlays compose after the built-in GPT-5 overlay", () => {
@@ -1038,7 +1040,7 @@ describe("provider-runtime", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("keeps OpenAI plugin personality fallback for Azure OpenAI GPT-5 providers", () => {
@@ -1059,7 +1061,7 @@ describe("provider-runtime", () => {
     });
 
     expect(contribution?.stablePrefix).toContain("<persona_latch>");
-    expect(contribution?.sectionOverrides).toEqual({});
+    expect(contribution?.sectionOverrides).toStrictEqual({});
   });
 
   it("does not apply the shared GPT-5 prompt overlay to non-GPT-5 models", () => {
@@ -1151,6 +1153,30 @@ describe("provider-runtime", () => {
     ).toBeUndefined();
 
     expect(normalizeConfig).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
+  });
+
+  it("resolves thinking profiles from bundled policy surface before runtime plugins", () => {
+    const resolveThinkingProfile = vi.fn(() => ({
+      levels: [{ id: "off" as const }],
+      defaultLevel: "off" as const,
+    }));
+    resolveBundledProviderPolicySurfaceMock.mockReturnValue({
+      resolveThinkingProfile,
+    });
+
+    expect(
+      resolveProviderThinkingProfile({
+        provider: "xai",
+        context: {
+          provider: "xai",
+          modelId: "grok-4.3",
+          reasoning: true,
+        },
+      }),
+    ).toEqual({ levels: [{ id: "off" }], defaultLevel: "off" });
+
+    expect(resolveThinkingProfile).toHaveBeenCalledTimes(1);
     expect(resolvePluginProvidersMock).not.toHaveBeenCalled();
   });
 
@@ -1795,7 +1821,7 @@ describe("provider-runtime", () => {
           tools: [DEMO_TOOL],
         }),
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
 
     expect(
       normalizeProviderResolvedModelWithPlugin({

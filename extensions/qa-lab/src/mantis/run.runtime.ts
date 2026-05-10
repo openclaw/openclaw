@@ -24,6 +24,7 @@ export type MantisBeforeAfterOptions = {
 
 export type MantisBeforeAfterResult = {
   comparisonPath: string;
+  manifestPath: string;
   outputDir: string;
   reportPath: string;
   status: "pass" | "fail";
@@ -54,9 +55,21 @@ type LaneResult = {
   videoPath?: string;
 };
 
+type MantisScenarioConfig = {
+  baselineExpected: string;
+  baselineLabel: string;
+  baselineScreenshotAlt: string;
+  candidateExpected: string;
+  candidateLabel: string;
+  candidateScreenshotAlt: string;
+  defaultBaselineRef: string;
+  id: string;
+  title: string;
+};
+
 type Comparison = {
   baseline: {
-    expected: "queued-only";
+    expected: string;
     ref: string;
     reproduced: boolean;
     screenshotPath?: string;
@@ -64,7 +77,7 @@ type Comparison = {
     videoPath?: string;
   };
   candidate: {
-    expected: "queued -> thinking -> done";
+    expected: string;
     fixed: boolean;
     ref: string;
     screenshotPath?: string;
@@ -79,11 +92,37 @@ type Comparison = {
 const DEFAULT_BASELINE_REF = "0bf06e953fdda290799fc9fb9244a8f67fdae593";
 const DEFAULT_CANDIDATE_REF = "HEAD";
 const DEFAULT_SCENARIO = "discord-status-reactions-tool-only";
+const DISCORD_THREAD_FILEPATH_ATTACHMENT_SCENARIO = "discord-thread-reply-filepath-attachment";
 const DEFAULT_TRANSPORT = "discord";
 const DEFAULT_PROVIDER_MODE = "live-frontier";
 const DEFAULT_MODEL = "openai/gpt-5.4";
 const DEFAULT_CREDENTIAL_SOURCE = "convex";
 const DEFAULT_CREDENTIAL_ROLE = "ci";
+
+const MANTIS_SCENARIO_CONFIGS: Record<string, MantisScenarioConfig> = {
+  [DEFAULT_SCENARIO]: {
+    baselineExpected: "queued-only",
+    baselineLabel: "Baseline queued-only",
+    baselineScreenshotAlt: "Baseline Discord status reaction timeline",
+    candidateExpected: "queued -> thinking -> done",
+    candidateLabel: "Candidate queued -> thinking -> done",
+    candidateScreenshotAlt: "Candidate Discord status reaction timeline",
+    defaultBaselineRef: DEFAULT_BASELINE_REF,
+    id: DEFAULT_SCENARIO,
+    title: "Mantis Discord Status Reactions QA",
+  },
+  [DISCORD_THREAD_FILEPATH_ATTACHMENT_SCENARIO]: {
+    baselineExpected: "thread reply omits filePath attachment",
+    baselineLabel: "Baseline missing filePath attachment",
+    baselineScreenshotAlt: "Baseline Discord thread reply without filePath attachment",
+    candidateExpected: "thread reply includes filePath attachment",
+    candidateLabel: "Candidate includes filePath attachment",
+    candidateScreenshotAlt: "Candidate Discord thread reply with filePath attachment",
+    defaultBaselineRef: "81349cdc2a9d5143fd0991ed858b739e7d96e05c",
+    id: DISCORD_THREAD_FILEPATH_ATTACHMENT_SCENARIO,
+    title: "Mantis Discord Thread Attachment QA",
+  },
+};
 
 function trimToValue(value: string | undefined) {
   const trimmed = value?.trim();
@@ -176,9 +215,10 @@ function renderReport(params: {
   candidate: LaneResult;
   comparison: Comparison;
   outputDir: string;
+  scenarioConfig: MantisScenarioConfig;
 }) {
   const lines = [
-    "# Mantis Before/After",
+    `# ${params.scenarioConfig.title}`,
     "",
     `Status: ${params.comparison.pass ? "pass" : "fail"}`,
     `Transport: ${params.comparison.transport}`,
@@ -215,6 +255,107 @@ function renderReport(params: {
     "",
   ].filter((line) => line !== undefined);
   return `${lines.join("\n")}\n`;
+}
+
+function relativeArtifactPath(outputDir: string, artifactPath: string | undefined) {
+  if (!artifactPath) {
+    return undefined;
+  }
+  return path.isAbsolute(artifactPath) ? path.relative(outputDir, artifactPath) : artifactPath;
+}
+
+function buildEvidenceManifest(params: {
+  baseline: LaneResult;
+  candidate: LaneResult;
+  comparison: Comparison;
+  outputDir: string;
+  scenarioConfig: MantisScenarioConfig;
+}) {
+  const artifacts: {
+    alt?: string;
+    kind: string;
+    label: string;
+    lane: "baseline" | "candidate" | "run";
+    path: string;
+    required?: boolean;
+    targetPath: string;
+    width?: number;
+  }[] = [
+    {
+      kind: "metadata",
+      label: "Comparison JSON",
+      lane: "run",
+      path: "comparison.json",
+      targetPath: "comparison.json",
+    },
+    {
+      kind: "report",
+      label: "Mantis report",
+      lane: "run",
+      path: "mantis-report.md",
+      targetPath: "mantis-report.md",
+    },
+  ];
+  const baselineScreenshot = relativeArtifactPath(params.outputDir, params.baseline.screenshotPath);
+  if (baselineScreenshot) {
+    artifacts.push({
+      alt: params.scenarioConfig.baselineScreenshotAlt,
+      kind: "timeline",
+      label: params.scenarioConfig.baselineLabel,
+      lane: "baseline",
+      path: baselineScreenshot,
+      targetPath: "baseline.png",
+      width: 420,
+    });
+  }
+  const candidateScreenshot = relativeArtifactPath(
+    params.outputDir,
+    params.candidate.screenshotPath,
+  );
+  if (candidateScreenshot) {
+    artifacts.push({
+      alt: params.scenarioConfig.candidateScreenshotAlt,
+      kind: "timeline",
+      label: params.scenarioConfig.candidateLabel,
+      lane: "candidate",
+      path: candidateScreenshot,
+      targetPath: "candidate.png",
+      width: 420,
+    });
+  }
+  const baselineVideo = relativeArtifactPath(params.outputDir, params.baseline.videoPath);
+  if (baselineVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Baseline MP4",
+      lane: "baseline",
+      path: baselineVideo,
+      targetPath: "baseline.mp4",
+      required: false,
+    });
+  }
+  const candidateVideo = relativeArtifactPath(params.outputDir, params.candidate.videoPath);
+  if (candidateVideo) {
+    artifacts.push({
+      kind: "fullVideo",
+      label: "Candidate MP4",
+      lane: "candidate",
+      path: candidateVideo,
+      targetPath: "candidate.mp4",
+      required: false,
+    });
+  }
+
+  return {
+    artifacts,
+    comparison: params.comparison,
+    id: params.comparison.scenario,
+    scenario: params.comparison.scenario,
+    schemaVersion: 1,
+    summary:
+      "Mantis ran the before/after scenario, captured baseline and candidate evidence, and compared the expected bug reproduction against the candidate fix.",
+    title: params.scenarioConfig.title,
+  };
 }
 
 async function copyScreenshot(params: { lane: "baseline" | "candidate"; result: LaneResult }) {
@@ -351,14 +492,19 @@ export async function runMantisBeforeAfter(
   const scenario = normalizeRequiredLiteral(
     opts.scenario,
     DEFAULT_SCENARIO,
-    [DEFAULT_SCENARIO],
+    Object.keys(MANTIS_SCENARIO_CONFIGS),
     "--scenario",
   );
-  const baseline = trimToValue(opts.baseline) ?? DEFAULT_BASELINE_REF;
+  const scenarioConfig = MANTIS_SCENARIO_CONFIGS[scenario];
+  if (!scenarioConfig) {
+    throw new Error(`Unsupported Mantis scenario: ${scenario}`);
+  }
+  const baseline = trimToValue(opts.baseline) ?? scenarioConfig.defaultBaselineRef;
   const candidate = trimToValue(opts.candidate) ?? DEFAULT_CANDIDATE_REF;
   const runner = opts.commandRunner ?? defaultCommandRunner;
   const worktreeRoot = path.join(outputDir, "worktrees");
   const comparisonPath = path.join(outputDir, "comparison.json");
+  const manifestPath = path.join(outputDir, "mantis-evidence.json");
   const reportPath = path.join(outputDir, "mantis-report.md");
   await fs.mkdir(worktreeRoot, { recursive: true });
 
@@ -393,7 +539,7 @@ export async function runMantisBeforeAfter(
     });
     const comparison = {
       baseline: {
-        expected: "queued-only",
+        expected: scenarioConfig.baselineExpected,
         ref: baseline,
         reproduced: baselineResult.status === "fail",
         screenshotPath: baselineResult.screenshotPath,
@@ -401,7 +547,7 @@ export async function runMantisBeforeAfter(
         videoPath: baselineResult.videoPath,
       },
       candidate: {
-        expected: "queued -> thinking -> done",
+        expected: scenarioConfig.candidateExpected,
         fixed: candidateResult.status === "pass",
         ref: candidate,
         screenshotPath: candidateResult.screenshotPath,
@@ -420,11 +566,28 @@ export async function runMantisBeforeAfter(
         candidate: candidateResult,
         comparison,
         outputDir,
+        scenarioConfig,
       }),
+      "utf8",
+    );
+    await fs.writeFile(
+      manifestPath,
+      `${JSON.stringify(
+        buildEvidenceManifest({
+          baseline: baselineResult,
+          candidate: candidateResult,
+          comparison,
+          outputDir,
+          scenarioConfig,
+        }),
+        null,
+        2,
+      )}\n`,
       "utf8",
     );
     return {
       comparisonPath,
+      manifestPath,
       outputDir,
       reportPath,
       status: comparison.pass ? "pass" : "fail",

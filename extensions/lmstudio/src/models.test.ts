@@ -2,7 +2,7 @@ import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "openclaw/plugin-sdk/provider-setup";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH } from "./defaults.js";
 import { discoverLmstudioModels, ensureLmstudioModelLoaded } from "./models.fetch.js";
 import {
@@ -21,6 +21,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     ...actual,
     fetchWithSsrFGuard: (...args: unknown[]) => fetchWithSsrFGuardMock(...args),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
 });
 
 describe("lmstudio-models", () => {
@@ -69,8 +74,10 @@ describe("lmstudio-models", () => {
     contextLength: number,
   ) => {
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    const loadInit = loadCall?.[1] as RequestInit;
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).toBe(contextLength);
   };
@@ -356,8 +363,10 @@ describe("lmstudio-models", () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
     const loadCall = findModelLoadCall(fetchMock);
-    expect(loadCall).toBeDefined();
-    expect(loadCall?.[1]).toMatchObject({
+    if (!loadCall) {
+      throw new Error("expected LM Studio model load request");
+    }
+    expect(loadCall[1]).toMatchObject({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -369,7 +378,7 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall![1] as RequestInit;
+    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

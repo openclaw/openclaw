@@ -119,21 +119,16 @@ async function emitTranscriptUpdateAndCollectEvents(params: {
 
 async function expectNoMessageWithin(params: {
   action?: () => Promise<void> | void;
-  watch: () => Promise<unknown>;
+  watch: (timeoutMs: number) => Promise<unknown>;
   timeoutMs?: number;
 }): Promise<void> {
   const timeoutMs = params.timeoutMs ?? 300;
-  let received = false;
-  const watch = params
-    .watch()
-    .then(() => {
-      received = true;
-    })
-    .catch(() => undefined);
+  const received = params.watch(timeoutMs).then(
+    () => true,
+    () => false,
+  );
   await params.action?.();
-  await new Promise((resolve) => setTimeout(resolve, timeoutMs));
-  expect(received).toBe(false);
-  await watch;
+  await expect(received).resolves.toBe(false);
 }
 
 describe("session.message websocket events", () => {
@@ -221,21 +216,24 @@ describe("session.message websocket events", () => {
         storePath,
       });
       expect(appended.ok).toBe(true);
-      await expect(subscribedEvent).resolves.toBeTruthy();
+      await expect(subscribedEvent).resolves.toMatchObject({
+        type: "event",
+        event: "session.message",
+      });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             unsubscribedWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             nodeWs,
             (message) => message.type === "event" && message.event === "session.message",
-            300,
+            timeoutMs,
           ),
       });
     } finally {
@@ -284,6 +282,97 @@ describe("session.message websocket events", () => {
     } finally {
       emitSpy.mockRestore();
     }
+  });
+
+  test("strips blocked original content from live session.message events", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+    const transcriptPath = path.join(path.dirname(storePath), "sess-main.jsonl");
+    await fs.writeFile(
+      transcriptPath,
+      JSON.stringify({ type: "session", version: 1, id: "sess-main" }) + "\n",
+      "utf-8",
+    );
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const { messageEvent } = await emitTranscriptUpdateAndCollectEvents({
+        ws,
+        sessionKey: "agent:main:main",
+        sessionFile: transcriptPath,
+        messageId: "blocked-1",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: { blockedBy: "policy-plugin", blockedAt: 1 },
+          },
+        },
+      });
+
+      const payload = messageEvent.payload as {
+        message?: { content?: unknown; __openclaw?: { beforeAgentRunBlocked?: unknown } };
+      };
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
+  });
+
+  test("broadcasts redacted blocked user appends to live session listeners", async () => {
+    const storePath = await createSessionStoreFile();
+    await writeSessionStore({
+      entries: {
+        main: {
+          sessionId: "sess-main",
+          updatedAt: Date.now(),
+        },
+      },
+      storePath,
+    });
+
+    await withOperatorSessionSubscriber(async (ws) => {
+      const messageEventPromise = waitForSessionMessageEvent(ws, "agent:main:main");
+      emitSessionTranscriptUpdate({
+        sessionFile: path.join(path.dirname(storePath), "sess-main.jsonl"),
+        sessionKey: "agent:main:main",
+        messageId: "blocked-message",
+        message: {
+          role: "user",
+          content: [{ type: "text", text: "The agent cannot read this message." }],
+          __openclaw: {
+            beforeAgentRunBlocked: {
+              blockedBy: "policy-plugin",
+              blockedAt: Date.now(),
+            },
+          },
+        },
+      });
+
+      const messageEvent = await messageEventPromise;
+      const payload = messageEvent.payload as {
+        message?: {
+          role?: unknown;
+          content?: unknown;
+          __openclaw?: { beforeAgentRunBlocked?: unknown };
+        };
+      };
+      expect(payload.message?.role).toBe("user");
+      expect(payload.message?.content).toEqual([
+        { type: "text", text: "The agent cannot read this message." },
+      ]);
+      expect(JSON.stringify(payload.message)).not.toContain("secret blocked prompt");
+      expect(JSON.stringify(payload.message)).not.toContain("contains protected content");
+    });
   });
 
   test("includes live usage metadata on session.message and sessions.changed transcript events", async () => {
@@ -550,7 +639,7 @@ describe("session.message websocket events", () => {
       expect(mainAppend.ok).toBe(true);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -558,7 +647,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:worker",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const workerAppend = await appendAssistantMessageToSessionTranscript({
@@ -577,7 +666,7 @@ describe("session.message websocket events", () => {
       expect(unsubscribeRes.payload?.subscribed).toBe(false);
 
       await expectNoMessageWithin({
-        watch: () =>
+        watch: (timeoutMs) =>
           onceMessage(
             ws,
             (message) =>
@@ -585,7 +674,7 @@ describe("session.message websocket events", () => {
               message.event === "session.message" &&
               (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
                 "agent:main:main",
-            300,
+            timeoutMs,
           ),
         action: async () => {
           const hiddenAppend = await appendAssistantMessageToSessionTranscript({

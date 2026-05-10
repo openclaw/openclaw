@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -21,6 +21,8 @@ const DEFAULT_CAPTURE_BYTES = 8 * 1024 * 1024;
 const DEFAULT_HEARTBEAT_MS = 30_000;
 const TERMINATION_GRACE_MS = 5_000;
 const TSDOWN_OUTPUT_ROOTS = ["dist", "dist-runtime"];
+const GENERATED_SOURCE_DECLARATION_PATHSPEC = ":(glob)extensions/**/*.d.ts";
+const SOURCE_DECLARATION_SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".mjs", ".cjs"];
 
 function removeDistPluginNodeModulesSymlinks(rootDir) {
   const extensionsDir = path.join(rootDir, "extensions");
@@ -91,6 +93,52 @@ export function pruneStaleRootChunkFiles(params = {}) {
       }
     }
   }
+}
+
+export function pruneUntrackedGeneratedSourceDeclarations(params = {}) {
+  const cwd = params.cwd ?? process.cwd();
+  const fsImpl = params.fs ?? fs;
+  const spawnSyncImpl = params.spawnSync ?? spawnSync;
+  let result;
+  try {
+    result = spawnSyncImpl(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", GENERATED_SOURCE_DECLARATION_PATHSPEC],
+      {
+        cwd,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
+  } catch {
+    return 0;
+  }
+  if (result.status !== 0 || typeof result.stdout !== "string") {
+    return 0;
+  }
+
+  let removed = 0;
+  for (const rawPath of result.stdout.split(/\r?\n/u)) {
+    const relativePath = rawPath.trim().replaceAll("\\", "/");
+    if (!relativePath.startsWith("extensions/") || !relativePath.endsWith(".d.ts")) {
+      continue;
+    }
+    const declarationPath = path.join(cwd, relativePath);
+    const sourceBase = declarationPath.slice(0, -".d.ts".length);
+    const hasMatchingSource = SOURCE_DECLARATION_SOURCE_EXTENSIONS.some((extension) =>
+      fsImpl.existsSync(`${sourceBase}${extension}`),
+    );
+    if (!hasMatchingSource) {
+      continue;
+    }
+    try {
+      fsImpl.rmSync(declarationPath, { force: true });
+      removed += 1;
+    } catch {
+      // Best-effort cleanup; tsdown will still report any remaining stale files.
+    }
+  }
+  return removed;
 }
 
 export function pruneSourceCheckoutBundledPluginNodeModules(params = {}) {
@@ -326,6 +374,7 @@ function isMainModule() {
 
 if (isMainModule()) {
   pruneSourceCheckoutBundledPluginNodeModules();
+  pruneUntrackedGeneratedSourceDeclarations();
   pruneStaleRuntimeSymlinks();
   cleanTsdownOutputRoots();
   const invocation = resolveTsdownBuildInvocation();

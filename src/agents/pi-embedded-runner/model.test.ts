@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { discoverAuthStorage, discoverModels } from "../pi-model-discovery.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
 
+const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+
 vi.mock("../model-suppression.js", () => {
   // Mirrors the canonical manifest-driven suppression in
   // extensions/qwen/openclaw.plugin.json and src/plugins/manifest-model-suppression.ts.
@@ -40,6 +42,25 @@ vi.mock("../model-suppression.js", () => {
     return undefined;
   }
 
+  const staleOpenAICodexModelIds = new Set([
+    "gpt-5.1",
+    "gpt-5.1-codex",
+    "gpt-5.1-codex-mini",
+    "gpt-5.1-codex-max",
+    "gpt-5.2",
+    "gpt-5.2-codex",
+    "gpt-5.2-pro",
+    "gpt-5.3",
+    "gpt-5.3-codex",
+    "gpt-5.3-chat-latest",
+  ]);
+
+  function isStaleOpenAICodexModel(provider?: string, id?: string): boolean {
+    return (
+      provider === "openai-codex" && staleOpenAICodexModelIds.has(id?.trim().toLowerCase() ?? "")
+    );
+  }
+
   return {
     shouldSuppressBuiltInModel: ({
       provider,
@@ -52,6 +73,9 @@ vi.mock("../model-suppression.js", () => {
       baseUrl?: string;
       config?: unknown;
     }) => {
+      if (isStaleOpenAICodexModel(provider, id)) {
+        return true;
+      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -67,6 +91,9 @@ vi.mock("../model-suppression.js", () => {
       );
     },
     shouldUnconditionallySuppress: ({ provider, id }: { provider?: string; id?: string }) => {
+      if (isStaleOpenAICodexModel(provider, id)) {
+        return true;
+      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -93,6 +120,10 @@ vi.mock("../model-suppression.js", () => {
       ) {
         return "Unknown model: qwen/qwen3.6-plus. qwen3.6-plus is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint or choose qwen/qwen3.5-plus.";
       }
+      if (isStaleOpenAICodexModel(provider, id)) {
+        const modelId = id?.trim().toLowerCase() ?? "";
+        return `Unknown model: openai-codex/${modelId}. ${modelId} is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.`;
+      }
       if (
         (provider === "openai" ||
           provider === "azure-openai-responses" ||
@@ -109,6 +140,10 @@ vi.mock("../model-suppression.js", () => {
 vi.mock("../pi-model-discovery.js", () => ({
   discoverAuthStorage: vi.fn(() => ({ mocked: true })),
   discoverModels: vi.fn(() => ({ find: vi.fn(() => null) })),
+}));
+
+vi.mock("./model.static-catalog.js", () => ({
+  resolveBundledStaticCatalogModel: resolveBundledStaticCatalogModelMock,
 }));
 
 import type { OpenRouterModelCapabilities } from "./openrouter-model-capabilities.js";
@@ -128,7 +163,12 @@ vi.mock("./openrouter-model-capabilities.js", () => ({
 import type { OpenClawConfig } from "../../config/config.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import { buildForwardCompatTemplate } from "./model.forward-compat.test-support.js";
-import { buildInlineProviderModels, resolveModel, resolveModelAsync } from "./model.js";
+import {
+  buildInlineProviderModels,
+  resolveModel,
+  resolveModelAsync,
+  resolveModelWithRegistry,
+} from "./model.js";
 import {
   buildOpenAICodexForwardCompatExpectation,
   makeModel,
@@ -146,6 +186,7 @@ beforeEach(() => {
   mockGetOpenRouterModelCapabilities.mockReturnValue(undefined);
   mockLoadOpenRouterModelCapabilities.mockReset();
   mockLoadOpenRouterModelCapabilities.mockResolvedValue();
+  resolveBundledStaticCatalogModelMock.mockReset();
 });
 
 function createRuntimeHooks() {
@@ -196,6 +237,20 @@ function resolveModelAsyncForTest(
   });
 }
 
+type ResolveModelForTestResult =
+  | ReturnType<typeof resolveModelForTest>
+  | Awaited<ReturnType<typeof resolveModelAsyncForTest>>;
+
+function expectResolvedModel(result: ResolveModelForTestResult) {
+  if (result.error !== undefined) {
+    throw new Error(`expected model resolution to succeed, got error: ${result.error}`);
+  }
+  if (!result.model) {
+    throw new Error("expected model resolution to return a model");
+  }
+  return result.model;
+}
+
 describe("resolveModel", () => {
   it("skips PI auth and model discovery during dynamic model resolution", async () => {
     const result = await resolveModelAsync(
@@ -209,11 +264,74 @@ describe("resolveModel", () => {
       },
     );
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openrouter",
       id: "openrouter/auto",
     });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("resolves opt-in bundled static catalog rows while skipping PI discovery", async () => {
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      name: "Mistral Medium 3.5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 1.5, output: 7.5, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        allowBundledStaticCatalogFallback: true,
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(expectResolvedModel(result)).toMatchObject({
+      provider: "mistral",
+      id: "mistral-medium-3-5",
+      api: "openai-completions",
+      baseUrl: "https://api.mistral.ai/v1",
+      reasoning: true,
+      contextWindow: 262144,
+      maxTokens: 8192,
+    });
+    expect(resolveBundledStaticCatalogModelMock).toHaveBeenCalledWith({
+      provider: "mistral",
+      modelId: "mistral-medium-3-5",
+      cfg: undefined,
+      workspaceDir: undefined,
+    });
+    expect(discoverAuthStorage).not.toHaveBeenCalled();
+    expect(discoverModels).not.toHaveBeenCalled();
+  });
+
+  it("does not use bundled static catalog rows unless the caller opts in", async () => {
+    const result = await resolveModelAsync(
+      "mistral",
+      "mistral-medium-3-5",
+      "/tmp/agent",
+      undefined,
+      {
+        runtimeHooks: createRuntimeHooks(),
+        skipPiDiscovery: true,
+      },
+    );
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
+    expect(resolveBundledStaticCatalogModelMock).not.toHaveBeenCalled();
     expect(discoverAuthStorage).not.toHaveBeenCalled();
     expect(discoverModels).not.toHaveBeenCalled();
   });
@@ -249,9 +367,7 @@ describe("resolveModel", () => {
       },
     } as unknown as OpenClawConfig);
 
-    expect(result.error).toBeUndefined();
-    expect(Array.isArray(result.model?.input)).toBe(true);
-    expect(result.model?.input).toEqual(["text"]);
+    expect(expectResolvedModel(result).input).toEqual(["text"]);
   });
 
   it("defaults missing model cost before handing models to PI", () => {
@@ -278,8 +394,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai", "gpt-5.5", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openai",
       id: "gpt-5.5",
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -299,11 +414,12 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.model?.baseUrl).toBe("http://localhost:9000");
-    expect(result.model?.provider).toBe("custom");
-    expect(result.model?.id).toBe("missing-model");
-    expect(result.model?.api).toBe("openai-completions");
+    expect(model.baseUrl).toBe("http://localhost:9000");
+    expect(model.provider).toBe("custom");
+    expect(model.id).toBe("missing-model");
+    expect(model.api).toBe("openai-completions");
   });
 
   it("defaults baseUrl-only local custom fallback models to chat completions", () => {
@@ -324,15 +440,15 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("local-agent-proxy", "gpt-5.2", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(model).toMatchObject({
       provider: "local-agent-proxy",
       id: "gpt-5.2",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:3000/v1",
     });
-    expect(getModelProviderRequestTransport(result.model ?? {})).toBeUndefined();
+    expect(getModelProviderRequestTransport(model)).toBeUndefined();
   });
 
   it("resolves explicitly configured qwen3.6-plus before Coding Plan built-in suppression", () => {
@@ -359,8 +475,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("qwen", "qwen3.6-plus", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "qwen",
       id: "qwen3.6-plus",
       api: "openai-completions",
@@ -414,8 +529,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.4-mini", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "openai-codex",
       id: "gpt-5.4-mini",
       api: "openai-codex-responses",
@@ -439,7 +553,9 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("google-paid", "missing-model", "/tmp/agent", cfg);
 
-    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(expectResolvedModel(result).baseUrl).toBe(
+      "https://generativelanguage.googleapis.com/v1beta",
+    );
   });
 
   it("normalizes configured Google override baseUrls when provider api is omitted", () => {
@@ -466,10 +582,10 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("google", "gemini-2.5-pro", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model?.api).toBe("google-generative-ai");
-    expect(result.model?.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
+    expect(model.api).toBe("google-generative-ai");
+    expect(model.baseUrl).toBe("https://generativelanguage.googleapis.com/v1beta");
   });
 
   it("normalizes custom api.openai.com providers to responses transport", () => {
@@ -492,8 +608,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("custom-openai", "gpt-5.4", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "custom-openai",
       id: "gpt-5.4",
       api: "openai-responses",
@@ -521,8 +636,7 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("custom-xai", "grok-4.1-fast", "/tmp/agent", cfg);
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
+    expect(expectResolvedModel(result)).toMatchObject({
       provider: "custom-xai",
       id: "grok-4.1-fast",
       api: "openai-responses",
@@ -545,9 +659,9 @@ describe("resolveModel", () => {
 
     // Requesting a non-listed model forces the providerCfg fallback branch.
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Custom-Auth": "token-123",
     });
   });
@@ -570,9 +684,9 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "missing-model", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Custom-Auth": "token-123",
     });
   });
@@ -593,9 +707,9 @@ describe("resolveModel", () => {
     });
 
     const result = resolveModelForTest("custom", "listed-model", "/tmp/agent");
+    const model = expectResolvedModel(result) as unknown as { headers?: Record<string, string> };
 
-    expect(result.error).toBeUndefined();
-    expect((result.model as unknown as { headers?: Record<string, string> }).headers).toEqual({
+    expect(model.headers).toEqual({
       "X-Static": "tenant-a",
     });
   });
@@ -624,9 +738,10 @@ describe("resolveModel", () => {
     } as unknown as OpenClawConfig;
 
     const result = resolveModelForTest("custom", "model-b", "/tmp/agent", cfg);
+    const model = expectResolvedModel(result);
 
-    expect(result.model?.contextWindow).toBe(262144);
-    expect(result.model?.maxTokens).toBe(32768);
+    expect(model.contextWindow).toBe(262144);
+    expect(model.maxTokens).toBe(32768);
   });
 
   it("merges configured model params with agent defaults for resolved models", () => {
@@ -1455,7 +1570,7 @@ describe("resolveModel", () => {
     });
   });
 
-  it("does not downgrade exact openai-codex gpt-5.3-codex registry metadata", () => {
+  it("rejects stale exact openai-codex gpt-5.3-codex registry metadata", () => {
     vi.mocked(discoverModels).mockReturnValue({
       find: vi.fn((provider: string, modelId: string) => {
         if (provider !== "openai-codex") {
@@ -1475,13 +1590,10 @@ describe("resolveModel", () => {
 
     const result = resolveModelForTest("openai-codex", "gpt-5.3-codex", "/tmp/agent");
 
-    expect(result.error).toBeUndefined();
-    expect(result.model).toMatchObject({
-      provider: "openai-codex",
-      id: "gpt-5.3-codex",
-      contextWindow: 272000,
-      maxTokens: 128000,
-    });
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe(
+      "Unknown model: openai-codex/gpt-5.3-codex. gpt-5.3-codex is no longer supported for ChatGPT/Codex OAuth accounts. Use openai/gpt-5.5 through the Codex runtime.",
+    );
   });
 
   it("canonicalizes the legacy openai-codex gpt-5.4-codex alias at runtime", () => {
@@ -1923,6 +2035,60 @@ describe("resolveModel", () => {
       id: "gpt-5.4",
       contextWindow: 1_050_000,
       contextTokens: 272_000,
+    });
+  });
+
+  it("passes configured workspaceDir through direct registry dynamic hooks", () => {
+    const runProviderDynamicModel = vi.fn(
+      (params: {
+        workspaceDir?: string;
+        context: { workspaceDir?: string; provider: string; modelId: string };
+      }) =>
+        params.workspaceDir === "/tmp/workspace" &&
+        params.context.workspaceDir === "/tmp/workspace" &&
+        params.context.provider === "openai-codex" &&
+        params.context.modelId === "gpt-5.4"
+          ? ({
+              ...buildOpenAICodexForwardCompatExpectation("gpt-5.4"),
+              name: "GPT-5.4",
+            } as ReturnType<typeof buildOpenAICodexForwardCompatExpectation>)
+          : undefined,
+    );
+    const runtimeHooks = {
+      ...createRuntimeHooks(),
+      runProviderDynamicModel,
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          workspace: "/tmp/workspace",
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = resolveModelWithRegistry({
+      provider: "openai-codex",
+      modelId: "gpt-5.4",
+      agentDir: "/tmp/agent-state",
+      cfg,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent-state"),
+      runtimeHooks,
+    });
+
+    expect(runProviderDynamicModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceDir: "/tmp/workspace",
+        context: expect.objectContaining({
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent-state",
+          modelId: "gpt-5.4",
+          provider: "openai-codex",
+        }),
+      }),
+    );
+    expect(result).toMatchObject({
+      provider: "openai-codex",
+      id: "gpt-5.4",
     });
   });
 

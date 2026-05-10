@@ -14,7 +14,6 @@ const readConfigFileSnapshotForWrite = vi.fn().mockResolvedValue({
   writeOptions: {},
 });
 const setRuntimeConfigSnapshot = vi.fn();
-const resolveOpenClawAgentDir = vi.fn().mockReturnValue("/tmp/openclaw-agent");
 const ensureAuthProfileStore = vi.fn().mockReturnValue({ version: 1, profiles: {} });
 const listProfilesForProvider = vi.fn().mockReturnValue([]);
 const resolveEnvApiKey = vi.fn().mockReturnValue(undefined);
@@ -53,10 +52,6 @@ vi.mock("./models/load-config.js", () => ({
       diagnostics: [],
     };
   }),
-}));
-
-vi.mock("../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir,
 }));
 
 vi.mock("../agents/auth-profiles/profile-list.js", () => ({
@@ -190,6 +185,8 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 beforeEach(() => {
   previousExitCode = process.exitCode;
   process.exitCode = undefined;
+  modelRegistryState.models = [];
+  modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
   modelRegistryState.findError = undefined;
@@ -496,12 +493,10 @@ describe("models list/status", () => {
     }
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "workspace-cloud/model-a",
-        available: true,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("workspace-cloud/model-a");
+    expect(model.available).toBe(true);
   });
 
   it("models list all includes unauthenticated provider catalog rows", async () => {
@@ -510,18 +505,19 @@ describe("models list/status", () => {
     loadProviderCatalogModelsForList.mockResolvedValueOnce([MOONSHOT_MODEL]);
     const runtime = makeRuntime();
 
-    await modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime);
+    await withEnvAsync(
+      { KIMI_API_KEY: undefined, KIMICODE_API_KEY: undefined, MOONSHOT_API_KEY: undefined },
+      () => modelsListCommand({ all: true, provider: "moonshot", json: true }, runtime),
+    );
 
     const payload = parseJsonLog(runtime);
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "moonshot/kimi-k2.6",
-        name: "Kimi K2.6",
-        available: false,
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("moonshot/kimi-k2.6");
+    expect(model.name).toBe("Kimi K2.6");
+    expect(model.available).toBe(false);
+    expect(model.missing).toBe(false);
   });
 
   it("models list rejects provider display labels", async () => {
@@ -682,16 +678,14 @@ describe("models list/status", () => {
     await modelsListCommand({ all: true, json: true }, runtime);
 
     const payload = parseJsonLog(runtime);
-    expect(payload.models).toEqual([
-      expect.objectContaining({
-        key: "custom-proxy/custom-model",
-        name: "Custom Model",
-        missing: false,
-      }),
-    ]);
+    expect(payload.models).toHaveLength(1);
+    const model = payload.models[0];
+    expect(model.key).toBe("custom-proxy/custom-model");
+    expect(model.name).toBe("Custom Model");
+    expect(model.missing).toBe(false);
   });
 
-  it("toModelRow does not crash without cfg/authStore when availability is undefined", async () => {
+  it("toModelRow marks unavailable when cfg/authStore and availability are undefined", () => {
     const row = toModelRow({
       model: makeGoogleAntigravityTemplate(
         "claude-opus-4-6-thinking",

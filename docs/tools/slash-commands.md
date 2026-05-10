@@ -125,7 +125,7 @@ Current source-of-truth:
 <AccordionGroup>
   <Accordion title="Sessions and runs">
     - `/new [model]` starts a new session; `/reset` is the reset alias.
-    - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session; typed `/reset` still runs the Gateway's in-place reset.
+    - Control UI intercepts typed `/new` to create and switch to a fresh dashboard session, except when `session.dmScope: "main"` is configured and the current parent is the agent's main session; in that case `/new` resets the main session in place. Typed `/reset` still runs the Gateway's in-place reset.
     - `/reset soft [message]` keeps the current transcript, drops reused CLI backend session ids, and reruns startup/system-prompt loading in-place.
     - `/compact [instructions]` compacts the session context. See [Compaction](/concepts/compaction).
     - `/stop` aborts the current run.
@@ -135,10 +135,10 @@ Current source-of-truth:
 
   </Accordion>
   <Accordion title="Model and run controls">
-    - `/think <level>` sets the thinking level. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
+    - `/think <level|default>` sets the thinking level or clears the session override. Options come from the active model's provider profile; common levels are `off`, `minimal`, `low`, `medium`, and `high`, with custom levels such as `xhigh`, `adaptive`, `max`, or binary `on` only where supported. Aliases: `/thinking`, `/t`.
     - `/verbose on|off|full` toggles verbose output. Alias: `/v`.
     - `/trace on|off` toggles plugin trace output for the current session.
-    - `/fast [status|on|off]` shows or sets fast mode.
+    - `/fast [status|on|off|default]` shows, sets, or clears fast mode.
     - `/reasoning [on|off|stream]` toggles reasoning visibility. Alias: `/reason`.
     - `/elevated [on|off|ask|full]` toggles elevated mode. Alias: `/elev`.
     - `/exec host=<auto|sandbox|gateway|node> security=<deny|allowlist|full> ask=<off|on-miss|always> node=<id>` shows or sets exec defaults.

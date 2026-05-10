@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { collectConfiguredAgentHarnessRuntimes } from "../../../agents/harness-runtimes.js";
 import {
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelIds,
@@ -108,13 +109,11 @@ function addConfiguredAgentRuntimePluginIds(
   cfg: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): void {
-  addConfiguredPluginId(ids, env?.OPENCLAW_AGENT_RUNTIME);
-  const agents = asObjectRecord(cfg.agents);
-  const defaults = asObjectRecord(agents?.defaults);
-  addConfiguredPluginId(ids, asObjectRecord(defaults?.agentRuntime)?.id);
-  const list = Array.isArray(agents?.list) ? agents.list : [];
-  for (const entry of list) {
-    addConfiguredPluginId(ids, asObjectRecord(asObjectRecord(entry)?.agentRuntime)?.id);
+  for (const runtime of collectConfiguredAgentHarnessRuntimes(cfg, env ?? process.env, {
+    includeEnvRuntime: false,
+    includeLegacyAgentRuntimes: false,
+  })) {
+    addConfiguredPluginId(ids, runtime);
   }
 }
 
@@ -698,10 +697,6 @@ async function repairMissingPluginInstalls(params: {
       if (!record || !isInstalledRecordMissingOnDisk(record, env)) {
         continue;
       }
-      if (nextRecords === records) {
-        nextRecords = { ...records };
-      }
-      delete nextRecords[pluginId];
       changes.push(
         `Skipped package-manager repair for configured plugin "${pluginId}" during package update; rerun "openclaw doctor --fix" after the update completes.`,
       );
@@ -710,6 +705,7 @@ async function repairMissingPluginInstalls(params: {
 
   const missingRecordedPluginIds = Object.keys(records).filter(
     (pluginId) =>
+      !deferredPluginIds.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&

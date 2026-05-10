@@ -32,6 +32,7 @@ describe("sendMessageSlack NO_REPLY guard", () => {
 
     expect(client.chat.postMessage).not.toHaveBeenCalled();
     expect(result.messageId).toBe("suppressed");
+    expect(result.receipt.platformMessageIds).toStrictEqual([]);
   });
 
   it("suppresses NO_REPLY with surrounding whitespace", async () => {
@@ -147,7 +148,11 @@ describe("sendMessageSlack chunking", () => {
     const postedTexts = client.chat.postMessage.mock.calls.map((call) => call[0].text);
 
     expect(postedTexts).toHaveLength(2);
-    expect(postedTexts.every((text) => typeof text === "string" && text.length <= 8000)).toBe(true);
+    expect(
+      postedTexts
+        .map((text, index) => ({ index, length: typeof text === "string" ? text.length : null }))
+        .filter((text) => text.length === null || text.length > 8000),
+    ).toStrictEqual([]);
     expect(postedTexts.join("")).toBe(message);
   });
 });
@@ -170,7 +175,18 @@ describe("sendMessageSlack blocks", () => {
         blocks: [{ type: "divider" }],
       }),
     );
-    expect(result).toEqual({ messageId: "171234.567", channelId: "C123" });
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "C123" });
+    expect(result.receipt).toMatchObject({
+      primaryPlatformMessageId: "171234.567",
+      platformMessageIds: ["171234.567"],
+      parts: [
+        expect.objectContaining({
+          platformMessageId: "171234.567",
+          kind: "card",
+          raw: expect.objectContaining({ channel: "slack", channelId: "C123" }),
+        }),
+      ],
+    });
   });
 
   it("posts user-target block messages directly without conversations.open", async () => {
@@ -191,7 +207,8 @@ describe("sendMessageSlack blocks", () => {
         text: "Shared a Block Kit message",
       }),
     );
-    expect(result).toEqual({ messageId: "171234.567", channelId: "U123" });
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "U123" });
+    expect(result.receipt.platformMessageIds).toEqual(["171234.567"]);
   });
 
   it("retries Slack postMessage DNS request errors without enabling broad write retries", async () => {
@@ -207,7 +224,13 @@ describe("sendMessageSlack blocks", () => {
     });
 
     expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
-    expect(result).toEqual({ messageId: "171234.999", channelId: "C123" });
+    expect(result).toMatchObject({ messageId: "171234.999", channelId: "C123" });
+    expect(result.receipt.parts[0]).toEqual(
+      expect.objectContaining({
+        platformMessageId: "171234.999",
+        kind: "text",
+      }),
+    );
   });
 
   it("retries Slack conversations.open DNS request errors for threaded DMs", async () => {
@@ -227,7 +250,8 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledWith(
       expect.objectContaining({ channel: "D123", thread_ts: "171234.100" }),
     );
-    expect(result).toEqual({ messageId: "171234.567", channelId: "D123" });
+    expect(result).toMatchObject({ messageId: "171234.567", channelId: "D123" });
+    expect(result.receipt.threadId).toBe("171234.100");
   });
 
   it("does not retry Slack platform errors", async () => {

@@ -4,7 +4,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveDefaultAgentDir: vi.fn(() => "/tmp/agent"),
   ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
     void agentDir;
     void options;
@@ -20,8 +20,8 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
 vi.mock("../../agents/auth-profiles.js", async () => {
@@ -546,6 +546,22 @@ describe("aggregateOAuthStatus", () => {
       NOW,
     );
     expect(result.status).toBe("ok");
+  });
+
+  it("uses effective OAuth profiles while keeping stale inventory visible", () => {
+    const healthy = oauth("ok", expiring + 10_000_000);
+    const stale = oauth("expired", NOW - 1);
+    const result = aggregateOAuthStatus(
+      {
+        provider: "openai-codex",
+        status: "ok",
+        effectiveProfiles: [healthy],
+        profiles: [stale, healthy],
+      },
+      NOW,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.expiresAt).toBe(healthy.expiresAt);
   });
 
   it("falls back to prov.status when no OAuth profiles exist", () => {

@@ -20,6 +20,7 @@ import { cronHandlers } from "./server-methods/cron.js";
 import { deviceHandlers } from "./server-methods/devices.js";
 import { diagnosticsHandlers } from "./server-methods/diagnostics.js";
 import { doctorHandlers } from "./server-methods/doctor.js";
+import { environmentsHandlers } from "./server-methods/environments.js";
 import { execApprovalsHandlers } from "./server-methods/exec-approvals.js";
 import { healthHandlers } from "./server-methods/health.js";
 import { logsHandlers } from "./server-methods/logs.js";
@@ -36,6 +37,7 @@ import { sessionsHandlers } from "./server-methods/sessions.js";
 import { skillsHandlers } from "./server-methods/skills.js";
 import { systemHandlers } from "./server-methods/system.js";
 import { talkHandlers } from "./server-methods/talk.js";
+import { tasksHandlers } from "./server-methods/tasks.js";
 import { toolsCatalogHandlers } from "./server-methods/tools-catalog.js";
 import { toolsEffectiveHandlers } from "./server-methods/tools-effective.js";
 import { toolsInvokeHandlers } from "./server-methods/tools-invoke.js";
@@ -96,6 +98,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...deviceHandlers,
   ...diagnosticsHandlers,
   ...doctorHandlers,
+  ...environmentsHandlers,
   ...execApprovalsHandlers,
   ...webHandlers,
   ...modelsHandlers,
@@ -105,6 +108,7 @@ export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...configHandlers,
   ...wizardHandlers,
   ...talkHandlers,
+  ...tasksHandlers,
   ...toolsCatalogHandlers,
   ...toolsEffectiveHandlers,
   ...toolsInvokeHandlers,

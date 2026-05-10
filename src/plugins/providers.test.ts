@@ -226,8 +226,10 @@ function resolveProviderOwnersFixture(params: { providerId: string }): readonly 
 
 function getLastRuntimeRegistryCall(): Record<string, unknown> {
   const call = resolveRuntimePluginRegistryMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call ?? {}) as Record<string, unknown>;
+  if (!call) {
+    throw new Error("expected runtime plugin registry to be resolved");
+  }
+  return call as Record<string, unknown>;
 }
 
 function cloneOptions<T>(value: T): T {
@@ -279,8 +281,10 @@ function getLastResolvedPluginConfig() {
 
 function getLastSetupLoadedPluginConfig() {
   const call = loadOpenClawPluginsMock.mock.calls.at(-1)?.[0];
-  expect(call).toBeDefined();
-  return (call?.config ?? undefined) as
+  if (!call) {
+    throw new Error("expected OpenClaw plugin setup loader to be called");
+  }
+  return (call.config ?? undefined) as
     | {
         plugins?: {
           allow?: string[];
@@ -670,14 +674,14 @@ describe("resolvePluginProviders", () => {
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveDiscoveredProviderPluginIds({
         config: {},
         env: {} as NodeJS.ProcessEnv,
         onlyPluginIds: [],
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it.each([
@@ -1165,7 +1169,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners disabled in config", () => {
@@ -1190,7 +1194,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not activate explicit runtime owners outside the allowlist", () => {
@@ -1213,7 +1217,7 @@ describe("resolvePluginProviders", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("uses setup.providers to keep explicit provider owners on the setup path", () => {
@@ -1322,7 +1326,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
   });
 
@@ -1346,7 +1350,7 @@ describe("resolvePluginProviders", () => {
       includeUntrustedWorkspacePlugins: false,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1370,7 +1374,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1397,7 +1401,7 @@ describe("resolvePluginProviders", () => {
       activate: true,
     });
 
-    expect(providers).toEqual([]);
+    expect(providers).toStrictEqual([]);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
     expect(getRuntimePluginRegistryForLoadOptionsMock).not.toHaveBeenCalled();
   });
@@ -1428,7 +1432,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("does not auto-activate explicitly disabled trusted workspace runtime owners", () => {
@@ -1456,7 +1460,7 @@ describe("resolvePluginProviders", () => {
         },
         includeUntrustedWorkspacePlugins: false,
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps legacy CLI backend ownership as the explicit provider fallback", () => {

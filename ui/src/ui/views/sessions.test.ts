@@ -5,12 +5,15 @@ import { describe, expect, it, vi } from "vitest";
 import type { SessionsListResult } from "../types.ts";
 import { renderSessions, type SessionsProps } from "./sessions.ts";
 
-function buildResult(session: SessionsListResult["sessions"][number]): SessionsListResult {
+function buildResult(
+  session: SessionsListResult["sessions"][number],
+  defaults?: Partial<SessionsListResult["defaults"]>,
+): SessionsListResult {
   return {
     ts: Date.now(),
     path: "(multiple)",
     count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
+    defaults: { modelProvider: null, model: null, contextTokens: null, ...defaults },
     sessions: [session],
   };
 }
@@ -134,7 +137,7 @@ describe("sessions view", () => {
     expect(archivedToggle?.getAttribute("data-tooltip")).toBe("Include archived sessions.");
     expect(
       Array.from(filters?.querySelectorAll("[title]") ?? []).map((node) => node.className),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps active and limit together and renders streamlined source toggles", async () => {
@@ -188,7 +191,8 @@ describe("sessions view", () => {
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector(".sessions-filter-bar")).toBeNull();
 
-    toggle?.click();
+    expect(toggle).toBeInstanceOf(HTMLButtonElement);
+    toggle!.click();
 
     expect(onToggleFiltersCollapsed).toHaveBeenCalledTimes(1);
   });
@@ -229,7 +233,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "max")
         ?.textContent?.trim(),
-    ).toBe("maximum");
+    ).toBe("Override: maximum");
 
     thinking!.value = "max";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +264,47 @@ describe("sessions view", () => {
 
     const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
     expect(thinking?.value).toBe("");
-    expect(thinking?.options[0]?.textContent?.trim()).toBe("Default (adaptive)");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: adaptive");
+    expect(
+      Array.from(thinking?.options ?? [])
+        .find((option) => option.value === "adaptive")
+        ?.textContent?.trim(),
+    ).toBe("Override: adaptive");
+  });
+
+  it("labels inherited thinking from list defaults when lightweight rows omit row defaults", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions(
+        buildProps(
+          buildResult(
+            {
+              key: "agent:main:main",
+              kind: "direct",
+              updatedAt: Date.now(),
+            },
+            {
+              modelProvider: "openai-codex",
+              model: "gpt-5.5",
+              thinkingDefault: "high",
+              thinkingLevels: [
+                { id: "off", label: "off" },
+                { id: "high", label: "high" },
+              ],
+            },
+          ),
+        ),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const thinking = container.querySelector("tbody select") as HTMLSelectElement | null;
+    expect(thinking?.value).toBe("");
+    expect(thinking?.options[0]?.textContent?.trim()).toBe("Inherited: high");
+    expect(Array.from(thinking?.options ?? []).map((option) => option.textContent?.trim())).toEqual(
+      ["Inherited: high", "Off", "Override: high"],
+    );
   });
 
   it("keeps legacy binary thinking labels patching canonical ids", async () => {
@@ -289,7 +333,7 @@ describe("sessions view", () => {
       Array.from(thinking?.options ?? [])
         .find((option) => option.value === "low")
         ?.textContent?.trim(),
-    ).toBe("on");
+    ).toBe("Override: on");
 
     thinking!.value = "low";
     thinking!.dispatchEvent(new Event("change", { bubbles: true }));
@@ -367,6 +411,41 @@ describe("sessions view", () => {
     expect(badge?.textContent?.trim()).toBe("cron");
   });
 
+  it("renders and filters the session runtime", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildMultiResult([
+            {
+              key: "agent:main:claude",
+              kind: "direct",
+              updatedAt: 20,
+              agentRuntime: { id: "claude-cli", fallback: "none", source: "agent" },
+            },
+            {
+              key: "agent:main:pi",
+              kind: "direct",
+              updatedAt: 10,
+              agentRuntime: { id: "pi", source: "implicit" },
+            },
+          ]),
+        ),
+        searchQuery: "fallback none",
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(
+      Array.from(container.querySelectorAll("thead th")).map((cell) => cell.textContent?.trim()),
+    ).toContain("Runtime");
+    expect(container.querySelector(".session-runtime-cell")?.textContent?.trim()).toBe(
+      "claude-cli (fallback none)",
+    );
+    expect(container.textContent).not.toContain("agent:main:pi");
+  });
+
   it("keeps raw keys for inherited identity object properties", async () => {
     const container = document.createElement("div");
     render(
@@ -414,12 +493,104 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const row = container.querySelector("tbody tr.session-data-row");
-    row?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const row = container.querySelector<HTMLTableRowElement>("tbody tr.session-data-row");
+    expect(row).toBeInstanceOf(HTMLTableRowElement);
+    row!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
     const tokenCell = container.querySelector(".session-token-cell");
     expect(tokenCell?.textContent?.trim()).toBe("123456 / 200000");
+  });
+
+  it("renders the checkpoint count as the compaction disclosure", async () => {
+    const container = document.createElement("div");
+    const onToggleCheckpointDetails = vi.fn();
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        onToggleCheckpointDetails,
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const compactionCell = container.querySelector("tbody .session-compaction-col");
+    expect(compactionCell?.textContent).toContain("1 Checkpoint");
+    expect(compactionCell?.textContent).not.toContain("manual");
+    const trigger = container.querySelector<HTMLButtonElement>(".session-compaction-trigger");
+    expect(trigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(container.querySelector(".session-checkpoint-toggle")).toBeNull();
+
+    expect(trigger).toBeInstanceOf(HTMLButtonElement);
+    trigger!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onToggleCheckpointDetails).toHaveBeenCalledWith("agent:main:main");
+  });
+
+  it("renders expanded session details with compaction history", async () => {
+    const container = document.createElement("div");
+    render(
+      renderSessions({
+        ...buildProps(
+          buildResult({
+            key: "agent:main:main",
+            kind: "direct",
+            updatedAt: Date.now(),
+            totalTokens: 123456,
+            contextTokens: 200000,
+            model: "gpt-5.5",
+            modelProvider: "openai",
+            status: "running",
+            runtimeMs: 125000,
+            compactionCheckpointCount: 1,
+            latestCompactionCheckpoint: {
+              checkpointId: "checkpoint-1",
+              createdAt: Date.now(),
+              reason: "manual",
+            },
+          }),
+        ),
+        expandedCheckpointKey: "agent:main:main",
+        checkpointItemsByKey: {
+          "agent:main:main": [
+            {
+              checkpointId: "checkpoint-1",
+              sessionKey: "agent:main:main",
+              sessionId: "session-1",
+              createdAt: Date.now(),
+              reason: "manual",
+              tokensBefore: 123456,
+              tokensAfter: 38920,
+              summary: "Trimmed earlier setup chatter and kept the active execution plan.",
+              preCompaction: { sessionId: "session-1" },
+              postCompaction: { sessionId: "session-1" },
+            },
+          ],
+        },
+      }),
+      container,
+    );
+    await Promise.resolve();
+
+    const details = container.querySelector(".session-details-panel");
+    expect(details?.textContent).toContain("Session details");
+    expect(details?.textContent).toContain("gpt-5.5");
+    expect(details?.textContent).toContain("openai");
+    expect(details?.textContent).toContain("2m 5s");
+    expect(details?.textContent).toContain("Compaction history");
+    expect(details?.textContent).toContain("123,456 to 38,920 tokens");
+    expect(details?.textContent).not.toContain("->");
   });
 
   it("does not expand checkpoint details when the row has none or a nested control was used", async () => {
@@ -455,9 +626,14 @@ describe("sessions view", () => {
     await Promise.resolve();
 
     const rows = container.querySelectorAll("tbody tr.session-data-row");
-    const checkbox = rows[0]?.querySelector("input[type=checkbox]");
-    checkbox?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    rows[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    const checkbox = rows[0]?.querySelector<HTMLInputElement>("input[type=checkbox]");
+    expect(checkbox).toBeInstanceOf(HTMLInputElement);
+    expect(rows[1]).toBeInstanceOf(HTMLTableRowElement);
+    if (!(checkbox instanceof HTMLInputElement) || !(rows[1] instanceof HTMLTableRowElement)) {
+      throw new Error("Expected checkpoint toggle row controls");
+    }
+    checkbox.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    rows[1].dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onToggleCheckpointDetails).not.toHaveBeenCalled();
   });
@@ -524,11 +700,11 @@ describe("sessions view", () => {
     const reasoning = selects[3] as HTMLSelectElement | undefined;
     expect(fast?.value).toBe("on");
     expect(verbose?.value).toBe("full");
-    expect(Array.from(verbose?.options ?? []).some((option) => option.value === "full")).toBe(true);
+    expect(Array.from(verbose?.options ?? []).map((option) => option.value)).toContain("full");
     expect(reasoning?.value).toBe("custom-mode");
-    expect(
-      Array.from(reasoning?.options ?? []).some((option) => option.value === "custom-mode"),
-    ).toBe(true);
+    expect(Array.from(reasoning?.options ?? []).map((option) => option.value)).toContain(
+      "custom-mode",
+    );
 
     const onSelectPage = vi.fn();
     const onDeselectPage = vi.fn();
@@ -559,8 +735,9 @@ describe("sessions view", () => {
     );
     await Promise.resolve();
 
-    const headerCheckbox = container.querySelector("thead input[type=checkbox]");
-    headerCheckbox?.dispatchEvent(new Event("change", { bubbles: true }));
+    const headerCheckbox = container.querySelector<HTMLInputElement>("thead input[type=checkbox]");
+    expect(headerCheckbox).toBeInstanceOf(HTMLInputElement);
+    headerCheckbox!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
@@ -592,8 +769,10 @@ describe("sessions view", () => {
     const showAll = Array.from(container.querySelectorAll("button")).find(
       (button) => button.textContent?.trim() === "Show all",
     );
-    expect(showAll).toBeTruthy();
-    showAll?.click();
+    if (!showAll) {
+      throw new Error("Expected filtered empty state to render a Show all button");
+    }
+    showAll.click();
     expect(onClearFilters).toHaveBeenCalledTimes(1);
   });
 

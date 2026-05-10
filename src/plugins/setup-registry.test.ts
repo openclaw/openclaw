@@ -2,17 +2,16 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldExpectNativeJitiForJavaScriptTestRuntime } from "../test-utils/jiti-runtime.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 import {
   getRegistryJitiMocks,
   resetRegistryJitiMocks,
 } from "./test-helpers/registry-jiti-mocks.js";
 
-// plugin-module-loader-cache prefers native require() for compiled .js before falling
-// back to jiti. These tests scripts plugin-loading behaviour through the
-// source-transform mock — disable the native-require fast path so the mocked source transformer
-// stays authoritative for the test fixture files on disk.
+// plugin-module-loader-cache prefers native require() for compiled .js before
+// falling back to jiti. These tests script plugin-loading behavior through the
+// source-transform mock, so force the fallback path and keep the fixture
+// transformer authoritative.
 vi.mock("./native-module-require.js", () => ({
   isJavaScriptModulePath: (_modulePath: string) => false,
   tryNativeRequireJavaScriptModule: (_modulePath: string) => ({ ok: false }),
@@ -26,6 +25,9 @@ let resolvePluginSetupRegistry: typeof import("./setup-registry.js").resolvePlug
 let resolvePluginSetupProvider: typeof import("./setup-registry.js").resolvePluginSetupProvider;
 let resolvePluginSetupCliBackend: typeof import("./setup-registry.js").resolvePluginSetupCliBackend;
 let runPluginSetupConfigMigrations: typeof import("./setup-registry.js").runPluginSetupConfigMigrations;
+let setPluginSetupRegistryModuleLoaderFactoryForTest:
+  | typeof import("./setup-registry.js").setPluginSetupRegistryModuleLoaderFactoryForTest
+  | undefined;
 
 function forceNodeRuntimeVersionsForTest(): () => void {
   const originalVersions = process.versions;
@@ -164,10 +166,11 @@ async function expectNoUnhandledRejection(run: () => void | Promise<void>): Prom
   } finally {
     process.off("unhandledRejection", onUnhandledRejection);
   }
-  expect(unhandledRejections).toEqual([]);
+  expect(unhandledRejections).toStrictEqual([]);
 }
 
 afterEach(() => {
+  setPluginSetupRegistryModuleLoaderFactoryForTest?.(undefined);
   cleanupTrackedTempDirs(tempDirs);
 });
 
@@ -181,7 +184,9 @@ describe("setup-registry module loader", () => {
       resolvePluginSetupProvider,
       resolvePluginSetupCliBackend,
       runPluginSetupConfigMigrations,
+      setPluginSetupRegistryModuleLoaderFactoryForTest,
     } = await import("./setup-registry.js"));
+    setPluginSetupRegistryModuleLoaderFactoryForTest(mocks.createJiti);
     clearPluginSetupRegistryCache();
   });
 
@@ -194,7 +199,6 @@ describe("setup-registry module loader", () => {
     });
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const restoreVersions = forceNodeRuntimeVersionsForTest();
-    const expectedTryNative = shouldExpectNativeJitiForJavaScriptTestRuntime();
 
     try {
       resolvePluginSetupRegistry({
@@ -212,7 +216,7 @@ describe("setup-registry module loader", () => {
     );
     expect(mocks.createJiti.mock.calls[0]?.[1]).toEqual(
       expect.objectContaining({
-        tryNative: expectedTryNative,
+        tryNative: true,
       }),
     );
   });
@@ -275,7 +279,7 @@ describe("setup-registry module loader", () => {
       env: {},
     });
 
-    expect(result.changes).toEqual([]);
+    expect(result.changes).toStrictEqual([]);
     expect(mocks.createJiti).not.toHaveBeenCalled();
   });
 
@@ -542,7 +546,7 @@ describe("setup-registry module loader", () => {
       requiresRuntime: true,
     });
 
-    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toEqual([]);
+    expect(resolvePluginSetupRegistry({ env: {} }).diagnostics).toStrictEqual([]);
   });
 
   it("does not load setup-api modules from the current working directory", () => {

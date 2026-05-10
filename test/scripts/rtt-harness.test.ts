@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   appendJsonl,
   buildRttResult,
@@ -17,6 +17,11 @@ import { __testing as cliTesting } from "../../scripts/rtt.ts";
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE_PATH = path.resolve(TEST_DIR, "../fixtures/telegram-qa-summary-rtt.json");
+const tempDirs: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(tempDirs.splice(0).map((dir) => fs.rm(dir, { recursive: true, force: true })));
+});
 
 describe("RTT harness", () => {
   it("validates OpenClaw package specs", () => {
@@ -111,9 +116,21 @@ describe("RTT harness", () => {
       version: "2026.4.30-beta.1",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toStrictEqual({
+      artifacts: {
+        rawObservedMessagesPath: "runs/run/raw/telegram-qa-observed-messages.json",
+        rawReportPath: "runs/run/raw/telegram-qa-report.md",
+        rawSummaryPath: "runs/run/raw/telegram-qa-summary.json",
+        resultPath: "runs/run/result.json",
+      },
       package: { spec: "openclaw@beta", version: "2026.4.30-beta.1" },
-      run: { durationMs: 12_000, id: "run", status: "pass" },
+      run: {
+        durationMs: 12_000,
+        finishedAt: "2026-05-01T00:00:12.000Z",
+        id: "run",
+        startedAt: "2026-05-01T00:00:00.000Z",
+        status: "pass",
+      },
       mode: {
         providerMode: "mock-openai",
         scenarios: ["telegram-mentioned-message-reply"],
@@ -126,9 +143,9 @@ describe("RTT harness", () => {
         p95Ms: 7000,
         maxMs: 7000,
         failedSamples: 0,
+        warmSamples: [4000, 5000, 7000],
       },
     });
-    expect(result.rtt.warmSamples).toEqual([4000, 5000, 7000]);
   });
 
   it("marks failed scenario summaries as failed results", () => {
@@ -160,6 +177,7 @@ describe("RTT harness", () => {
 
   it("appends JSONL rows", async () => {
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-rtt-test-"));
+    tempDirs.push(tempDir);
     const jsonlPath = path.join(tempDir, "data/rtt.jsonl");
     await appendJsonl(jsonlPath, { run: 1 });
     await appendJsonl(jsonlPath, { run: 2 });
@@ -189,7 +207,7 @@ describe("RTT harness", () => {
     ]);
 
     expect(parsed.spec).toBe("openclaw@latest");
-    expect(parsed.options).toMatchObject({
+    expect(parsed.options).toStrictEqual({
       packageTgz: "/tmp/openclaw.tgz",
       providerMode: "live-frontier",
       runs: 3,

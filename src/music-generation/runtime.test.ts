@@ -72,8 +72,8 @@ describe("music-generation runtime", () => {
 
     expect(result.provider).toBe("music-plugin");
     expect(result.model).toBe("track-v1");
-    expect(result.attempts).toEqual([]);
-    expect(result.ignoredOverrides).toEqual([]);
+    expect(result.attempts).toStrictEqual([]);
+    expect(result.ignoredOverrides).toStrictEqual([]);
     expect(seenAuthStore).toEqual(authStore);
     expect(seenTimeoutMs).toBe(12_345);
     expect(result.tracks).toEqual([
@@ -119,7 +119,7 @@ describe("music-generation runtime", () => {
     const result = await runGenerateMusic(params);
 
     expect(result.provider).toBe("music-plugin");
-    expect(listedConfigs).toEqual([]);
+    expect(listedConfigs).toStrictEqual([]);
   });
 
   it("auto-detects and falls through to another configured music-generation provider by default", async () => {
@@ -364,16 +364,15 @@ describe("music-generation runtime", () => {
     expect(seenRequest).toEqual({
       durationSeconds: 30,
     });
-    expect(result.ignoredOverrides).toEqual([]);
-    expect(result.normalization).toMatchObject({
-      durationSeconds: {
-        requested: 45,
-        applied: 30,
-      },
-    });
-    expect(result.metadata).toMatchObject({
-      requestedDurationSeconds: 45,
-      normalizedDurationSeconds: 30,
-    });
+    expect(result.ignoredOverrides).toStrictEqual([]);
+    expect(result.normalization).toBeDefined();
+    expect(result.metadata).toBeDefined();
+    if (!result.normalization || !result.metadata) {
+      throw new Error("Expected normalization and metadata");
+    }
+    expect(result.normalization.durationSeconds?.requested).toBe(45);
+    expect(result.normalization.durationSeconds?.applied).toBe(30);
+    expect(result.metadata.requestedDurationSeconds).toBe(45);
+    expect(result.metadata.normalizedDurationSeconds).toBe(30);
   });
 });

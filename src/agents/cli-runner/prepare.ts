@@ -12,8 +12,7 @@ import type {
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
-import { resolveOpenClawAgentDir } from "../agent-paths.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
@@ -44,9 +43,10 @@ import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import { resolveSkillsPromptForRun } from "../skills.js";
 import { resolveSystemPromptOverride } from "../system-prompt-override.js";
 import { buildSystemPromptReport } from "../system-prompt-report.js";
+import { appendModelIdentitySystemPrompt } from "../system-prompt.js";
 import { redactRunIdentifier, resolveRunWorkspaceDir } from "../workspace-run.js";
 import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
-import { buildSystemPrompt, normalizeCliModel } from "./helpers.js";
+import { buildCliAgentSystemPrompt, normalizeCliModel } from "./helpers.js";
 import { cliBackendLog } from "./log.js";
 import {
   buildCliSessionHistoryPrompt,
@@ -114,12 +114,22 @@ export async function prepareCliRunContext(
   if (!backendResolved) {
     throw new Error(`Unknown CLI backend: ${params.provider}`);
   }
+  if (params.toolsAllow !== undefined) {
+    throw new Error(
+      `CLI backend ${backendResolved.id} cannot enforce runtime toolsAllow; use an embedded runtime for restricted tool policy`,
+    );
+  }
   if (params.disableTools === true && backendResolved.nativeToolMode === "always-on") {
     throw new Error(
       `CLI backend ${backendResolved.id} cannot run with tools disabled because it exposes native tools`,
     );
   }
-  const agentDir = resolveOpenClawAgentDir();
+  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
+    sessionKey: params.sessionKey,
+    config: params.config,
+    agentId: params.agentId,
+  });
+  const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
   const effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
@@ -174,11 +184,6 @@ export async function prepareCliRunContext(
     mode: bootstrapPromptWarningMode,
     seenSignatures: params.bootstrapPromptWarningSignaturesSeen,
     previousSignature: params.bootstrapPromptWarningSignature,
-  });
-  const { defaultAgentId, sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    agentId: params.agentId,
   });
   const bundleMcpEnabled = backendResolved.bundleMcp && params.disableTools !== true;
   let mcpLoopbackRuntime = bundleMcpEnabled ? prepareDeps.getActiveMcpLoopbackRuntime() : undefined;
@@ -329,7 +334,7 @@ export async function prepareCliRunContext(
       config: params.config,
       agentId: sessionAgentId,
     }) ??
-    buildSystemPrompt({
+    buildCliAgentSystemPrompt({
       workspaceDir,
       config: params.config,
       defaultThinkLevel: params.thinkLevel,
@@ -401,19 +406,31 @@ export async function prepareCliRunContext(
     cliBackendLog.warn(`cli prompt-build hook preparation failed: ${String(error)}`);
   }
   preparedPrompt = annotateInterSessionPromptText(preparedPrompt, params.inputProvenance);
-  const openClawHistoryPrompt = reusableCliSession.sessionId
-    ? undefined
-    : buildCliSessionHistoryPrompt({
+  const allowRawTranscriptReseed =
+    backendResolved.config.reseedFromRawTranscriptWhenUncompacted === true;
+  const rawTranscriptReseedReason = reusableCliSession.sessionId
+    ? "session-expired"
+    : reusableCliSession.invalidatedReason;
+  const shouldPrepareOpenClawHistoryPrompt =
+    !reusableCliSession.sessionId || allowRawTranscriptReseed;
+  const openClawHistoryPrompt = shouldPrepareOpenClawHistoryPrompt
+    ? buildCliSessionHistoryPrompt({
         messages: await loadCliSessionReseedMessages({
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
           sessionKey: params.sessionKey,
           agentId: params.agentId,
           config: params.config,
+          allowRawTranscriptReseed,
+          rawTranscriptReseedReason,
         }),
         prompt: preparedPrompt,
-      });
-  systemPrompt = applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input);
+      })
+    : undefined;
+  systemPrompt = appendModelIdentitySystemPrompt({
+    systemPrompt: applyPluginTextReplacements(systemPrompt, backendResolved.textTransforms?.input),
+    model: modelDisplay,
+  });
   const systemPromptReport = buildSystemPromptReport({
     source: "run",
     generatedAt: Date.now(),

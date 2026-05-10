@@ -94,6 +94,26 @@ import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 let cachedBundledTelegramDir = "";
 let cachedBundledMemoryDir = "";
 
+type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function expectGlobalHookRunner(runner: ReturnType<typeof getGlobalHookRunner>): GlobalHookRunner {
+  if (runner === null) {
+    throw new Error("Expected global hook runner");
+  }
+  expect(typeof runner.hasHooks).toBe("function");
+  return runner;
+}
+
 function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycleRuntime {
   const fail = (name: string): never => {
     throw new Error(`detached runtime ${id} should not execute ${name} in this test`);
@@ -283,7 +303,7 @@ function setupBundledTelegramPlugin() {
 function expectTelegramLoaded(registry: ReturnType<typeof loadOpenClawPlugins>) {
   const telegram = registry.plugins.find((entry) => entry.id === "telegram");
   expect(telegram?.status).toBe("loaded");
-  expect(registry.channels.some((entry) => entry.plugin.id === "telegram")).toBe(true);
+  expect(registry.channels.map((entry) => entry.plugin.id)).toContain("telegram");
 }
 
 function loadRegistryFromSinglePlugin(params: {
@@ -417,10 +437,12 @@ function expectRegisteredHttpRoute(
   },
 ) {
   const route = registry.httpRoutes.find((entry) => entry.pluginId === scenario.pluginId);
-  expect(route, scenario.label).toBeDefined();
-  expect(route?.path, scenario.label).toBe(scenario.expectedPath);
-  expect(route?.auth, scenario.label).toBe(scenario.expectedAuth);
-  expect(route?.match, scenario.label).toBe(scenario.expectedMatch);
+  if (!route) {
+    throw new Error(`expected http route for ${scenario.label}`);
+  }
+  expect(route.path, scenario.label).toBe(scenario.expectedPath);
+  expect(route.auth, scenario.label).toBe(scenario.expectedAuth);
+  expect(route.match, scenario.label).toBe(scenario.expectedMatch);
   const httpPlugin = registry.plugins.find((entry) => entry.id === scenario.pluginId);
   expect(httpPlugin?.httpRoutes, scenario.label).toBe(1);
 }
@@ -497,14 +519,49 @@ function expectRegistryErrorDiagnostic(params: {
   pluginId: string;
   message: string;
 }) {
-  expect(
-    params.registry.diagnostics.some(
-      (diag) =>
-        diag.level === "error" &&
-        diag.pluginId === params.pluginId &&
-        diag.message === params.message,
-    ),
-  ).toBe(true);
+  expect(params.registry.diagnostics, params.message).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        level: "error",
+        pluginId: params.pluginId,
+        message: params.message,
+      }),
+    ]),
+  );
+}
+
+function expectDiagnosticContaining(params: {
+  registry: PluginRegistry;
+  message: string;
+  level?: string;
+  pluginId?: string;
+}) {
+  expect(params.registry.diagnostics, params.message).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        ...(params.level ? { level: params.level } : {}),
+        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+        message: expect.stringContaining(params.message),
+      }),
+    ]),
+  );
+}
+
+function expectNoDiagnosticContaining(params: {
+  registry: PluginRegistry;
+  message: string;
+  level?: string;
+  pluginId?: string;
+}) {
+  expect(params.registry.diagnostics, params.message).not.toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({
+        ...(params.level ? { level: params.level } : {}),
+        ...(params.pluginId ? { pluginId: params.pluginId } : {}),
+        message: expect.stringContaining(params.message),
+      }),
+    ]),
+  );
 }
 
 function createWarningLogger(warnings: string[]) {
@@ -778,6 +835,13 @@ module.exports = {
     },
     outbound: { deliveryMode: "direct" },
   },
+  ${
+    params.bundledSetupRuntimeMarker
+      ? `setChannelRuntime: () => {
+    require("node:fs").writeFileSync(${JSON.stringify(params.bundledSetupRuntimeMarker)}, "loaded", "utf-8");
+  },`
+      : ""
+  }
 };`,
     "utf-8",
   );
@@ -846,7 +910,7 @@ function expectEscapingEntryRejected(params: {
 
   const record = registry.plugins.find((entry) => entry.id === params.id);
   expect(record?.status).not.toBe("loaded");
-  expect(registry.diagnostics.some((entry) => entry.message.includes("escapes"))).toBe(true);
+  expectDiagnosticContaining({ registry, message: "escapes" });
   return registry;
 }
 
@@ -1038,7 +1102,10 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const record = registry.plugins.find((entry) => entry.id === "discord");
-    expect(record?.status, record?.error).toBe("loaded");
+    expect(
+      record?.status,
+      JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+    ).toBe("loaded");
   });
   it("registers standalone text transforms", () => {
     useNoBundledPlugins();
@@ -1062,13 +1129,14 @@ describe("loadOpenClawPlugins", () => {
     });
 
     expect(registry.textTransforms).toHaveLength(1);
-    expect(registry.textTransforms[0]).toMatchObject({
-      pluginId: "text-shim",
-      transforms: {
-        input: expect.any(Array),
-        output: expect.any(Array),
-      },
-    });
+    const transformRegistration = registry.textTransforms[0];
+    expect(transformRegistration?.pluginId).toBe("text-shim");
+    expect(transformRegistration?.transforms.input).toEqual([
+      { from: /red basket/g, to: "blue basket" },
+    ]);
+    expect(transformRegistration?.transforms.output).toEqual([
+      { from: /blue basket/g, to: "red basket" },
+    ]);
   });
 
   it.each([
@@ -1375,13 +1443,10 @@ describe("loadOpenClawPlugins", () => {
 
         expect(Object.keys(registry.gatewayHandlers)).toContain(RESERVED_ADMIN_PLUGIN_METHOD);
         expect(registry.gatewayMethodScopes?.[RESERVED_ADMIN_PLUGIN_METHOD]).toBe("operator.admin");
-        expect(
-          registry.diagnostics.some((diag) =>
-            diag.message.includes(
-              `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
-            ),
-          ),
-        ).toBe(true);
+        expectDiagnosticContaining({
+          registry,
+          message: `${RESERVED_ADMIN_SCOPE_WARNING}: ${RESERVED_ADMIN_PLUGIN_METHOD}`,
+        });
       },
     },
     {
@@ -1586,12 +1651,10 @@ module.exports = { id: "manifest-surfaces-plugin", register() { throw new Error(
           },
         });
 
-        expect(
-          registry.diagnostics.some(
-            (entry) =>
-              entry.message === "memory slot plugin not found or not marked as memory: memory-demo",
-          ),
-        ).toBe(false);
+        expectNoDiagnosticContaining({
+          registry,
+          message: "memory slot plugin not found or not marked as memory: memory-demo",
+        });
         expect(registry.plugins).toEqual(
           expect.arrayContaining([
             expect.objectContaining({
@@ -1866,7 +1929,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: [],
     });
 
-    expect(registry.plugins).toEqual([]);
+    expect(registry.plugins).toStrictEqual([]);
   });
 
   it("skips discovery and manifest registry loading entirely when onlyPluginIds is an explicit empty array", async () => {
@@ -1894,7 +1957,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: [],
     });
 
-    expect(registry.plugins).toEqual([]);
+    expect(registry.plugins).toStrictEqual([]);
     expect(discoverySpy).not.toHaveBeenCalled();
     expect(manifestSpy).not.toHaveBeenCalled();
 
@@ -1902,7 +1965,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     manifestSpy.mockRestore();
   });
 
-  it("only publishes plugin commands to the global registry during activating loads", async () => {
+  it("only publishes plugin commands to the global registry during activating loads", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "command-plugin",
@@ -1936,7 +1999,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(scoped.plugins.find((entry) => entry.id === "command-plugin")?.status).toBe("loaded");
     expect(scoped.commands.map((entry) => entry.command.name)).toEqual(["pair"]);
-    expect(getPluginCommandSpecs("telegram")).toEqual([]);
+    expect(getPluginCommandSpecs("telegram")).toStrictEqual([]);
 
     const active = loadOpenClawPlugins({
       cache: false,
@@ -2002,7 +2065,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
-    expect(listAgentHarnessIds()).toEqual([]);
+    expect(listAgentHarnessIds()).toStrictEqual([]);
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -2033,7 +2096,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["bad-harness"],
     });
 
-    expect(listAgentHarnessIds()).toEqual([]);
+    expect(listAgentHarnessIds()).toStrictEqual([]);
     expect(registry.diagnostics).toContainEqual(
       expect.objectContaining({
         level: "error",
@@ -2074,7 +2137,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       "loaded",
     );
     expect(scoped.hooks.map((entry) => entry.entry.hook.name)).toEqual(["snapshot-hook"]);
-    expect(getRegisteredEventKeys()).toEqual([]);
+    expect(getRegisteredEventKeys()).toStrictEqual([]);
 
     clearInternalHooks();
   });
@@ -2117,7 +2180,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
-    expect(event.messages.filter((message) => message === "reload-hook-fired")).toHaveLength(1);
+    expect(countMatching(event.messages, (message) => message === "reload-hook-fired")).toBe(1);
 
     clearInternalHooks();
   });
@@ -2177,7 +2240,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
     expect(event.messages).toEqual(["plugin-config-visible"]);
-    expect(event.context).toEqual({});
+    expect(event.context).toStrictEqual({});
 
     clearInternalHooks();
   });
@@ -2252,19 +2315,19 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "failing-side-effects")?.status).toBe(
       "error",
     );
-    expect(getRegisteredEventKeys()).toEqual([]);
-    expect(getPluginCommandSpecs()).toEqual([]);
-    expect(registry.reloads).toEqual([]);
-    expect(registry.nodeHostCommands).toEqual([]);
-    expect(registry.nodeInvokePolicies).toEqual([]);
-    expect(registry.securityAuditCollectors).toEqual([]);
+    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expect(getPluginCommandSpecs()).toStrictEqual([]);
+    expect(registry.reloads).toStrictEqual([]);
+    expect(registry.nodeHostCommands).toStrictEqual([]);
+    expect(registry.nodeInvokePolicies).toStrictEqual([]);
+    expect(registry.securityAuditCollectors).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("slack", "failme:payload")).toBeNull();
     expect(getContextEngineFactory("failme-context")).toBeUndefined();
     expect(listContextEngineIds()).not.toContain("failme-context");
 
     const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
     await triggerInternalHook(event);
-    expect(event.messages).toEqual([]);
+    expect(event.messages).toStrictEqual([]);
 
     clearInternalHooks();
     clearPluginCommands();
@@ -2302,16 +2365,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(record?.status).toBe("error");
     expect(record?.failurePhase).toBe("register");
     expect(record?.error).toContain("hook registration missing name");
-    expect(registry.hooks).toEqual([]);
-    expect(getRegisteredEventKeys()).toEqual([]);
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "nameless-hook" &&
-          diag.level === "error" &&
-          diag.message.includes("hook registration missing name"),
-      ),
-    ).toBe(true);
+    expect(registry.hooks).toStrictEqual([]);
+    expect(getRegisteredEventKeys()).toStrictEqual([]);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "nameless-hook",
+      message: "hook registration missing name",
+    });
 
     clearInternalHooks();
   });
@@ -2348,33 +2409,86 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(record?.failurePhase).toBe("register");
     expect(record?.error).toContain("only memory plugins can register a memory capability");
     expect(getMemoryCapabilityRegistration()).toBeUndefined();
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "invalid-memory-capability" &&
-          diag.level === "error" &&
-          diag.message.includes("only memory plugins can register a memory capability"),
-      ),
-    ).toBe(true);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "invalid-memory-capability",
+      message: "only memory plugins can register a memory capability",
+    });
   });
 
-  it("can scope bundled provider loads to deepseek without hanging", () => {
+  it("can scope bundled provider loads without hanging", () => {
+    const bundledDir = makeTempDir();
+    const scopedDir = path.join(bundledDir, "scoped-provider");
+    mkdirSafe(scopedDir);
+    fs.writeFileSync(
+      path.join(scopedDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/scoped-provider",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf-8",
+    );
+    const plugin = writePlugin({
+      id: "scoped-provider",
+      dir: scopedDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+        id: "scoped-provider",
+        register(api) {
+          api.registerProvider({
+            id: "scoped-provider",
+            label: "Scoped Provider",
+            auth: [],
+          });
+        },
+      };`,
+    });
+    updatePluginManifest(plugin, { enabledByDefault: true, providers: ["scoped-provider"] });
+
+    const unscopedDir = path.join(bundledDir, "unscoped-provider");
+    mkdirSafe(unscopedDir);
+    fs.writeFileSync(
+      path.join(unscopedDir, "package.json"),
+      JSON.stringify({
+        name: "@openclaw/unscoped-provider",
+        openclaw: { extensions: ["./index.cjs"] },
+      }),
+      "utf-8",
+    );
+    const unscoped = writePlugin({
+      id: "unscoped-provider",
+      dir: unscopedDir,
+      filename: "index.cjs",
+      body: `module.exports = {
+        id: "unscoped-provider",
+        register() {
+          throw new Error("unscoped provider should not load");
+        },
+      };`,
+    });
+    updatePluginManifest(unscoped, {
+      enabledByDefault: true,
+      providers: ["unscoped-provider"],
+    });
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+    delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+
     const scoped = loadOpenClawPlugins({
       cache: false,
       activate: false,
-      pluginSdkResolution: "dist",
       config: {
         plugins: {
           enabled: true,
-          allow: ["deepseek"],
+          allow: ["scoped-provider", "unscoped-provider"],
         },
       },
-      onlyPluginIds: ["deepseek"],
+      onlyPluginIds: ["scoped-provider"],
     });
 
-    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["deepseek"]);
+    expect(scoped.plugins.map((entry) => entry.id)).toEqual(["scoped-provider"]);
     expect(scoped.plugins[0]?.status).toBe("loaded");
-    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["deepseek"]);
+    expect(scoped.providers.map((entry) => entry.provider.id)).toEqual(["scoped-provider"]);
   });
 
   it("does not replace active memory plugin registries during non-activating loads", () => {
@@ -2519,11 +2633,11 @@ module.exports = { id: "throws-after-import", register() {} };`,
     });
 
     expect(registry.plugins.find((entry) => entry.id === "failing-memory")?.status).toBe("error");
-    expect(buildMemoryPromptSection({ availableTools: new Set() })).toEqual([]);
-    expect(listMemoryCorpusSupplements()).toEqual([]);
+    expect(buildMemoryPromptSection({ availableTools: new Set() })).toStrictEqual([]);
+    expect(listMemoryCorpusSupplements()).toStrictEqual([]);
     expect(resolveMemoryFlushPlan({})).toBeNull();
     expect(getMemoryRuntime()).toBeUndefined();
-    expect(listMemoryEmbeddingProviders()).toEqual([]);
+    expect(listMemoryEmbeddingProviders()).toStrictEqual([]);
   });
 
   it("does not replace the active detached task runtime during non-activating loads", () => {
@@ -2698,7 +2812,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(getPluginCommandSpecs()).toEqual([
       { name: "hue", description: "Control Hue lights", acceptsArgs: false },
     ]);
-    expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeDefined();
+    expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toMatchObject({
+      namespace: "hue",
+      payload: "on",
+    });
 
     const dedupeKey = "telegram:hue:callback-1";
     expect(claimPluginInteractiveCallbackDedupe(dedupeKey, 1_000)).toBe(true);
@@ -2710,7 +2827,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     clearPluginCommands();
     clearPluginInteractiveHandlerRegistrations();
-    expect(getPluginCommandSpecs()).toEqual([]);
+    expect(getPluginCommandSpecs()).toStrictEqual([]);
     expect(resolvePluginInteractiveNamespaceMatch("telegram", "hue:on")).toBeNull();
 
     loadOpenClawPlugins(loadOptions);
@@ -2971,7 +3088,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
 
-    expect(registry.tools).toEqual([]);
+    expect(registry.tools).toStrictEqual([]);
     expect(registry.diagnostics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -3013,7 +3130,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
 
-    expect(registry.tools).toEqual([]);
+    expect(registry.tools).toStrictEqual([]);
     expect(registry.diagnostics).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -3061,7 +3178,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(second).toBe(first);
     expect((globalThis as Record<string, unknown>)[marker]).toBe(1);
     expect(first.commands.map((entry) => entry.command.name)).toEqual(["snapshot-command"]);
-    expect(getPluginCommandSpecs()).toEqual([]);
+    expect(getPluginCommandSpecs()).toStrictEqual([]);
 
     const active = loadOpenClawPlugins({
       workspaceDir: plugin.dir,
@@ -3178,14 +3295,14 @@ module.exports = { id: "throws-after-import", register() {} };`,
     };
 
     const first = loadOpenClawPlugins(options);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
     expect(getGlobalHookRunner()).toBeNull();
 
     const second = loadOpenClawPlugins(options);
     expect(second).toBe(first);
-    expect(getGlobalHookRunner()).not.toBeNull();
+    expectGlobalHookRunner(getGlobalHookRunner());
 
     resetGlobalHookRunner();
   });
@@ -3226,7 +3343,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
 
     const defaultRegistry = loadOpenClawPlugins({
       workspaceDir: defaultPlugin.dir,
@@ -3246,8 +3363,9 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     expect(getActivePluginRegistry()).toBe(defaultRegistry);
     expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(getGlobalHookRunner()?.hasHooks("subagent_ended")).toBe(true);
-    expect(getGlobalHookRunner()?.hasHooks("message_sent")).toBe(false);
+    const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
+    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
+    expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
   });
 
   it.each([
@@ -3694,7 +3812,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
 
     const configurable = registry.plugins.find((entry) => entry.id === "configurable");
     expect(configurable?.status).toBe("error");
-    expect(registry.diagnostics.some((d) => d.level === "error")).toBe(true);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "configurable",
+      message: "invalid config",
+    });
   });
 
   it("repairs incomplete registered channel metadata before storing registry entries", () => {
@@ -3733,14 +3856,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
       label: "Telegram",
       docsPath: "/channels/telegram",
     });
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.level === "warn" &&
-          diag.message ===
-            'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
-      ),
-    ).toBe(true);
+    expectDiagnosticContaining({
+      registry,
+      level: "warn",
+      message:
+        'channel "telegram" registered incomplete metadata; filled missing label, selectionLabel, docsPath, blurb',
+    });
   });
 
   it("throws when strict plugin loading sees plugin errors", () => {
@@ -3792,15 +3913,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(loaded?.error).toBe(
       'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
     );
-    expect(
-      registry.diagnostics.some(
-        (entry) =>
-          entry.level === "error" &&
-          entry.pluginId === "manifest-id" &&
-          entry.message ===
-            'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
-      ),
-    ).toBe(true);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "manifest-id",
+      message: 'plugin id mismatch (config uses "manifest-id", export uses "export-id")',
+    });
   });
 
   it("can include plugin export shape when register is missing", () => {
@@ -3856,7 +3974,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
 } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           const channel = registry.channels.find((entry) => entry.plugin.id === "demo");
-          expect(channel).toBeDefined();
+          expect(channel?.plugin.id).toBe("demo");
         },
       },
       {
@@ -3901,7 +4019,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   });
 } };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
-          expect(registry.channels.filter((entry) => entry.plugin.id === "demo")).toHaveLength(1);
+          expect(countMatching(registry.channels, (entry) => entry.plugin.id === "demo")).toBe(1);
           expect(
             registry.channels.find((entry) => entry.plugin.id === "demo")?.plugin.meta?.label,
           ).toBe("Demo Duplicate");
@@ -3963,7 +4081,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "memory-prompt-supplement-malformed",
             message: "memory prompt supplement registration missing builder",
           });
-          expect(listMemoryPromptSupplements()).toEqual([]);
+          expect(listMemoryPromptSupplements()).toStrictEqual([]);
         },
       },
       {
@@ -3979,6 +4097,33 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "cli-missing-metadata",
             message: "cli registration missing explicit commands metadata",
           });
+        },
+      },
+      {
+        label: "registers node feature CLI commands under nodes",
+        pluginId: "node-cli-feature",
+        body: `module.exports = { id: "node-cli-feature", register(api) {
+  api.registerNodeCliFeature(() => {}, {
+    descriptors: [
+      {
+        name: "demo-node",
+        description: "Demo node feature",
+        hasSubcommands: true,
+      },
+    ],
+  });
+} };`,
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          expect(registry.cliRegistrars).toHaveLength(1);
+          expect(registry.cliRegistrars[0]?.parentPath).toEqual(["nodes"]);
+          expect(registry.cliRegistrars[0]?.commands).toEqual(["demo-node"]);
+          expect(registry.cliRegistrars[0]?.descriptors).toEqual([
+            {
+              name: "demo-node",
+              description: "Demo node feature",
+              hasSubcommands: true,
+            },
+          ]);
         },
       },
     ] as const;
@@ -4033,7 +4178,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   api.registerHook("gateway:startup", () => {}, { name: "shared-hook" });
 } };`,
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.hooks.filter((entry) => entry.entry.hook.name === "shared-hook").length,
+          countMatching(registry.hooks, (entry) => entry.entry.hook.name === "shared-hook"),
         duplicateMessage: "hook already registered: shared-hook (hook-owner-a)",
         assert: expectDuplicateRegistrationResult,
       },
@@ -4045,7 +4190,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
   api.registerService({ id: "shared-service", start() {} });
 } };`,
         selectCount: (registry: ReturnType<typeof loadOpenClawPlugins>) =>
-          registry.services.filter((entry) => entry.service.id === "shared-service").length,
+          countMatching(registry.services, (entry) => entry.service.id === "shared-service"),
         duplicateMessage: "service already registered: shared-service (service-owner-a)",
         assert: expectDuplicateRegistrationResult,
       },
@@ -4138,14 +4283,13 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
     });
 
-    expect(registry.services.filter((entry) => entry.service.id === "shared-service")).toHaveLength(
+    expect(countMatching(registry.services, (entry) => entry.service.id === "shared-service")).toBe(
       1,
     );
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("service already registered: shared-service"),
-      ),
-    ).toBe(false);
+    expectNoDiagnosticContaining({
+      registry,
+      message: "service already registered: shared-service",
+    });
   });
 
   it("tracks regular services and gateway discovery services separately", () => {
@@ -4171,7 +4315,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(record?.gatewayDiscoveryServiceIds).toEqual(["shared-service"]);
     expect(registry.services).toHaveLength(1);
     expect(registry.gatewayDiscoveryServices).toHaveLength(1);
-    expect(registry.diagnostics).toEqual([]);
+    expect(registry.diagnostics).toStrictEqual([]);
   });
 
   it("rewrites removed registerHttpHandler failures into migration diagnostics", () => {
@@ -4200,13 +4344,12 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(loaded?.error).toContain("api.registerHttpHandler(...) was removed");
     expect(loaded?.error).toContain("api.registerHttpRoute(...)");
     expect(loaded?.error).toContain("registerPluginHttpRoute(...)");
-    expect(
-      registry.diagnostics.some((diag) =>
-        diag.message.includes("api.registerHttpHandler(...) was removed"),
-      ),
-    ).toBe(true);
-    expect(errors.some((entry) => entry.includes("api.registerHttpHandler(...) was removed"))).toBe(
-      true,
+    expectDiagnosticContaining({
+      registry,
+      message: "api.registerHttpHandler(...) was removed",
+    });
+    expect(errors).toEqual(
+      expect.arrayContaining([expect.stringContaining("api.registerHttpHandler(...) was removed")]),
     );
   });
 
@@ -4251,11 +4394,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
           expect(
             registry.httpRoutes.find((entry) => entry.pluginId === "http-route-missing-auth"),
           ).toBeUndefined();
-          expect(
-            registry.diagnostics.some((diag) =>
-              diag.message.includes("http route registration missing or invalid auth"),
-            ),
-          ).toBe(true);
+          expectDiagnosticContaining({
+            registry,
+            message: "http route registration missing or invalid auth",
+          });
         },
       },
       {
@@ -4276,7 +4418,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
           );
           expect(routes).toHaveLength(1);
           expect(routes[0]?.path).toBe("/demo");
-          expect(registry.diagnostics).toEqual([]);
+          expect(registry.diagnostics).toStrictEqual([]);
         },
       },
       {
@@ -4300,11 +4442,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
         assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
           const route = registry.httpRoutes.find((entry) => entry.path === "/demo");
           expect(route?.pluginId).toBe("http-route-owner-a");
-          expect(
-            registry.diagnostics.some((diag) =>
-              diag.message.includes("http route replacement rejected"),
-            ),
-          ).toBe(true);
+          expectDiagnosticContaining({
+            registry,
+            message: "http route replacement rejected",
+          });
         },
       },
       {
@@ -4325,11 +4466,10 @@ module.exports = { id: "throws-after-import", register() {} };`,
           );
           expect(routes).toHaveLength(1);
           expect(routes[0]?.path).toBe("/plugin/secure");
-          expect(
-            registry.diagnostics.some((diag) =>
-              diag.message.includes("http route overlap rejected"),
-            ),
-          ).toBe(true);
+          expectDiagnosticContaining({
+            registry,
+            message: "http route overlap rejected",
+          });
         },
       },
       {
@@ -4349,7 +4489,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             (entry) => entry.pluginId === "http-route-overlap-same-auth",
           );
           expect(routes).toHaveLength(2);
-          expect(registry.diagnostics).toEqual([]);
+          expect(registry.diagnostics).toStrictEqual([]);
         },
       },
     ] as const;
@@ -4470,9 +4610,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     expect(registry.plugins.find((entry) => entry.id === "nested-default-channel")?.status).toBe(
       "loaded",
     );
-    expect(registry.channels.some((entry) => entry.plugin.id === "nested-default-channel")).toBe(
-      true,
-    );
+    expect(registry.channels.map((entry) => entry.plugin.id)).toContain("nested-default-channel");
   });
 
   it("does not treat manifest channel ids as scoped plugin id matches", () => {
@@ -4804,6 +4942,40 @@ module.exports = {
       expectBundledFullRuntimeLoaded: true,
     },
     {
+      name: "preserves external setupEntry runtime setter for deferred configured channel loads",
+      fixture: {
+        id: "setup-runtime-external-deferred-test",
+        label: "Setup Runtime External Deferred Test",
+        packageName: "@openclaw/setup-runtime-external-deferred-test",
+        fullBlurb: "full entry should defer while configured",
+        setupBlurb: "setup runtime external deferred",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        bundledSetupRuntimeMarker: path.join(makeTempDir(), "external-setup-runtime-applied.txt"),
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-external-deferred-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-external-deferred-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
+      expectedChannels: 1,
+      expectSetupRuntimeLoaded: true,
+    },
+    {
       name: "does not prefer setupEntry for configured channel loads without startup opt-in",
       fixture: {
         id: "setup-runtime-not-preferred-test",
@@ -5087,8 +5259,7 @@ module.exports = {
     const diagnostic = registry.diagnostics.find(
       (d) => d.pluginId === "setup-entry-throws-test" && d.level === "error",
     );
-    expect(diagnostic).toBeDefined();
-    expect(diagnostic!.message).toContain("failed to load setup entry");
+    expect(diagnostic?.message).toContain("failed to load setup entry");
   });
 
   it("keeps healthy sibling channel plugins loadable when a setup entry throws", () => {
@@ -5180,14 +5351,12 @@ module.exports = {
       docsPath: "/channels/healthy-chat",
     });
     expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");
-    expect(
-      registry.diagnostics.some(
-        (diag) =>
-          diag.pluginId === "setup-entry-throws-sibling-test" &&
-          diag.level === "error" &&
-          diag.message.includes("failed to load setup entry"),
-      ),
-    ).toBe(true);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: "setup-entry-throws-sibling-test",
+      message: "failed to load setup entry",
+    });
   });
 
   it("prefers setupEntry for configured channel loads during startup when opted in", () => {
@@ -5292,6 +5461,7 @@ module.exports = {
           "hook-policy": {
             hooks: {
               allowPromptInjection: false,
+              allowConversationAccess: true,
             },
           },
         },
@@ -5407,6 +5577,7 @@ module.exports = {
         entries: {
           "hook-timeouts": {
             hooks: {
+              allowConversationAccess: true,
               timeoutMs: 250,
               timeouts: {
                 before_model_resolve: 750,
@@ -5432,10 +5603,13 @@ module.exports = {
       id: "conversation-hooks",
       filename: "conversation-hooks.cjs",
       body: `module.exports = { id: "conversation-hooks", register(api) {
+  api.on("before_model_resolve", () => undefined);
+  api.on("before_agent_reply", () => undefined);
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("before_agent_run", () => undefined);
 } };`,
     });
 
@@ -5446,13 +5620,13 @@ module.exports = {
       },
     });
 
-    expect(registry.typedHooks).toEqual([]);
+    expect(registry.typedHooks).toStrictEqual([]);
     const blockedDiagnostics = registry.diagnostics.filter((diag) =>
       diag.message.includes(
         "non-bundled plugins must set plugins.entries.conversation-hooks.hooks.allowConversationAccess=true",
       ),
     );
-    expect(blockedDiagnostics).toHaveLength(4);
+    expect(blockedDiagnostics).toHaveLength(7);
   });
 
   it("allows conversation typed hooks for non-bundled plugins when explicitly enabled", () => {
@@ -5461,10 +5635,13 @@ module.exports = {
       id: "conversation-hooks-allowed",
       filename: "conversation-hooks-allowed.cjs",
       body: `module.exports = { id: "conversation-hooks-allowed", register(api) {
+  api.on("before_model_resolve", () => undefined);
+  api.on("before_agent_reply", () => undefined);
   api.on("llm_input", () => undefined);
   api.on("llm_output", () => undefined);
   api.on("before_agent_finalize", () => undefined);
   api.on("agent_end", () => undefined);
+  api.on("before_agent_run", () => undefined);
 } };`,
     });
 
@@ -5483,10 +5660,13 @@ module.exports = {
     });
 
     expect(registry.typedHooks.map((entry) => entry.hookName)).toEqual([
+      "before_model_resolve",
+      "before_agent_reply",
       "llm_input",
       "llm_output",
       "before_agent_finalize",
       "agent_end",
+      "before_agent_run",
     ]);
   });
 
@@ -5506,6 +5686,13 @@ module.exports = {
       plugin,
       pluginConfig: {
         allow: ["hook-unknown"],
+        entries: {
+          "hook-unknown": {
+            hooks: {
+              allowConversationAccess: true,
+            },
+          },
+        },
       },
     });
 
@@ -5697,7 +5884,7 @@ module.exports = {
           expect(core?.status).toBe("loaded");
           expect(lance?.status).toBe("loaded");
           expect(lance?.memorySlotSelected).toBe(true);
-          expect(core?.memorySlotSelected).toBeFalsy();
+          expect(core?.memorySlotSelected).not.toBe(true);
         },
       },
       {
@@ -6188,9 +6375,7 @@ module.exports = {
 
     expect(registry.plugins.find((entry) => entry.id === "@team/shadowed")?.status).toBe("loaded");
     expect(registry.plugins.find((entry) => entry.id === "shadowed")?.status).toBe("loaded");
-    expect(registry.diagnostics.some((diag) => diag.message.includes("duplicate plugin id"))).toBe(
-      false,
-    );
+    expectNoDiagnosticContaining({ registry, message: "duplicate plugin id" });
   });
 
   it("evaluates load-path provenance warnings", () => {
@@ -6444,7 +6629,9 @@ module.exports = {
         status: "disabled",
         error: "not in allowlist",
       });
-      expect(warnings.some((message) => message.includes("plugins.allow is empty"))).toBe(false);
+      expect(warnings).not.toEqual(
+        expect.arrayContaining([expect.stringContaining("plugins.allow is empty")]),
+      );
       expect(
         warnings.some(
           (message) =>
@@ -6525,9 +6712,7 @@ module.exports = {
 
     const record = registry.plugins.find((entry) => entry.id === "hardlinked-bundled");
     expect(record?.status).toBe("loaded");
-    expect(registry.diagnostics.some((entry) => entry.message.includes("unsafe plugin path"))).toBe(
-      false,
-    );
+    expectNoDiagnosticContaining({ registry, message: "unsafe plugin path" });
   });
 
   it("preserves runtime reflection semantics when runtime is lazily initialized", () => {
@@ -6567,7 +6752,7 @@ module.exports = {
     expect(record?.status).toBe("loaded");
   });
 
-  it("supports legacy plugins importing monolithic plugin-sdk root", async () => {
+  it("supports legacy plugins importing monolithic plugin-sdk root", () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
       id: "legacy-root-import",
@@ -6592,10 +6777,13 @@ module.exports = {
       }),
     );
     const record = registry.plugins.find((entry) => entry.id === "legacy-root-import");
-    expect(record?.status, record?.error).toBe("loaded");
+    expect(
+      record?.status,
+      JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+    ).toBe("loaded");
   });
 
-  it("supports legacy plugins subscribing to diagnostic events from the root sdk", async () => {
+  it("supports legacy plugins subscribing to diagnostic events from the root sdk", () => {
     useNoBundledPlugins();
     const seenKey = "__openclawLegacyRootDiagnosticSeen";
     delete (globalThis as Record<string, unknown>)[seenKey];
@@ -6640,7 +6828,10 @@ module.exports = {
       const record = registry.plugins.find(
         (entry) => entry.id === "legacy-root-diagnostic-listener",
       );
-      expect(record?.status, record?.error).toBe("loaded");
+      expect(
+        record?.status,
+        JSON.stringify({ error: record?.error, diagnostics: registry.diagnostics }, null, 2),
+      ).toBe("loaded");
 
       emitDiagnosticEvent({
         type: "model.usage",
@@ -6684,15 +6875,13 @@ module.exports = {
         },
       });
 
-      expect(warnings).toEqual([]);
-      expect(
-        registry.diagnostics.some(
-          (diag) =>
-            diag.level === "warn" &&
-            diag.pluginId === "rogue" &&
-            diag.message.includes("loaded without install/load-path provenance"),
-        ),
-      ).toBe(true);
+      expect(warnings).toStrictEqual([]);
+      expectDiagnosticContaining({
+        registry,
+        level: "warn",
+        pluginId: "rogue",
+        message: "loaded without install/load-path provenance",
+      });
     });
   });
 

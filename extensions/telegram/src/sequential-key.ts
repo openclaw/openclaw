@@ -96,7 +96,8 @@ export function getTelegramSequentialKey(ctx: TelegramSequentialKeyContext): str
   }
   const isGroup = msg?.chat?.type === "group" || msg?.chat?.type === "supergroup";
   const messageThreadId = msg?.message_thread_id;
-  const isForum = msg?.chat?.is_forum;
+  const isForum =
+    msg?.chat?.is_forum ?? (msg?.chat?.type === "supergroup" && msg?.is_topic_message === true);
   const threadId = isGroup
     ? resolveTelegramForumThreadId({ isForum, messageThreadId })
     : messageThreadId;

@@ -1,4 +1,4 @@
-import fsSync from "node:fs";
+import fsSync, { type Dirent } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +48,16 @@ vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
 let resolvePluginSkillDirs: typeof import("./plugin-skills.js").resolvePluginSkillDirs;
 
 const tempDirs = createTrackedTempDirs();
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.lstat(targetPath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
 
 function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
   return {
@@ -278,7 +288,7 @@ describe("resolvePluginSkillDirs", () => {
       } as OpenClawConfig,
     });
 
-    expect(dirs).toEqual([]);
+    expect(dirs).toStrictEqual([]);
   });
 
   it("cleans up generated plugin skill links when the plugin registry is empty", async () => {
@@ -300,10 +310,25 @@ describe("resolvePluginSkillDirs", () => {
       pluginSkillsDir,
     });
 
-    expect(dirs).toEqual([]);
-    await expect(fs.lstat(path.join(pluginSkillsDir, "stale-skill"))).rejects.toMatchObject({
-      code: "ENOENT",
+    expect(dirs).toStrictEqual([]);
+    await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
+  });
+
+  it("cleans up generated plugin skill links when no workspace is active", async () => {
+    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
+    const staleRoot = await tempDirs.make("stale-plugin-skills-");
+    const staleSkill = path.join(staleRoot, "stale-skill");
+    await fs.mkdir(staleSkill, { recursive: true });
+    fsSync.symlinkSync(staleSkill, path.join(pluginSkillsDir, "stale-skill"), "dir");
+
+    const dirs = resolvePluginSkillDirs({
+      workspaceDir: undefined,
+      config: {} as OpenClawConfig,
+      pluginSkillsDir,
     });
+
+    expect(dirs).toStrictEqual([]);
+    await expectPathMissing(path.join(pluginSkillsDir, "stale-skill"));
   });
 
   it("resolves Claude bundle command roots through the normal plugin skill path", async () => {
@@ -366,7 +391,18 @@ describe("resolvePluginSkillDirs", () => {
 });
 
 describe("publishPluginSkills", () => {
-  const { publishPluginSkills } = __testing;
+  const { isGeneratedPluginSkillEntry, publishPluginSkills, resolvePluginSkillLinkType } =
+    __testing;
+
+  function withPlatform<T>(platform: NodeJS.Platform, fn: () => T): T {
+    const originalPlatform = process.platform;
+    Object.defineProperty(process, "platform", { configurable: true, value: platform });
+    try {
+      return fn();
+    } finally {
+      Object.defineProperty(process, "platform", { configurable: true, value: originalPlatform });
+    }
+  }
 
   async function writeSkillDir(
     parentDir: string,
@@ -397,6 +433,12 @@ describe("publishPluginSkills", () => {
     const linkB = path.join(managedDir, "skill-b");
     expect(fsSync.readlinkSync(linkA)).toBe(dirA);
     expect(fsSync.readlinkSync(linkB)).toBe(dirB);
+  });
+
+  it("uses junction links for plugin skill directories on Windows", () => {
+    expect(resolvePluginSkillLinkType("win32")).toBe("junction");
+    expect(resolvePluginSkillLinkType("linux")).toBe("dir");
+    expect(resolvePluginSkillLinkType("darwin")).toBe("dir");
   });
 
   it("is idempotent: skips symlinks that already point to the same target", async () => {
@@ -444,6 +486,37 @@ describe("publishPluginSkills", () => {
 
     expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
     expect(fsSync.existsSync(path.join(managedDir, "stale-skill"))).toBe(false);
+  });
+
+  it("cleans up stale generated junction-like directories on Windows", async () => {
+    const skillParent = await tempDirs.make("plugin-skills-");
+    const managedDir = await tempDirs.make("managed-skills-");
+
+    const dir = await writeSkillDir(skillParent, "current-skill");
+    const staleDir = path.join(managedDir, "stale-skill");
+    await fs.mkdir(staleDir, { recursive: true });
+
+    await withPlatform("win32", async () => {
+      publishPluginSkills([dir], { pluginSkillsDir: managedDir });
+    });
+
+    expect(fsSync.existsSync(path.join(managedDir, "current-skill"))).toBe(true);
+    expect(fsSync.existsSync(staleDir)).toBe(false);
+  });
+
+  it("treats Windows directory entries as generated plugin skill entries", () => {
+    const directoryEntry = {
+      isDirectory: () => true,
+      isSymbolicLink: () => false,
+    } as Dirent;
+    const regularEntry = {
+      isDirectory: () => false,
+      isSymbolicLink: () => false,
+    } as Dirent;
+
+    expect(withPlatform("win32", () => isGeneratedPluginSkillEntry(directoryEntry))).toBe(true);
+    expect(withPlatform("linux", () => isGeneratedPluginSkillEntry(directoryEntry))).toBe(false);
+    expect(withPlatform("win32", () => isGeneratedPluginSkillEntry(regularEntry))).toBe(false);
   });
 
   it("cleans up broken symlinks (dangling)", async () => {
@@ -533,7 +606,7 @@ describe("publishPluginSkills", () => {
   it("handles empty skill dirs list without error", async () => {
     const managedDir = await tempDirs.make("managed-skills-");
     publishPluginSkills([], { pluginSkillsDir: managedDir });
-    // No error expected. The managed dir may or may not be created.
+    expect(fsSync.readdirSync(managedDir)).toStrictEqual([]);
   });
 
   it("handles collision: same basename from different plugins uses first one", async () => {

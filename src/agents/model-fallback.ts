@@ -3,6 +3,7 @@ import {
   resolveAgentModelPrimaryValue,
 } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -26,6 +27,7 @@ import {
 } from "./failover-policy.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
+  isModelFallbackDecisionLogEnabled,
   logModelFallbackDecision,
   type ModelFallbackDecisionParams,
   type ModelFallbackStepFields,
@@ -40,6 +42,7 @@ import {
 } from "./model-selection-resolve.js";
 import { isLikelyContextOverflowError } from "./pi-embedded-helpers/errors.js";
 import type { FailoverReason } from "./pi-embedded-helpers/types.js";
+import { resolveSessionSuspensionReason, suspendSession } from "./session-suspension.js";
 
 const log = createSubsystemLogger("model-fallback");
 
@@ -357,6 +360,22 @@ function recordFailedCandidateAttempt(params: {
   });
 }
 
+function appendFailedCandidateAttempt(params: {
+  attempts: FallbackAttempt[];
+  candidate: ModelCandidate;
+  error: unknown;
+}): void {
+  const described = describeFailoverError(params.error);
+  params.attempts.push({
+    provider: params.candidate.provider,
+    model: params.candidate.model,
+    error: described.rawError ?? described.message,
+    reason: described.reason ?? "unknown",
+    status: described.status,
+    code: described.code,
+  });
+}
+
 function findLiveSessionModelSwitchRedirectIndex(params: {
   error: LiveSessionModelSwitchError;
   candidates: ModelCandidate[];
@@ -380,10 +399,25 @@ function throwFallbackFailureSummary(params: {
   formatAttempt: (attempt: FallbackAttempt) => string;
   soonestCooldownExpiry?: number | null;
   attribution?: FailoverAttribution;
+  cfg?: OpenClawConfig;
+  agentDir?: string;
 }): never {
   if (params.attempts.length <= 1 && params.lastError) {
     throw params.lastError;
   }
+
+  if (params.attribution?.sessionId) {
+    void suspendSession({
+      cfg: params.cfg,
+      agentDir: params.agentDir,
+      sessionId: params.attribution.sessionId,
+      laneId: params.attribution.lane,
+      reason: "circuit_open",
+      failedProvider: params.attempts[params.attempts.length - 1]?.provider ?? "unknown",
+      failedModel: params.attempts[params.attempts.length - 1]?.model ?? "unknown",
+    });
+  }
+
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
   throw new FallbackSummaryError(
@@ -507,6 +541,13 @@ function resolveImageFallbackDefaultProvider(cfg: OpenClawConfig | undefined): s
   }
   return DEFAULT_PROVIDER;
 }
+
+export const __testing = {
+  resolveFallbackCandidates,
+  resolveImageFallbackCandidates,
+  resolveCooldownDecision,
+  resolveSessionSuspensionReason,
+} as const;
 
 function resolveFallbackCandidates(params: {
   cfg: OpenClawConfig | undefined;
@@ -702,6 +743,11 @@ type CooldownDecision =
       type: "attempt";
       reason: FailoverReason;
       markProbe: boolean;
+    }
+  | {
+      type: "suspend_lanes";
+      reason: FailoverReason;
+      leaderCandidate?: ModelCandidate;
     };
 
 function resolveCooldownDecision(params: {
@@ -754,9 +800,9 @@ function resolveCooldownDecision(params: {
       return { type: "attempt", reason: inferredReason, markProbe: true };
     }
     return {
-      type: "skip",
+      type: "suspend_lanes",
       reason: inferredReason,
-      error: `Provider ${params.candidate.provider} has ${inferredReason} issue (skipping all models)`,
+      leaderCandidate: params.candidate,
     };
   }
 
@@ -765,9 +811,9 @@ function resolveCooldownDecision(params: {
     (!params.isPrimary && shouldUseTransientCooldownProbeSlot(inferredReason));
   if (!shouldAttemptDespiteCooldown) {
     return {
-      type: "skip",
+      type: "suspend_lanes",
       reason: inferredReason,
-      error: `Provider ${params.candidate.provider} is in cooldown (all profiles unavailable)`,
+      leaderCandidate: params.candidate,
     };
   }
 
@@ -815,6 +861,9 @@ export async function runWithModelFallback<T>(params: {
   let lastError: unknown;
   const cooldownProbeUsedProviders = new Set<string>();
   const observeDecision = async (decision: ModelFallbackDecisionParams) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      return;
+    }
     const fallbackStep = logModelFallbackDecision(decision);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);
@@ -823,6 +872,10 @@ export async function runWithModelFallback<T>(params: {
   const observeFailedCandidate = async (
     failedAttempt: Parameters<typeof recordFailedCandidateAttempt>[0],
   ) => {
+    if (!params.onFallbackStep && !isModelFallbackDecisionLogEnabled()) {
+      appendFailedCandidateAttempt(failedAttempt);
+      return;
+    }
     const fallbackStep = recordFailedCandidateAttempt(failedAttempt);
     if (fallbackStep) {
       await params.onFallbackStep?.(fallbackStep);
@@ -866,6 +919,56 @@ export async function runWithModelFallback<T>(params: {
           authStore,
           profileIds,
         });
+
+        if (decision.type === "suspend_lanes") {
+          const error = `Provider ${candidate.provider} is in cooldown (suspending lanes)`;
+          attempts.push({
+            provider: candidate.provider,
+            model: candidate.model,
+            error,
+            reason: decision.reason,
+          });
+
+          if (params.sessionId) {
+            emitFailoverEvent({
+              sessionId: params.sessionId,
+              lane: params.lane,
+              fromProvider: candidate.provider,
+              fromModel: candidate.model,
+              reason: decision.reason,
+              suspended: true,
+            });
+            void suspendSession({
+              cfg: params.cfg,
+              agentDir: params.agentDir,
+              sessionId: params.sessionId,
+              laneId: params.lane,
+              reason: resolveSessionSuspensionReason(decision.reason),
+              failedProvider: candidate.provider,
+              failedModel: candidate.model,
+            });
+          }
+
+          await observeDecision({
+            decision: "skip_candidate",
+            runId: params.runId,
+            sessionId: params.sessionId,
+            lane: params.lane,
+            requestedProvider: params.provider,
+            requestedModel: params.model,
+            candidate,
+            attempt: i + 1,
+            total: candidates.length,
+            reason: decision.reason,
+            error,
+            nextCandidate: candidates[i + 1],
+            isPrimary,
+            requestedModelMatched: requestedModel,
+            fallbackConfigured: hasFallbackCandidates,
+            profileCount: profileIds.length,
+          });
+          continue;
+        }
 
         if (decision.type === "skip") {
           attempts.push({
@@ -1115,6 +1218,8 @@ export async function runWithModelFallback<T>(params: {
       candidates,
     }),
     attribution: { sessionId: params.sessionId, lane: params.lane },
+    cfg: params.cfg,
+    agentDir: params.agentDir,
   });
 }
 
@@ -1174,5 +1279,6 @@ export async function runWithImageModelFallback<T>(params: {
     lastError,
     label: "image models",
     formatAttempt: (attempt) => `${attempt.provider}/${attempt.model}: ${attempt.error}`,
+    cfg: params.cfg,
   });
 }

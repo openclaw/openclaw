@@ -3,7 +3,7 @@ import { readStringParam } from "../../agents/tools/common.js";
 import { resolveChannelMessageToolMediaSourceParamKeys } from "../../channels/plugins/message-action-discovery.js";
 import type { ChannelId, ChannelMessageActionName } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { createRootScopedReadFile } from "../../infra/fs-safe.js";
+import { root } from "../../infra/fs-safe.js";
 import { basenameFromMediaSource } from "../../infra/local-file-access.js";
 import { resolveChannelAccountMediaMaxMb } from "../../media/configured-max-bytes.js";
 import {
@@ -215,9 +215,12 @@ function buildAttachmentMediaLoadOptions(params: {
       hostReadCapability?: boolean;
     } {
   if (params.policy.mode === "sandbox") {
-    const readSandboxFile = createRootScopedReadFile({
-      rootDir: params.policy.sandboxRoot.trim(),
-    });
+    const sandboxRoot = params.policy.sandboxRoot.trim();
+    let sandboxFsPromise: ReturnType<typeof root> | undefined;
+    const readSandboxFile = async (filePath: string): Promise<Buffer> => {
+      sandboxFsPromise ??= root(sandboxRoot);
+      return await (await sandboxFsPromise).readBytes(filePath);
+    };
     return {
       maxBytes: params.maxBytes,
       sandboxValidated: true,
@@ -381,9 +384,14 @@ export async function hydrateAttachmentParamsForAction(params: {
   mediaPolicy: AttachmentMediaPolicy;
 }): Promise<void> {
   const shouldHydrateUploadFile = params.action === "upload-file";
+  // Reply gets the same hydration as sendAttachment so threaded sends with
+  // an attachment go through the resolver's localRoots/sandbox/size checks
+  // instead of forwarding raw paths to the channel runtime. Reply has its
+  // own `text`/`message` field, so don't fall back caption -> message.
   if (
     params.action !== "sendAttachment" &&
     params.action !== "setGroupIcon" &&
+    params.action !== "reply" &&
     !shouldHydrateUploadFile
   ) {
     return;

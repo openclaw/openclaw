@@ -271,13 +271,11 @@ async function prewarmConfiguredPrimaryModel(params: {
     return;
   }
   const [
-    { resolveOpenClawAgentDir },
-    { resolveAgentWorkspaceDir, resolveDefaultAgentId },
+    { resolveAgentWorkspaceDir, resolveDefaultAgentDir, resolveDefaultAgentId },
     { DEFAULT_MODEL, DEFAULT_PROVIDER },
     { isCliProvider, resolveConfiguredModelRef },
     { resolveEmbeddedAgentRuntime },
   ] = await Promise.all([
-    import("../agents/agent-paths.js"),
     import("../agents/agent-scope.js"),
     import("../agents/defaults.js"),
     import("../agents/model-selection.js"),
@@ -297,7 +295,7 @@ async function prewarmConfiguredPrimaryModel(params: {
   }
   // Keep startup prewarm metadata-only; resolving models can import provider runtimes and block readiness.
   const { ensureOpenClawModelsJson } = await import("../agents/models-config.js");
-  const agentDir = resolveOpenClawAgentDir();
+  const agentDir = resolveDefaultAgentDir(params.cfg);
   const workspaceDir =
     params.workspaceDir ?? resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
   try {
@@ -675,6 +673,7 @@ export async function startGatewayPostAttachRuntime(
     broadcast: (event: string, payload: unknown, opts?: { dropIfSlow?: boolean }) => void;
     tailscaleMode: GatewayTailscaleMode;
     resetOnExit: boolean;
+    preserveFunnel: boolean;
     controlUiBasePath: string;
     logTailscale: {
       info: (msg: string) => void;
@@ -759,6 +758,7 @@ export async function startGatewayPostAttachRuntime(
           runtimeDeps.startGatewayTailscaleExposure({
             tailscaleMode: params.tailscaleMode,
             resetOnExit: params.resetOnExit,
+            preserveFunnel: params.preserveFunnel,
             port: params.port,
             controlUiBasePath: params.controlUiBasePath,
             logTailscale: params.logTailscale,

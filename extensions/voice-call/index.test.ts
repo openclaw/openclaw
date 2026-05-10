@@ -227,8 +227,10 @@ describe("voice-call plugin", () => {
     );
     const { service, methods } = setup({ provider: "mock" });
 
-    expect(service).toBeDefined();
-    expect(service!.start(createServiceContext())).toBeUndefined();
+    if (!service) {
+      throw new Error("expected voice-call service");
+    }
+    expect(service.start(createServiceContext())).toBeUndefined();
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
 
     resolveRuntime?.(runtimeStub);
@@ -409,6 +411,37 @@ describe("voice-call plugin", () => {
       message: "Hi",
       mode: "conversation",
     });
+    expect(respond.mock.calls[0]?.[0]).toBe(true);
+  });
+
+  it("preserves explicit session keys on voicecall.start", async () => {
+    const { methods } = setup({ provider: "mock" });
+    const handler = methods.get("voicecall.start") as
+      | ((ctx: {
+          params: Record<string, unknown>;
+          respond: ReturnType<typeof vi.fn>;
+        }) => Promise<void>)
+      | undefined;
+    const respond = vi.fn();
+    await handler?.({
+      params: {
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+        sessionKey: "voice:google-meet:meet-1",
+        to: "+15550001234",
+      },
+      respond,
+    });
+    expect(runtimeStub.manager.initiateCall).toHaveBeenCalledWith(
+      "+15550001234",
+      "voice:google-meet:meet-1",
+      {
+        dtmfSequence: undefined,
+        message: undefined,
+        mode: "conversation",
+        requesterSessionKey: "agent:main:discord:channel:general",
+      },
+    );
     expect(respond.mock.calls[0]?.[0]).toBe(true);
   });
 
@@ -774,7 +807,9 @@ describe("voice-call plugin", () => {
       | undefined;
     expect(startPayload).toEqual(
       expect.objectContaining({
-        operationId: expect.any(String),
+        operationId: expect.stringMatching(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu,
+        ),
         status: "pending",
         pollTimeoutMs: 180000,
       }),

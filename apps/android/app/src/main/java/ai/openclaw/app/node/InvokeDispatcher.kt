@@ -13,6 +13,7 @@ import ai.openclaw.app.protocol.OpenClawMotionCommand
 import ai.openclaw.app.protocol.OpenClawNotificationsCommand
 import ai.openclaw.app.protocol.OpenClawSmsCommand
 import ai.openclaw.app.protocol.OpenClawSystemCommand
+import ai.openclaw.app.protocol.OpenClawTalkCommand
 
 internal enum class SmsSearchAvailabilityReason {
   Available,
@@ -59,6 +60,7 @@ class InvokeDispatcher(
   private val deviceHandler: DeviceHandler,
   private val notificationsHandler: NotificationsHandler,
   private val systemHandler: SystemHandler,
+  private val talkHandler: TalkHandler,
   private val photosHandler: PhotosHandler,
   private val contactsHandler: ContactsHandler,
   private val calendarHandler: CalendarHandler,
@@ -76,9 +78,9 @@ class InvokeDispatcher(
   private val smsTelephonyAvailable: () -> Boolean,
   private val callLogAvailable: () -> Boolean,
   private val debugBuild: () -> Boolean,
-  private val refreshNodeCanvasCapability: suspend () -> Boolean,
   private val onCanvasA2uiPush: () -> Unit,
   private val onCanvasA2uiReset: () -> Unit,
+  private val refreshCanvasHostUrl: suspend () -> String?,
   private val motionActivityAvailable: () -> Boolean,
   private val motionPedometerAvailable: () -> Boolean,
 ) {
@@ -188,6 +190,12 @@ class InvokeDispatcher(
       // System command
       OpenClawSystemCommand.Notify.rawValue -> systemHandler.handleSystemNotify(paramsJson)
 
+      // Talk commands
+      OpenClawTalkCommand.PttStart.rawValue -> talkHandler.handlePttStart(paramsJson)
+      OpenClawTalkCommand.PttStop.rawValue -> talkHandler.handlePttStop(paramsJson)
+      OpenClawTalkCommand.PttCancel.rawValue -> talkHandler.handlePttCancel(paramsJson)
+      OpenClawTalkCommand.PttOnce.rawValue -> talkHandler.handlePttOnce(paramsJson)
+
       // Photos command
       ai.openclaw.app.protocol.OpenClawPhotosCommand.Latest.rawValue ->
         photosHandler.handlePhotosLatest(
@@ -223,23 +231,15 @@ class InvokeDispatcher(
   private suspend fun withReadyA2ui(block: suspend () -> GatewaySession.InvokeResult): GatewaySession.InvokeResult {
     var a2uiUrl =
       a2uiHandler.resolveA2uiHostUrl()
+        ?: refreshCanvasHostUrl().let { a2uiHandler.resolveA2uiHostUrl() }
         ?: return GatewaySession.InvokeResult.error(
           code = "A2UI_HOST_NOT_CONFIGURED",
           message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
         )
     val readyOnFirstCheck = a2uiHandler.ensureA2uiReady(a2uiUrl)
     if (!readyOnFirstCheck) {
-      if (!refreshNodeCanvasCapability()) {
-        return GatewaySession.InvokeResult.error(
-          code = "A2UI_HOST_UNAVAILABLE",
-          message = "A2UI_HOST_UNAVAILABLE: A2UI host not reachable",
-        )
-      }
-      a2uiUrl = a2uiHandler.resolveA2uiHostUrl()
-        ?: return GatewaySession.InvokeResult.error(
-          code = "A2UI_HOST_NOT_CONFIGURED",
-          message = "A2UI_HOST_NOT_CONFIGURED: gateway did not advertise canvas host",
-        )
+      refreshCanvasHostUrl()
+      a2uiUrl = a2uiHandler.resolveA2uiHostUrl() ?: a2uiUrl
       if (!a2uiHandler.ensureA2uiReady(a2uiUrl)) {
         return GatewaySession.InvokeResult.error(
           code = "A2UI_HOST_UNAVAILABLE",
@@ -335,4 +335,14 @@ class InvokeDispatcher(
           )
         }
     }
+}
+
+interface TalkHandler {
+  suspend fun handlePttStart(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttStop(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttCancel(paramsJson: String?): GatewaySession.InvokeResult
+
+  suspend fun handlePttOnce(paramsJson: String?): GatewaySession.InvokeResult
 }

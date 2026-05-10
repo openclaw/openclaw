@@ -47,11 +47,7 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
-import type {
-  ExecElevatedDefaults,
-  ExecToolDefaults,
-  ExecToolDetails,
-} from "./bash-tools.exec-types.js";
+import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -139,9 +135,9 @@ async function loadFsSafeModule(): Promise<FsSafeModule> {
 
 function shouldSkipScriptPreflightPathError(
   error: unknown,
-  SafeOpenError: FsSafeModule["SafeOpenError"],
+  FsSafeError: FsSafeModule["FsSafeError"],
 ): boolean {
-  if (error instanceof SafeOpenError) {
+  if (error instanceof FsSafeError) {
     return true;
   }
   const errorCode = getNodeErrorCode(error);
@@ -155,8 +151,8 @@ function resolvePreflightRelativePath(params: { rootDir: string; absPath: string
   if (/^\.\.(?:[\\/]|$)/u.test(relative) || path.isAbsolute(relative)) {
     return null;
   }
-  // Preserve literal "~" path segments under the workdir. `readFileWithinRoot`
-  // expands home prefixes for relative paths, so normalize `~/...` to `./~/...`.
+  // Preserve literal "~" path segments under the workdir. Root reads
+  // expand home prefixes for relative paths, so normalize `~/...` to `./~/...`.
   return /^~(?:$|[\\/])/u.test(relative) ? `.${path.sep}${relative}` : relative;
 }
 
@@ -973,7 +969,8 @@ async function validateScriptFileForShellBleed(params: {
     return;
   }
 
-  const { SafeOpenError, readFileWithinRoot } = await loadFsSafeModule();
+  const { FsSafeError, root: fsRoot } = await loadFsSafeModule();
+  const workspaceRoot = await fsRoot(params.workdir);
   for (const relOrAbsPath of target.relOrAbsPaths) {
     const absPath = path.isAbsolute(relOrAbsPath)
       ? path.resolve(relOrAbsPath)
@@ -992,16 +989,14 @@ async function validateScriptFileForShellBleed(params: {
     // Use non-blocking open to avoid stalls if a path is swapped to a FIFO.
     let content: string;
     try {
-      const safeRead = await readFileWithinRoot({
-        rootDir: params.workdir,
-        relativePath,
+      const safeRead = await workspaceRoot.read(relativePath, {
         nonBlockingRead: true,
-        allowSymlinkTargetWithinRoot: true,
+        symlinks: "follow-within-root",
         maxBytes: 512 * 1024,
       });
       content = safeRead.buffer.toString("utf-8");
     } catch (error) {
-      if (shouldSkipScriptPreflightPathError(error, SafeOpenError)) {
+      if (shouldSkipScriptPreflightPathError(error, FsSafeError)) {
         // Preflight validation is best-effort: skip path/read failures and
         // continue to execute the command normally.
         continue;

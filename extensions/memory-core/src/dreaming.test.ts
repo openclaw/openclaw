@@ -941,19 +941,18 @@ describe("gateway startup reconciliation", () => {
       const managed = startupHarness.jobs.find((job) =>
         job.description?.includes("[managed-by=memory-core.short-term-promotion]"),
       );
-      expect(managed).toBeDefined();
+      if (!managed) {
+        throw new Error("expected managed short-term promotion dreaming job");
+      }
+      expect(managed.description).toContain("[managed-by=memory-core.short-term-promotion]");
 
-      const reloadedHarness = createCronHarness(
-        managed
-          ? [
-              {
-                ...managed,
-                schedule: managed.schedule ? { ...managed.schedule } : undefined,
-                payload: managed.payload ? { ...managed.payload } : undefined,
-              },
-            ]
-          : [],
-      );
+      const reloadedHarness = createCronHarness([
+        {
+          ...managed,
+          schedule: managed.schedule ? { ...managed.schedule } : undefined,
+          payload: managed.payload ? { ...managed.payload } : undefined,
+        },
+      ]);
       cronRef.current = reloadedHarness.cron;
       api.config = {
         plugins: {
@@ -1944,7 +1943,8 @@ describe("short-term dreaming trigger", () => {
     const result = await runShortTermDreamingPromotionIfTriggered({
       cleanedBody: [
         "[cron:e795558c-a273-4124-ba88-d4916688d977 Memory Dreaming Promotion] __openclaw_memory_core_short_term_promotion_dream__",
-        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles) / 2026-04-16 22:10 UTC",
+        "Current time: Thursday, April 16th, 2026 - 3:10 PM (America/Los_Angeles)",
+        "Reference UTC: 2026-04-16 22:10 UTC",
       ].join("\n"),
       trigger: "cron",
       workspaceDir,

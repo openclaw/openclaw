@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -6,17 +7,20 @@ import {
   resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
-  resolveOpenClawAgentDir,
+  resolveDefaultAgentDir,
   resolvePersistedAuthProfileOwnerAgentDir,
   saveAuthProfileStore,
   type AuthProfileCredential,
+  type AuthProfileStore,
   type OAuthCredential,
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import type { ChatgptAuthTokensRefreshResponse } from "./protocol-generated/typescript/v2/ChatgptAuthTokensRefreshResponse.js";
-import type { GetAccountResponse } from "./protocol-generated/typescript/v2/GetAccountResponse.js";
-import type { LoginAccountParams } from "./protocol-generated/typescript/v2/LoginAccountParams.js";
+import type {
+  CodexChatgptAuthTokensRefreshResponse,
+  CodexGetAccountResponse,
+  CodexLoginAccountParams,
+} from "./protocol.js";
 import { resolveCodexAppServerSpawnEnv } from "./transport-stdio.js";
 
 const CODEX_APP_SERVER_AUTH_PROVIDER = "openai-codex";
@@ -82,13 +86,101 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
   agentDir?: string;
   config?: AuthProfileOrderConfig;
 }): string | undefined {
-  const agentDir = params.agentDir?.trim() || resolveOpenClawAgentDir();
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   return resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
     store,
     config: params.config,
   });
+}
+
+export async function resolveCodexAppServerAuthAccountCacheKey(params: {
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  agentDir?: string;
+  config?: AuthProfileOrderConfig;
+}): Promise<string | undefined> {
+  const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
+  const store =
+    params.authProfileStore ?? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const profileId = resolveCodexAppServerAuthProfileId({
+    authProfileId: params.authProfileId,
+    store,
+    config: params.config,
+  });
+  if (!profileId) {
+    return undefined;
+  }
+  const credential = store.profiles[profileId];
+  if (!credential || !isCodexAppServerAuthProvider(credential.provider, params.config)) {
+    return undefined;
+  }
+  if (credential.type === "api_key") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const apiKey = resolved?.apiKey?.trim();
+    return apiKey
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintApiKeyAuthProfileCacheKey(apiKey)}`
+      : resolveChatgptAccountId(profileId, credential);
+  }
+  if (credential.type === "token") {
+    const resolved = await resolveApiKeyForProfile({
+      store,
+      profileId,
+      agentDir,
+    });
+    const accessToken = resolved?.apiKey?.trim();
+    return accessToken
+      ? `${resolveChatgptAccountId(profileId, credential)}:${fingerprintTokenAuthProfileCacheKey(accessToken)}`
+      : resolveChatgptAccountId(profileId, credential);
+  }
+  return resolveChatgptAccountId(profileId, credential);
+}
+
+export function resolveCodexAppServerEnvApiKeyCacheKey(params: {
+  startOptions: Pick<CodexAppServerStartOptions, "transport" | "env" | "clearEnv">;
+  baseEnv?: NodeJS.ProcessEnv;
+  platform?: NodeJS.Platform;
+}): string | undefined {
+  if (params.startOptions.transport !== "stdio") {
+    return undefined;
+  }
+  const env = resolveCodexAppServerSpawnEnv(
+    params.startOptions,
+    params.baseEnv ?? process.env,
+    params.platform ?? process.platform,
+  );
+  const apiKey = readFirstNonEmptyEnvEntry(env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
+  if (!apiKey) {
+    return undefined;
+  }
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-env-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey.key);
+  hash.update("\0");
+  hash.update(apiKey.value);
+  return `${apiKey.key}:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintApiKeyAuthProfileCacheKey(apiKey: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-api-key:v1");
+  hash.update("\0");
+  hash.update(apiKey);
+  return `api_key:sha256:${hash.digest("hex")}`;
+}
+
+function fingerprintTokenAuthProfileCacheKey(accessToken: string): string {
+  const hash = createHash("sha256");
+  hash.update("openclaw:codex:app-server-auth-profile-token:v1");
+  hash.update("\0");
+  hash.update(accessToken);
+  return `token:sha256:${hash.digest("hex")}`;
 }
 
 export function resolveCodexAppServerHomeDir(agentDir: string): string {
@@ -170,7 +262,7 @@ function resolveCodexAppServerAuthProfileLoginParams(params: {
   agentDir: string;
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   return resolveCodexAppServerAuthProfileLoginParamsInternal(params);
 }
 
@@ -178,7 +270,7 @@ export async function refreshCodexAppServerAuthTokens(params: {
   agentDir: string;
   authProfileId?: string;
   config?: AuthProfileOrderConfig;
-}): Promise<ChatgptAuthTokensRefreshResponse> {
+}): Promise<CodexChatgptAuthTokensRefreshResponse> {
   const loginParams = await resolveCodexAppServerAuthProfileLoginParamsInternal({
     ...params,
     forceOAuthRefresh: true,
@@ -198,7 +290,7 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   authProfileId?: string;
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
   const profileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
@@ -233,12 +325,12 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
 async function resolveCodexAppServerEnvApiKeyLoginParams(params: {
   client: CodexAppServerClient;
   env: NodeJS.ProcessEnv;
-}): Promise<LoginAccountParams | undefined> {
+}): Promise<CodexLoginAccountParams | undefined> {
   const apiKey = readFirstNonEmptyEnv(params.env, CODEX_APP_SERVER_API_KEY_ENV_VARS);
   if (!apiKey) {
     return undefined;
   }
-  const response = await params.client.request<GetAccountResponse>("account/read", {
+  const response = await params.client.request<CodexGetAccountResponse>("account/read", {
     refreshToken: false,
   });
   if (response.account || !response.requiresOpenaiAuth) {
@@ -251,7 +343,7 @@ async function resolveLoginParamsForCredential(
   profileId: string,
   credential: AuthProfileCredential,
   params: { agentDir: string; forceOAuthRefresh: boolean; config?: AuthProfileOrderConfig },
-): Promise<LoginAccountParams | undefined> {
+): Promise<CodexLoginAccountParams | undefined> {
   if (credential.type === "api_key") {
     const resolved = await resolveApiKeyForProfile({
       store: ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false }),
@@ -271,6 +363,9 @@ async function resolveLoginParamsForCredential(
     return accessToken
       ? buildChatgptAuthTokensParams(profileId, credential, accessToken)
       : undefined;
+  }
+  if (credential.type !== "oauth") {
+    return undefined;
   }
   const resolvedCredential = await resolveOAuthCredentialForCodexAppServer(profileId, credential, {
     agentDir: params.agentDir,
@@ -362,10 +457,17 @@ function withClearedEnvironmentVariables(
 }
 
 function readFirstNonEmptyEnv(env: NodeJS.ProcessEnv, keys: readonly string[]): string | undefined {
+  return readFirstNonEmptyEnvEntry(env, keys)?.value;
+}
+
+function readFirstNonEmptyEnvEntry(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+): { key: string; value: string } | undefined {
   for (const key of keys) {
     const value = env[key]?.trim();
     if (value) {
-      return value;
+      return { key, value };
     }
   }
   return undefined;
@@ -375,7 +477,7 @@ function buildChatgptAuthTokensParams(
   profileId: string,
   credential: AuthProfileCredential,
   accessToken: string,
-): LoginAccountParams {
+): CodexLoginAccountParams {
   return {
     type: "chatgptAuthTokens",
     accessToken,

@@ -33,7 +33,7 @@ minimumReleaseAgeExclude:
   - "sqlite-vec-*"
 
 onlyBuiltDependencies:
-  - "@discordjs/opus"
+  - "@openclaw/fs-safe"
   - "@google/genai"
   - "@lydell/node-pty"
   - "@matrix-org/matrix-sdk-crypto-nodejs"
@@ -48,5 +48,6 @@ onlyBuiltDependencies:
   - sharp
 
 ignoredBuiltDependencies:
+  - "@discordjs/opus"
   - koffi
   - tree-sitter-bash

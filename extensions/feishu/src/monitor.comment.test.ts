@@ -1,5 +1,5 @@
 import { createNonExitingRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import * as dedup from "./dedup.js";
 import { createFeishuDriveCommentNoticeHandler } from "./monitor.comment-notice-handler.js";
@@ -22,6 +22,12 @@ vi.mock("./client.js", () => ({
 vi.mock("./comment-handler.js", () => ({
   handleFeishuCommentEvent: handleFeishuCommentEventMock,
 }));
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.doUnmock("./comment-handler.js");
+  vi.resetModules();
+});
 
 function buildMonitorConfig(): ClawdbotConfig {
   return {
@@ -218,7 +224,6 @@ describe("resolveDriveCommentEventTurn", () => {
       createClient: () => client as never,
     });
 
-    expect(turn).not.toBeNull();
     expect(turn?.senderId).toBe("ou_509d4d7ace4a9addec2312676ffcba9b");
     expect(turn?.messageId).toBe("drive-comment:10d9d60b990db39f96a4c2fd357fb877");
     expect(turn?.fileType).toBe("docx");

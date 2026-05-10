@@ -1,4 +1,5 @@
 import { createCodingTools, createReadTool } from "@mariozechner/pi-coding-agent";
+import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../auto-reply/heartbeat-tool-response.js";
 import type { ModelCompatConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -141,6 +142,28 @@ function createLazyProcessTool(defaults?: ProcessToolDefaults): AnyAgentTool {
     execute: async (...args: Parameters<AnyAgentTool["execute"]>) =>
       (await loadTool()).execute(...args),
   } as AnyAgentTool;
+}
+
+export function resolveProcessToolScopeKey(params: {
+  scopeKey?: string;
+  sessionKey?: string;
+  sessionId?: string;
+  agentId?: string;
+}): string | undefined {
+  const explicitScopeKey = params.scopeKey?.trim();
+  if (explicitScopeKey) {
+    return explicitScopeKey;
+  }
+  const sessionKey = params.sessionKey?.trim();
+  if (sessionKey) {
+    return sessionKey;
+  }
+  const sessionId = params.sessionId?.trim();
+  if (sessionId) {
+    return sessionId;
+  }
+  const agentId = params.agentId?.trim();
+  return agentId ? `agent:${agentId}` : undefined;
 }
 
 function applyModelProviderToolPolicy(
@@ -341,6 +364,8 @@ export function createOpenClawCodingTools(options?: {
   modelHasVision?: boolean;
   /** Require explicit message targets (no implicit last-route sends). */
   requireExplicitMessageTarget?: boolean;
+  /** Visible source replies must be sent through the message tool when set to message_tool_only. */
+  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   /** If true, omit the message tool from the tool list. */
   disableMessageTool?: boolean;
   /** Keep the message tool available even when the selected profile omits it. */
@@ -439,8 +464,12 @@ export function createOpenClawCodingTools(options?: {
   ]);
   // Prefer sessionKey for process isolation scope to prevent cross-session process visibility/killing.
   // Fallback to agentId if no sessionKey is available (e.g. legacy or global contexts).
-  const scopeKey =
-    options?.exec?.scopeKey ?? options?.sessionKey ?? (agentId ? `agent:${agentId}` : undefined);
+  const scopeKey = resolveProcessToolScopeKey({
+    scopeKey: options?.exec?.scopeKey,
+    sessionKey: options?.sessionKey,
+    sessionId: options?.sessionId,
+    agentId,
+  });
   const subagentStore = resolveSubagentCapabilityStore(options?.sessionKey, {
     cfg: options?.config,
   });
@@ -508,51 +537,56 @@ export function createOpenClawCodingTools(options?: {
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
   options?.recordToolPrepStage?.("workspace-policy");
 
-  const base = includeBaseCodingTools
-    ? (createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]).flatMap((tool) => {
-        if (tool.name === "read") {
-          if (sandboxRoot) {
-            const sandboxed = createSandboxedReadTool({
-              root: sandboxRoot,
-              bridge: sandboxFsBridge!,
-              modelContextWindowTokens: options?.modelContextWindowTokens,
-              imageSanitization,
-            });
-            return [
-              workspaceOnly
-                ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
-                    containerWorkdir: sandbox.containerWorkdir,
-                  })
-                : sandboxed,
-            ];
-          }
-          const freshReadTool = createReadTool(workspaceRoot);
-          const wrapped = createOpenClawReadTool(freshReadTool, {
+  const base: AnyAgentTool[] = [];
+  if (includeBaseCodingTools) {
+    for (const tool of createCodingTools(workspaceRoot) as unknown as AnyAgentTool[]) {
+      if (tool.name === "read") {
+        if (sandboxRoot) {
+          const sandboxed = createSandboxedReadTool({
+            root: sandboxRoot,
+            bridge: sandboxFsBridge!,
             modelContextWindowTokens: options?.modelContextWindowTokens,
             imageSanitization,
           });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+          base.push(
+            workspaceOnly
+              ? wrapToolWorkspaceRootGuardWithOptions(sandboxed, sandboxRoot, {
+                  containerWorkdir: sandbox.containerWorkdir,
+                })
+              : sandboxed,
+          );
+          continue;
         }
-        if (tool.name === "bash" || tool.name === execToolName) {
-          return [];
+        const freshReadTool = createReadTool(workspaceRoot);
+        const wrapped = createOpenClawReadTool(freshReadTool, {
+          modelContextWindowTokens: options?.modelContextWindowTokens,
+          imageSanitization,
+        });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      if (tool.name === "bash" || tool.name === execToolName) {
+        continue;
+      }
+      if (tool.name === "write") {
+        if (sandboxRoot) {
+          continue;
         }
-        if (tool.name === "write") {
-          if (sandboxRoot) {
-            return [];
-          }
-          const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
+        const wrapped = createHostWorkspaceWriteTool(workspaceRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      if (tool.name === "edit") {
+        if (sandboxRoot) {
+          continue;
         }
-        if (tool.name === "edit") {
-          if (sandboxRoot) {
-            return [];
-          }
-          const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
-          return [workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped];
-        }
-        return [tool];
-      })
-    : [];
+        const wrapped = createHostWorkspaceEditTool(workspaceRoot, { workspaceOnly });
+        base.push(workspaceOnly ? wrapToolWorkspaceRootGuard(wrapped, workspaceRoot) : wrapped);
+        continue;
+      }
+      base.push(tool);
+    }
+  }
   options?.recordToolPrepStage?.("base-coding-tools");
   const { cleanupMs: cleanupMsOverride, ...execDefaults } = options?.exec ?? {};
   const execTool = includeShellTools
@@ -738,9 +772,11 @@ export function createOpenClawCodingTools(options?: {
           hasRepliedRef: options?.hasRepliedRef,
           modelHasVision: options?.modelHasVision,
           requireExplicitMessageTarget: options?.requireExplicitMessageTarget,
+          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
           disableMessageTool: options?.disableMessageTool,
           enableHeartbeatTool,
           disablePluginTools: !includePluginTools,
+          wrapBeforeToolCallHook: false,
           ...(cronSelfRemoveOnlyJobId ? { cronSelfRemoveOnlyJobId } : {}),
           requesterAgentIdOverride: agentId,
           requesterSenderId: options?.senderId,
@@ -754,28 +790,29 @@ export function createOpenClawCodingTools(options?: {
       : pluginToolsOnly),
   ];
   options?.recordToolPrepStage?.("openclaw-tools");
-  const toolsForMemoryFlush =
-    isMemoryFlushRun && memoryFlushWritePath
-      ? tools.flatMap((tool) => {
-          if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
-            return [];
-          }
-          if (tool.name === "write") {
-            return [
-              wrapToolMemoryFlushAppendOnlyWrite(tool, {
-                root: sandboxRoot ?? workspaceRoot,
-                relativePath: memoryFlushWritePath,
-                containerWorkdir: sandbox?.containerWorkdir,
-                sandbox:
-                  sandboxRoot && sandboxFsBridge
-                    ? { root: sandboxRoot, bridge: sandboxFsBridge }
-                    : undefined,
-              }),
-            ];
-          }
-          return [tool];
-        })
-      : tools;
+  const toolsForMemoryFlush: AnyAgentTool[] = isMemoryFlushRun && memoryFlushWritePath ? [] : tools;
+  if (isMemoryFlushRun && memoryFlushWritePath) {
+    for (const tool of tools) {
+      if (!MEMORY_FLUSH_ALLOWED_TOOL_NAMES.has(tool.name)) {
+        continue;
+      }
+      if (tool.name === "write") {
+        toolsForMemoryFlush.push(
+          wrapToolMemoryFlushAppendOnlyWrite(tool, {
+            root: sandboxRoot ?? workspaceRoot,
+            relativePath: memoryFlushWritePath,
+            containerWorkdir: sandbox?.containerWorkdir,
+            sandbox:
+              sandboxRoot && sandboxFsBridge
+                ? { root: sandboxRoot, bridge: sandboxFsBridge }
+                : undefined,
+          }),
+        );
+        continue;
+      }
+      toolsForMemoryFlush.push(tool);
+    }
+  }
   const toolsForMessageProvider = filterToolsByMessageProvider(
     toolsForMemoryFlush,
     options?.messageProvider,
@@ -837,6 +874,10 @@ export function createOpenClawCodingTools(options?: {
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
       ...(options?.config ? { config: options.config } : {}),
+      cwd: sandboxRoot ?? workspaceRoot,
+      ...(sandboxRoot && allowWorkspaceWrites
+        ? { sandbox: { root: sandboxRoot, bridge: sandboxFsBridge! } }
+        : {}),
       sessionKey: options?.sessionKey,
       sessionId: options?.sessionId,
       runId: options?.runId,

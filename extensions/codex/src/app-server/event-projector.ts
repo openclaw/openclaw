@@ -21,6 +21,7 @@ import {
 import { readCodexTurn } from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolCallOutputContentItem,
   type CodexServerNotification,
   type CodexThreadItem,
   type CodexTurn,
@@ -30,6 +31,11 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
+import {
+  resolveCodexToolProgressDetailMode,
+  sanitizeCodexAgentEventRecord,
+  sanitizeCodexToolArguments,
+} from "./tool-progress-normalization.js";
 import { attachCodexMirrorIdentity } from "./transcript-mirror.js";
 
 export type CodexAppServerToolTelemetry = {
@@ -75,6 +81,20 @@ const CODEX_PROMPT_TOTAL_INPUT_KEYS = [
 ] as const;
 
 const MAX_TOOL_OUTPUT_DELTA_MESSAGES_PER_ITEM = 20;
+const TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS = 12_000;
+
+type ToolTranscriptCallInput = {
+  id: string;
+  name: string;
+  arguments?: unknown;
+};
+
+type ToolTranscriptResultInput = {
+  id: string;
+  name: string;
+  text?: string;
+  isError: boolean;
+};
 
 export class CodexAppServerEventProjector {
   private readonly assistantTextByItem = new Map<string, string>();
@@ -92,6 +112,9 @@ export class CodexAppServerEventProjector {
     { chars: number; messages: number; truncated: boolean }
   >();
   private readonly toolMetas = new Map<string, { toolName: string; meta?: string }>();
+  private readonly toolTranscriptMessages: AgentMessage[] = [];
+  private readonly toolTranscriptCallIds = new Set<string>();
+  private readonly toolTranscriptResultIds = new Set<string>();
   private assistantStarted = false;
   private reasoningStarted = false;
   private reasoningEnded = false;
@@ -233,6 +256,7 @@ export class CodexAppServerEventProjector {
         ),
       );
     }
+    messagesSnapshot.push(...this.toolTranscriptMessages);
     if (lastAssistant) {
       messagesSnapshot.push(attachCodexMirrorIdentity(lastAssistant, `${turnId}:assistant`));
     }
@@ -290,6 +314,28 @@ export class CodexAppServerEventProjector {
       yieldDetected: options?.yieldDetected || false,
       didSendDeterministicApprovalPrompt: this.guardianReviewCount > 0 ? false : undefined,
     };
+  }
+
+  recordDynamicToolCall(params: { callId: string; tool: string; arguments?: JsonValue }): void {
+    this.recordToolTranscriptCall({
+      id: params.callId,
+      name: params.tool,
+      arguments: sanitizeCodexToolArguments(params.arguments),
+    });
+  }
+
+  recordDynamicToolResult(params: {
+    callId: string;
+    tool: string;
+    success: boolean;
+    contentItems: CodexDynamicToolCallOutputContentItem[];
+  }): void {
+    this.recordToolTranscriptResult({
+      id: params.callId,
+      name: params.tool,
+      text: collectDynamicToolContentText(params.contentItems),
+      isError: !params.success,
+    });
   }
 
   markTimedOut(): void {
@@ -396,6 +442,8 @@ export class CodexAppServerEventProjector {
       });
     }
     this.emitStandardItemEvent({ phase: "start", item });
+    this.emitNormalizedToolItemEvent({ phase: "start", item });
+    this.recordNativeToolTranscriptCall(item);
     this.emitToolResultSummary(item);
     this.emitAgentEvent({
       stream: "codex_app_server.item",
@@ -449,6 +497,9 @@ export class CodexAppServerEventProjector {
     }
     this.recordToolMeta(item);
     this.emitStandardItemEvent({ phase: "end", item });
+    this.emitNormalizedToolItemEvent({ phase: "result", item });
+    this.recordNativeToolTranscriptCall(item);
+    this.recordNativeToolTranscriptResult(item);
     this.emitToolResultSummary(item);
     this.emitToolResultOutput(item);
     this.emitAgentEvent({
@@ -551,6 +602,8 @@ export class CodexAppServerEventProjector {
         this.emitPlanUpdate({ explanation: undefined, steps: splitPlanText(item.text) });
       }
       this.recordToolMeta(item);
+      this.recordNativeToolTranscriptCall(item);
+      this.recordNativeToolTranscriptResult(item);
       this.emitToolResultSummary(item);
       this.emitToolResultOutput(item);
     }
@@ -656,6 +709,7 @@ export class CodexAppServerEventProjector {
       return;
     }
     const meta = itemMeta(item, this.toolProgressDetailMode());
+    const suppressChannelProgress = shouldSuppressChannelProgressForItem(item);
     this.emitAgentEvent({
       stream: "item",
       data: {
@@ -666,6 +720,42 @@ export class CodexAppServerEventProjector {
         status: params.phase === "start" ? "running" : itemStatus(item),
         ...(itemName(item) ? { name: itemName(item) } : {}),
         ...(meta ? { meta } : {}),
+        ...(suppressChannelProgress ? { suppressChannelProgress: true } : {}),
+      },
+    });
+  }
+
+  private emitNormalizedToolItemEvent(params: {
+    phase: "start" | "result";
+    item: CodexThreadItem | undefined;
+  }): void {
+    const { item } = params;
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    const meta = itemMeta(item, this.toolProgressDetailMode());
+    const args = params.phase === "start" ? itemToolArgs(item) : undefined;
+    const status = params.phase === "result" ? itemStatus(item) : "running";
+    this.emitAgentEvent({
+      stream: "tool",
+      data: {
+        phase: params.phase,
+        name,
+        itemId: item.id,
+        toolCallId: item.id,
+        ...(meta ? { meta } : {}),
+        ...(args ? { args } : {}),
+        ...(params.phase === "result"
+          ? {
+              status,
+              isError: isNonSuccessItemStatus(status),
+              ...itemToolResult(item),
+            }
+          : {}),
       },
     });
   }
@@ -743,7 +833,7 @@ export class CodexAppServerEventProjector {
   }
 
   private toolProgressDetailMode(): ToolProgressDetailMode {
-    return this.params.toolProgressDetail === "raw" ? "raw" : "explain";
+    return resolveCodexToolProgressDetailMode(this.params.toolProgressDetail);
   }
 
   private recordToolMeta(item: CodexThreadItem | undefined): void {
@@ -759,6 +849,63 @@ export class CodexAppServerEventProjector {
       toolName,
       ...(meta ? { meta } : {}),
     });
+  }
+
+  private recordNativeToolTranscriptCall(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptCall({
+      id: item.id,
+      name,
+      arguments: itemToolArgs(item),
+    });
+  }
+
+  private recordNativeToolTranscriptResult(item: CodexThreadItem | undefined): void {
+    if (!item || !shouldSynthesizeToolProgressForItem(item)) {
+      return;
+    }
+    const name = itemName(item);
+    if (!name) {
+      return;
+    }
+    this.recordToolTranscriptResult({
+      id: item.id,
+      name,
+      text: itemTranscriptResultText(item),
+      isError: isNonSuccessItemStatus(itemStatus(item)),
+    });
+  }
+
+  private recordToolTranscriptCall(params: ToolTranscriptCallInput): void {
+    if (!params.id || !params.name || this.toolTranscriptCallIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptCallIds.add(params.id);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolCallMessage(params),
+        `${this.turnId}:tool:${params.id}:call`,
+      ),
+    );
+  }
+
+  private recordToolTranscriptResult(params: ToolTranscriptResultInput): void {
+    if (!params.id || !params.name || this.toolTranscriptResultIds.has(params.id)) {
+      return;
+    }
+    this.toolTranscriptResultIds.add(params.id);
+    this.toolTranscriptMessages.push(
+      attachCodexMirrorIdentity(
+        this.createToolResultMessage(params),
+        `${this.turnId}:tool:${params.id}:result`,
+      ),
+    );
   }
 
   private formatCodexErrorMessage(params: JsonObject): string | undefined {
@@ -866,6 +1013,47 @@ export class CodexAppServerEventProjector {
       stopReason: "stop",
       timestamp: Date.now(),
     };
+  }
+
+  private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
+    return {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: params.id,
+          name: params.name,
+          arguments: normalizeToolTranscriptArguments(params.arguments),
+        },
+      ],
+      api: this.params.model.api ?? "openai-codex-responses",
+      provider: this.params.provider,
+      model: this.params.modelId,
+      usage: ZERO_USAGE,
+      stopReason: "toolUse",
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
+  }
+
+  private createToolResultMessage(params: ToolTranscriptResultInput): AgentMessage {
+    const text = truncateToolTranscriptText(params.text?.trim() || toolResultStatusText(params));
+    return {
+      role: "toolResult",
+      toolCallId: params.id,
+      toolName: params.name,
+      isError: params.isError,
+      content: [
+        {
+          type: "toolResult",
+          toolCallId: params.id,
+          toolUseId: params.id,
+          tool_use_id: params.id,
+          content: text,
+          text,
+        },
+      ],
+      timestamp: Date.now(),
+    } as unknown as AgentMessage;
   }
 
   private isNotificationForTurn(params: JsonObject): boolean {
@@ -1074,15 +1262,22 @@ function itemTitle(item: CodexThreadItem): string {
   }
 }
 
-function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" {
+function itemStatus(item: CodexThreadItem): "completed" | "failed" | "running" | "blocked" {
   const status = readItemString(item, "status");
   if (status === "failed") {
     return "failed";
+  }
+  if (status === "declined") {
+    return "blocked";
   }
   if (status === "inProgress" || status === "running") {
     return "running";
   }
   return "completed";
+}
+
+function isNonSuccessItemStatus(status: ReturnType<typeof itemStatus>): boolean {
+  return status === "failed" || status === "blocked";
 }
 
 function itemName(item: CodexThreadItem): string | undefined {
@@ -1103,6 +1298,78 @@ function itemName(item: CodexThreadItem): string | undefined {
     return "web_search";
   }
   return undefined;
+}
+
+function shouldSynthesizeToolProgressForItem(item: CodexThreadItem): boolean {
+  switch (item.type) {
+    case "commandExecution":
+    case "fileChange":
+    case "webSearch":
+    case "mcpToolCall":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function shouldSuppressChannelProgressForItem(item: CodexThreadItem): boolean {
+  if (shouldSynthesizeToolProgressForItem(item)) {
+    return true;
+  }
+  // Dynamic OpenClaw tool requests are emitted at the item/tool/call request
+  // boundary in run-attempt.ts. Re-emitting item notifications to channels can
+  // duplicate start/result progress when the app-server sends both signals.
+  return item.type === "dynamicToolCall";
+}
+
+function itemToolArgs(item: CodexThreadItem): Record<string, unknown> | undefined {
+  if (item.type === "commandExecution") {
+    return sanitizeCodexAgentEventRecord({
+      command: item.command,
+      ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+    });
+  }
+  if (item.type === "webSearch" && typeof item.query === "string") {
+    return sanitizeCodexAgentEventRecord({ query: item.query });
+  }
+  if (item.type === "mcpToolCall") {
+    return sanitizeCodexToolArguments(item.arguments);
+  }
+  return undefined;
+}
+
+function itemToolResult(item: CodexThreadItem): { result?: Record<string, unknown> } {
+  if (item.type === "commandExecution") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        exitCode: item.exitCode,
+        durationMs: item.durationMs,
+      }),
+    };
+  }
+  if (item.type === "fileChange") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        changes: item.changes.map((change) => ({ path: change.path, kind: change.kind })),
+      }),
+    };
+  }
+  if (item.type === "mcpToolCall") {
+    return {
+      result: sanitizeCodexAgentEventRecord({
+        status: item.status,
+        durationMs: item.durationMs,
+        ...(item.error ? { error: item.error } : {}),
+        ...(item.result ? { result: item.result } : {}),
+      }),
+    };
+  }
+  if (item.type === "webSearch") {
+    return { result: sanitizeCodexAgentEventRecord({ status: "completed" }) };
+  }
+  return {};
 }
 
 function itemMeta(
@@ -1145,9 +1412,23 @@ function itemOutputText(item: CodexThreadItem): string | undefined {
   return undefined;
 }
 
-function collectDynamicToolContentText(
-  contentItems: Extract<CodexThreadItem, { type: "dynamicToolCall" }>["contentItems"],
-): string {
+function itemTranscriptResultText(item: CodexThreadItem): string | undefined {
+  const output = itemOutputText(item);
+  if (output) {
+    return output;
+  }
+  const result = itemToolResult(item).result;
+  return result ? stringifyJsonValue(result) : itemStatus(item);
+}
+
+function normalizeToolTranscriptArguments(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return value as Record<string, unknown>;
+}
+
+function collectDynamicToolContentText(contentItems: CodexThreadItem["contentItems"]): string {
   if (!Array.isArray(contentItems)) {
     return "";
   }
@@ -1160,6 +1441,17 @@ function collectDynamicToolContentText(
       return text ? [text] : [];
     })
     .join("\n");
+}
+
+function truncateToolTranscriptText(text: string): string {
+  if (text.length <= TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS) {
+    return text;
+  }
+  return `${text.slice(0, TOOL_TRANSCRIPT_OUTPUT_MAX_CHARS)}\n...(truncated)...`;
+}
+
+function toolResultStatusText(params: ToolTranscriptResultInput): string {
+  return params.isError ? `${params.name} failed` : `${params.name} completed`;
 }
 
 function stringifyJsonValue(value: unknown): string | undefined {

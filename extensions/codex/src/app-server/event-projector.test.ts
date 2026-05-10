@@ -473,7 +473,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {
@@ -491,7 +491,7 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
-    expect(result.assistantTexts).toEqual([]);
+    expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
   });
 
@@ -658,6 +658,244 @@ describe("CodexAppServerEventProjector", () => {
     expect(JSON.stringify(result.messagesSnapshot[1])).toContain("Codex reasoning");
     expect(JSON.stringify(result.messagesSnapshot[2])).toContain("Codex plan");
     expect(result.itemLifecycle).toMatchObject({ compactionCount: 1 });
+  });
+
+  it("synthesizes normalized tool progress for Codex-native tool items", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-1",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        phase: "start",
+        kind: "command",
+        name: "bash",
+        itemId: "cmd-1",
+        suppressChannelProgress: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "start",
+        name: "bash",
+        itemId: "cmd-1",
+        toolCallId: "cmd-1",
+        args: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        name: "bash",
+        itemId: "cmd-1",
+        toolCallId: "cmd-1",
+        status: "completed",
+        isError: false,
+        result: expect.objectContaining({ exitCode: 0, durationMs: 42 }),
+      }),
+    });
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "cmd-1",
+          name: "bash",
+          arguments: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "cmd-1",
+      toolName: "bash",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          toolCallId: "cmd-1",
+          content: "ok",
+        }),
+      ],
+    });
+  });
+
+  it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
+    const projector = await createProjector();
+
+    projector.recordDynamicToolCall({
+      callId: "call-browser-1",
+      tool: "browser",
+      arguments: { action: "open", url: "http://127.0.0.1:3000" },
+    });
+    projector.recordDynamicToolResult({
+      callId: "call-browser-1",
+      tool: "browser",
+      success: true,
+      contentItems: [{ type: "inputText", text: "opened" }],
+    });
+    await projector.handleNotification(agentMessageDelta("done"));
+
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+      "assistant",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-browser-1",
+          name: "browser",
+          arguments: { action: "open", url: "http://127.0.0.1:3000" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-browser-1",
+      toolName: "browser",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          toolCallId: "call-browser-1",
+          content: "opened",
+        }),
+      ],
+    });
+  });
+
+  it("marks declined Codex-native tool results as non-success", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-declined",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "declined",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "item",
+      data: expect.objectContaining({
+        phase: "end",
+        kind: "command",
+        name: "bash",
+        itemId: "cmd-declined",
+        status: "blocked",
+        suppressChannelProgress: true,
+      }),
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith({
+      stream: "tool",
+      data: expect.objectContaining({
+        phase: "result",
+        name: "bash",
+        itemId: "cmd-declined",
+        toolCallId: "cmd-declined",
+        status: "blocked",
+        isError: true,
+      }),
+    });
+  });
+
+  it("leaves Codex dynamic tool item progress to item/tool/call normalization", async () => {
+    const onAgentEvent = vi.fn();
+    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "dynamicToolCall",
+          id: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send" },
+          status: "inProgress",
+          contentItems: null,
+          success: null,
+          durationMs: null,
+        },
+      }),
+    );
+
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "item",
+        data: expect.objectContaining({
+          phase: "start",
+          kind: "tool",
+          name: "message",
+          suppressChannelProgress: true,
+        }),
+      }),
+    );
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "tool",
+        data: expect.objectContaining({ phase: "start", name: "message" }),
+      }),
+    );
   });
 
   it("emits verbose tool summaries through onToolResult", async () => {

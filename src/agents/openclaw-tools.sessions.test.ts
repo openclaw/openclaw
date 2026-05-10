@@ -52,6 +52,16 @@ const TEST_CONFIG = {
   },
 } as OpenClawConfig;
 
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean) {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 const resolveSessionConversationStub: NonNullable<
   ChannelMessagingAdapter["resolveSessionConversation"]
 > = ({ rawId }) => ({
@@ -182,7 +192,6 @@ describe("sessions tools", () => {
     const tools = createOpenClawTools();
     const byName = (name: string) => {
       const tool = tools.find((candidate) => candidate.name === name);
-      expect(tool).toBeDefined();
       if (!tool) {
         throw new Error(`missing ${name} tool`);
       }
@@ -201,7 +210,6 @@ describe("sessions tools", () => {
 
       const properties = schema.properties ?? {};
       const value = properties[prop] as { type?: unknown } | undefined;
-      expect(value).toBeDefined();
       if (!value) {
         throw new Error(`missing ${toolName} schema prop: ${prop}`);
       }
@@ -291,7 +299,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
@@ -427,7 +434,6 @@ describe("sessions tools", () => {
           },
         } as OpenClawConfig,
       }).find((candidate) => candidate.name === "sessions_list");
-      expect(tool).toBeDefined();
       if (!tool) {
         throw new Error("missing sessions_list tool");
       }
@@ -475,7 +481,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_list");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_list tool");
     }
@@ -510,7 +515,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -559,7 +563,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -623,7 +626,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -672,7 +674,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -713,7 +714,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -751,7 +751,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -779,7 +778,6 @@ describe("sessions tools", () => {
     });
 
     const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_history tool");
     }
@@ -793,7 +791,8 @@ describe("sessions tools", () => {
   it("sessions_send supports fire-and-forget and wait", async () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
-    let _historyCallCount = 0;
+    let historyCallCount = 0;
+    let waitCallCount = 0;
     let sendCallCount = 0;
     let lastWaitedRunId: string | undefined;
     const replyByRunId = new Map<string, string>();
@@ -822,12 +821,13 @@ describe("sessions tools", () => {
         };
       }
       if (request.method === "agent.wait") {
+        waitCallCount += 1;
         const params = request.params as { runId?: string } | undefined;
         lastWaitedRunId = params?.runId;
         return { runId: params?.runId ?? "run-1", status: "ok" };
       }
       if (request.method === "chat.history") {
-        _historyCallCount += 1;
+        historyCallCount += 1;
         const text = (lastWaitedRunId && replyByRunId.get(lastWaitedRunId)) ?? "";
         return {
           messages: [
@@ -855,7 +855,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -870,9 +869,9 @@ describe("sessions tools", () => {
       runId: "run-1",
       delivery: { status: "pending", mode: "announce" },
     });
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 3);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 3);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 3);
+    await waitForCalls(() => agentCallCount, 3);
+    await waitForCalls(() => waitCallCount, 3);
+    await waitForCalls(() => historyCallCount, 3);
 
     const waitPromise = tool.execute("call6", {
       sessionKey: "main",
@@ -886,9 +885,9 @@ describe("sessions tools", () => {
       delivery: { status: "pending", mode: "announce" },
     });
     expect(typeof (waited.details as { runId?: string }).runId).toBe("string");
-    await waitForCalls(() => calls.filter((call) => call.method === "agent").length, 6);
-    await waitForCalls(() => calls.filter((call) => call.method === "agent.wait").length, 6);
-    await waitForCalls(() => calls.filter((call) => call.method === "chat.history").length, 7);
+    await waitForCalls(() => agentCallCount, 6);
+    await waitForCalls(() => waitCallCount, 6);
+    await waitForCalls(() => historyCallCount, 7);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     const waitCalls = calls.filter((call) => call.method === "agent.wait");
@@ -953,7 +952,6 @@ describe("sessions tools", () => {
       agentSessionKey: "main",
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1051,7 +1049,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1067,7 +1064,7 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "agent")).toHaveLength(3);
+        expect(countMatching(calls, (call) => call.method === "agent")).toBe(3);
       },
       { timeout: 2_000, interval: 5 },
     );
@@ -1167,7 +1164,6 @@ describe("sessions tools", () => {
         },
       },
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1190,7 +1186,9 @@ describe("sessions tools", () => {
             call.method === "agent" &&
             (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
         );
-        expect(requesterReplyCall).toBeDefined();
+        if (!requesterReplyCall) {
+          throw new Error("expected requester reply call");
+        }
       },
       { timeout: 2_000, interval: 5 },
     );
@@ -1247,7 +1245,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1263,7 +1260,7 @@ describe("sessions tools", () => {
       sessionKey: targetKey,
     });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
   });
 
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
@@ -1315,7 +1312,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1331,17 +1327,16 @@ describe("sessions tools", () => {
       reply: "child reply",
       delivery: { status: "skipped", mode: "announce" },
     });
-    expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
-    expect(
-      calls.some(
-        (call) =>
-          call.method === "agent" &&
-          typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-          (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
-            "Agent-to-agent reply step",
-          ),
-      ),
-    ).toBe(false);
+    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+    const replyPromptAgentCalls = calls.filter(
+      (call) =>
+        call.method === "agent" &&
+        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
+        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
+          "Agent-to-agent reply step",
+        ),
+    );
+    expect(replyPromptAgentCalls).toStrictEqual([]);
     expect(calls.some((call) => call.method === "send")).toBe(false);
   });
 
@@ -1451,7 +1446,6 @@ describe("sessions tools", () => {
       agentSessionKey: requesterKey,
       agentChannel: "discord",
     }).find((candidate) => candidate.name === "sessions_send");
-    expect(tool).toBeDefined();
     if (!tool) {
       throw new Error("missing sessions_send tool");
     }
@@ -1467,7 +1461,7 @@ describe("sessions tools", () => {
     });
     await vi.waitFor(
       () => {
-        expect(calls.filter((call) => call.method === "send")).toHaveLength(1);
+        expect(countMatching(calls, (call) => call.method === "send")).toBe(1);
       },
       { timeout: 2_000, interval: 5 },
     );

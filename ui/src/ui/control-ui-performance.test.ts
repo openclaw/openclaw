@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EventLogEntry } from "./app-events.ts";
 import {
   recordControlUiPerformanceEvent,
+  recordControlUiRenderTiming,
   startControlUiResponsivenessObserver,
 } from "./control-ui-performance.ts";
 
@@ -53,6 +54,7 @@ function createHost() {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   Object.defineProperty(globalThis, "PerformanceObserver", {
     configurable: true,
     value: originalPerformanceObserver,
@@ -68,8 +70,46 @@ describe("recordControlUiPerformanceEvent", () => {
     }
 
     expect(host.eventLogBuffer).toHaveLength(250);
-    expect(host.eventLogBuffer[0]?.payload).toEqual({ i: 259 });
-    expect(host.eventLogBuffer.at(-1)?.payload).toEqual({ i: 10 });
+    const [newestEvent] = host.eventLogBuffer;
+    const oldestEvent = host.eventLogBuffer.at(-1);
+    if (!newestEvent || !oldestEvent) {
+      throw new Error("Expected bounded performance event buffer entries");
+    }
+    expect(newestEvent.payload).toEqual({ i: 259 });
+    expect(oldestEvent.payload).toEqual({ i: 10 });
+  });
+});
+
+describe("recordControlUiRenderTiming", () => {
+  it("records slow render timings after the current render turn", async () => {
+    vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    const host = createHost();
+
+    recordControlUiRenderTiming(host, "chat", { durationMs: 20, messageCount: 150 });
+
+    expect(host.eventLogBuffer).toHaveLength(0);
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toEqual([
+      expect.objectContaining({
+        event: "control-ui.render",
+        payload: expect.objectContaining({
+          surface: "chat",
+          durationMs: 20,
+          messageCount: 150,
+          slow: true,
+        }),
+      }),
+    ]);
+  });
+
+  it("skips render timings that stay within budget", async () => {
+    const host = createHost();
+
+    recordControlUiRenderTiming(host, "config", { durationMs: 4 });
+    await Promise.resolve();
+
+    expect(host.eventLogBuffer).toHaveLength(0);
   });
 });
 
@@ -188,7 +228,7 @@ describe("startControlUiResponsivenessObserver", () => {
     expect(
       host.eventLogBuffer.filter((entry) => entry.event === "control-ui.longtask"),
     ).toHaveLength(50);
-    expect(host.eventLogBuffer.some((entry) => entry.event === "gateway.event")).toBe(true);
+    expect(host.eventLogBuffer.map((entry) => entry.event)).toContain("gateway.event");
   });
 
   it("returns null when responsiveness entries are unsupported or observe fails", () => {

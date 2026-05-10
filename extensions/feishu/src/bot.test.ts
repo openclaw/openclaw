@@ -1,7 +1,8 @@
 import type * as ConversationRuntime from "openclaw/plugin-sdk/conversation-runtime";
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveGroupSessionKey } from "openclaw/plugin-sdk/session-store-runtime";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import type { FeishuMessageEvent } from "./bot.js";
 import { handleFeishuMessage } from "./bot.js";
@@ -249,6 +250,7 @@ const {
   mockTouchBinding,
   mockResolveFeishuReasoningPreviewEnabled,
   mockTranscribeFirstAudio,
+  mockMaybeCreateDynamicAgent,
 } = vi.hoisted(() => ({
   mockCreateFeishuReplyDispatcher: vi.fn(() => ({
     dispatcher: createReplyDispatcher(),
@@ -284,6 +286,7 @@ const {
   mockTouchBinding: vi.fn(),
   mockResolveFeishuReasoningPreviewEnabled: vi.fn(() => false),
   mockTranscribeFirstAudio: vi.fn(),
+  mockMaybeCreateDynamicAgent: vi.fn(),
 }));
 
 vi.mock("./reply-dispatcher.js", () => ({
@@ -310,6 +313,10 @@ vi.mock("./audio-preflight.runtime.js", () => ({
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
+}));
+
+vi.mock("./dynamic-agent.js", () => ({
+  maybeCreateDynamicAgent: mockMaybeCreateDynamicAgent,
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
@@ -351,6 +358,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
       touch: mockTouchBinding,
     }),
   };
+});
+
+afterAll(() => {
+  vi.doUnmock("./reply-dispatcher.js");
+  vi.doUnmock("./reasoning-preview.js");
+  vi.doUnmock("./send.js");
+  vi.doUnmock("./media.js");
+  vi.doUnmock("./audio-preflight.runtime.js");
+  vi.doUnmock("./client.js");
+  vi.doUnmock("openclaw/plugin-sdk/conversation-runtime");
+  vi.resetModules();
 });
 
 async function dispatchMessage(params: { cfg: ClawdbotConfig; event: FeishuMessageEvent }) {
@@ -395,6 +413,7 @@ describe("handleFeishuMessage ACP routing", () => {
     mockTouchBinding.mockReset();
     mockResolveFeishuReasoningPreviewEnabled.mockReset().mockReturnValue(false);
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
+    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
     mockResolveAgentRoute.mockReset().mockReturnValue({
       ...buildDefaultResolveRoute(),
       sessionKey: "agent:main:feishu:direct:ou_sender_1",
@@ -594,6 +613,7 @@ describe("handleFeishuMessage command authorization", () => {
     mockResolveBoundConversation.mockReset().mockReturnValue(null);
     mockTouchBinding.mockReset();
     mockTranscribeFirstAudio.mockReset().mockResolvedValue(undefined);
+    mockMaybeCreateDynamicAgent.mockReset().mockResolvedValue({ created: false });
     mockResolveAgentRoute.mockReturnValue(buildDefaultResolveRoute());
     mockCreateFeishuClient.mockReturnValue({
       contact: {
@@ -666,6 +686,48 @@ describe("handleFeishuMessage command authorization", () => {
     await dispatchMessage({ cfg, event });
 
     expect(mockEnqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
+  it("passes disabled config-write policy to dynamic agent creation", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          configWrites: false,
+          dynamicAgentCreation: {
+            enabled: true,
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-attacker",
+        },
+      },
+      message: {
+        message_id: "msg-dynamic-config-writes-disabled",
+        chat_id: "oc-dm",
+        chat_type: "p2p",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    expect(mockMaybeCreateDynamicAgent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        senderOpenId: "ou-attacker",
+        configWritesAllowed: false,
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
   });
 
   it("blocks open DMs when a restrictive allowlist does not match", async () => {
@@ -1153,6 +1215,61 @@ describe("handleFeishuMessage command authorization", () => {
       expect.objectContaining({
         ChatType: "group",
         SenderId: "ou-allowed",
+      }),
+    );
+    expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps Feishu group policy bound to the chat while preserving speaker identity", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groupPolicy: "open",
+          groupSenderAllowFrom: ["ou-allowed"],
+          groups: {
+            "oc-group": {
+              requireMention: false,
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const event: FeishuMessageEvent = {
+      sender: {
+        sender_id: {
+          open_id: "ou-allowed",
+        },
+      },
+      message: {
+        message_id: "msg-group-context-79457",
+        chat_id: "oc-group",
+        chat_type: "group",
+        message_type: "text",
+        content: JSON.stringify({ text: "hello" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event });
+
+    const finalized = mockFinalizeInboundContext.mock.calls.at(-1)?.[0];
+    expect(finalized).toEqual(
+      expect.objectContaining({
+        ChatType: "group",
+        From: "feishu:ou-allowed",
+        To: "chat:oc-group",
+        OriginatingChannel: "feishu",
+        OriginatingTo: "chat:oc-group",
+        SenderId: "ou-allowed",
+      }),
+    );
+    expect(resolveGroupSessionKey(finalized as never)).toEqual(
+      expect.objectContaining({
+        channel: "feishu",
+        id: "oc-group",
+        key: "feishu:group:oc-group",
       }),
     );
     expect(mockDispatchReplyFromConfig).toHaveBeenCalledTimes(1);
@@ -2510,6 +2627,75 @@ describe("handleFeishuMessage command authorization", () => {
       2,
       expect.objectContaining({
         peer: { kind: "group", id: "oc-group:topic:msg-topic-first" },
+      }),
+    );
+  });
+
+  it("hydrates missing native topic thread_id before routing starter events", async () => {
+    mockShouldComputeCommandAuthorized.mockReturnValue(false);
+    mockGetMessageFeishu.mockResolvedValueOnce({
+      messageId: "msg-native-topic-first",
+      chatId: "oc-group",
+      chatType: "topic_group",
+      content: "topic starter",
+      contentType: "text",
+      threadId: "omt_native_topic",
+    });
+
+    const cfg: ClawdbotConfig = {
+      channels: {
+        feishu: {
+          groups: {
+            "oc-group": {
+              requireMention: false,
+              groupSessionScope: "group_topic",
+              replyInThread: "enabled",
+            },
+          },
+        },
+      },
+    } as ClawdbotConfig;
+
+    const firstTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-native-topic-first",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        message_type: "text",
+        content: JSON.stringify({ text: "create native topic" }),
+      },
+    };
+    const secondTurn: FeishuMessageEvent = {
+      sender: { sender_id: { open_id: "ou-topic-init" } },
+      message: {
+        message_id: "msg-native-topic-second",
+        chat_id: "oc-group",
+        chat_type: "topic_group",
+        thread_id: "omt_native_topic",
+        message_type: "text",
+        content: JSON.stringify({ text: "follow up in same native topic" }),
+      },
+    };
+
+    await dispatchMessage({ cfg, event: firstTurn });
+    await dispatchMessage({ cfg, event: secondTurn });
+
+    expect(mockGetMessageFeishu).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageId: "msg-native-topic-first",
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_native_topic" },
+      }),
+    );
+    expect(mockResolveAgentRoute).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        peer: { kind: "group", id: "oc-group:topic:omt_native_topic" },
       }),
     );
   });

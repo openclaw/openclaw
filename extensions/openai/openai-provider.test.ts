@@ -67,9 +67,9 @@ function runWrappedPayloadCase(params: {
   payload?: Record<string, unknown>;
 }) {
   const payload = params.payload ?? { store: false };
-  let capturedOptions: (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+  let capturedOptions: SimpleStreamOptions | undefined;
   const baseStreamFn: StreamFn = (model, _context, options) => {
-    capturedOptions = options as (SimpleStreamOptions & { openaiWsWarmup?: boolean }) | undefined;
+    capturedOptions = options;
     options?.onPayload?.(payload, model);
     return {} as ReturnType<StreamFn>;
   };
@@ -282,6 +282,60 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
+  it("resolves chat-latest as an explicit direct API model override", () => {
+    const provider = buildOpenAIProvider();
+
+    const model = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.5"
+            ? {
+                id,
+                name: "GPT-5.5",
+                provider: "openai",
+                api: "openai-responses",
+                baseUrl: "https://api.openai.com/v1",
+                reasoning: true,
+                input: ["text", "image"],
+                cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+                contextWindow: 1_050_000,
+                maxTokens: 128_000,
+              }
+            : null,
+      } as never,
+    });
+
+    expect(model).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+      input: ["text", "image"],
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+
+    const fallback = provider.resolveDynamicModel?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      modelRegistry: { find: () => null },
+    } as never);
+
+    expect(fallback).toMatchObject({
+      provider: "openai",
+      id: "chat-latest",
+      api: "openai-responses",
+      reasoning: false,
+      contextWindow: 400_000,
+      maxTokens: 128_000,
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+    });
+  });
+
   it("leaves gpt-5.5 to Pi and resolves gpt-5.5-pro locally", () => {
     const provider = buildOpenAIProvider();
 
@@ -340,7 +394,7 @@ describe("buildOpenAIProvider", () => {
     });
   });
 
-  it("surfaces gpt-5.5 in xhigh without synthetic catalog metadata", () => {
+  it("keeps chat-latest and gpt-5.5 out of synthetic catalog metadata", () => {
     const provider = buildOpenAIProvider();
 
     expect(
@@ -363,9 +417,15 @@ describe("buildOpenAIProvider", () => {
         id: "gpt-5.5",
       }),
     );
+    expect(entries).not.toContainEqual(
+      expect.objectContaining({
+        provider: "openai",
+        id: "chat-latest",
+      }),
+    );
   });
 
-  it("keeps modern live selection on OpenAI 5.2+ and Codex 5.2+", () => {
+  it("keeps modern live selection on OpenAI 5.2+ and current Codex models", () => {
     const provider = buildOpenAIProvider();
     const codexProvider = buildOpenAICodexProviderPlugin();
 
@@ -385,6 +445,12 @@ describe("buildOpenAIProvider", () => {
       provider.isModernModelRef?.({
         provider: "openai",
         modelId: "gpt-5.4",
+      } as never),
+    ).toBe(true);
+    expect(
+      provider.isModernModelRef?.({
+        provider: "openai",
+        modelId: "chat-latest",
       } as never),
     ).toBe(true);
     expect(
@@ -411,7 +477,7 @@ describe("buildOpenAIProvider", () => {
         provider: "openai-codex",
         modelId: "gpt-5.2-codex",
       } as never),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       codexProvider.isModernModelRef?.({
         provider: "openai-codex",
@@ -510,7 +576,6 @@ describe("buildOpenAIProvider", () => {
     expect(extraParams).toMatchObject({
       transport: "sse",
     });
-    expect(extraParams?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.store).toBe(true);
     expect(result.payload.context_management).toEqual([
       { type: "compaction", compact_threshold: 140_000 },
@@ -519,6 +584,40 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.text).toEqual({ verbosity: "low" });
     expect(result.payload.reasoning).toEqual({ effort: "none" });
     expect(result.payload.tools).toEqual([{ type: "web_search" }]);
+  });
+
+  it("clamps chat-latest text verbosity to the only live-supported value", () => {
+    const provider = buildOpenAIProvider();
+    const wrap = provider.wrapStreamFn;
+    expect(wrap).toBeTypeOf("function");
+    if (!wrap) {
+      throw new Error("expected OpenAI wrapper");
+    }
+    const extraParams = provider.prepareExtraParams?.({
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: {
+        textVerbosity: "low",
+      },
+    } as never);
+    const result = runWrappedPayloadCase({
+      wrap,
+      provider: "openai",
+      modelId: "chat-latest",
+      extraParams: extraParams ?? undefined,
+      model: {
+        api: "openai-responses",
+        provider: "openai",
+        id: "chat-latest",
+        baseUrl: "https://api.openai.com/v1",
+        contextWindow: 400_000,
+      } as Model<"openai-responses">,
+      payload: {
+        text: { verbosity: "high" },
+      },
+    });
+
+    expect(result.payload.text).toEqual({ verbosity: "medium" });
   });
 
   it("uses native OpenAI web search instead of the managed web_search function", () => {
@@ -643,12 +742,11 @@ describe("buildOpenAIProvider", () => {
     expect(result.payload.tools).toEqual([{ type: "function", name: "web_search" }]);
   });
 
-  it("preserves explicit OpenAI responses transport and warmup overrides", () => {
+  it("preserves explicit OpenAI responses transport overrides", () => {
     const provider = buildOpenAIProvider();
 
     const explicit = {
       transport: "websocket",
-      openaiWsWarmup: false,
       fastMode: true,
     };
 
@@ -661,7 +759,7 @@ describe("buildOpenAIProvider", () => {
     ).toBe(explicit);
   });
 
-  it("defaults Codex responses transport without forcing warmup flags", () => {
+  it("defaults Codex responses transport without forcing extra flags", () => {
     const provider = buildOpenAICodexProviderPlugin();
 
     expect(
@@ -677,7 +775,6 @@ describe("buildOpenAIProvider", () => {
 
     const explicit = {
       transport: "sse",
-      openaiWsWarmup: false,
     };
     expect(
       provider.prepareExtraParams?.({
@@ -723,7 +820,6 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(result.options?.transport).toBeUndefined();
-    expect(result.options?.openaiWsWarmup).toBeUndefined();
     expect(result.payload.reasoning).toEqual({ effort: "none" });
   });
 

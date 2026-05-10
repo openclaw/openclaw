@@ -49,7 +49,15 @@ describe("Slack live QA runtime helpers", () => {
   });
 
   it("reports standard live transport scenario coverage", () => {
-    expect(__testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual(["canary", "mention-gating"]);
+    expect(__testing.SLACK_QA_STANDARD_SCENARIO_IDS).toEqual([
+      "canary",
+      "mention-gating",
+      "allowlist-block",
+      "top-level-reply-shape",
+      "restart-resume",
+      "thread-follow-up",
+      "thread-isolation",
+    ]);
   });
 
   it("selects Slack scenarios by id", () => {
@@ -110,9 +118,7 @@ describe("Slack live QA runtime helpers", () => {
       },
     ]);
     expect(result.scenarios[0]?.details).toContain("Missing OPENCLAW_QA_CONVEX_SITE_URL");
-    await expect(fs.stat(result.reportPath)).resolves.toMatchObject({
-      isFile: expect.any(Function),
-    });
+    await expect(fs.stat(result.reportPath).then((stats) => stats.isFile())).resolves.toBe(true);
     const summary = JSON.parse(await fs.readFile(result.summaryPath, "utf8")) as {
       channelId: string;
       credentials: { kind: string; role?: string; source: string };

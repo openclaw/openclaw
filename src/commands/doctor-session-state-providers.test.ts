@@ -3,6 +3,7 @@ import {
   applySessionRouteStateRepair,
   resolveConfiguredDoctorSessionStateRoute,
   scanSessionRouteStateOwners,
+  storeMayContainPluginSessionRouteState,
 } from "./doctor-session-state-providers.js";
 
 const codexOwner = {
@@ -15,44 +16,75 @@ const codexOwner = {
 };
 
 describe("doctor session state provider routes", () => {
-  it("preserves raw configured CLI runtimes before harness policy normalization", () => {
+  it("skips plugin route-state scans for unrelated recovery metadata", () => {
     expect(
-      resolveConfiguredDoctorSessionStateRoute({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-              agentRuntime: { id: "codex-cli" },
-            },
+      storeMayContainPluginSessionRouteState({
+        "agent:main:subagent:wedged-child": {
+          sessionId: "session-wedged-child",
+          updatedAt: 1,
+          abortedLastRun: true,
+          subagentRecovery: {
+            automaticAttempts: 2,
+            lastAttemptAt: 1,
+            wedgedAt: 2,
+            wedgedReason: "blocked",
           },
         },
-        sessionKey: "agent:main:telegram:direct:1",
-        env: {},
       }),
-    ).toMatchObject({
-      defaultProvider: "openai",
-      configuredModelRefs: ["openai/gpt-5.5"],
-      runtime: "codex-cli",
-    });
+    ).toBe(false);
+
+    expect(
+      storeMayContainPluginSessionRouteState({
+        "agent:main:telegram:direct:1": {
+          sessionId: "session-codex",
+          updatedAt: 1,
+          modelProvider: "openai-codex",
+          model: "gpt-5.4",
+        },
+      }),
+    ).toBe(true);
   });
 
-  it("lets environment CLI runtime overrides reach plugin-owned scanners", () => {
-    expect(
-      resolveConfiguredDoctorSessionStateRoute({
-        cfg: {
-          agents: {
-            defaults: {
-              model: { primary: "openai/gpt-5.5" },
-              agentRuntime: { id: "pi" },
+  it("preserves configured provider CLI runtimes before harness policy normalization", () => {
+    const route = resolveConfiguredDoctorSessionStateRoute({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+          },
+        },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              agentRuntime: { id: "codex-cli" },
+              models: [],
             },
           },
         },
-        sessionKey: "agent:main:telegram:direct:1",
-        env: { OPENCLAW_AGENT_RUNTIME: "codex-cli" },
-      }),
-    ).toMatchObject({
-      runtime: "codex-cli",
+      },
+      sessionKey: "agent:main:telegram:direct:1",
+      env: {},
     });
+    expect(route.defaultProvider).toBe("openai");
+    expect(route.configuredModelRefs).toStrictEqual(["openai/gpt-5.5"]);
+    expect(route.runtime).toBe("codex-cli");
+  });
+
+  it("ignores legacy environment runtime overrides before plugin-owned scans", () => {
+    const route = resolveConfiguredDoctorSessionStateRoute({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            agentRuntime: { id: "pi" },
+          },
+        },
+      },
+      sessionKey: "agent:main:telegram:direct:1",
+      env: { OPENCLAW_AGENT_RUNTIME: "codex-cli" },
+    });
+    expect(route.runtime).toBe("codex");
   });
 
   it("clears auto-created route state when current route no longer uses the owner", () => {
@@ -96,7 +128,7 @@ describe("doctor session state provider routes", () => {
       },
     });
 
-    expect(scan.manualReview).toEqual([]);
+    expect(scan.manualReview).toStrictEqual([]);
     expect(scan.repairs).toEqual([
       {
         key: sessionKey,
@@ -114,15 +146,13 @@ describe("doctor session state provider routes", () => {
     ]);
 
     expect(applySessionRouteStateRepair({ entry, repair: scan.repairs[0], now: 123 })).toBe(true);
-    expect(entry).toMatchObject({
-      sessionId: "sess-stale-codex",
-      updatedAt: 123,
-      cliSessionBindings: {
-        "claude-cli": { sessionId: "claude-session-1" },
-      },
-      cliSessionIds: {
-        "claude-cli": "claude-session-1",
-      },
+    expect(entry.sessionId).toBe("sess-stale-codex");
+    expect(entry.updatedAt).toBe(123);
+    expect(entry.cliSessionBindings).toStrictEqual({
+      "claude-cli": { sessionId: "claude-session-1" },
+    });
+    expect(entry.cliSessionIds).toStrictEqual({
+      "claude-cli": "claude-session-1",
     });
     expect(entry.providerOverride).toBeUndefined();
     expect(entry.modelOverride).toBeUndefined();
@@ -166,7 +196,7 @@ describe("doctor session state provider routes", () => {
       },
     });
 
-    expect(scan.repairs).toEqual([]);
+    expect(scan.repairs).toStrictEqual([]);
     expect(scan.manualReview).toEqual([
       {
         key: sessionKey,

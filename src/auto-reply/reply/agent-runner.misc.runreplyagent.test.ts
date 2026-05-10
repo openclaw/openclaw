@@ -7,6 +7,7 @@ import {
   abortEmbeddedPiRun,
   isEmbeddedPiRunActive,
 } from "../../agents/pi-embedded-runner/runs.js";
+import { clearRuntimeConfigSnapshot } from "../../config/config.js";
 import * as sessionTypesModule from "../../config/sessions.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionStore, saveSessionStore } from "../../config/sessions.js";
@@ -149,6 +150,7 @@ type RunWithModelFallbackParams = {
 };
 
 beforeEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   embeddedRunTesting.resetActiveEmbeddedRuns();
   replyRunRegistryTesting.resetReplyRunRegistry();
@@ -182,6 +184,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  clearRuntimeConfigSnapshot();
   resetDiagnosticEventsForTest();
   vi.useRealTimers();
   clearMemoryPluginState();
@@ -1690,6 +1693,104 @@ describe("runReplyAgent claude-cli routing", () => {
     expect(result).toMatchObject({ text: "ok" });
   });
 
+  it("does not leak hook-blocked CLI input in raw trace payloads", async () => {
+    runCliAgentMock.mockResolvedValueOnce({
+      payloads: [
+        {
+          text: "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+          isError: true,
+        },
+      ],
+      meta: {
+        error: {
+          kind: "hook_block",
+          message:
+            "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+        },
+        agentMeta: {
+          provider: "claude-cli",
+          model: "opus-4.5",
+        },
+      },
+    });
+
+    const typing = createMockTypingController();
+    const sessionCtx = {
+      Provider: "webchat",
+      OriginatingTo: "session:1",
+      AccountId: "primary",
+      MessageSid: "msg",
+      CommandBody: "secret hitl prompt",
+      RawBody: "secret hitl prompt",
+      BodyForAgent: "secret hitl prompt",
+      Body: "secret hitl prompt",
+    } as unknown as TemplateContext;
+    const resolvedQueue = { mode: "interrupt" } as unknown as QueueSettings;
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      traceLevel: "raw",
+    } as SessionEntry;
+    const followupRun = {
+      prompt: "secret hitl prompt",
+      summaryLine: "secret hitl prompt",
+      enqueuedAt: Date.now(),
+      run: {
+        agentId: "main",
+        sessionId: "session",
+        sessionKey: "main",
+        messageProvider: "webchat",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp",
+        config: createCliBackendTestConfig(),
+        skillsSnapshot: {},
+        traceAuthorized: true,
+        provider: "claude-cli",
+        model: "opus-4.5",
+        thinkLevel: "low",
+        verboseLevel: "off",
+        elevatedLevel: "off",
+        bashElevated: {
+          enabled: false,
+          allowed: false,
+          defaultLevel: "off",
+        },
+        timeoutMs: 1_000,
+        blockReplyBreak: "message_end",
+      },
+    } as unknown as FollowupRun;
+
+    const result = await runReplyAgent({
+      commandBody: "secret hitl prompt",
+      followupRun,
+      queueKey: "main",
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { main: sessionEntry },
+      defaultModel: "claude-cli/opus-4.5",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    const texts = Array.isArray(result)
+      ? result.map((payload) => payload.text ?? "").join("\n")
+      : (result?.text ?? "");
+    expect(texts).toContain(
+      "Your message could not be sent: The agent cannot read this message. (blocked by policy-plugin)",
+    );
+    expect(texts).not.toContain("secret hitl prompt");
+  });
+
   it("uses the selected CLI runtime for canonical Anthropic models", async () => {
     runCliAgentMock.mockResolvedValueOnce({
       payloads: [{ text: "ok" }],
@@ -1712,7 +1813,6 @@ describe("runReplyAgent claude-cli routing", () => {
     const sessionEntry = {
       sessionId: "session",
       updatedAt: Date.now(),
-      agentRuntimeOverride: "claude-cli",
     } as SessionEntry;
     const followupRun = {
       prompt: "hello",
@@ -1724,7 +1824,15 @@ describe("runReplyAgent claude-cli routing", () => {
         messageProvider: "webchat",
         sessionFile: "/tmp/session.jsonl",
         workspaceDir: "/tmp",
-        config: { agents: { defaults: { agentRuntime: { id: "claude-cli" } } } },
+        config: {
+          agents: {
+            defaults: {
+              models: {
+                "anthropic/claude-opus-4-7": { agentRuntime: { id: "claude-cli" } },
+              },
+            },
+          },
+        },
         skillsSnapshot: {},
         provider: "anthropic",
         model: "claude-opus-4-7",

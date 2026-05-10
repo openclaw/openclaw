@@ -3,8 +3,12 @@ import path from "node:path";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { saveJsonFile } from "../infra/json-file.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveDefaultPluginNpmDir } from "../plugins/install-paths.js";
-import type { InstalledPluginIndexRecordStoreOptions } from "../plugins/installed-plugin-index-records.js";
+import {
+  loadInstalledPluginIndexInstallRecords,
+  type InstalledPluginIndexRecordStoreOptions,
+} from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
 import { note } from "../terminal/note.js";
@@ -36,12 +40,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
-    return isRecord(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
+  const parsed = tryReadJsonSync(filePath);
+  return isRecord(parsed) ? parsed : null;
 }
 
 function readStringMap(value: unknown): Record<string, string> {
@@ -228,6 +228,17 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   return true;
 }
 
+async function loadInstallRecordsWithoutPluginIds(
+  params: PluginRegistryDoctorRepairParams,
+  pluginIds: readonly string[],
+) {
+  const records = await loadInstalledPluginIndexInstallRecords(params);
+  for (const pluginId of pluginIds) {
+    delete records[pluginId];
+  }
+  return records;
+}
+
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {
@@ -247,6 +258,9 @@ export async function maybeRepairPluginRegistryState(
     ...params,
     config: params.config,
   };
+  const staleManagedNpmBundledPluginIds = listStaleManagedNpmBundledPlugins(params).map(
+    (plugin) => plugin.pluginId,
+  );
   const removedStaleManagedNpmBundledPlugins = maybeRepairStaleManagedNpmBundledPlugins(params);
   if (!params.prompter.shouldRepair) {
     if (preflight.action === "migrate") {
@@ -278,6 +292,14 @@ export async function maybeRepairPluginRegistryState(
     const index = await refreshPluginRegistry({
       ...migrationParams,
       reason: "migration",
+      ...(removedStaleManagedNpmBundledPlugins
+        ? {
+            installRecords: await loadInstallRecordsWithoutPluginIds(
+              params,
+              staleManagedNpmBundledPluginIds,
+            ),
+          }
+        : {}),
     });
     const total = index.plugins.length;
     const enabled = index.plugins.filter((plugin) => plugin.enabled).length;
