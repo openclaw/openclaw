@@ -441,16 +441,21 @@ export async function launchOpenClawChrome(
       userDataDir,
       ...launchOptions,
     });
+    const env = {
+      ...omitChromeProxyEnv(process.env),
+      // Reduce accidental sharing with the user's env.
+      HOME: os.homedir(),
+    };
+    if (process.platform === "linux") {
+      env.XDG_CONFIG_HOME ??= path.join(os.tmpdir(), ".chromium");
+      env.XDG_CACHE_HOME ??= path.join(os.tmpdir(), ".chromium");
+    }
     // stdio tuple: discard stdout to prevent buffer saturation in constrained
     // environments (e.g. Docker), while keeping stderr piped for diagnostics.
     // Cast to ChildProcessWithoutNullStreams so callers can use .stderr safely;
     // the tuple overload resolution varies across @types/node versions.
     const preparedSpawn = prepareOomScoreAdjustedSpawn(exe.path, args, {
-      env: {
-        ...omitChromeProxyEnv(process.env),
-        // Reduce accidental sharing with the user's env.
-        HOME: os.homedir(),
-      },
+      env,
     });
     return spawn(preparedSpawn.command, preparedSpawn.args, {
       stdio: ["ignore", "ignore", "pipe"],
