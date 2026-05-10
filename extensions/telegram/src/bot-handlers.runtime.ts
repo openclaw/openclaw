@@ -240,13 +240,38 @@ export const registerTelegramHandlers = ({
   };
 
   const MULTI_SELECT_PREFIX = "OC_MULTI|";
+  const MULTI_SELECT_TOGGLE_PREFIX = `${MULTI_SELECT_PREFIX}toggle|`;
   const SELECT_PREFIX = "OC_SELECT|";
   const SELECTED_PREFIX = "✅ ";
+
+  type TelegramManagedSelectCallback =
+    | { type: "multi-toggle"; value: string }
+    | { type: "multi-clear" }
+    | { type: "multi-submit" }
+    | { type: "select"; value: string };
 
   type TelegramCallbackButton = {
     text: string;
     callback_data: string;
     style?: "danger" | "success" | "primary";
+  };
+
+  const parseTelegramManagedSelectCallback = (
+    data: string,
+  ): TelegramManagedSelectCallback | undefined => {
+    if (data.startsWith(MULTI_SELECT_TOGGLE_PREFIX)) {
+      return { type: "multi-toggle", value: data.slice(MULTI_SELECT_TOGGLE_PREFIX.length) };
+    }
+    if (data === `${MULTI_SELECT_PREFIX}clear`) {
+      return { type: "multi-clear" };
+    }
+    if (data === `${MULTI_SELECT_PREFIX}submit`) {
+      return { type: "multi-submit" };
+    }
+    if (data.startsWith(SELECT_PREFIX)) {
+      return { type: "select", value: data.slice(SELECT_PREFIX.length) };
+    }
+    return undefined;
   };
 
   const cloneInlineKeyboardButtons = (message: Message): TelegramCallbackButton[][] => {
@@ -292,15 +317,14 @@ export const registerTelegramHandlers = ({
   const isSelectedMultiButton = (button: TelegramCallbackButton): boolean =>
     /^✅\s*/.test(button.text);
   const isMultiToggleButton = (button: TelegramCallbackButton): boolean =>
-    typeof button.callback_data === "string" &&
-    button.callback_data.startsWith(`${MULTI_SELECT_PREFIX}toggle|`);
+    button.callback_data.startsWith(MULTI_SELECT_TOGGLE_PREFIX);
   const resolveMultiSelectedValues = (buttons: TelegramCallbackButton[][]): string[] =>
     buttons.flatMap((row) =>
       row.flatMap((button) => {
         if (!isMultiToggleButton(button) || !isSelectedMultiButton(button)) {
           return [];
         }
-        return [button.callback_data.slice(`${MULTI_SELECT_PREFIX}toggle|`.length)];
+        return [button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length)];
       }),
     );
   const updateMultiSelectKeyboard = (
@@ -313,7 +337,7 @@ export const registerTelegramHandlers = ({
         if (!isMultiToggleButton(button)) {
           return button;
         }
-        const buttonValue = button.callback_data.slice(`${MULTI_SELECT_PREFIX}toggle|`.length);
+        const buttonValue = button.callback_data.slice(MULTI_SELECT_TOGGLE_PREFIX.length);
         const baseText = stripMultiSelectPrefix(button.text);
         const selected =
           action === "clear"
@@ -1694,10 +1718,17 @@ export const registerTelegramHandlers = ({
         return;
       }
 
-      if (data.startsWith(MULTI_SELECT_PREFIX)) {
-        const [, action, value = ""] = data.split("|");
-        if (action === "toggle" || action === "clear") {
-          const buttons = updateMultiSelectKeyboard(callbackMessage, action, value);
+      const managedSelectCallback = parseTelegramManagedSelectCallback(data);
+      if (managedSelectCallback) {
+        if (
+          managedSelectCallback.type === "multi-toggle" ||
+          managedSelectCallback.type === "multi-clear"
+        ) {
+          const buttons = updateMultiSelectKeyboard(
+            callbackMessage,
+            managedSelectCallback.type === "multi-clear" ? "clear" : "toggle",
+            managedSelectCallback.type === "multi-toggle" ? managedSelectCallback.value : "",
+          );
           if (buttons.length > 0) {
             try {
               await editCallbackButtons(buttons);
@@ -1709,7 +1740,8 @@ export const registerTelegramHandlers = ({
           }
           return;
         }
-        if (action === "submit") {
+
+        if (managedSelectCallback.type === "multi-submit") {
           const selected = resolveMultiSelectedValues(cloneInlineKeyboardButtons(callbackMessage));
           const synthetic = buildCallbackSyntheticTextContext({
             ctx,
@@ -1724,10 +1756,7 @@ export const registerTelegramHandlers = ({
           });
           return;
         }
-      }
 
-      if (data.startsWith(SELECT_PREFIX)) {
-        const value = data.slice(SELECT_PREFIX.length);
         try {
           await clearCallbackButtons();
         } catch (editErr) {
@@ -1743,7 +1772,7 @@ export const registerTelegramHandlers = ({
           ctx,
           callbackMessage,
           callback,
-          text: `Single-select submitted: ${value}`,
+          text: `Single-select submitted: ${managedSelectCallback.value}`,
           isForum,
         });
         await processMessageWithReplyChain(synthetic.ctx, synthetic.message, [], storeAllowFrom, {

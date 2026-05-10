@@ -764,14 +764,14 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-multi-toggle-1",
-        data: "OC_MULTI|toggle|red",
+        data: "OC_MULTI|toggle|env|prod",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
           date: 1736380800,
           message_id: 10,
           reply_markup: {
-            inline_keyboard: [[{ text: "Red", callback_data: "OC_MULTI|toggle|red" }]],
+            inline_keyboard: [[{ text: "Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
           },
         },
       },
@@ -781,7 +781,7 @@ describe("createTelegramBot", () => {
 
     expect(editMessageReplyMarkupSpy).toHaveBeenCalledWith(1234, 10, {
       reply_markup: {
-        inline_keyboard: [[{ text: "✅ Red", callback_data: "OC_MULTI|toggle|red" }]],
+        inline_keyboard: [[{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }]],
       },
     });
     expect(replySpy).not.toHaveBeenCalled();
@@ -808,7 +808,7 @@ describe("createTelegramBot", () => {
           message_id: 10,
           reply_markup: {
             inline_keyboard: [
-              [{ text: "✅ Red", callback_data: "OC_MULTI|toggle|red" }],
+              [{ text: "✅ Prod", callback_data: "OC_MULTI|toggle|env|prod" }],
               [{ text: "Blue", callback_data: "OC_MULTI|toggle|blue" }],
             ],
           },
@@ -819,7 +819,7 @@ describe("createTelegramBot", () => {
     });
 
     expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls[0][0].Body).toContain("Multi-select submitted: red");
+    expect(replySpy.mock.calls[0][0].Body).toContain("Multi-select submitted: env|prod");
   });
 
   it("submits OC_SELECT values as a synthetic inbound message and clears buttons", async () => {
@@ -834,14 +834,14 @@ describe("createTelegramBot", () => {
     await callbackHandler({
       callbackQuery: {
         id: "cbq-select-1",
-        data: "OC_SELECT|alpha",
+        data: "OC_SELECT|env|canary",
         from: { id: 9, first_name: "Ada", username: "ada_bot" },
         message: {
           chat: { id: 1234, type: "private" },
           date: 1736380800,
           message_id: 10,
           reply_markup: {
-            inline_keyboard: [[{ text: "Alpha", callback_data: "OC_SELECT|alpha" }]],
+            inline_keyboard: [[{ text: "Canary", callback_data: "OC_SELECT|env|canary" }]],
           },
         },
       },
@@ -853,7 +853,7 @@ describe("createTelegramBot", () => {
       reply_markup: { inline_keyboard: [] },
     });
     expect(replySpy).toHaveBeenCalledTimes(1);
-    expect(replySpy.mock.calls[0][0].Body).toContain("Single-select submitted: alpha");
+    expect(replySpy.mock.calls[0][0].Body).toContain("Single-select submitted: env|canary");
   });
 
   it("preserves native command source for prefixed callback_query payloads", async () => {

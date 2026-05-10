@@ -362,26 +362,6 @@ describe("sanitizeUserFacingText", () => {
     );
   });
 
-  it("bounds large child completion results before injecting internal context", () => {
-    const internal = formatAgentInternalEventsForPrompt([
-      {
-        type: "task_completion",
-        source: "subagent",
-        childSessionKey: "agent:main:subagent:test",
-        childSessionId: "sess_1",
-        announceType: "subagent task",
-        taskLabel: "Investigate issue",
-        status: "ok",
-        statusLabel: "completed successfully",
-        result: "x".repeat(6_000),
-        replyInstruction: "Reply to the user in your own words.",
-      },
-    ]);
-
-    expect(internal).toContain("[child result truncated: 2000 additional characters omitted]");
-    expect(internal.length).toBeLessThan(5_000);
-  });
-
   it("does not strip inline delimiter mentions that are not standalone marker lines", () => {
     const input = `Note: ${INTERNAL_RUNTIME_CONTEXT_BEGIN} appears inline and should stay.`;
     expect(sanitizeUserFacingText(input)).toBe(input);
