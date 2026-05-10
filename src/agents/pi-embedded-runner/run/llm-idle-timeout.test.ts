@@ -225,6 +225,25 @@ describe("resolveLlmIdleTimeoutMs", () => {
       30_000,
     );
   });
+
+  it("disables the default idle watchdog when thinkingEnabled is true", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true })).toBe(0);
+  });
+
+  it("keeps the default idle watchdog when thinkingEnabled is false", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: false })).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+  });
+
+  it("still honors an explicit provider request timeout when thinkingEnabled", () => {
+    expect(resolveLlmIdleTimeoutMs({ thinkingEnabled: true, modelRequestTimeoutMs: 300_000 })).toBe(
+      300_000,
+    );
+  });
+
+  it("still applies agents.defaults.timeoutSeconds when thinkingEnabled", () => {
+    const cfg = { agents: { defaults: { timeoutSeconds: 60 } } } as OpenClawConfig;
+    expect(resolveLlmIdleTimeoutMs({ cfg, thinkingEnabled: true })).toBe(60_000);
+  });
 });
 
 describe("streamWithIdleTimeout", () => {
