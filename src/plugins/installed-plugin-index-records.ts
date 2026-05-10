@@ -67,6 +67,16 @@ export function withPluginInstallRecords(
   };
 }
 
+export function readPendingPluginInstallRecords(
+  config: OpenClawConfig,
+): Record<string, PluginInstallRecord> {
+  return config.plugins?.installs ?? {};
+}
+
+export function hasPendingPluginInstallRecords(config: OpenClawConfig): boolean {
+  return Object.keys(readPendingPluginInstallRecords(config)).length > 0;
+}
+
 export function withoutPluginInstallRecords(config: OpenClawConfig): OpenClawConfig {
   if (!config.plugins?.installs) {
     return config;

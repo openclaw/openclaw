@@ -9,7 +9,9 @@ import type { PluginCandidate } from "./discovery.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
+  hasPendingPluginInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
+  readPendingPluginInstallRecords,
   recordPluginInstallInRecords,
   removePluginInstallRecordFromRecords,
   withoutPluginInstallRecords,
@@ -379,24 +381,29 @@ describe("plugin index install records store", () => {
   });
 
   it("strips transient install records from config writes", () => {
-    expect(
-      withoutPluginInstallRecords({
-        plugins: {
-          entries: {
-            twitch: { enabled: true },
-          },
-          installs: {
-            twitch: { source: "npm", spec: "twitch@1.0.0" },
-          },
+    const config = {
+      plugins: {
+        entries: {
+          twitch: { enabled: true },
         },
-      }),
-    ).toEqual({
+        installs: {
+          twitch: { source: "npm", spec: "twitch@1.0.0" },
+        },
+      },
+    };
+
+    expect(readPendingPluginInstallRecords(config)).toEqual({
+      twitch: { source: "npm", spec: "twitch@1.0.0" },
+    });
+    expect(hasPendingPluginInstallRecords(config)).toBe(true);
+    expect(withoutPluginInstallRecords(config)).toEqual({
       plugins: {
         entries: {
           twitch: { enabled: true },
         },
       },
     });
+    expect(hasPendingPluginInstallRecords({ plugins: { entries: {} } })).toBe(false);
   });
 
   it("ignores invalid persisted plugin index files", async () => {
