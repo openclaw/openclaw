@@ -106,8 +106,8 @@ importers:
         specifier: ^0.6.0
         version: 0.6.0
       '@openclaw/fs-safe':
-        specifier: github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c
-        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c
+        specifier: github:openclaw/fs-safe#66a4dfba0e3a9035d011a12ca5d24948a928f59b
+        version: https://codeload.github.com/openclaw/fs-safe/tar.gz/66a4dfba0e3a9035d011a12ca5d24948a928f59b
       '@slack/bolt':
         specifier: ^4.7.2
         version: 4.7.2(@types/express@5.0.6)
@@ -3359,8 +3359,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':
-    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c}
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/66a4dfba0e3a9035d011a12ca5d24948a928f59b':
+    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/66a4dfba0e3a9035d011a12ca5d24948a928f59b}
     version: 0.2.0
     engines: {node: '>=20.11'}
 
@@ -7463,6 +7463,11 @@ packages:
     resolution: {integrity: sha512-BR7VvDCVHO+q2xBEWskxS6DJE1qRnb7DxzUrogb71CWoSficBxYsiAGd+Kl0mmq/MprG9yArRkyrQxTO6XjMzA==}
     hasBin: true
 
+  semver@7.7.4:
+    resolution: {integrity: sha512-vFKC2IEtQnVhpT78h1Yp8wzwrf8CM+MzKMHGJZfBtzhZNycRFnXsHk6E5TxIkkMsgNS7mdX3AGB7x2QM2di4lA==}
+    engines: {node: '>=10'}
+    hasBin: true
+
   semver@7.8.0:
     resolution: {integrity: sha512-AcM7dV/5ul4EekoQ29Agm5vri8JNqRyj39o0qpX6vDF2GZrtutZl5RwgD1XnZjiTAfncsJhMI48QQH3sN87YNA==}
     engines: {node: '>=10'}
@@ -9315,7 +9320,7 @@ snapshots:
       nopt: 5.0.0
       npmlog: 5.0.1
       rimraf: 3.0.2
-      semver: 7.8.0
+      semver: 7.7.4
       tar: 7.5.15
     transitivePeerDependencies:
       - encoding
@@ -10388,7 +10393,7 @@ snapshots:
   '@openai/codex@0.130.0-win32-x64':
     optional: true
 
-  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':
+  '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/66a4dfba0e3a9035d011a12ca5d24948a928f59b':
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.15
@@ -14976,6 +14981,9 @@ snapshots:
   sdp-transform@3.0.0: {}
 
   semver@6.3.1:
+    optional: true
+
+  semver@7.7.4:
     optional: true
 
   semver@7.8.0: {}

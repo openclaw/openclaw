@@ -31,6 +31,7 @@ minimumReleaseAgeExclude:
   - "rolldown"
   - "sqlite-vec"
   - "sqlite-vec-*"
+  - "@tloncorp/tlon-skill-*"
 
 onlyBuiltDependencies:
   - "@openclaw/fs-safe"
