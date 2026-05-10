@@ -728,6 +728,8 @@ async function clearChatHistory(host: ChatHost) {
     host.chatSideResultTerminalRuns?.clear();
     host.chatStream = null;
     host.chatRunId = null;
+    (host as { chatStreamStartedAt?: number | null }).chatStreamStartedAt = null;
+    resetToolStream(host as unknown as Parameters<typeof resetToolStream>[0]);
     await loadChatHistory(host as unknown as ChatState);
   } catch (err) {
     host.lastError = String(err);

@@ -487,7 +487,7 @@ export async function renderContextTreemapPng(params: {
     rgba(51, 65, 85),
     1,
   );
-  const outPath = path.join(os.tmpdir(), `openclaw-context-map-${crypto.randomUUID()}.png`);
+  const outPath = path.join(os.tmpdir(), "openclaw-context-map-" + crypto.randomUUID() + ".png");
   await writeFile(outPath, encodePng(canvas.data));
   const caption = [
     "Context treemap",

@@ -27,6 +27,25 @@ describe("preserveOptimisticTailMessages", () => {
     ).toEqual([persistedUser, optimisticUser, optimisticAssistant]);
   });
 
+  it("can preserve optimistic messages when stale history has no shared anchor", () => {
+    const persistedAssistant = {
+      role: "assistant",
+      content: [{ type: "text", text: "older persisted reply" }],
+      __openclaw: { seq: 1 },
+    };
+    const optimisticUser = {
+      role: "user",
+      content: [{ type: "text", text: "latest ask" }],
+      timestamp: 10,
+    };
+
+    expect(
+      preserveOptimisticTailMessages([persistedAssistant], [optimisticUser], {
+        preserveUnanchoredOptimisticMessages: true,
+      }),
+    ).toEqual([persistedAssistant, optimisticUser]);
+  });
+
   it("drops streamed assistant tail when final history has caught up past the shared user", () => {
     const persistedUser = {
       role: "user",

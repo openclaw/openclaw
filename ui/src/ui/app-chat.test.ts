@@ -1282,6 +1282,7 @@ describe("handleSendChat", () => {
       sessionKey: "main",
       chatMessage: "/clear",
       chatMessages: [{ role: "user", content: "hello", timestamp: 1 }],
+      chatStream: "old streamed text",
       chatSideResult: {
         kind: "btw",
         runId: "btw-run-clear",
@@ -1293,6 +1294,33 @@ describe("handleSendChat", () => {
       },
       chatSideResultTerminalRuns: new Set(["btw-run-clear"]),
     });
+    const toolHost = host as unknown as {
+      chatStreamStartedAt: number | null;
+      chatStreamSegments: Array<{ text: string; ts: number }>;
+      chatToolMessages: Array<Record<string, unknown>>;
+      toolStreamById: Map<string, unknown>;
+      toolStreamOrder: string[];
+    };
+    toolHost.chatStreamStartedAt = 123;
+    toolHost.chatStreamSegments = [{ text: "old segment", ts: 123 }];
+    toolHost.chatToolMessages = [
+      { role: "assistant", content: [{ type: "toolcall", name: "shell" }] },
+    ];
+    toolHost.toolStreamById = new Map([
+      [
+        "tool-1",
+        {
+          toolCallId: "tool-1",
+          runId: "run-old",
+          sessionKey: "main",
+          name: "shell",
+          startedAt: 1,
+          updatedAt: 1,
+          message: { role: "assistant", content: [{ type: "toolcall", name: "shell" }] },
+        },
+      ],
+    ]);
+    toolHost.toolStreamOrder = ["tool-1"];
 
     await handleSendChat(host);
 
@@ -1302,6 +1330,11 @@ describe("handleSendChat", () => {
     expect(host.chatSideResultTerminalRuns?.size).toBe(0);
     expect(host.chatRunId).toBeNull();
     expect(host.chatStream).toBeNull();
+    expect(toolHost.chatStreamStartedAt).toBeNull();
+    expect(toolHost.chatStreamSegments).toStrictEqual([]);
+    expect(toolHost.chatToolMessages).toStrictEqual([]);
+    expect(toolHost.toolStreamById.size).toBe(0);
+    expect(toolHost.toolStreamOrder).toStrictEqual([]);
   });
 
   it("shows a visible pending item for /steer on the active run", async () => {

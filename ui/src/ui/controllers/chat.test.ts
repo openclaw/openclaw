@@ -1161,6 +1161,48 @@ describe("loadChatHistory retry handling", () => {
     expect(state.chatStream).toBeNull();
   });
 
+  it("keeps a message sent while a stale history request is in flight", async () => {
+    const persistedUser = {
+      role: "user",
+      content: [{ type: "text", text: "first" }],
+      __openclaw: { seq: 1 },
+    };
+    const history = createDeferred<{ messages: Array<unknown>; thinkingLevel?: string }>();
+    const request = vi.fn((method: string) => {
+      if (method === "chat.history") {
+        return history.promise;
+      }
+      if (method === "chat.send") {
+        return Promise.resolve({ status: "started", runId: "run-1" });
+      }
+      throw new Error(`Unexpected method: ${method}`);
+    });
+    const state = createState({
+      connected: true,
+      client: { request } as unknown as ChatState["client"],
+      chatMessages: [persistedUser],
+    });
+
+    const reload = loadChatHistory(state);
+    const send = sendChatMessage(state, "latest ask");
+    await send;
+
+    history.resolve({ messages: [persistedUser], thinkingLevel: "low" });
+    await reload;
+
+    expect(state.chatMessages).toEqual([
+      persistedUser,
+      {
+        role: "user",
+        content: [{ type: "text", text: "latest ask" }],
+        timestamp: expect.any(Number),
+      },
+    ]);
+    expect(state.chatRunId).toMatch(UUID_V4_RE);
+    expect(state.chatStream).toBe("");
+    expect(state.chatStreamStartedAt).toEqual(expect.any(Number));
+  });
+
   it("keeps local optimistic messages when history reload returns empty", async () => {
     const optimisticUser = {
       role: "user",

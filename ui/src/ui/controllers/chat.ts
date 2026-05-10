@@ -27,6 +27,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const chatLocalMutationVersions = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -45,6 +46,15 @@ function shouldApplyChatHistoryResult(
   sessionKey: string,
 ): boolean {
   return isLatestChatHistoryRequest(state, version) && state.sessionKey === sessionKey;
+}
+
+function getChatLocalMutationVersion(state: ChatState): number {
+  return chatLocalMutationVersions.get(state as object) ?? 0;
+}
+
+function markChatLocalMutation(state: ChatState): void {
+  const key = state as object;
+  chatLocalMutationVersions.set(key, (chatLocalMutationVersions.get(key) ?? 0) + 1);
 }
 
 function isSilentReplyStream(text: string): boolean {
@@ -140,11 +150,9 @@ function shouldHideHistoryMessage(message: unknown): boolean {
 }
 
 function hasTranscriptMeta(message: unknown): boolean {
+  const transcriptMeta = (message as { __openclaw?: unknown } | null)?.["__openclaw"];
   return Boolean(
-    message &&
-    typeof message === "object" &&
-    (message as { __openclaw?: unknown }).__openclaw &&
-    typeof (message as { __openclaw?: unknown }).__openclaw === "object",
+    message && typeof message === "object" && transcriptMeta && typeof transcriptMeta === "object",
   );
 }
 
@@ -179,6 +187,7 @@ function messageDisplaySignature(message: unknown): string | null {
 export function preserveOptimisticTailMessages(
   historyMessages: unknown[],
   previousMessages: unknown[],
+  opts?: { preserveUnanchoredOptimisticMessages?: boolean },
 ): unknown[] {
   if (previousMessages.length === 0) {
     return historyMessages;
@@ -210,7 +219,19 @@ export function preserveOptimisticTailMessages(
     }
   }
   if (sharedPreviousIndex < 0) {
-    return historyMessages;
+    if (!opts?.preserveUnanchoredOptimisticMessages) {
+      return historyMessages;
+    }
+    const optimisticMessages = previousMessages.filter((message) => {
+      if (!isLocallyOptimisticHistoryMessage(message) || shouldHideHistoryMessage(message)) {
+        return false;
+      }
+      const signature = messageDisplaySignature(message);
+      return Boolean(signature && !historySignatureIndexes.has(signature));
+    });
+    return optimisticMessages.length > 0
+      ? [...historyMessages, ...optimisticMessages]
+      : historyMessages;
   }
   if (sharedHistoryIndex < historyMessages.length - 1) {
     return historyMessages;
@@ -298,6 +319,7 @@ export async function loadChatHistory(state: ChatState) {
   }
   const sessionKey = state.sessionKey;
   const requestVersion = beginChatHistoryRequest(state);
+  const localMutationVersion = getChatLocalMutationVersion(state);
   const startedAt = Date.now();
   const previousMessages = state.chatMessages;
   // Any pending input-history snapshot becomes invalid once we start reloading transcript state.
@@ -339,15 +361,22 @@ export async function loadChatHistory(state: ChatState) {
     }
     const messages = Array.isArray(res.messages) ? res.messages : [];
     const visibleMessages = messages.filter((message) => !shouldHideHistoryMessage(message));
-    state.chatMessages = preserveOptimisticTailMessages(visibleMessages, previousMessages);
+    const localStateChanged = getChatLocalMutationVersion(state) !== localMutationVersion;
+    state.chatMessages = preserveOptimisticTailMessages(
+      visibleMessages,
+      localStateChanged ? state.chatMessages : previousMessages,
+      { preserveUnanchoredOptimisticMessages: localStateChanged },
+    );
     state.currentSessionId =
       typeof res.sessionId === "string" && res.sessionId.trim() ? res.sessionId : null;
     state.chatThinkingLevel = res.thinkingLevel ?? null;
-    // Clear all streaming state — history includes tool results and text
-    // inline, so keeping streaming artifacts would cause duplicates.
-    maybeResetToolStream(state);
-    state.chatStream = null;
-    state.chatStreamStartedAt = null;
+    const hasActiveStream = state.chatRunId !== null || state.chatStream !== null;
+    if (!hasActiveStream) {
+      // Clear all streaming state — history includes tool results and text inline once no run is active.
+      maybeResetToolStream(state);
+      state.chatStream = null;
+      state.chatStreamStartedAt = null;
+    }
   } catch (err) {
     if (!shouldApplyChatHistoryResult(state, requestVersion, sessionKey)) {
       return;
@@ -532,6 +561,7 @@ export async function sendChatMessage(
       timestamp: now,
     },
   ];
+  markChatLocalMutation(state);
 
   state.chatSending = true;
   state.lastError = null;
@@ -557,6 +587,7 @@ export async function sendChatMessage(
         timestamp: Date.now(),
       },
     ];
+    markChatLocalMutation(state);
     return null;
   } finally {
     state.chatSending = false;
@@ -649,6 +680,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
       const finalMessage = normalizeFinalAssistantMessage(payload.message);
       if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
         state.chatMessages = [...state.chatMessages, finalMessage];
+        markChatLocalMutation(state);
         return null;
       }
       return "final";
@@ -669,6 +701,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const finalMessage = normalizeFinalAssistantMessage(payload.message);
     if (finalMessage && !shouldHideAssistantChatMessage(finalMessage)) {
       state.chatMessages = [...state.chatMessages, finalMessage];
+      markChatLocalMutation(state);
     } else if (
       state.chatStream?.trim() &&
       !isSilentReplyStream(state.chatStream) &&
@@ -682,6 +715,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
           timestamp: Date.now(),
         },
       ];
+      markChatLocalMutation(state);
     }
     state.chatStream = null;
     state.chatRunId = null;
@@ -690,6 +724,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     const normalizedMessage = normalizeAbortedAssistantMessage(payload.message);
     if (normalizedMessage && !shouldHideAssistantChatMessage(normalizedMessage)) {
       state.chatMessages = [...state.chatMessages, normalizedMessage];
+      markChatLocalMutation(state);
     } else {
       const streamedText = state.chatStream ?? "";
       if (
@@ -705,6 +740,7 @@ export function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
             timestamp: Date.now(),
           },
         ];
+        markChatLocalMutation(state);
       }
     }
     state.chatStream = null;
