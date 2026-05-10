@@ -226,14 +226,10 @@ function expectReplyCall(
 
 type TestSessionRowsTarget = {
   agentId: string;
-  sessionsDir: string;
 };
 
 function sessionRowsTarget(root: string, agentId = "main"): TestSessionRowsTarget {
-  return {
-    agentId,
-    sessionsDir: path.join(root, "agents", agentId, "sessions"),
-  };
+  return { agentId };
 }
 
 async function replaceTestSessionRows(

@@ -950,5 +950,13 @@
   {
     "source": "ACP agents setup",
     "target": "ACP Agents 设置"
+  },
+  {
+    "source": "Kysely best practices",
+    "target": "Kysely 最佳实践"
+  },
+  {
+    "source": "Database-first state refactor",
+    "target": "数据库优先状态重构"
   }
 ]

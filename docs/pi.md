@@ -517,15 +517,15 @@ This provides the interactive terminal experience similar to pi's native mode.
 
 ## Key differences from Pi CLI
 
-| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                              |
-| --------------- | ----------------------- | ---------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` command / RPC      | SDK via `createAgentSession()`                                                                 |
-| Tools           | Default coding tools    | Custom OpenClaw tool suite                                                                     |
-| System prompt   | AGENTS.md + prompts     | Dynamic per-channel/context                                                                    |
-| Session storage | `~/.pi/agent/sessions/` | `~/.openclaw/agents/<agentId>/sessions/` (or `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`) |
-| Auth            | Single credential       | Multi-profile with rotation                                                                    |
-| Extensions      | Loaded from disk        | Programmatic + disk paths                                                                      |
-| Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                            |
+| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                                                   |
+| --------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Invocation      | `pi` command / RPC      | SDK via `createAgentSession()`                                                                                      |
+| Tools           | Default coding tools    | Custom OpenClaw tool suite                                                                                          |
+| System prompt   | AGENTS.md + prompts     | Dynamic per-channel/context                                                                                         |
+| Session storage | `~/.pi/agent/sessions/` | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite` plus `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` |
+| Auth            | Single credential       | Multi-profile with rotation                                                                                         |
+| Extensions      | Loaded from disk        | Programmatic + disk paths                                                                                           |
+| Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                                                 |
 
 ## Future considerations
 
