@@ -1,14 +1,20 @@
 import fs from "node:fs";
 import path from "node:path";
-import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { BUNDLED_PLUGIN_PATH_PREFIX } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import { GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES } from "../src/plugin-sdk/test-helpers/public-artifacts.js";
 
 const repoRoot = path.resolve(import.meta.dirname, "..");
 const ALLOWED_EXTENSION_PUBLIC_SURFACE_BASENAMES = new Set(
   GUARDED_EXTENSION_PUBLIC_SURFACE_BASENAMES,
 );
 const CHANNEL_CONTRACT_TEST_HELPERS_PREFIX = "src/channels/plugins/contracts/test-helpers/";
+const BUNDLED_PLUGIN_RESOLVER_TEST_FILES = [
+  "src/plugin-sdk/facade-loader.test.ts",
+  "src/plugins/public-surface-loader.test.ts",
+  "src/plugins/public-surface-runtime.test.ts",
+] as const;
+const BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES = new Set(["api.js", "runtime-api.js"]);
 const ROOTDIR_BOUNDARY_CANARY_RE =
   /(^|\/)__rootdir_boundary_canary__\.(?:[cm]?ts|[cm]?js|tsx|jsx)$/u;
 
@@ -93,6 +99,41 @@ function getImportBasename(importPath: string): string {
   return importPath.split("/").at(-1) ?? importPath;
 }
 
+function collectBundledPluginIds(): Set<string> {
+  return new Set(
+    fs
+      .readdirSync(path.join(repoRoot, "extensions"), { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name),
+  );
+}
+
+function getLineNumber(source: string, index: number): number {
+  return source.slice(0, index).split("\n").length;
+}
+
+function findRealBroadSourceApiResolverReferences(
+  source: string,
+  pluginIds: Set<string>,
+): string[] {
+  const offenders: string[] = [];
+  for (const match of source.matchAll(/\{[^{}]*\bdirName:\s*["'][^"']+["'][^{}]*\}/g)) {
+    const objectLiteral = match[0];
+    const dirName = objectLiteral.match(/\bdirName:\s*["']([^"']+)["']/)?.[1];
+    const artifactBasename = objectLiteral.match(/\bartifactBasename:\s*["']([^"']+)["']/)?.[1];
+    if (
+      dirName &&
+      artifactBasename &&
+      pluginIds.has(dirName) &&
+      BROAD_PUBLIC_SOURCE_ARTIFACT_BASENAMES.has(artifactBasename)
+    ) {
+      offenders.push(`${dirName}/${artifactBasename}:${getLineNumber(source, match.index ?? 0)}`);
+    }
+  }
+
+  return offenders;
+}
+
 function isAllowedCoreContractSuite(file: string, imports: readonly string[]): boolean {
   return (
     file.startsWith("src/channels/plugins/contracts/") &&
@@ -135,7 +176,7 @@ describe("non-extension test boundaries", () => {
       })
       .filter((value): value is { file: string; imports: string[] } => value !== null);
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension-owned onboard helper coverage out of the core onboard auth suite", () => {
@@ -156,7 +197,7 @@ describe("non-extension test boundaries", () => {
       bannedPluginSdkModules.has(entry),
     );
 
-    expect(imports).toEqual([]);
+    expect(imports).toStrictEqual([]);
   });
 
   it("keeps bundled plugin public-surface imports out of core source", () => {
@@ -169,7 +210,7 @@ describe("non-extension test boundaries", () => {
       return findBundledPluginPublicSurfaceImports(source).length > 0;
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin sync test-api loaders out of core tests", () => {
@@ -187,7 +228,19 @@ describe("non-extension test boundaries", () => {
       return source.includes("loadBundledPluginTestApiSync(");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
+  });
+
+  it("keeps resolver tests on generated fixtures for broad bundled plugin source APIs", () => {
+    const bundledPluginIds = collectBundledPluginIds();
+    const offenders = BUNDLED_PLUGIN_RESOLVER_TEST_FILES.flatMap((file) => {
+      const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+      return findRealBroadSourceApiResolverReferences(source, bundledPluginIds).map(
+        (reference) => `${file}: ${reference}`,
+      );
+    });
+
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled channel security collector coverage under extension tests", () => {
@@ -204,7 +257,7 @@ describe("non-extension test boundaries", () => {
       );
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension channel contract helpers on the public testing surface", () => {
@@ -215,7 +268,7 @@ describe("non-extension test boundaries", () => {
       return source.includes("src/channels/plugins/contracts/test-helpers/");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension tests off legacy broad testing barrels and repo helper bridges", () => {
@@ -234,7 +287,7 @@ describe("non-extension test boundaries", () => {
       return bannedPatterns.some((pattern) => pattern.test(source));
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps extension root test-support helpers from reaching into private src trees", () => {
@@ -249,7 +302,7 @@ describe("non-extension test boundaries", () => {
       })
       .filter((entry): entry is { file: string; imports: string[] } => entry !== null);
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled extension sources off deprecated channel config schema aliases", () => {
@@ -260,6 +313,6 @@ describe("non-extension test boundaries", () => {
       return source.includes("openclaw/plugin-sdk/channel-config-schema-legacy");
     });
 
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

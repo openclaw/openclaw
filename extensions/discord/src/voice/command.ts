@@ -1,17 +1,17 @@
 import {
-  ChannelType as CarbonChannelType,
-  Command,
-  CommandWithSubcommands,
-  type CommandInteraction,
-  type CommandOptions,
-} from "@buape/carbon";
-import {
   ApplicationCommandOptionType,
   ChannelType as DiscordChannelType,
   type APIApplicationCommandChannelOption,
 } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { DiscordAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveDiscordAccountAllowFrom } from "../accounts.js";
+import {
+  Command,
+  CommandWithSubcommands,
+  type CommandInteraction,
+  type CommandOptions,
+} from "../internal/discord.js";
 import { formatMention } from "../mentions.js";
 import { resolveDiscordChannelNameSafe } from "../monitor/channel-access.js";
 import { resolveDiscordSenderIdentity } from "../monitor/sender-identity.js";
@@ -75,6 +75,7 @@ async function authorizeVoiceCommand(
   const access = await authorizeDiscordVoiceIngress({
     cfg: params.cfg,
     discordConfig: params.discordConfig,
+    accountId: params.accountId,
     groupPolicy: params.groupPolicy,
     useAccessGroups: params.useAccessGroups,
     guild: interaction.guild,
@@ -88,6 +89,10 @@ async function authorizeVoiceCommand(
     scope: channelContext.isThreadChannel ? "thread" : "channel",
     channelLabel: channelId ? formatMention({ channelId }) : "This channel",
     memberRoleIds,
+    ownerAllowFrom: resolveDiscordAccountAllowFrom({
+      cfg: params.cfg,
+      accountId: params.accountId,
+    }),
     sender: {
       id: sender.id,
       name: sender.name,
@@ -274,6 +279,6 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   })();
 }
 
-function isVoiceChannelType(type: CarbonChannelType) {
-  return type === CarbonChannelType.GuildVoice || type === CarbonChannelType.GuildStageVoice;
+function isVoiceChannelType(type: DiscordChannelType) {
+  return type === DiscordChannelType.GuildVoice || type === DiscordChannelType.GuildStageVoice;
 }

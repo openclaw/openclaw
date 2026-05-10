@@ -46,6 +46,7 @@ function installGoogleFetchMock(params?: {
 describe("Google image-generation provider", () => {
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
   });
 
   it("generates image buffers from the Gemini generateContent API", async () => {
@@ -116,6 +117,49 @@ describe("Google image-generation provider", () => {
       ],
       model: "gemini-3.1-flash-image-preview",
     });
+  });
+
+  it("passes request SSRF policy to the provider HTTP helper", async () => {
+    mockGoogleApiKeyAuth();
+    const postJsonRequest = vi.spyOn(providerHttp, "postJsonRequest").mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [
+                  {
+                    inlineData: {
+                      mimeType: "image/png",
+                      data: Buffer.from("png-data").toString("base64"),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+      finalUrl:
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent",
+      release: async () => {},
+    });
+
+    const provider = buildGoogleImageGenerationProvider();
+    await provider.generateImage({
+      provider: "google",
+      model: "gemini-3.1-flash-image-preview",
+      prompt: "draw a cat",
+      cfg: {},
+      ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+    });
+
+    expect(postJsonRequest).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ssrfPolicy: { allowRfc2544BenchmarkRange: true },
+      }),
+    );
   });
 
   it("accepts OAuth JSON auth and inline_data responses", async () => {

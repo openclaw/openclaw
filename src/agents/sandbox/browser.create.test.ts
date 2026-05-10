@@ -141,6 +141,33 @@ async function ensureTestSandboxBrowser(params: Omit<EnsureSandboxBrowserParams,
   });
 }
 
+function requireDockerCreateArgs(): string[] {
+  const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+  if (!createArgs) {
+    throw new Error("expected docker create args");
+  }
+  return createArgs;
+}
+
+function requireValue<T>(value: T | null | undefined, label: string): T {
+  if (value === null || value === undefined) {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
+}
+
+function latestBridgeResolved(): Record<string, unknown> {
+  const params = bridgeMocks.startBrowserBridgeServer.mock.calls.at(-1)?.[0];
+  if (!params || typeof params !== "object") {
+    throw new Error("expected browser bridge start params");
+  }
+  const resolved = params.resolved;
+  if (!resolved || typeof resolved !== "object") {
+    throw new Error("expected resolved browser bridge config");
+  }
+  return resolved;
+}
+
 describe("ensureSandboxBrowser create args", () => {
   beforeAll(async () => {
     await loadFreshBrowserModulesForTest();
@@ -206,11 +233,10 @@ describe("ensureSandboxBrowser create args", () => {
       cfg: buildConfig(true),
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const createArgs = requireDockerCreateArgs();
 
-    expect(createArgs).toBeDefined();
     expect(createArgs).toContain("127.0.0.1::6080");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    const envEntries = collectDockerFlagValues(createArgs, "-e");
     expect(envEntries).toContain("OPENCLAW_BROWSER_NO_SANDBOX=1");
     const passwordEntry = envEntries.find((entry) =>
       entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="),
@@ -230,10 +256,38 @@ describe("ensureSandboxBrowser create args", () => {
 
     const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
     const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
-    expect(envEntries.some((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD="))).toBe(
-      false,
-    );
+    expect(
+      envEntries.filter((entry) => entry.startsWith("OPENCLAW_BROWSER_NOVNC_PASSWORD=")),
+    ).toStrictEqual([]);
     expect(result?.noVncUrl).toBeUndefined();
+  });
+
+  it("fails before creating a browser container when Docker daemon is unavailable", async () => {
+    dockerMocks.execDocker.mockImplementation(async (args: string[]) => {
+      if (args[0] === "network" && args[1] === "inspect") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (args[0] === "image" && args[1] === "inspect") {
+        return {
+          stdout: "",
+          stderr:
+            "Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?",
+          code: 1,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    });
+
+    await expect(
+      ensureTestSandboxBrowser({
+        scopeKey: "session:test",
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/workspace",
+        cfg: buildConfig(false),
+      }),
+    ).rejects.toThrow("Docker daemon is not available");
+
+    expect(findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create")).toBeUndefined();
   });
 
   it("passes the browser SSRF policy to the sandbox bridge", async () => {
@@ -245,13 +299,9 @@ describe("ensureSandboxBrowser create args", () => {
       ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
     });
 
-    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolved: expect.objectContaining({
-          ssrfPolicy: { dangerouslyAllowPrivateNetwork: true },
-        }),
-      }),
-    );
+    expect(latestBridgeResolved().ssrfPolicy).toEqual({
+      dangerouslyAllowPrivateNetwork: true,
+    });
   });
 
   it("recreates a cached bridge when the SSRF policy changes", async () => {
@@ -311,13 +361,68 @@ describe("ensureSandboxBrowser create args", () => {
     });
 
     expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith(existingBridge.server);
-    expect(bridgeMocks.startBrowserBridgeServer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        resolved: expect.objectContaining({
-          ssrfPolicy: { allowedHostnames: ["example.com"] },
-        }),
-      }),
-    );
+    expect(latestBridgeResolved().ssrfPolicy).toEqual({
+      allowedHostnames: ["example.com"],
+    });
+  });
+
+  it("recreates a cached bridge when evaluate permission changes", async () => {
+    const existingBridge = {
+      server: {} as never,
+      port: 19000,
+      baseUrl: "http://127.0.0.1:19000",
+      state: {
+        resolved: {
+          enabled: true,
+          evaluateEnabled: true,
+          controlPort: 0,
+          cdpProtocol: "http",
+          cdpHost: "127.0.0.1",
+          cdpIsLoopback: true,
+          cdpPortRangeStart: 18800,
+          cdpPortRangeEnd: 18899,
+          remoteCdpTimeoutMs: 1500,
+          remoteCdpHandshakeTimeoutMs: 3000,
+          localLaunchTimeoutMs: 15_000,
+          localCdpReadyTimeoutMs: 8_000,
+          color: "#FF4500",
+          headless: false,
+          noSandbox: false,
+          attachOnly: true,
+          defaultProfile: "openclaw",
+          extraArgs: [],
+          tabCleanup: {
+            enabled: true,
+            idleMinutes: 120,
+            maxTabsPerSession: 8,
+            sweepMinutes: 5,
+          },
+          profiles: {
+            openclaw: {
+              cdpPort: 49100,
+              color: "#FF4500",
+            },
+          },
+        },
+      },
+    };
+    BROWSER_BRIDGES.set("session:test", {
+      bridge: existingBridge,
+      containerName: "openclaw-sbx-browser-session-test-0661d10a",
+      authToken: "test-bridge-token",
+    });
+    dockerMocks.dockerContainerState.mockResolvedValue({ exists: true, running: true });
+
+    await ensureTestSandboxBrowser({
+      scopeKey: "session:test",
+      workspaceDir: "/tmp/workspace",
+      agentWorkspaceDir: "/tmp/workspace",
+      cfg: buildConfig(false),
+      evaluateEnabled: false,
+    });
+
+    expect(bridgeMocks.stopBrowserBridgeServer).toHaveBeenCalledWith(existingBridge.server);
+    expect(latestBridgeResolved().evaluateEnabled).toBe(false);
   });
 
   it("mounts the main workspace read-only when workspaceAccess is none", async () => {
@@ -331,9 +436,8 @@ describe("ensureSandboxBrowser create args", () => {
       cfg,
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const createArgs = requireDockerCreateArgs();
 
-    expect(createArgs).toBeDefined();
     expect(createArgs).toContain("/tmp/workspace:/workspace:ro,z");
   });
 
@@ -348,9 +452,8 @@ describe("ensureSandboxBrowser create args", () => {
       cfg,
     });
 
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
+    const createArgs = requireDockerCreateArgs();
 
-    expect(createArgs).toBeDefined();
     expect(createArgs).toContain("/tmp/workspace:/workspace:z");
     expect(createArgs).not.toContain("/tmp/workspace:/workspace:ro,z");
   });
@@ -490,9 +593,9 @@ describe("ensureSandboxBrowser create args", () => {
       cfg,
     });
 
-    expect(result).toBeDefined();
-    const createArgs = findDockerArgsCall(dockerMocks.execDocker.mock.calls, "create");
-    const envEntries = collectDockerFlagValues(createArgs ?? [], "-e");
+    requireValue(result, "sandbox browser result");
+    const createArgs = requireDockerCreateArgs();
+    const envEntries = collectDockerFlagValues(createArgs, "-e");
     expect(envEntries).toContain("OPENCLAW_BROWSER_CDP_SOURCE_RANGE=127.0.0.1/32");
   });
 });

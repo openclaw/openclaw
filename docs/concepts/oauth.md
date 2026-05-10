@@ -8,7 +8,7 @@ read_when:
 title: "OAuth"
 ---
 
-OpenClaw supports “subscription auth” via OAuth for providers that offer it
+OpenClaw supports "subscription auth" via OAuth for providers that offer it
 (notably **OpenAI Codex (ChatGPT OAuth)**). For Anthropic, the practical split
 is now:
 
@@ -25,7 +25,7 @@ For Anthropic in production, API key auth is the safer recommended path.
 - where tokens are **stored** (and why)
 - how to handle **multiple accounts** (profiles + per-session overrides)
 
-OpenClaw also supports **provider plugins** that ship their own OAuth or API‑key
+OpenClaw also supports **provider plugins** that ship their own OAuth or API-key
 flows. Run them via:
 
 ```bash
@@ -38,7 +38,7 @@ OAuth providers commonly mint a **new refresh token** during login/refresh flows
 
 Practical symptom:
 
-- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets “logged out” later
+- you log in via OpenClaw _and_ via Claude Code / Codex CLI → one of them randomly gets "logged out" later
 
 To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
 
@@ -48,10 +48,13 @@ To reduce that, OpenClaw treats `auth-profiles.json` as a **token sink**:
   `openai-codex:default` profile, but once OpenClaw has a local OAuth profile,
   the local refresh token is canonical; other integrations can remain
   externally managed and re-read their CLI auth store
+- status and startup paths that already know the configured provider set scope
+  external CLI discovery to that set, so an unrelated CLI login store is not
+  probed for a single-provider setup
 
 ## Storage (where tokens live)
 
-Secrets are stored **per-agent**:
+Secrets are stored in agent auth stores:
 
 - Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/agents/<agentId>/agent/auth-profiles.json`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
@@ -64,6 +67,13 @@ Legacy import-only file (still supported, but not the main store):
 All of the above also respect `$OPENCLAW_STATE_DIR` (state dir override). Full reference: [/gateway/configuration](/gateway/configuration-reference#auth-storage)
 
 For static secret refs and runtime snapshot activation behavior, see [Secrets Management](/gateway/secrets).
+
+When a secondary agent has no local auth profile, OpenClaw uses read-through
+inheritance from the default/main agent store. It does not clone the main
+agent's `auth-profiles.json` on read. OAuth refresh tokens are especially
+sensitive: normal copy flows skip them by default because some providers rotate
+or invalidate refresh tokens after use. Configure a separate OAuth login for an
+agent when it needs an independent account.
 
 ## Anthropic legacy token compatibility
 
@@ -95,7 +105,7 @@ Claude login on the host, onboarding/configure can reuse it directly.
 
 ## OAuth exchange (how login works)
 
-OpenClaw’s interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
+OpenClaw's interactive login flows are implemented in `@mariozechner/pi-ai` and wired into the wizards/commands.
 
 ### Anthropic setup-token
 
@@ -115,7 +125,7 @@ Flow shape (PKCE):
 1. generate PKCE verifier/challenge + random `state`
 2. open `https://auth.openai.com/oauth/authorize?...`
 3. try to capture callback on `http://127.0.0.1:1455/auth/callback`
-4. if callback can’t bind (or you’re remote/headless), paste the redirect URL/code
+4. if callback can't bind (or you're remote/headless), paste the redirect URL/code
 5. exchange at `https://auth.openai.com/oauth/token`
 6. extract `accountId` from the access token and store `{ access, refresh, expires, accountId }`
 
@@ -129,6 +139,9 @@ At runtime:
 
 - if `expires` is in the future → use the stored access token
 - if expired → refresh (under a file lock) and overwrite the stored credentials
+- if a secondary agent reads an inherited main-agent OAuth profile, refresh
+  writes back to the main agent store instead of copying the refresh token into
+  the secondary agent store
 - exception: some external CLI credentials stay externally managed; OpenClaw
   re-reads those CLI auth stores instead of spending copied refresh tokens.
   Codex CLI bootstrap is intentionally narrower: it seeds an empty
@@ -143,7 +156,7 @@ Two patterns:
 
 ### 1) Preferred: separate agents
 
-If you want “personal” and “work” to never interact, use isolated agents (separate sessions + credentials + workspace):
+If you want "personal" and "work" to never interact, use isolated agents (separate sessions + credentials + workspace):
 
 ```bash
 openclaw agents add work
@@ -176,6 +189,6 @@ Related docs:
 
 ## Related
 
-- [Authentication](/gateway/authentication) — model provider auth overview
-- [Secrets](/gateway/secrets) — credential storage and SecretRef
-- [Configuration Reference](/gateway/configuration-reference#auth-storage) — auth config keys
+- [Authentication](/gateway/authentication) - model provider auth overview
+- [Secrets](/gateway/secrets) - credential storage and SecretRef
+- [Configuration Reference](/gateway/configuration-reference#auth-storage) - auth config keys

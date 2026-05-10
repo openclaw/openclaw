@@ -107,8 +107,6 @@ describe("resolveNativeSkillsEnabled", () => {
       ...process.env,
       OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
       OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
-      OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-      OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     };
 
     expect(
@@ -175,15 +173,6 @@ describe("resolveNativeSkillsEnabled", () => {
       }),
     ).toBe(false);
   });
-
-  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
-    expect(
-      resolveNativeSkillsEnabled({
-        providerId: "demo-channel",
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
-  });
 });
 
 describe("resolveNativeCommandsEnabled", () => {
@@ -197,15 +186,6 @@ describe("resolveNativeCommandsEnabled", () => {
     expect(resolveNativeCommandsEnabled({ providerId: "slack", globalSetting: "auto" })).toBe(
       false,
     );
-  });
-
-  it("uses the plugin registry for auto defaults even when chat-channel normalization misses", () => {
-    expect(
-      resolveNativeCommandsEnabled({
-        providerId: "demo-channel",
-        globalSetting: "auto",
-      }),
-    ).toBe(true);
   });
 
   it("honors explicit provider/global booleans", () => {
@@ -223,6 +203,29 @@ describe("resolveNativeCommandsEnabled", () => {
       }),
     ).toBe(false);
   });
+});
+
+describe("plugin registry auto defaults", () => {
+  it.each([
+    {
+      name: "native skills",
+      resolve: resolveNativeSkillsEnabled,
+    },
+    {
+      name: "native commands",
+      resolve: resolveNativeCommandsEnabled,
+    },
+  ])(
+    "uses the plugin registry for auto defaults even when chat-channel normalization misses for $name",
+    ({ resolve }) => {
+      expect(
+        resolve({
+          providerId: "demo-channel",
+          globalSetting: "auto",
+        }),
+      ).toBe(true);
+    },
+  );
 });
 
 describe("isNativeCommandsExplicitlyDisabled", () => {
@@ -283,7 +286,7 @@ describe("deprecated commands compatibility", () => {
 
     expect(result.ok).toBe(true);
     if (result.ok) {
-      expect(result.config.commands).toMatchObject({ text: true });
+      expect(result.config.commands?.text).toBe(true);
       expect(Object.hasOwn(result.config.commands ?? {}, "modelsWrite")).toBe(false);
     }
   });

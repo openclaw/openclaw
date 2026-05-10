@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.hoisted(() => {
+  vi.resetModules();
+});
+
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
 type ResolveManifestProviderAuthChoices =
@@ -99,11 +103,10 @@ describe("provider flow install catalog contributions", () => {
         source: "manifest",
       },
     ]);
-    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    expect(resolveManifestProviderAuthChoices).toHaveBeenCalledTimes(1);
+    expect(
+      resolveManifestProviderAuthChoices.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
+    ).toBe(false);
     expect(resolveProviderWizardOptions).not.toHaveBeenCalled();
     expect(resolvePluginProviders).not.toHaveBeenCalled();
   });
@@ -194,11 +197,10 @@ describe("provider flow install catalog contributions", () => {
         source: "install-catalog",
       },
     ]);
-    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    expect(resolveProviderInstallCatalogEntries).toHaveBeenCalledTimes(1);
+    expect(
+      resolveProviderInstallCatalogEntries.mock.calls[0]?.[0]?.includeUntrustedWorkspacePlugins,
+    ).toBe(false);
   });
 
   it("adds a fallback group when install-catalog entries omit group metadata", () => {
@@ -261,7 +263,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("hides install-catalog choices outside a configured plugin allowlist", () => {
@@ -289,7 +291,7 @@ describe("provider flow install catalog contributions", () => {
           },
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
   });
 
   it("keeps setup contributions on cold metadata instead of runtime wizard options", () => {

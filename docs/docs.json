@@ -53,6 +53,10 @@
   },
   "redirects": [
     {
+      "source": "/channels/bluebubbles",
+      "destination": "/channels/imessage-from-bluebubbles"
+    },
+    {
       "source": "/install/migrating-matrix",
       "destination": "/channels/matrix-migration"
     },
@@ -102,7 +106,7 @@
     },
     {
       "source": "/tools/capability-cookbook",
-      "destination": "/plugins/architecture"
+      "destination": "/plugins/adding-capabilities"
     },
     {
       "source": "/brave-search",
@@ -389,16 +393,16 @@
       "destination": "/channels/pairing"
     },
     {
-      "source": "/clawhub",
-      "destination": "/tools/clawhub"
+      "source": "/clawdhub",
+      "destination": "/clawhub"
     },
     {
-      "source": "/clawdhub",
-      "destination": "/tools/clawhub"
+      "source": "/tools/clawhub",
+      "destination": "/clawhub"
     },
     {
       "source": "/tools/clawdhub",
-      "destination": "/tools/clawhub"
+      "destination": "/clawhub"
     },
     {
       "source": "/configuration",
@@ -1059,9 +1063,10 @@
                   "channels/msteams",
                   "channels/googlechat",
                   "channels/imessage",
-                  "channels/bluebubbles",
+                  "channels/imessage-from-bluebubbles",
                   "channels/matrix",
                   "channels/matrix-migration",
+                  "channels/matrix-presentation",
                   "channels/matrix-push-rules"
                 ]
               },
@@ -1093,6 +1098,7 @@
                 "group": "Configuration",
                 "pages": [
                   "channels/pairing",
+                  "channels/access-groups",
                   "channels/group-messages",
                   "channels/groups",
                   "channels/broadcast-groups",
@@ -1142,6 +1148,7 @@
                       "concepts/memory-honcho",
                       "concepts/memory-search",
                       "concepts/active-memory",
+                      "concepts/commitments",
                       "concepts/dreaming"
                     ]
                   },
@@ -1152,6 +1159,7 @@
                 "group": "Multi-agent",
                 "pages": [
                   "concepts/multi-agent",
+                  "concepts/parallel-specialist-lanes",
                   "concepts/presence",
                   "concepts/delegate-architecture"
                 ]
@@ -1160,9 +1168,12 @@
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
+                  "concepts/message-lifecycle-refactor",
                   "concepts/streaming",
+                  "concepts/progress-drafts",
                   "concepts/retry",
-                  "concepts/queue"
+                  "concepts/queue",
+                  "concepts/queue-steering"
                 ]
               }
             ]
@@ -1178,8 +1189,13 @@
                 "group": "Plugins",
                 "pages": [
                   "tools/plugin",
+                  "plugins/manage-plugins",
                   "plugins/community",
+                  "plugins/plugin-inventory",
+                  "plugins/reference",
                   "plugins/bundles",
+                  "plugins/dependency-resolution",
+                  "plugins/install-overrides",
                   "plugins/codex-harness",
                   "plugins/codex-computer-use",
                   "plugins/google-meet",
@@ -1188,6 +1204,7 @@
                   "plugins/memory-wiki",
                   "plugins/memory-lancedb",
                   "plugins/message-presentation",
+                  "plugins/oc-path",
                   "plugins/skill-workshop",
                   "plugins/zalouser",
                   {
@@ -1196,18 +1213,22 @@
                       "plugins/building-plugins",
                       "plugins/hooks",
                       "plugins/sdk-channel-plugins",
+                      "plugins/sdk-channel-message",
                       "plugins/sdk-provider-plugins",
+                      "plugins/cli-backend-plugins",
+                      "plugins/adding-capabilities",
                       "plugins/compatibility",
                       "plugins/sdk-migration"
                     ]
                   },
                   {
-                    "group": "SDK reference",
+                    "group": "Plugin SDK reference",
                     "pages": [
                       "plugins/sdk-overview",
                       "plugins/sdk-subpaths",
                       "plugins/sdk-entrypoints",
                       "plugins/sdk-runtime",
+                      "plugins/sdk-channel-turn",
                       "plugins/sdk-agent-harness",
                       "plugins/sdk-setup",
                       "plugins/sdk-testing",
@@ -1225,7 +1246,6 @@
                   "tools/creating-skills",
                   "tools/skills-config",
                   "tools/slash-commands",
-                  "tools/clawhub",
                   "prose"
                 ]
               },
@@ -1260,6 +1280,7 @@
                   "tools/reactions",
                   "tools/thinking",
                   "tools/tokenjuice",
+                  "tools/tool-search",
                   "tools/loop-detection",
                   "tools/trajectory",
                   "tools/tts",
@@ -1299,10 +1320,41 @@
                 "group": "Agent coordination",
                 "pages": [
                   "tools/agent-send",
+                  "tools/steer",
                   "tools/subagents",
                   "tools/acp-agents",
                   "tools/acp-agents-setup",
                   "tools/multi-agent-sandbox-tools"
+                ]
+              }
+            ]
+          },
+          {
+            "tab": "ClawHub",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["clawhub/index", "clawhub/quickstart", "clawhub/how-it-works"]
+              },
+              {
+                "group": "Using ClawHub",
+                "pages": [
+                  "clawhub/cli",
+                  "clawhub/publishing",
+                  "clawhub/skill-format",
+                  "clawhub/soul-format",
+                  "clawhub/auth",
+                  "clawhub/telemetry",
+                  "clawhub/troubleshooting"
+                ]
+              },
+              {
+                "group": "API and trust",
+                "pages": [
+                  "clawhub/api",
+                  "clawhub/http-api",
+                  "clawhub/security",
+                  "clawhub/acceptable-usage"
                 ]
               }
             ]
@@ -1327,6 +1379,7 @@
                   "providers/anthropic",
                   "providers/arcee",
                   "providers/azure-speech",
+                  "providers/cerebras",
                   "providers/chutes",
                   "providers/claude-max-api-proxy",
                   "providers/cloudflare-ai-gateway",
@@ -1361,6 +1414,7 @@
                   "providers/qianfan",
                   "providers/qwen",
                   "providers/runway",
+                  "providers/senseaudio",
                   "providers/sglang",
                   "providers/stepfun",
                   "providers/synthetic",
@@ -1485,7 +1539,9 @@
                     "group": "Security and sandboxing",
                     "pages": [
                       "gateway/security/index",
+                      "gateway/security/secure-file-operations",
                       "gateway/security/audit-checks",
+                      "gateway/operator-scopes",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated"
@@ -1500,18 +1556,13 @@
                       "gateway/openresponses-http-api",
                       "gateway/tools-invoke-http-api",
                       "gateway/cli-backends",
-                      "gateway/local-models"
+                      "gateway/local-models",
+                      "gateway/local-model-services"
                     ]
                   },
                   {
                     "group": "Networking and discovery",
-                    "pages": [
-                      "network",
-                      "gateway/network-model",
-                      "gateway/pairing",
-                      "gateway/discovery",
-                      "gateway/bonjour"
-                    ]
+                    "pages": ["network", "gateway/pairing", "gateway/discovery", "gateway/bonjour"]
                   }
                 ]
               },
@@ -1566,6 +1617,7 @@
                     "group": "Gateway and service",
                     "pages": [
                       "cli/backup",
+                      "cli/crestodian",
                       "cli/daemon",
                       "cli/doctor",
                       "cli/gateway",
@@ -1590,6 +1642,7 @@
                       "cli/hooks",
                       "cli/infer",
                       "cli/memory",
+                      "cli/commitments",
                       "cli/message",
                       "cli/models",
                       "cli/sessions",
@@ -1626,7 +1679,7 @@
                   },
                   {
                     "group": "Plugins and skills",
-                    "pages": ["cli/plugins", "cli/skills"]
+                    "pages": ["cli/plugins", "cli/path", "cli/skills"]
                   },
                   {
                     "group": "Interfaces",
@@ -1649,7 +1702,20 @@
               },
               {
                 "group": "RPC and API",
-                "pages": ["reference/rpc", "reference/device-models"]
+                "pages": [
+                  "reference/rpc",
+                  "concepts/openclaw-sdk",
+                  "reference/openclaw-sdk-api-design",
+                  "reference/device-models"
+                ]
+              },
+              {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime",
+                  "plugins/codex-native-plugins"
+                ]
               },
               {
                 "group": "Templates",
@@ -1695,11 +1761,17 @@
               },
               {
                 "group": "Project",
-                "pages": ["reference/credits"]
+                "pages": ["reference/application-modernization-plan", "reference/credits"]
               },
               {
                 "group": "Release and CI",
-                "pages": ["reference/RELEASING", "reference/test", "ci", "help/scripts"]
+                "pages": [
+                  "reference/RELEASING",
+                  "reference/full-release-validation",
+                  "reference/test",
+                  "ci",
+                  "help/scripts"
+                ]
               }
             ]
           },
@@ -1716,7 +1788,7 @@
               },
               {
                 "group": "Testing",
-                "pages": ["help/testing", "help/testing-live"]
+                "pages": ["help/testing", "help/testing-updates-plugins", "help/testing-live"]
               },
               {
                 "group": "Diagnostics",

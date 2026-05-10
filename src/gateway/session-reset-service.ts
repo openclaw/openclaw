@@ -46,7 +46,7 @@ import {
 import {
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
-  readSessionMessages,
+  readSessionMessagesAsync,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
 } from "./session-utils.js";
@@ -433,14 +433,14 @@ export async function cleanupSessionBeforeMutation(params: {
   });
 }
 
-function emitGatewayBeforeResetPluginHook(params: {
+export async function emitGatewayBeforeResetPluginHook(params: {
   cfg: OpenClawConfig;
   key: string;
   target: ReturnType<typeof resolveGatewaySessionStoreTarget>;
   storePath: string;
   entry?: SessionEntry;
   reason: "new" | "reset";
-}): void {
+}): Promise<void> {
   const hookRunner = getGlobalHookRunner();
   if (!hookRunner?.hasHooks("before_reset")) {
     return;
@@ -454,7 +454,10 @@ function emitGatewayBeforeResetPluginHook(params: {
   let messages: unknown[] = [];
   try {
     if (typeof sessionId === "string" && sessionId.trim().length > 0) {
-      messages = readSessionMessages(sessionId, params.storePath, sessionFile);
+      messages = await readSessionMessagesAsync(sessionId, params.storePath, sessionFile, {
+        mode: "full",
+        reason: "before_reset hook payload",
+      });
     }
   } catch (err) {
     logVerbose(
@@ -620,7 +623,10 @@ export async function performGatewaySessionReset(params: {
       lastTo: currentEntry?.lastTo,
       lastAccountId: currentEntry?.lastAccountId,
       lastThreadId: currentEntry?.lastThreadId,
-      skillsSnapshot: currentEntry?.skillsSnapshot,
+      // Do not carry the cached skills catalog across /new. Long-lived channel
+      // sessions (Signal DMs/groups in particular) otherwise keep advertising a
+      // stale <available_skills> block even after reset/restart, because the
+      // skills snapshot version is runtime-local and may reset to 0.
       acp: currentEntry?.acp,
       inputTokens: 0,
       outputTokens: 0,
@@ -630,7 +636,7 @@ export async function performGatewaySessionReset(params: {
     store[primaryKey] = nextEntry;
     return nextEntry;
   });
-  emitGatewayBeforeResetPluginHook({
+  await emitGatewayBeforeResetPluginHook({
     cfg,
     key: params.key,
     target,

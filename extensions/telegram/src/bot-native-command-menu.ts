@@ -2,41 +2,72 @@ import { createHash } from "node:crypto";
 import type { Bot } from "grammy";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeOptionalString, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
 import { normalizeTelegramCommandName, TELEGRAM_COMMAND_NAME_PATTERN } from "./command-config.js";
 
-export const TELEGRAM_MAX_COMMANDS = 100;
+const TELEGRAM_MAX_COMMANDS = 100;
 export const TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET = 5700;
 const TELEGRAM_COMMAND_RETRY_RATIO = 0.8;
 const TELEGRAM_MIN_COMMAND_DESCRIPTION_LENGTH = 1;
+const TELEGRAM_MENU_RESULT_CACHE_MAX = 128;
 
-export type TelegramMenuCommand = {
+type TelegramMenuCommand = {
   command: string;
   description: string;
 };
+
+type TelegramCommandMenuScope =
+  | { label: "default"; options?: undefined }
+  | { label: "all_group_chats"; options: { scope: { type: "all_group_chats" } } };
 
 type TelegramPluginCommandSpec = {
   name: unknown;
   description: unknown;
 };
 
+const TELEGRAM_COMMAND_MENU_SCOPES: readonly TelegramCommandMenuScope[] = [
+  { label: "default" },
+  { label: "all_group_chats", options: { scope: { type: "all_group_chats" } } },
+];
+
+const cappedTelegramMenuCache = new Map<
+  string,
+  ReturnType<typeof buildUncachedCappedTelegramMenuCommands>
+>();
+
 function countTelegramCommandText(value: string): number {
-  return Array.from(value).length;
+  let count = 0;
+  for (let index = 0; index < value.length; ) {
+    const codePoint = value.codePointAt(index);
+    index += codePoint && codePoint > 0xffff ? 2 : 1;
+    count += 1;
+  }
+  return count;
 }
 
 function truncateTelegramCommandText(value: string, maxLength: number): string {
   if (maxLength <= 0) {
     return "";
   }
-  const chars = Array.from(value);
-  if (chars.length <= maxLength) {
-    return value;
+
+  const suffix = maxLength > 1 ? "…" : "";
+  const prefixLimit = maxLength - countTelegramCommandText(suffix);
+  let count = 0;
+  let prefixEnd = 0;
+  for (const char of value) {
+    count += 1;
+    if (count <= prefixLimit) {
+      prefixEnd += char.length;
+    }
+    if (count > maxLength) {
+      return `${value.slice(0, prefixEnd)}${suffix}`;
+    }
   }
-  if (maxLength === 1) {
-    return chars[0] ?? "";
-  }
-  return `${chars.slice(0, maxLength - 1).join("")}…`;
+  return value;
 }
 
 function fitTelegramCommandsWithinTextBudget(
@@ -175,6 +206,31 @@ export function buildCappedTelegramMenuCommands(params: {
   allCommands: TelegramMenuCommand[];
   maxCommands?: number;
   maxTotalChars?: number;
+}): ReturnType<typeof buildUncachedCappedTelegramMenuCommands> {
+  const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
+  const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
+  const cacheKey = buildTelegramMenuResultCacheKey({
+    allCommands: params.allCommands,
+    maxCommands,
+    maxTotalChars,
+  });
+  const cached = cappedTelegramMenuCache.get(cacheKey);
+  if (cached) {
+    return cached;
+  }
+  const result = buildUncachedCappedTelegramMenuCommands({
+    allCommands: params.allCommands,
+    maxCommands,
+    maxTotalChars,
+  });
+  rememberCappedTelegramMenuResult(cacheKey, result);
+  return result;
+}
+
+function buildUncachedCappedTelegramMenuCommands(params: {
+  allCommands: TelegramMenuCommand[];
+  maxCommands: number;
+  maxTotalChars: number;
 }): {
   commandsToRegister: TelegramMenuCommand[];
   totalCommands: number;
@@ -185,8 +241,7 @@ export function buildCappedTelegramMenuCommands(params: {
   textBudgetDropCount: number;
 } {
   const { allCommands } = params;
-  const maxCommands = params.maxCommands ?? TELEGRAM_MAX_COMMANDS;
-  const maxTotalChars = params.maxTotalChars ?? TELEGRAM_TOTAL_COMMAND_TEXT_BUDGET;
+  const { maxCommands, maxTotalChars } = params;
   const totalCommands = allCommands.length;
   const overflowCount = Math.max(0, totalCommands - maxCommands);
   const {
@@ -205,7 +260,44 @@ export function buildCappedTelegramMenuCommands(params: {
   };
 }
 
-/** Compute a stable hash of the command list for change detection. */
+function buildTelegramMenuResultCacheKey(params: {
+  allCommands: TelegramMenuCommand[];
+  maxCommands: number;
+  maxTotalChars: number;
+}): string {
+  const digest = createHash("sha256");
+  updateTelegramCommandDigestField(digest, String(params.maxCommands));
+  updateTelegramCommandDigestField(digest, String(params.maxTotalChars));
+  for (const command of params.allCommands) {
+    updateTelegramCommandDigestField(digest, command.command);
+    updateTelegramCommandDigestField(digest, command.description);
+  }
+  return digest.digest("hex").slice(0, 16);
+}
+
+function updateTelegramCommandDigestField(
+  digest: ReturnType<typeof createHash>,
+  value: string,
+): void {
+  digest.update(String(value.length));
+  digest.update(":");
+  digest.update(value);
+}
+
+function rememberCappedTelegramMenuResult(
+  key: string,
+  result: ReturnType<typeof buildUncachedCappedTelegramMenuCommands>,
+): void {
+  cappedTelegramMenuCache.set(key, result);
+  if (cappedTelegramMenuCache.size <= TELEGRAM_MENU_RESULT_CACHE_MAX) {
+    return;
+  }
+  const oldestKey = cappedTelegramMenuCache.keys().next().value;
+  if (oldestKey) {
+    cappedTelegramMenuCache.delete(oldestKey);
+  }
+}
+
 export function hashCommandList(commands: TelegramMenuCommand[]): string {
   const sorted = [...commands].toSorted((a, b) => a.command.localeCompare(b.command));
   return createHash("sha256").update(JSON.stringify(sorted)).digest("hex").slice(0, 16);
@@ -232,6 +324,57 @@ function writeCachedCommandHash(
   syncedCommandHashes.set(key, hash);
 }
 
+function formatTelegramCommandScopeOperation(
+  operation: "deleteMyCommands" | "setMyCommands",
+  scope: TelegramCommandMenuScope,
+): string {
+  return scope.label === "default" ? operation : `${operation}(${scope.label})`;
+}
+
+async function deleteTelegramMenuCommandsForScopes(params: {
+  bot: Bot;
+  runtime: RuntimeEnv;
+}): Promise<boolean> {
+  const { bot, runtime } = params;
+  if (typeof bot.api.deleteMyCommands !== "function") {
+    return true;
+  }
+
+  let allDeleted = true;
+  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+    const deleted = await withTelegramApiErrorLogging({
+      operation: formatTelegramCommandScopeOperation("deleteMyCommands", scope),
+      runtime,
+      fn: () =>
+        scope.options ? bot.api.deleteMyCommands(scope.options) : bot.api.deleteMyCommands(),
+    })
+      .then(() => true)
+      .catch(() => false);
+    allDeleted &&= deleted;
+  }
+  return allDeleted;
+}
+
+async function setTelegramMenuCommandsForScopes(params: {
+  bot: Bot;
+  runtime: RuntimeEnv;
+  commands: TelegramMenuCommand[];
+  shouldLog?: (err: unknown) => boolean;
+}): Promise<void> {
+  const { bot, runtime, commands, shouldLog } = params;
+  for (const scope of TELEGRAM_COMMAND_MENU_SCOPES) {
+    await withTelegramApiErrorLogging({
+      operation: formatTelegramCommandScopeOperation("setMyCommands", scope),
+      runtime,
+      shouldLog,
+      fn: () =>
+        scope.options
+          ? bot.api.setMyCommands(commands, scope.options)
+          : bot.api.setMyCommands(commands),
+    });
+  }
+}
+
 export function syncTelegramMenuCommands(params: {
   bot: Bot;
   runtime: RuntimeEnv;
@@ -253,21 +396,15 @@ export function syncTelegramMenuCommands(params: {
     }
 
     // Keep delete -> set ordering to avoid stale deletions racing after fresh registrations.
-    let deleteSucceeded = true;
-    if (typeof bot.api.deleteMyCommands === "function") {
-      deleteSucceeded = await withTelegramApiErrorLogging({
-        operation: "deleteMyCommands",
-        runtime,
-        fn: () => bot.api.deleteMyCommands(),
-      })
-        .then(() => true)
-        .catch(() => false);
-    }
+    const deleteSucceeded = await deleteTelegramMenuCommandsForScopes({ bot, runtime });
 
     if (commandsToRegister.length === 0) {
       if (!deleteSucceeded) {
         runtime.log?.("telegram: deleteMyCommands failed; skipping empty-menu hash cache write");
         return;
+      }
+      if (typeof bot.api.deleteMyCommands !== "function") {
+        await setTelegramMenuCommandsForScopes({ bot, runtime, commands: [] });
       }
       writeCachedCommandHash(accountId, botIdentity, currentHash);
       return;
@@ -277,11 +414,11 @@ export function syncTelegramMenuCommands(params: {
     const initialCommandCount = commandsToRegister.length;
     while (retryCommands.length > 0) {
       try {
-        await withTelegramApiErrorLogging({
-          operation: "setMyCommands",
+        await setTelegramMenuCommandsForScopes({
+          bot,
           runtime,
+          commands: retryCommands,
           shouldLog: (err) => !isBotCommandsTooMuchError(err),
-          fn: () => bot.api.setMyCommands(retryCommands),
         });
         if (retryCommands.length < initialCommandCount) {
           runtime.log?.(

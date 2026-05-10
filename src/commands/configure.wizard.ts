@@ -3,6 +3,7 @@ import nodePath from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { describeCodexNativeWebSearch } from "../agents/codex-native-web-search.shared.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatPortRangeHint } from "../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../cli/plugins-install-record-commit.js";
 import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
 import { logConfigUpdated } from "../config/logging.js";
@@ -12,6 +13,7 @@ import { ensureControlUiAssetsBuilt } from "../infra/control-ui-assets.js";
 import { resolvePluginContributionOwners } from "../plugins/plugin-registry.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
+import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { isPlainObject, resolveUserPath } from "../utils.js";
@@ -56,11 +58,20 @@ type SetupPluginConfigModule = typeof import("../wizard/setup.plugin-config.js")
 
 const GATEWAY_HINT_PROBE_TIMEOUT_MS = 300;
 
-let setupPluginConfigModulePromise: Promise<SetupPluginConfigModule> | undefined;
+const setupPluginConfigModuleLoader = createLazyImportLoader<SetupPluginConfigModule>(
+  () => import("../wizard/setup.plugin-config.js"),
+);
+
+function validateGatewayPortInput(value: unknown): string | undefined {
+  const port = Number(typeof value === "string" ? value.trim() : value);
+  if (!Number.isInteger(port) || port < 1 || port > 65_535) {
+    return formatPortRangeHint();
+  }
+  return undefined;
+}
 
 function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
-  setupPluginConfigModulePromise ??= import("../wizard/setup.plugin-config.js");
-  return setupPluginConfigModulePromise;
+  return setupPluginConfigModuleLoader.load();
 }
 
 function mergeWizardConfigOntoLatest(current: unknown, base: unknown, next: unknown): unknown {
@@ -155,13 +166,12 @@ async function promptConfigureSection(
 ): Promise<ConfigureSectionChoice> {
   return guardCancel(
     await select<ConfigureSectionChoice>({
-      message: "Select sections to configure",
+      message: "What do you want to configure?",
       options: [
         ...CONFIGURE_SECTION_OPTIONS,
         {
           value: "__continue",
-          label: "Continue",
-          hint: hasSelection ? "Done" : "Skip for now",
+          label: hasSelection ? "Done" : "Skip for now",
         },
       ],
       initialValue: CONFIGURE_SECTION_OPTIONS[0]?.value,
@@ -173,12 +183,12 @@ async function promptConfigureSection(
 async function promptChannelMode(runtime: RuntimeEnv): Promise<ChannelsWizardMode> {
   return guardCancel(
     await select({
-      message: "Channels",
+      message: "Channel setup",
       options: [
         {
           value: "configure",
-          label: "Configure/link",
-          hint: "Add/update channels; disable unselected accounts",
+          label: "Add or update channels",
+          hint: "Configure accounts and disable unselected accounts",
         },
         {
           value: "remove",
@@ -587,7 +597,10 @@ export async function runConfigureWizard(
           },
         },
       };
-      await ensureWorkspaceAndSessions(workspaceDir, runtime);
+      await ensureWorkspaceAndSessions(workspaceDir, runtime, {
+        skipBootstrap: Boolean(nextConfig.agents?.defaults?.skipBootstrap),
+        skipOptionalBootstrapFiles: nextConfig.agents?.defaults?.skipOptionalBootstrapFiles,
+      });
     };
 
     const configureChannelsSection = async () => {
@@ -610,7 +623,7 @@ export async function runConfigureWizard(
         await text({
           message: "Gateway port for service install",
           initialValue: String(gatewayPort),
-          validate: (value) => (Number.isFinite(Number(value)) ? undefined : "Invalid port"),
+          validate: validateGatewayPortInput,
         }),
         runtime,
       );
@@ -620,7 +633,7 @@ export async function runConfigureWizard(
     if (opts.sections) {
       const selected = opts.sections;
       if (!selected || selected.length === 0) {
-        outro("No changes selected.");
+        outro("No configuration changes selected.");
         return;
       }
 
@@ -749,7 +762,7 @@ export async function runConfigureWizard(
           outro("Gateway mode set to local.");
           return;
         }
-        outro("No changes selected.");
+        outro("No configuration changes selected.");
         return;
       }
     }
@@ -815,7 +828,7 @@ export async function runConfigureWizard(
       "Control UI",
     );
 
-    outro("Configure complete.");
+    outro("Configuration updated.");
   } catch (err) {
     if (err instanceof WizardCancelledError) {
       runtime.exit(1);

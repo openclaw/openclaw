@@ -5,7 +5,7 @@ import {
 } from "./attempt.thread-helpers.js";
 
 describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
-  it("skips cache-ttl append when compaction completed during the attempt", async () => {
+  it("skips cache-ttl append when compaction completed during the attempt", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
@@ -36,7 +36,7 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     );
   });
 
-  it("appends cache-ttl when no compaction completed during the attempt", async () => {
+  it("appends cache-ttl when no compaction completed during the attempt", () => {
     const sessionManager = {
       appendCustomEntry: vi.fn(),
     };
@@ -61,13 +61,10 @@ describe("runEmbeddedAttempt cache-ttl tracking after compaction", () => {
     });
 
     expect(appended).toBe(true);
-    expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(
-      ATTEMPT_CACHE_TTL_CUSTOM_TYPE,
-      expect.objectContaining({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4-20250514",
-        timestamp: 123,
-      }),
-    );
+    expect(sessionManager.appendCustomEntry).toHaveBeenCalledWith(ATTEMPT_CACHE_TTL_CUSTOM_TYPE, {
+      timestamp: 123,
+      provider: "anthropic",
+      modelId: "claude-sonnet-4-20250514",
+    });
   });
 });

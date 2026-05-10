@@ -116,9 +116,14 @@ describe("runCapability deepgram provider options", () => {
         media,
         providerRegistry,
       });
-      expect(result.outputs[0]?.text).toBe("ok");
+      expect(result.outputs).toHaveLength(1);
+      const [output] = result.outputs;
+      if (!output) {
+        throw new Error("Expected Deepgram media output");
+      }
+      expect(output.text).toBe("ok");
       expect(seenBaseUrl).toBe("https://entry.example");
-      expect(seenHeaders).toMatchObject({
+      expect(seenHeaders).toStrictEqual({
         "X-Provider": "1",
         "X-Provider-Managed": "secretref-managed",
         "X-Config": "2",
@@ -126,7 +131,7 @@ describe("runCapability deepgram provider options", () => {
         "X-Entry": "3",
         "X-Entry-Managed": "secretref-managed",
       });
-      expect(seenQuery).toMatchObject({
+      expect(seenQuery).toStrictEqual({
         detect_language: false,
         punctuate: false,
         smart_format: true,

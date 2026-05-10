@@ -9,7 +9,15 @@ import type { ReplyThreadingPolicy } from "./types.js";
 /** Valid message channels for routing. */
 export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
-export type StickerContextMetadata = {
+export type MentionSource =
+  | "explicit_bot"
+  | "subteam"
+  | "mention_pattern"
+  | "implicit_thread"
+  | "command_bypass"
+  | "none";
+
+type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
   setName?: string;
@@ -21,7 +29,7 @@ export type StickerContextMetadata = {
   isVideo?: boolean;
 } & Record<string, unknown>;
 
-export type UntrustedStructuredContextEntry = {
+type UntrustedStructuredContextEntry = {
   label: string;
   source?: string;
   type?: string;
@@ -45,6 +53,8 @@ export type MsgContext = {
     timestamp?: number;
   }>;
   /**
+   * @deprecated Use CommandBody.
+   *
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
@@ -94,6 +104,24 @@ export type MsgContext = {
   ReplyToIdFull?: string;
   ReplyToBody?: string;
   ReplyToSender?: string;
+  ReplyChain?: Array<{
+    messageId?: string;
+    threadId?: string;
+    sender?: string;
+    senderId?: string;
+    senderUsername?: string;
+    timestamp?: number;
+    body?: string;
+    isQuote?: boolean;
+    mediaType?: string;
+    mediaPath?: string;
+    mediaRef?: string;
+    replyToId?: string;
+    forwardedFrom?: string;
+    forwardedFromId?: string;
+    forwardedFromUsername?: string;
+    forwardedDate?: number;
+  }>;
   ReplyToIsQuote?: boolean;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
@@ -186,6 +214,16 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** True when this turn explicitly mentioned the current bot target. */
+  ExplicitlyMentionedBot?: boolean;
+  /** Provider-native explicit user mention ids present on this turn. */
+  MentionedUserIds?: string[];
+  /** Provider-native explicit user-group/subteam mention ids present on this turn. */
+  MentionedSubteamIds?: string[];
+  /** Provider-native implicit mention wake reasons present on this turn. */
+  ImplicitMentionKinds?: string[];
+  /** Provider-native source that caused the current mention decision. */
+  MentionSource?: MentionSource;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;

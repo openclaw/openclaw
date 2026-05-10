@@ -10,6 +10,14 @@ import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import type { SessionEntry } from "./types.js";
 
+async function expectPathExists(targetPath: string): Promise<void> {
+  await expect(fs.access(targetPath)).resolves.toBeUndefined();
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  await expect(fs.stat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
+}
+
 describe("enforceSessionDiskBudget", () => {
   it("does not treat referenced transcripts with marker-like session IDs as archived artifacts", async () => {
     await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
@@ -37,7 +45,7 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
+      await expectPathExists(transcriptPath);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 0,
@@ -75,8 +83,8 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(archivePath)).rejects.toThrow();
+      await expectPathExists(transcriptPath);
+      await expectPathMissing(archivePath);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 1,
@@ -135,9 +143,9 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(checkpointPath)).rejects.toThrow();
-      await expect(fs.stat(referencedCheckpointPath)).resolves.toBeDefined();
+      await expectPathExists(transcriptPath);
+      await expectPathMissing(checkpointPath);
+      await expectPathExists(referencedCheckpointPath);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 1,
@@ -183,15 +191,61 @@ describe("enforceSessionDiskBudget", () => {
         warnOnly: false,
       });
 
-      await expect(fs.stat(transcriptPath)).resolves.toBeDefined();
-      await expect(fs.stat(referencedRuntime)).resolves.toBeDefined();
-      await expect(fs.stat(referencedPointer)).resolves.toBeDefined();
-      await expect(fs.stat(orphanRuntime)).rejects.toThrow();
-      await expect(fs.stat(orphanPointer)).rejects.toThrow();
+      await expectPathExists(transcriptPath);
+      await expectPathExists(referencedRuntime);
+      await expectPathExists(referencedPointer);
+      await expectPathMissing(orphanRuntime);
+      await expectPathMissing(orphanPointer);
       expect(result).toEqual(
         expect.objectContaining({
           removedFiles: 2,
           removedEntries: 0,
+        }),
+      );
+    });
+  });
+
+  it("does not evict protected thread session entries under store pressure", async () => {
+    await withTempDir({ prefix: "openclaw-disk-budget-" }, async (dir) => {
+      const storePath = path.join(dir, "sessions.json");
+      const protectedKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+      const removableKey = "agent:main:subagent:old-worker";
+      const activeKey = "agent:main:main";
+      const store: Record<string, SessionEntry> = {
+        [protectedKey]: {
+          sessionId: "protected-thread",
+          updatedAt: 1,
+          displayName: "p".repeat(2000),
+        },
+        [removableKey]: {
+          sessionId: "removable-worker",
+          updatedAt: 2,
+          displayName: "r".repeat(2000),
+        },
+        [activeKey]: {
+          sessionId: "active",
+          updatedAt: 3,
+        },
+      };
+      await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+
+      const result = await enforceSessionDiskBudget({
+        store,
+        storePath,
+        activeSessionKey: activeKey,
+        maintenance: {
+          maxDiskBytes: 1000,
+          highWaterBytes: 500,
+        },
+        warnOnly: false,
+      });
+
+      expect(store).toHaveProperty(protectedKey);
+      expect(store[removableKey]).toBeUndefined();
+      expect(store).toHaveProperty(activeKey);
+      expect(result).toEqual(
+        expect.objectContaining({
+          removedEntries: 1,
         }),
       );
     });

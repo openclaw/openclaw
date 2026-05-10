@@ -1,5 +1,9 @@
-import { listChannelPlugins } from "../channels/plugins/index.js";
+import { listLoadedChannelPlugins } from "../channels/plugins/registry-loaded.js";
 import { GATEWAY_EVENT_UPDATE_AVAILABLE } from "./events.js";
+
+type GatewayMethodChannelPlugin = {
+  gatewayMethods?: readonly string[];
+};
 
 const BASE_METHODS = [
   "health",
@@ -11,9 +15,11 @@ const BASE_METHODS = [
   "doctor.memory.resetGroundedShortTerm",
   "doctor.memory.repairDreamingArtifacts",
   "doctor.memory.dedupeDreamDiary",
+  "doctor.memory.remHarness",
   "logs.tail",
   "channels.status",
   "channels.start",
+  "channels.stop",
   "channels.logout",
   "status",
   "usage.status",
@@ -50,12 +56,19 @@ const BASE_METHODS = [
   "wizard.next",
   "wizard.cancel",
   "wizard.status",
+  "talk.catalog",
   "talk.config",
-  "talk.realtime.session",
-  "talk.realtime.relayAudio",
-  "talk.realtime.relayMark",
-  "talk.realtime.relayStop",
-  "talk.realtime.relayToolResult",
+  "talk.client.create",
+  "talk.client.toolCall",
+  "talk.session.create",
+  "talk.session.join",
+  "talk.session.appendAudio",
+  "talk.session.startTurn",
+  "talk.session.endTurn",
+  "talk.session.cancelTurn",
+  "talk.session.cancelOutput",
+  "talk.session.submitToolResult",
+  "talk.session.close",
   "talk.speak",
   "talk.mode",
   "commands.list",
@@ -63,6 +76,12 @@ const BASE_METHODS = [
   "models.authStatus",
   "tools.catalog",
   "tools.effective",
+  "tools.invoke",
+  "tasks.list",
+  "tasks.get",
+  "tasks.cancel",
+  "environments.list",
+  "environments.status",
   "agents.list",
   "agents.create",
   "agents.update",
@@ -70,10 +89,16 @@ const BASE_METHODS = [
   "agents.files.list",
   "agents.files.get",
   "agents.files.set",
+  "artifacts.list",
+  "artifacts.get",
+  "artifacts.download",
   "skills.status",
   "skills.search",
   "skills.detail",
   "skills.bins",
+  "skills.upload.begin",
+  "skills.upload.chunk",
+  "skills.upload.commit",
   "skills.install",
   "skills.update",
   "update.status",
@@ -90,6 +115,7 @@ const BASE_METHODS = [
   "sessions.messages.subscribe",
   "sessions.messages.unsubscribe",
   "sessions.preview",
+  "sessions.describe",
   "sessions.compaction.list",
   "sessions.compaction.get",
   "sessions.compaction.branch",
@@ -99,6 +125,7 @@ const BASE_METHODS = [
   "sessions.abort",
   "sessions.patch",
   "sessions.pluginPatch",
+  "sessions.cleanup",
   "sessions.reset",
   "sessions.delete",
   "sessions.compact",
@@ -120,6 +147,7 @@ const BASE_METHODS = [
   "node.rename",
   "node.list",
   "node.describe",
+  "node.pluginSurface.refresh",
   "node.pending.drain",
   "node.pending.enqueue",
   "node.invoke",
@@ -127,7 +155,6 @@ const BASE_METHODS = [
   "node.pending.ack",
   "node.invoke.result",
   "node.event",
-  "node.canvas.capability.refresh",
   "cron.list",
   "cron.status",
   "cron.add",
@@ -136,6 +163,8 @@ const BASE_METHODS = [
   "cron.run",
   "cron.runs",
   "gateway.identity.get",
+  "gateway.restart.preflight",
+  "gateway.restart.request",
   "system-presence",
   "system-event",
   "message.action",
@@ -150,7 +179,9 @@ const BASE_METHODS = [
 ];
 
 export function listGatewayMethods(): string[] {
-  const channelMethods = listChannelPlugins().flatMap((plugin) => plugin.gatewayMethods ?? []);
+  const channelMethods = (listLoadedChannelPlugins() as GatewayMethodChannelPlugin[]).flatMap(
+    (plugin) => plugin.gatewayMethods ?? [],
+  );
   return Array.from(new Set([...BASE_METHODS, ...channelMethods]));
 }
 
@@ -164,6 +195,7 @@ export const GATEWAY_EVENTS = [
   "presence",
   "tick",
   "talk.mode",
+  "talk.event",
   "shutdown",
   "health",
   "heartbeat",

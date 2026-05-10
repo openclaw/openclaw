@@ -34,10 +34,12 @@ export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
 export type MockSock = {
   ev: EventEmitter;
+  end: AnyMockFn;
   ws: { close: AnyMockFn };
   sendPresenceUpdate: AnyMockFn;
   sendMessage: AnyMockFn;
   readMessages: AnyMockFn;
+  groupMetadata: AnyMockFn;
   groupFetchAllParticipating: AnyMockFn;
   updateMediaMessage: AnyMockFn;
   logger: Record<string, unknown>;
@@ -52,6 +54,25 @@ export type MockSock = {
 const sessionState = vi.hoisted(() => ({
   sock: undefined as MockSock | undefined,
 }));
+
+const channelActivityMocks = vi.hoisted(() => ({
+  recordChannelActivity: vi.fn(),
+}));
+
+export function getRecordChannelActivityMock(): AnyMockFn {
+  return channelActivityMocks.recordChannelActivity;
+}
+
+vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
+  const actual = await vi.importActual<
+    typeof import("openclaw/plugin-sdk/channel-activity-runtime")
+  >("openclaw/plugin-sdk/channel-activity-runtime");
+  return {
+    ...actual,
+    recordChannelActivity: (...args: unknown[]) =>
+      channelActivityMocks.recordChannelActivity(...args),
+  };
+});
 
 const inboundRuntimeMocks = vi.hoisted(() => {
   const wrapperKeys = [
@@ -106,10 +127,17 @@ function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
     ev,
+    end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
     sendMessage: createResolvedMock(),
     readMessages: createResolvedMock(),
+    groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
+      id: jid,
+      subject: "Test Group",
+      owner: undefined,
+      participants: [],
+    })),
     groupFetchAllParticipating: vi.fn().mockResolvedValue({}),
     updateMediaMessage: vi.fn(),
     logger: {},
@@ -268,6 +296,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    channelActivityMocks.recordChannelActivity.mockClear();
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {

@@ -1,6 +1,7 @@
-import { ChannelType, type Guild } from "@buape/carbon";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ChannelType, type Guild } from "./internal/discord.js";
 import {
   allowListMatches,
   type DiscordGuildEntryResolved,
@@ -10,6 +11,7 @@ import {
   resolveDiscordChannelConfig,
   resolveDiscordChannelConfigWithFallback,
   resolveDiscordGuildEntry,
+  resolveDiscordOwnerAccess,
   resolveDiscordShouldRequireMention,
   resolveGroupDmAllow,
   shouldEmitDiscordReactionNotification,
@@ -36,6 +38,17 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", async () => {
 });
 
 const fakeGuild = (id: string, name: string) => ({ id, name }) as Guild;
+
+function expectNormalizedAllowList(
+  entries: string[],
+  prefixes: string[],
+): NonNullable<ReturnType<typeof normalizeDiscordAllowList>> {
+  const allow = normalizeDiscordAllowList(entries, prefixes);
+  if (allow === null) {
+    throw new Error("Expected allow list to be normalized");
+  }
+  return allow;
+}
 
 const makeEntries = (
   entries: Record<string, Partial<DiscordGuildEntryResolved>>,
@@ -121,7 +134,7 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
 
     // handle() returns immediately while the background queue starts on the next tick.
@@ -153,13 +166,13 @@ describe("DiscordMessageListener", () => {
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
     await expect(
       listener.handle(
         {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-        {} as unknown as import("@buape/carbon").Client,
+        {} as unknown as import("./internal/discord.js").Client,
       ),
     ).resolves.toBeUndefined();
 
@@ -186,13 +199,13 @@ describe("DiscordMessageListener", () => {
 
     await listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
 
-  it("does not apply its own slow-listener logging (owned by inbound worker)", async () => {
+  it("does not apply its own slow-listener logging", async () => {
     const deferred = createDeferred();
     const handler = vi.fn(() => deferred.promise);
     const logger = {
@@ -205,15 +218,14 @@ describe("DiscordMessageListener", () => {
 
     const handlePromise = listener.handle(
       {} as unknown as import("./monitor/listeners.js").DiscordMessageEvent,
-      {} as unknown as import("@buape/carbon").Client,
+      {} as unknown as import("./internal/discord.js").Client,
     );
     await expect(handlePromise).resolves.toBeUndefined();
 
     deferred.resolve();
     await flushAsyncWork();
     expect(handler).toHaveBeenCalledOnce();
-    // The listener no longer wraps handlers with slow-listener logging;
-    // that responsibility moved to the inbound worker.
+    // The listener no longer wraps message handlers with slow-listener logging.
     expect(logger.warn).not.toHaveBeenCalled();
   });
 });
@@ -226,14 +238,10 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches ids by default and names only when enabled", () => {
-    const allow = normalizeDiscordAllowList(
+    const allow = expectNormalizedAllowList(
       ["123", "steipete", "Friends of OpenClaw"],
       ["discord:", "user:", "guild:", "channel:"],
     );
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
     expect(allowListMatches(allow, { id: "123" })).toBe(true);
     expect(allowListMatches(allow, { name: "steipete" })).toBe(false);
     expect(allowListMatches(allow, { name: "friends-of-openclaw" })).toBe(false);
@@ -245,13 +253,29 @@ describe("discord allowlist helpers", () => {
   });
 
   it("matches pk-prefixed allowlist entries", () => {
-    const allow = normalizeDiscordAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
-    expect(allow).not.toBeNull();
-    if (!allow) {
-      throw new Error("Expected allow list to be normalized");
-    }
+    const allow = expectNormalizedAllowList(["pk:member-123"], ["discord:", "user:", "pk:"]);
     expect(allowListMatches(allow, { id: "member-123" })).toBe(true);
     expect(allowListMatches(allow, { id: "member-999" })).toBe(false);
+  });
+
+  it("does not treat DM wildcard access as owner access", () => {
+    const wildcardOnly = resolveDiscordOwnerAccess({
+      allowFrom: ["*"],
+      sender: { id: "123" },
+    });
+    expect(wildcardOnly.ownerAllowList).toBeNull();
+    expect(wildcardOnly.ownerAllowed).toBe(false);
+
+    const explicitOwner = resolveDiscordOwnerAccess({
+      allowFrom: ["*", "user:123"],
+      sender: { id: "123" },
+    });
+    if (explicitOwner.ownerAllowList === null) {
+      throw new Error("Expected explicit owner allowlist");
+    }
+    expect(explicitOwner.ownerAllowList.allowAll).toBe(false);
+    expect(explicitOwner.ownerAllowList.ids).toEqual(new Set(["123"]));
+    expect(explicitOwner.ownerAllowed).toBe(true);
   });
 });
 
@@ -960,7 +984,7 @@ function makeReactionEvent(overrides?: {
     message: {
       fetch: messageFetch,
     },
-  } as DiscordReactionEvent;
+  } as unknown as DiscordReactionEvent;
 }
 
 function makeReactionClient(options?: {
@@ -1001,7 +1025,7 @@ function makeReactionListenerParams(overrides?: {
   guildEntries?: Record<string, DiscordGuildEntryResolved>;
 }) {
   return {
-    cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+    cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
     accountId: "acc-1",
     runtime: {} as import("openclaw/plugin-sdk/runtime-env").RuntimeEnv,
     botUserId: overrides?.botUserId ?? "bot-1",
@@ -1009,7 +1033,7 @@ function makeReactionListenerParams(overrides?: {
     groupDmEnabled: overrides?.groupDmEnabled ?? true,
     groupDmChannels: overrides?.groupDmChannels ?? [],
     dmPolicy: overrides?.dmPolicy ?? "open",
-    allowFrom: overrides?.allowFrom ?? [],
+    allowFrom: overrides?.allowFrom ?? ["*"],
     groupPolicy: overrides?.groupPolicy ?? "open",
     allowNameMatching: overrides?.allowNameMatching ?? false,
     guildEntries: overrides?.guildEntries,

@@ -145,8 +145,8 @@ export type MediaToolsConfig = {
   concurrency?: number;
   asyncCompletion?: {
     /**
-     * Enable direct channel sends for completed async media generation tasks.
-     * Default: false.
+     * Deprecated compatibility flag. Async media generation completions stay
+     * requester-session mediated so source delivery policy remains agent-owned.
      */
     directSend?: boolean;
   };
@@ -166,6 +166,11 @@ export type ToolLoopDetectionDetectorConfig = {
   pingPong?: boolean;
 };
 
+export type ToolLoopPostCompactionGuardConfig = {
+  /** How many attempts post-compaction the guard remains armed (default: 3). */
+  windowSize?: number;
+};
+
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
@@ -181,7 +186,24 @@ export type ToolLoopDetectionConfig = {
   globalCircuitBreakerThreshold?: number;
   /** Detector toggles. */
   detectors?: ToolLoopDetectionDetectorConfig;
+  /** Post-compaction loop guard: aborts when the agent repeats the same (tool, args, result) immediately after auto-compaction-retry. */
+  postCompactionGuard?: ToolLoopPostCompactionGuardConfig;
 };
+
+export type ToolSearchConfig =
+  | boolean
+  | {
+      /** Enable compact search/call cataloging for large tool sets. */
+      enabled?: boolean;
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
+      mode?: "code" | "tools";
+      /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
+      codeTimeoutMs?: number;
+      /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
+      searchDefaultLimit?: number;
+      /** Maximum search result count. Runtime clamps to 1..50. */
+      maxSearchLimit?: number;
+    };
 
 export type SessionsToolsVisibility = "self" | "tree" | "agent" | "all";
 
@@ -575,10 +597,14 @@ export type ToolsConfig = {
       userAgent?: string;
       /** Use Readability to extract main content (default: true). */
       readability?: boolean;
+      /** Route web_fetch through a trusted HTTP(S) env proxy and let the proxy resolve DNS. Enable only when that proxy enforces outbound policy. */
+      useTrustedEnvProxy?: boolean;
       /** SSRF policy configuration for web_fetch. */
       ssrfPolicy?: {
         /** Allow RFC 2544 benchmark range IPs (198.18.0.0/15) for fake-IP proxy compatibility (e.g., Clash TUN mode, Surge). */
         allowRfc2544BenchmarkRange?: boolean;
+        /** Allow IPv6 Unique Local Addresses (fc00::/7) for trusted fake-IP proxy compatibility. */
+        allowIpv6UniqueLocalRange?: boolean;
       };
     };
   };
@@ -645,6 +671,8 @@ export type ToolsConfig = {
   fs?: FsToolsConfig;
   /** Runtime loop detection for repetitive/ stuck tool-call patterns. */
   loopDetection?: ToolLoopDetectionConfig;
+  /** Compact large OpenClaw, MCP, and client tool catalogs behind search/call tools. */
+  toolSearch?: ToolSearchConfig;
   /** Sub-agent tool policy defaults (deny wins). */
   subagents?: {
     /** Default model selection for spawned sub-agents (string or {primary,fallbacks}). */

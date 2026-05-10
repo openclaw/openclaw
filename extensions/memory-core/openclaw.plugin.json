@@ -5,7 +5,8 @@
   },
   "kind": "memory",
   "contracts": {
-    "memoryEmbeddingProviders": ["local"]
+    "memoryEmbeddingProviders": ["local"],
+    "tools": ["memory_get", "memory_search"]
   },
   "commandAliases": [
     {

@@ -37,7 +37,7 @@ function createStoreTestState(storePath: string) {
     log: logger,
     nowMs: () => STORE_TEST_NOW,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeatNow: vi.fn(),
+    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
 }
@@ -81,13 +81,15 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state);
 
     const job = state.store?.jobs[0];
-    expect(job).toBeDefined();
-    expect(job?.sessionTarget).toBe("isolated");
-    expect(job?.payload.kind).toBe("agentTurn");
-    if (job?.payload.kind === "agentTurn") {
+    if (!job) {
+      throw new Error("expected loaded cron job");
+    }
+    expect(job.sessionTarget).toBe("isolated");
+    expect(job.payload.kind).toBe("agentTurn");
+    if (job.payload.kind === "agentTurn") {
       expect(job.payload.message).toBe("ping");
     }
-    expect(job?.delivery).toMatchObject({
+    expect(job.delivery).toMatchObject({
       mode: "announce",
       channel: "telegram",
       to: "123",
@@ -277,6 +279,36 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
+  });
+
+  it("clears stale nextRunAtMs without throwing when a force-reloaded schedule is malformed", async () => {
+    const { storePath } = await makeStorePath();
+    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
+
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+    });
+
+    const state = createStoreTestState(storePath);
+    await ensureLoaded(state, { skipRecompute: true });
+
+    await writeSingleJobStore(storePath, {
+      ...createReloadCronJob({
+        updatedAtMs: STORE_TEST_NOW,
+        state: { nextRunAtMs: staleNextRunAtMs },
+      }),
+      schedule: "0 17 * * *",
+    });
+
+    await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).resolves.toBe(
+      undefined,
+    );
+
+    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
+    expect(reloadedJob.schedule).toBe("0 17 * * *");
+    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {

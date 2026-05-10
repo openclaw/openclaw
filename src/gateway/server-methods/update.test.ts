@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RestartSentinelPayload } from "../../infra/restart-sentinel.js";
+import {
+  DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+  type RestartSentinelPayload,
+} from "../../infra/restart-sentinel.js";
 import type { UpdateInstallSurface, UpdateRunResult } from "../../infra/update-runner.js";
 
 // Capture the sentinel payload written during update.run
@@ -102,6 +105,7 @@ vi.mock("./restart-request.js", () => ({
   parseRestartRequestParams: (params: Record<string, unknown>) => ({
     sessionKey: params.sessionKey,
     note: params.note,
+    continuationMessage: params.continuationMessage,
     restartDelayMs: undefined,
   }),
 }));
@@ -151,6 +155,13 @@ async function invokeUpdateRun(
   } as never);
 }
 
+function readCapturedPayload(): RestartSentinelPayload {
+  if (!capturedPayload) {
+    throw new Error("expected restart sentinel payload");
+  }
+  return capturedPayload;
+}
+
 describe("update.run sentinel deliveryContext", () => {
   it("includes deliveryContext in sentinel payload when sessionKey is provided", async () => {
     capturedPayload = undefined;
@@ -161,13 +172,16 @@ describe("update.run sentinel deliveryContext", () => {
     });
 
     expect(responded).toBe(true);
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toEqual({
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toEqual({
       channel: "webchat",
       to: "webchat:user-123",
       accountId: "default",
     });
-    expect(capturedPayload!.continuation).toBeUndefined();
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("omits deliveryContext when no sessionKey is provided", async () => {
@@ -175,10 +189,10 @@ describe("update.run sentinel deliveryContext", () => {
 
     await invokeUpdateRun({});
 
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toBeUndefined();
-    expect(capturedPayload!.threadId).toBeUndefined();
-    expect(capturedPayload!.continuation).toBeUndefined();
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toBeUndefined();
+    expect(payload.threadId).toBeUndefined();
+    expect(payload.continuation).toBeUndefined();
   });
 
   it("includes threadId in sentinel payload for threaded sessions", async () => {
@@ -186,14 +200,31 @@ describe("update.run sentinel deliveryContext", () => {
 
     await invokeUpdateRun({ sessionKey: "agent:main:slack:dm:C0123ABC:thread:1234567890.123456" });
 
-    expect(capturedPayload).toBeDefined();
-    expect(capturedPayload!.deliveryContext).toEqual({
+    const payload = readCapturedPayload();
+    expect(payload.deliveryContext).toEqual({
       channel: "slack",
       to: "slack:C0123ABC",
       accountId: "workspace-1",
     });
-    expect(capturedPayload!.threadId).toBe("1234567890.123456");
-    expect(capturedPayload!.continuation).toBeUndefined();
+    expect(payload.threadId).toBe("1234567890.123456");
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
+  });
+
+  it("uses an explicit continuationMessage in successful update sentinels", async () => {
+    capturedPayload = undefined;
+
+    await invokeUpdateRun({
+      sessionKey: "agent:main:webchat:dm:user-123",
+      continuationMessage: "Check the running version and finish the update report.",
+    });
+
+    expect(readCapturedPayload().continuation).toEqual({
+      kind: "agentTurn",
+      message: "Check the running version and finish the update report.",
+    });
   });
 });
 
@@ -234,10 +265,16 @@ describe("update.run restart scheduling", () => {
 
     let payload: { ok: boolean; restart: unknown } | undefined;
 
-    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
-      const typed = response as { ok: boolean; restart: unknown };
-      payload = typed;
-    });
+    await invokeUpdateRun(
+      {
+        sessionKey: "agent:main:webchat:dm:user-123",
+        continuationMessage: "This should not run after a failed update.",
+      },
+      (_ok: boolean, response: unknown) => {
+        const typed = response as { ok: boolean; restart: unknown };
+        payload = typed;
+      },
+    );
 
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
     expect(payload?.ok).toBe(false);
@@ -276,7 +313,35 @@ describe("update.run restart scheduling", () => {
     );
   });
 
-  it("blocks unmanaged global installs before package mutation when restart is unavailable", async () => {
+  it("forces an immediate restart after successful package-manager updates", async () => {
+    resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({
+      kind: "global",
+      mode: "npm",
+      root: "/tmp/openclaw-global",
+      packageRoot: "/tmp/openclaw-global",
+    });
+
+    let payload:
+      | { ok: boolean; result?: { status?: string; reason?: string; mode?: string } }
+      | undefined;
+
+    await invokeUpdateRun({}, (_ok: boolean, response: unknown) => {
+      payload = response as typeof payload;
+    });
+
+    expect(runGatewayUpdateMock).toHaveBeenCalledTimes(1);
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        delayMs: 0,
+        reason: "update.run",
+        skipCooldown: true,
+        skipDeferral: true,
+      }),
+    );
+    expect(payload?.ok).toBe(true);
+  });
+
+  it("blocks global package installs when the gateway cannot restart afterward", async () => {
     isRestartEnabledMock.mockReturnValue(false);
     detectRespawnSupervisorMock.mockReturnValue(null);
     resolveUpdateInstallSurfaceMock.mockResolvedValueOnce({

@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { expectSingleNpmInstallIgnoreScriptsCall } from "../test-utils/exec-assertions.js";
 import { initializeGlobalHookRunner, resetGlobalHookRunner } from "./hook-runner-global.js";
 import { createMockPluginRegistry } from "./hooks.test-helpers.js";
 import {
@@ -233,7 +232,9 @@ describe("installPluginFromPath", () => {
       expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED);
       expect(result.error).toContain('Plugin file "payload" installation blocked');
     }
-    expect(warnings.some((w) => w.includes("dangerous code pattern"))).toBe(true);
+    expect(warnings).toEqual(
+      expect.arrayContaining([expect.stringContaining("dangerous code pattern")]),
+    );
   });
 
   it("allows plain file installs with dangerous code patterns when forced unsafe install is set", async () => {
@@ -339,7 +340,7 @@ describe("installPluginFromPath", () => {
     expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
   });
 
-  it("prefers native package installs over bundle installs for dual-format archives", async () => {
+  it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
     const { pluginDir, extensionsDir } = setupDualFormatInstallFixture({
       bundleFormat: "claude",
     });
@@ -371,9 +372,7 @@ describe("installPluginFromPath", () => {
     }
     expect(result.pluginId).toBe("native-dual");
     expect(result.targetDir).toBe(path.join(extensionsDir, "native-dual"));
-    expectSingleNpmInstallIgnoreScriptsCall({
-      calls: run.mock.calls as Array<[unknown, { cwd?: string } | undefined]>,
-      expectedTargetDir: result.targetDir,
-    });
+    expect(run).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(result.targetDir, "node_modules"))).toBe(false);
   });
 });

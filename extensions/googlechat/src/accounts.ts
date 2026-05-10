@@ -8,11 +8,11 @@ import {
 } from "openclaw/plugin-sdk/account-resolution";
 import { safeParseJsonWithSchema, safeParseWithSchema } from "openclaw/plugin-sdk/extension-shared";
 import { isSecretRef } from "openclaw/plugin-sdk/secret-input";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import type { GoogleChatAccountConfig } from "./types.config.js";
 
-export type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
+type GoogleChatCredentialSource = "file" | "inline" | "env" | "none";
 
 export type ResolvedGoogleChatAccount = {
   accountId: string;
@@ -22,6 +22,10 @@ export type ResolvedGoogleChatAccount = {
   credentialSource: GoogleChatCredentialSource;
   credentials?: Record<string, unknown>;
   credentialsFile?: string;
+};
+
+export type GoogleChatConfigAccessorAccount = {
+  config: GoogleChatAccountConfig;
 };
 
 const ENV_SERVICE_ACCOUNT = "GOOGLE_CHAT_SERVICE_ACCOUNT";
@@ -60,6 +64,16 @@ function mergeGoogleChatAccountConfig(
   // In multi-account setups, allow accounts.default to provide shared defaults
   // (for example webhook/audience fields) while preserving top-level and account overrides.
   return { ...defaultAccountShared, ...base } as GoogleChatAccountConfig;
+}
+
+export function resolveGoogleChatConfigAccessorAccount(params: {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+}): GoogleChatConfigAccessorAccount {
+  const accountId = normalizeAccountId(
+    params.accountId ?? params.cfg.channels?.googlechat?.defaultAccount,
+  );
+  return { config: mergeGoogleChatAccountConfig(params.cfg, accountId) };
 }
 
 function parseServiceAccount(value: unknown): Record<string, unknown> | null {

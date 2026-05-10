@@ -1,6 +1,6 @@
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   __testing,
@@ -57,15 +57,61 @@ describe("CodexAppServerClient", () => {
 
     harness.process.stdout.write('{"token":"secret-value"} trailing\n');
 
-    await vi.waitFor(() =>
-      expect(warn).toHaveBeenCalledWith(
-        "failed to parse codex app-server message",
-        expect.objectContaining({
-          linePreview: '{"token":"<redacted>"} trailing',
-        }),
-      ),
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(1));
+    expect(warn.mock.calls[0]?.[0]).toBe("failed to parse codex app-server message");
+    const metadata = warn.mock.calls[0]?.[1] as
+      | {
+          error?: unknown;
+          errorMessage?: string;
+          fragmentCount?: number;
+          linePreview?: string;
+          consoleMessage?: string;
+        }
+      | undefined;
+    expect(metadata?.error).toBeInstanceOf(SyntaxError);
+    expect(metadata?.errorMessage).toBe(
+      "Unexpected non-whitespace character after JSON at position 25 (line 1 column 26)",
+    );
+    expect(metadata?.fragmentCount).toBe(1);
+    expect(metadata?.linePreview).toBe('{"token":"<redacted>"} trailing');
+    expect(metadata?.consoleMessage).toBe(
+      'failed to parse codex app-server message: preview="{\\"token\\":\\"<redacted>\\"} trailing"',
     );
     expect(JSON.stringify(warn.mock.calls)).not.toContain("secret-value");
+  });
+
+  it("redacts prefixed env credential names from app-server previews", () => {
+    expect(
+      __testing.redactCodexAppServerLinePreview(
+        "fatal OPENAI_API_KEY=sk-live ANTHROPIC_API_KEY='anthropic-secret' OTHER=value",
+      ),
+    ).toBe("fatal OPENAI_API_KEY=<redacted> ANTHROPIC_API_KEY='<redacted>' OTHER=value");
+  });
+
+  it("recovers app-server messages split by raw newlines inside JSON strings", async () => {
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    const notifications: unknown[] = [];
+    harness.client.addNotificationHandler((notification) => {
+      notifications.push(notification);
+    });
+
+    harness.process.stdout.write(
+      '{"method":"item/commandExecution/outputDelta","params":{"delta":"first' +
+        "\n" +
+        'second"}}\n',
+    );
+
+    await vi.waitFor(() =>
+      expect(notifications).toEqual([
+        {
+          method: "item/commandExecution/outputDelta",
+          params: { delta: "first\nsecond" },
+        },
+      ]),
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("preserves JSON-RPC error codes", async () => {
@@ -122,13 +168,17 @@ describe("CodexAppServerClient", () => {
     });
 
     await expect(initializing).resolves.toBeUndefined();
-    expect(outbound).toMatchObject({
+    expect(outbound).toStrictEqual({
+      id: outbound.id,
       method: "initialize",
       params: {
         clientInfo: {
           name: "openclaw",
           title: "OpenClaw",
-          version: expect.any(String),
+          version: OPENCLAW_VERSION,
+        },
+        capabilities: {
+          experimentalApi: true,
         },
       },
     });
@@ -207,7 +257,7 @@ describe("CodexAppServerClient", () => {
     expect(harness.writes).toHaveLength(1);
   });
 
-  it("force-stops app-server transports that ignore the graceful signal", async () => {
+  it("waits for app-server transports to exit after closing stdin before force-stopping", async () => {
     vi.useFakeTimers();
     const process = Object.assign(new EventEmitter(), {
       stdin: {
@@ -226,7 +276,8 @@ describe("CodexAppServerClient", () => {
 
     __testing.closeCodexAppServerTransport(process, { forceKillDelayMs: 25 });
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     expect(process.unref).toHaveBeenCalledTimes(1);
@@ -253,14 +304,42 @@ describe("CodexAppServerClient", () => {
       exitTimeoutMs: 100,
       forceKillDelayMs: 25,
     });
-    await vi.advanceTimersByTimeAsync(25);
 
-    expect(process.kill).toHaveBeenCalledWith("SIGTERM");
+    expect(process.stdin.end).toHaveBeenCalledTimes(1);
+    expect(process.kill).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(25);
     expect(process.kill).toHaveBeenCalledWith("SIGKILL");
     process.signalCode = "SIGKILL";
     process.emit("exit");
 
     await expect(closed).resolves.toBe(true);
+  });
+
+  it("keeps async shutdown alive until the exit timeout resolves", async () => {
+    vi.useFakeTimers();
+    const process = Object.assign(new EventEmitter(), {
+      stdin: {
+        write: vi.fn(),
+        end: vi.fn(),
+        destroy: vi.fn(),
+        unref: vi.fn(),
+      },
+      stdout: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      stderr: Object.assign(new PassThrough(), { unref: vi.fn() }),
+      exitCode: null as number | null,
+      signalCode: null as string | null,
+      kill: vi.fn(),
+      unref: vi.fn(),
+    });
+
+    const closed = __testing.closeCodexAppServerTransportAndWait(process, {
+      exitTimeoutMs: 100,
+      forceKillDelayMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(100);
+
+    await expect(closed).resolves.toBe(false);
   });
 
   it("handles stdin write errors without crashing the process", async () => {
@@ -278,13 +357,27 @@ describe("CodexAppServerClient", () => {
     // an unhandled exception tearing down the gateway.
     await expect(pending).rejects.toThrow("write EPIPE");
 
-    // Subsequent requests are rejected immediately (client is closed).
+    // Subsequent requests keep the original close reason so startup logs stay actionable.
+    await expect(harness.client.request("another/method")).rejects.toThrow("write EPIPE");
+  });
+
+  it("preserves redacted app-server stderr on exit errors", async () => {
+    const harness = createClientHarness();
+    clients.push(harness.client);
+
+    const pending = harness.client.request("test/method");
+    harness.process.stderr.write('fatal token="secret-value" while booting\n');
+    harness.process.emit("exit", 1, null);
+
+    await expect(pending).rejects.toThrow(
+      'codex app-server exited: code=1 signal=null stderr="fatal token=\\"<redacted>\\" while booting"',
+    );
     await expect(harness.client.request("another/method")).rejects.toThrow(
-      "codex app-server client is closed",
+      "codex app-server exited: code=1 signal=null",
     );
   });
 
-  it("does not write to stdin after the child process exits", async () => {
+  it("does not write to stdin after the child process exits", () => {
     const harness = createClientHarness();
     clients.push(harness.client);
 
@@ -324,6 +417,41 @@ describe("CodexAppServerClient", () => {
     expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
       id: "srv-1",
       result: { contentItems: [{ type: "inputText", text: "ok" }], success: true },
+    });
+  });
+
+  it("fails closed when a dynamic tool server request handler hangs", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness();
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "item/tool/call") {
+        return new Promise<never>(() => undefined);
+      }
+      return undefined;
+    });
+
+    harness.send({ id: "srv-timeout", method: "item/tool/call", params: { tool: "message" } });
+    await vi.advanceTimersByTimeAsync(__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-timeout",
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: `OpenClaw dynamic tool call timed out after ${__testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+          },
+        ],
+      },
+    });
+    expect(warn).toHaveBeenCalledWith("codex app-server server request timed out", {
+      id: "srv-timeout",
+      method: "item/tool/call",
+      timeoutMs: __testing.CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
     });
   });
 

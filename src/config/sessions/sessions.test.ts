@@ -271,15 +271,13 @@ describe("session lifecycle timestamps", () => {
   });
 });
 
-describe("session store lock (Promise chain mutex)", () => {
-  const lockFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-lock-test-" });
-  let lockTmpDirs: string[] = [];
+describe("session store writer queue", () => {
+  const writerFixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-writer-test-" });
 
   async function makeTmpStore(
     initial: Record<string, unknown> = {},
   ): Promise<{ dir: string; storePath: string }> {
-    const dir = await lockFixtureRootTracker.make("case");
-    lockTmpDirs.push(dir);
+    const dir = await writerFixtureRootTracker.make("case");
     const storePath = path.join(dir, "sessions.json");
     if (Object.keys(initial).length > 0) {
       await fsPromises.writeFile(storePath, JSON.stringify(initial, null, 2), "utf-8");
@@ -288,16 +286,15 @@ describe("session store lock (Promise chain mutex)", () => {
   }
 
   beforeAll(async () => {
-    await lockFixtureRootTracker.setup();
+    await writerFixtureRootTracker.setup();
   });
 
   afterAll(async () => {
-    await lockFixtureRootTracker.cleanup();
+    await writerFixtureRootTracker.cleanup();
   });
 
   afterEach(async () => {
     clearSessionStoreCacheForTest();
-    lockTmpDirs = [];
   });
 
   it("serializes concurrent updateSessionStore calls without data loss", async () => {
@@ -340,6 +337,31 @@ describe("session store lock (Promise chain mutex)", () => {
     writeSpy.mockRestore();
   });
 
+  it("keeps session store writes atomic while skipping durable fsync inside the writer lock", async () => {
+    const key = "agent:main:no-fsync";
+    const { storePath } = await makeTmpStore({
+      [key]: { sessionId: "s-no-fsync", updatedAt: Date.now(), counter: 0 },
+    });
+
+    const writeSpy = vi.spyOn(jsonFiles, "writeTextAtomic");
+    await updateSessionStore(
+      storePath,
+      async (store) => {
+        const entry = store[key] as Record<string, unknown>;
+        entry.counter = 1;
+      },
+      { skipMaintenance: true },
+    );
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(writeSpy).toHaveBeenCalledWith(
+      storePath,
+      expect.any(String),
+      expect.objectContaining({ durable: false, mode: 0o600 }),
+    );
+    writeSpy.mockRestore();
+  });
+
   it("multiple consecutive errors do not permanently poison the queue", async () => {
     const key = "agent:main:multi-err";
     const { storePath } = await makeTmpStore({
@@ -356,8 +378,8 @@ describe("session store lock (Promise chain mutex)", () => {
       store[key] = { ...store[key], modelOverride: "recovered" } as unknown as SessionEntry;
     });
 
-    for (const p of errors) {
-      await expect(p).rejects.toThrow();
+    for (const [index, p] of errors.entries()) {
+      await expect(p).rejects.toThrow(`fail-${index}`);
     }
     await success;
 

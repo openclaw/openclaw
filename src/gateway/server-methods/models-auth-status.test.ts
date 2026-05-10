@@ -4,8 +4,12 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent"),
-  ensureAuthProfileStore: vi.fn(() => ({ profiles: {} })),
+  resolveDefaultAgentDir: vi.fn(() => "/tmp/agent"),
+  ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
+    void agentDir;
+    void options;
+    return { profiles: {} };
+  }),
   buildAuthHealthSummary: vi.fn(
     (): AuthHealthSummary => ({ now: 0, warnAfterMs: 0, profiles: [], providers: [] }),
   ),
@@ -16,13 +20,19 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
-vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: mocks.ensureAuthProfileStore,
-}));
+vi.mock("../../agents/auth-profiles.js", async () => {
+  const actual = await vi.importActual<typeof import("../../agents/auth-profiles.js")>(
+    "../../agents/auth-profiles.js",
+  );
+  return {
+    ...actual,
+    ensureAuthProfileStore: mocks.ensureAuthProfileStore,
+  };
+});
 
 vi.mock("../../agents/auth-health.js", async () => {
   const actual = await vi.importActual<typeof import("../../agents/auth-health.js")>(
@@ -60,6 +70,13 @@ function createOptions(
 }
 
 const handler = modelsAuthStatusHandlers["models.authStatus"];
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
 
 function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
   const profile = {
@@ -133,7 +150,7 @@ describe("models.authStatus", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
 
     const lastCall = opts2.respond.mock.calls.at(-1);
-    expect(lastCall?.[3]).toEqual(expect.objectContaining({ cached: true }));
+    expect(requireRecord(lastCall?.[3]).cached).toBe(true);
   });
 
   it("bypasses cache when params.refresh is set", async () => {
@@ -185,6 +202,55 @@ describe("models.authStatus", () => {
 
     await handler(createOptions());
     expect(mocks.loadProviderUsageSummary).not.toHaveBeenCalled();
+  });
+
+  it("scopes external CLI auth overlays to configured providers", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({
+      auth: {
+        profiles: {
+          "opencode-go:default": { provider: "opencode-go", mode: "api_key" },
+        },
+      },
+      agents: {
+        defaults: {
+          model: { primary: "opencode-go/kimi-k2.6" },
+        },
+      },
+      models: {
+        providers: {
+          "opencode-go": {
+            baseUrl: "https://example.test/v1",
+            auth: "api-key",
+            models: [],
+          },
+        },
+      },
+    });
+
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
+    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    const externalCli = requireRecord(requireRecord(options).externalCli);
+    expect(externalCli.mode).toBe("scoped");
+    expect(externalCli.allowKeychainPrompt).toBe(false);
+    requireRecord(externalCli.config);
+    expect(externalCli.providerIds).toContain("opencode-go");
+    expect(externalCli.providerIds).not.toContain("claude-cli");
+    expect(externalCli.profileIds).toEqual(["opencode-go:default"]);
+  });
+
+  it("disables external CLI auth overlays when config has no provider signal", async () => {
+    await handler(createOptions());
+
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
+    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    const externalCli = requireRecord(requireRecord(options).externalCli);
+    expect(externalCli.mode).toBe("none");
+    expect(externalCli.allowKeychainPrompt).toBe(false);
+    requireRecord(externalCli.config);
   });
 
   it("still returns providers when usage fetch fails", async () => {
@@ -431,7 +497,7 @@ describe("models.authStatus", () => {
     const [ok, payload, error] = opts.respond.mock.calls[0] ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error).toEqual(expect.objectContaining({ code: expect.stringMatching(/unavailable/i) }));
+    expect(String(requireRecord(error).code)).toMatch(/unavailable/i);
   });
 });
 
@@ -479,6 +545,22 @@ describe("aggregateOAuthStatus", () => {
       NOW,
     );
     expect(result.status).toBe("ok");
+  });
+
+  it("uses effective OAuth profiles while keeping stale inventory visible", () => {
+    const healthy = oauth("ok", expiring + 10_000_000);
+    const stale = oauth("expired", NOW - 1);
+    const result = aggregateOAuthStatus(
+      {
+        provider: "openai-codex",
+        status: "ok",
+        effectiveProfiles: [healthy],
+        profiles: [stale, healthy],
+      },
+      NOW,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.expiresAt).toBe(healthy.expiresAt);
   });
 
   it("falls back to prov.status when no OAuth profiles exist", () => {

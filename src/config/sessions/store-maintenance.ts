@@ -1,8 +1,18 @@
 import { parseByteSize } from "../../cli/parse-bytes.js";
 import { parseDurationMs } from "../../cli/parse-duration.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { normalizeStringifiedOptionalString } from "../../shared/string-coerce.js";
+import {
+  isAcpSessionKey,
+  isCronSessionKey,
+  isSubagentSessionKey,
+  parseAgentSessionKey,
+} from "../../sessions/session-key-utils.js";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeStringifiedOptionalString,
+} from "../../shared/string-coerce.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
+import { parseSessionThreadInfoFast } from "./thread-info.js";
 import type { SessionEntry } from "./types.js";
 
 const log = createSubsystemLogger("sessions/store");
@@ -176,7 +186,7 @@ export function pruneStaleEntries(
   const cutoffMs = Date.now() - maxAgeMs;
   let pruned = 0;
   for (const [key, entry] of Object.entries(store)) {
-    if (opts.preserveKeys?.has(key)) {
+    if (shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys })) {
       continue;
     }
     if (entry?.updatedAt != null && entry.updatedAt < cutoffMs) {
@@ -191,8 +201,123 @@ export function pruneStaleEntries(
   return pruned;
 }
 
+export const DEFAULT_QUOTA_SUSPENSION_TTL_MS = 30 * 60 * 1000; // 30 minutes
+const QUOTA_SUSPENSION_CLEANUP_FACTOR = 2; // entries beyond N*ttl are deleted outright
+
+export interface QuotaSuspensionMaintenanceResult {
+  /** Suspensions whose state was advanced from "suspended" to "resuming" so the next attempt injects a handoff. */
+  resumed: Array<{ sessionKey: string; laneId?: string }>;
+  /** Entries whose `quotaSuspension` field was removed entirely (already-resumed records past 2x TTL). */
+  cleared: number;
+}
+
+/**
+ * Two-stage TTL maintenance for `quotaSuspension` records:
+ *  1. After `ttlMs`, transition `state: "suspended" → "resuming"` so the next
+ *     attempt for that session sees the resume marker and injects a handoff.
+ *  2. After `2 * ttlMs`, drop the field entirely (the record has done its job).
+ *
+ * Mutates `store` in-place. The caller is responsible for translating the
+ * returned `resumed[]` into in-process lane-concurrency restoration calls,
+ * which keeps this module free of `process/*` dependencies.
+ */
+export function pruneQuotaSuspensions(params: {
+  store: Record<string, SessionEntry>;
+  now: number;
+  ttlMs?: number;
+  log?: boolean;
+}): QuotaSuspensionMaintenanceResult {
+  const ttlMs = params.ttlMs ?? DEFAULT_QUOTA_SUSPENSION_TTL_MS;
+  const cleanupAfterResumeMs = ttlMs * (QUOTA_SUSPENSION_CLEANUP_FACTOR - 1);
+  const resumed: Array<{ sessionKey: string; laneId?: string }> = [];
+  let cleared = 0;
+  for (const [sessionKey, entry] of Object.entries(params.store)) {
+    const suspension = entry.quotaSuspension;
+    if (!suspension) {
+      continue;
+    }
+    const resumeAtMs = suspension.expectedResumeBy ?? suspension.suspendedAt + ttlMs;
+    const cleanupAtMs = resumeAtMs + cleanupAfterResumeMs;
+    if (params.now >= cleanupAtMs) {
+      delete entry.quotaSuspension;
+      cleared++;
+      continue;
+    }
+    if (suspension.state === "suspended" && params.now >= resumeAtMs) {
+      entry.quotaSuspension = { ...suspension, state: "resuming" };
+      resumed.push({ sessionKey, laneId: suspension.laneId });
+    }
+  }
+  if ((resumed.length > 0 || cleared > 0) && params.log !== false) {
+    log.info("processed quota-suspension TTLs", {
+      resumed: resumed.length,
+      cleared,
+      ttlMs,
+    });
+  }
+  return { resumed, cleared };
+}
+
 function getEntryUpdatedAt(entry?: SessionEntry): number {
   return entry?.updatedAt ?? Number.NEGATIVE_INFINITY;
+}
+
+function isSyntheticSessionMaintenanceKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return (
+    isSubagentSessionKey(sessionKey) ||
+    isAcpSessionKey(sessionKey) ||
+    isCronSessionKey(sessionKey) ||
+    rest.startsWith("hook:") ||
+    rest.startsWith("node:") ||
+    rest === "heartbeat" ||
+    rest.endsWith(":heartbeat") ||
+    rest.includes(":heartbeat:")
+  );
+}
+
+function isTelegramTopicSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^telegram:(?:group|channel|direct|dm):.+:topic:[^:]+$/.test(rest);
+}
+
+function isExternalGroupOrChannelSessionKey(sessionKey: string): boolean {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const rest = normalizeLowercaseStringOrEmpty(parsed?.rest ?? sessionKey);
+  return /^[^:]+:(?:group|channel):.+$/.test(rest);
+}
+
+export function isProtectedSessionMaintenanceEntry(
+  sessionKey: string,
+  entry: SessionEntry | undefined,
+): boolean {
+  if (isSyntheticSessionMaintenanceKey(sessionKey)) {
+    return false;
+  }
+  if (parseSessionThreadInfoFast(sessionKey).threadId) {
+    return true;
+  }
+  if (isTelegramTopicSessionKey(sessionKey)) {
+    return true;
+  }
+  if (isExternalGroupOrChannelSessionKey(sessionKey)) {
+    return true;
+  }
+  const chatType = normalizeLowercaseStringOrEmpty(entry?.chatType ?? entry?.origin?.chatType);
+  return chatType === "group" || chatType === "channel" || chatType === "thread";
+}
+
+function shouldPreserveMaintenanceEntry(params: {
+  key: string;
+  entry: SessionEntry | undefined;
+  preserveKeys?: ReadonlySet<string>;
+}): boolean {
+  return (
+    params.preserveKeys?.has(params.key) === true ||
+    isProtectedSessionMaintenanceEntry(params.key, params.entry)
+  );
 }
 
 export function getActiveSessionMaintenanceWarning(params: {
@@ -208,6 +333,9 @@ export function getActiveSessionMaintenanceWarning(params: {
   }
   const activeEntry = params.store[activeSessionKey];
   if (!activeEntry) {
+    return null;
+  }
+  if (isProtectedSessionMaintenanceEntry(activeSessionKey, activeEntry)) {
     return null;
   }
   const now = params.nowMs ?? Date.now();
@@ -251,6 +379,15 @@ function wouldCapActiveSession(params: {
     return true;
   }
 
+  const protectedCount = params.keys.filter(
+    (key) =>
+      key !== params.activeSessionKey && isProtectedSessionMaintenanceEntry(key, params.store[key]),
+  ).length;
+  const maxRemovableEntries = Math.max(0, params.maxEntries - protectedCount);
+  if (maxRemovableEntries <= 0) {
+    return true;
+  }
+
   const activeUpdatedAt = getEntryUpdatedAt(params.activeEntry);
   let newerOrTieBeforeActive = 0;
   let seenActive = false;
@@ -259,10 +396,13 @@ function wouldCapActiveSession(params: {
       seenActive = true;
       continue;
     }
+    if (isProtectedSessionMaintenanceEntry(key, params.store[key])) {
+      continue;
+    }
     const entryUpdatedAt = getEntryUpdatedAt(params.store[key]);
     if (entryUpdatedAt > activeUpdatedAt || (!seenActive && entryUpdatedAt === activeUpdatedAt)) {
       newerOrTieBeforeActive++;
-      if (newerOrTieBeforeActive >= params.maxEntries) {
+      if (newerOrTieBeforeActive >= maxRemovableEntries) {
         return true;
       }
     }
@@ -286,11 +426,18 @@ export function capEntryCount(
   } = {},
 ): number {
   const maxEntries = overrideMax ?? resolveMaintenanceConfigFromInput().maxEntries;
-  const preservedCount = opts.preserveKeys
-    ? Object.keys(store).filter((key) => opts.preserveKeys?.has(key)).length
-    : 0;
+  const preservedCount = Object.entries(store).filter(([key, entry]) =>
+    shouldPreserveMaintenanceEntry({ key, entry, preserveKeys: opts.preserveKeys }),
+  ).length;
   const maxRemovableEntries = Math.max(0, maxEntries - preservedCount);
-  const keys = Object.keys(store).filter((key) => !opts.preserveKeys?.has(key));
+  const keys = Object.keys(store).filter(
+    (key) =>
+      !shouldPreserveMaintenanceEntry({
+        key,
+        entry: store[key],
+        preserveKeys: opts.preserveKeys,
+      }),
+  );
   if (keys.length <= maxRemovableEntries) {
     return 0;
   }

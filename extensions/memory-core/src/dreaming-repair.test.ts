@@ -13,6 +13,13 @@ async function createWorkspace(): Promise<string> {
   return workspaceDir;
 }
 
+function requireArchiveDir(archiveDir: string | undefined): string {
+  if (!archiveDir) {
+    throw new Error("Expected dreaming repair to create an archive directory");
+  }
+  return archiveDir;
+}
+
 afterEach(async () => {
   while (tempDirs.length > 0) {
     const dir = tempDirs.pop();
@@ -53,11 +60,14 @@ describe("dreaming artifact repair", () => {
     expect(audit.sessionCorpusFileCount).toBe(1);
     expect(audit.suspiciousSessionCorpusFileCount).toBe(1);
     expect(audit.suspiciousSessionCorpusLineCount).toBe(1);
-    expect(audit.issues).toEqual([
-      expect.objectContaining({
+    expect(audit.issues).toStrictEqual([
+      {
+        severity: "warn",
         code: "dreaming-session-corpus-self-ingested",
+        message:
+          "Dreaming session corpus appears to contain self-ingested narrative content (1 suspicious line).",
         fixable: true,
-      }),
+      },
     ]);
   });
 
@@ -79,7 +89,7 @@ describe("dreaming artifact repair", () => {
 
     expect(audit.suspiciousSessionCorpusFileCount).toBe(0);
     expect(audit.suspiciousSessionCorpusLineCount).toBe(0);
-    expect(audit.issues).toEqual([]);
+    expect(audit.issues).toStrictEqual([]);
   });
 
   it("rejects relative workspace paths during audit and repair", async () => {
@@ -113,7 +123,8 @@ describe("dreaming artifact repair", () => {
     expect(repair.archivedSessionCorpus).toBe(true);
     expect(repair.archivedSessionIngestion).toBe(true);
     expect(repair.archivedDreamsDiary).toBe(false);
-    expect(repair.archiveDir).toBe(
+    const archiveDir = requireArchiveDir(repair.archiveDir);
+    expect(archiveDir).toBe(
       path.join(workspaceDir, ".openclaw-repair", "dreaming", "2026-04-11T21-30-00-000Z"),
     );
     await expect(fs.access(sessionCorpusDir)).rejects.toMatchObject({ code: "ENOENT" });
@@ -121,8 +132,8 @@ describe("dreaming artifact repair", () => {
       fs.access(path.join(workspaceDir, "memory", ".dreams", "session-ingestion.json")),
     ).rejects.toMatchObject({ code: "ENOENT" });
     await expect(fs.readFile(dreamsPath, "utf-8")).resolves.toContain("# Dream Diary");
-    const archivedEntries = await fs.readdir(repair.archiveDir!);
-    expect(archivedEntries.some((entry) => entry.startsWith("session-corpus."))).toBe(true);
-    expect(archivedEntries.some((entry) => entry.startsWith("session-ingestion.json."))).toBe(true);
+    const archivedEntries = await fs.readdir(archiveDir);
+    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-corpus\./));
+    expect(archivedEntries).toContainEqual(expect.stringMatching(/^session-ingestion\.json\./));
   });
 });

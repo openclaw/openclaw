@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveConfiguredBindingRoute,
   resolveRuntimeConversationBindingRoute,
@@ -12,7 +12,7 @@ import {
 } from "openclaw/plugin-sdk/routing";
 import { buildAgentMainSessionKey, sanitizeAgentId } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
 import {
   buildTelegramGroupPeerId,
@@ -105,31 +105,27 @@ export function resolveTelegramConversationRoute(params: {
   let configuredBindingSessionKey = configuredRoute.boundSessionKey ?? "";
   route = configuredRoute.route;
 
-  const threadBindingConversationId =
+  const runtimeBindingConversationId =
     params.replyThreadId != null
       ? `${params.chatId}:topic:${params.replyThreadId}`
-      : !params.isGroup
-        ? String(params.chatId)
-        : undefined;
-  if (threadBindingConversationId) {
-    const runtimeRoute = resolveRuntimeConversationBindingRoute({
-      route,
-      conversation: {
-        channel: "telegram",
-        accountId: params.accountId,
-        conversationId: threadBindingConversationId,
-      },
-    });
-    route = runtimeRoute.route;
-    if (runtimeRoute.bindingRecord) {
-      configuredBinding = null;
-      configuredBindingSessionKey = "";
-      logVerbose(
-        runtimeRoute.boundSessionKey
-          ? `telegram: routed via bound conversation ${threadBindingConversationId} -> ${runtimeRoute.boundSessionKey}`
-          : `telegram: plugin-bound conversation ${threadBindingConversationId}`,
-      );
-    }
+      : String(params.chatId);
+  const runtimeRoute = resolveRuntimeConversationBindingRoute({
+    route,
+    conversation: {
+      channel: "telegram",
+      accountId: params.accountId,
+      conversationId: runtimeBindingConversationId,
+    },
+  });
+  route = runtimeRoute.route;
+  if (runtimeRoute.bindingRecord) {
+    configuredBinding = null;
+    configuredBindingSessionKey = "";
+    logVerbose(
+      runtimeRoute.boundSessionKey
+        ? `telegram: routed via bound conversation ${runtimeBindingConversationId} -> ${runtimeRoute.boundSessionKey}`
+        : `telegram: plugin-bound conversation ${runtimeBindingConversationId}`,
+    );
   }
 
   return {

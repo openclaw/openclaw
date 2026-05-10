@@ -3,7 +3,7 @@ import {
   createStandardChannelSetupStatus,
   mergeAllowFromEntries,
 } from "openclaw/plugin-sdk/setup";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import {
   isLineConfigured,
@@ -80,8 +80,6 @@ const lineDmPolicy: ChannelSetupDmPolicy = {
       clearFields: policy === "pairing" || policy === "disabled" ? ["allowFrom"] : undefined,
     }),
 };
-
-export { lineSetupAdapter } from "./setup-core.js";
 
 export const lineSetupWizard: ChannelSetupWizard = {
   channel,

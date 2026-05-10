@@ -58,9 +58,7 @@ describe("synthetic auth runtime refs", () => {
       "local-cli",
       "remote-provider",
     ]);
-    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
-      cache: true,
-    });
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({});
   });
 
   it("does not derive the registry just to resolve synthetic auth refs", () => {
@@ -76,7 +74,7 @@ describe("synthetic auth runtime refs", () => {
       diagnostics: [],
     });
 
-    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual([]);
+    expect(resolveRuntimeSyntheticAuthProviderRefs()).toStrictEqual([]);
   });
 
   it("prefers the active runtime registry when plugins are already loaded", () => {

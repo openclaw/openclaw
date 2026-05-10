@@ -25,7 +25,7 @@ register(api) {
 }
 ```
 
-## Config Loading And Writes
+## Config loading and writes
 
 Prefer config that was already passed into the active call path, for example `api.config` during registration or a `cfg` argument on channel/provider callbacks. This keeps one process snapshot flowing through the work instead of reparsing config on hot paths.
 
@@ -44,7 +44,7 @@ The mutation helpers return `afterWrite` plus a typed `followUp` summary so call
 `api.runtime.config.loadConfig()` and `api.runtime.config.writeConfigFile(...)` are deprecated compatibility helpers under `runtime-config-load-write`. They warn once at runtime, and remain available for old external plugins during the migration window. Bundled plugins must not use them; the config boundary guards fail if plugin code calls them or imports those helpers from plugin SDK subpaths.
 
 For direct SDK imports, use the focused config subpaths instead of the broad
-`openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-types` for
+`openclaw/plugin-sdk/config-runtime` compatibility barrel: `config-contracts` for
 types, `plugin-config-runtime` for already-loaded config assertions and plugin
 entry lookup, `runtime-config-snapshot` for current process snapshots, and
 `config-mutation` for writes. Bundled plugin tests should mock these focused
@@ -114,10 +114,15 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     ```typescript
     const storePath = api.runtime.agent.session.resolveStorePath(cfg);
-    const store = api.runtime.agent.session.loadSessionStore(cfg);
-    await api.runtime.agent.session.saveSessionStore(cfg, store);
+    const store = api.runtime.agent.session.loadSessionStore(storePath);
+    await api.runtime.agent.session.updateSessionStore(storePath, (nextStore) => {
+      // Patch one entry without replacing the whole file from stale state.
+      nextStore[sessionKey] = { ...nextStore[sessionKey], thinkingLevel: "high" };
+    });
     const filePath = api.runtime.agent.session.resolveSessionFilePath(cfg, sessionId);
     ```
+
+    Prefer `updateSessionStore(...)` or `updateSessionStoreEntry(...)` for runtime writes. They route through the Gateway-owned session-store writer, preserve concurrent updates, and reuse the hot cache. `saveSessionStore(...)` remains available for compatibility and offline maintenance-style rewrites.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
@@ -127,6 +132,32 @@ Provider and channel execution paths must use the active runtime config snapshot
     const model = api.runtime.agent.defaults.model; // e.g. "anthropic/claude-sonnet-4-6"
     const provider = api.runtime.agent.defaults.provider; // e.g. "anthropic"
     ```
+
+  </Accordion>
+
+  <Accordion title="api.runtime.llm">
+    Run a host-owned text completion without importing provider internals or
+    duplicating OpenClaw model/auth/base URL preparation.
+
+    ```typescript
+    const result = await api.runtime.llm.complete({
+      messages: [{ role: "user", content: "Summarize this transcript." }],
+      purpose: "my-plugin.summary",
+      maxTokens: 512,
+      temperature: 0.2,
+    });
+    ```
+
+    The helper uses the same simple-completion preparation path as OpenClaw's
+    built-in runtime and the host-owned runtime config snapshot. Context engines
+    receive a session-bound `llm.complete` capability, so model calls use the
+    active session's agent and do not silently fall back to the default agent. The
+    result includes provider/model/agent attribution plus normalized token,
+    cache, and estimated cost usage when available.
+
+    <Warning>
+    Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. Use `plugins.entries.<id>.llm.allowedModels` to restrict trusted plugins to specific canonical `provider/model` targets. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.
+    </Warning>
 
   </Accordion>
   <Accordion title="api.runtime.subagent">
@@ -178,7 +209,9 @@ Provider and channel execution paths must use the active runtime config snapshot
     });
     ```
 
-    Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, and node-local command handling.
+    Inside the Gateway this runtime is in-process. In plugin CLI commands it calls the configured Gateway over RPC, so commands such as `openclaw googlemeet recover-tab` can inspect paired nodes from the terminal. Node commands still go through normal Gateway node pairing, command allowlists, plugin node-invoke policies, and node-local command handling.
+
+    Plugins that expose dangerous node-host commands should register a node-invoke policy with `api.registerNodeInvokePolicy(...)`. The policy runs in the Gateway after command allowlist checks and before the command is forwarded to the node, so direct `node.invoke` calls and higher-level plugin tools share the same enforcement path.
 
   </Accordion>
   <Accordion title="api.runtime.tasks.managedFlows">
@@ -353,7 +386,12 @@ Provider and channel execution paths must use the active runtime config snapshot
 
     ```typescript
     await api.runtime.system.enqueueSystemEvent(event);
-    api.runtime.system.requestHeartbeatNow();
+    api.runtime.system.requestHeartbeat({
+      source: "other",
+      intent: "event",
+      reason: "plugin-event",
+    });
+    api.runtime.system.requestHeartbeatNow({ reason: "plugin-event" }); // Deprecated compatibility alias.
     const output = await api.runtime.system.runCommandWithTimeout(cmd, args, opts);
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
@@ -394,11 +432,28 @@ Provider and channel execution paths must use the active runtime config snapshot
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution.
+    State directory resolution and SQLite-backed keyed storage.
 
     ```typescript
-    const stateDir = api.runtime.state.resolveStateDir();
+    const stateDir = api.runtime.state.resolveStateDir(process.env);
+    const store = api.runtime.state.openKeyedStore<MyRecord>({
+      namespace: "my-feature",
+      maxEntries: 200,
+      defaultTtlMs: 15 * 60_000,
+    });
+
+    await store.register("key-1", { value: "hello" });
+    const claimed = await store.registerIfAbsent("dedupe-key", { value: "first" });
+    const value = await store.lookup("key-1");
+    await store.consume("key-1");
+    await store.clear();
     ```
+
+    Keyed stores survive restarts and are isolated by the runtime-bound plugin id. Use `registerIfAbsent(...)` for atomic dedupe claims: it returns `true` when the key was missing or expired and registered, or `false` when a live value already exists without overwriting its value, creation time, or TTL. Limits: `maxEntries` per namespace, 1,000 live rows per plugin, JSON values under 64KB, and optional TTL expiry.
+
+    <Warning>
+    Bundled plugins only in this release.
+    </Warning>
 
   </Accordion>
   <Accordion title="api.runtime.tools">

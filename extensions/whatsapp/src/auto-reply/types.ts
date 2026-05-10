@@ -27,6 +27,7 @@ export type WebChannelStatus = {
   lastInboundAt?: number | null;
   lastMessageAt?: number | null;
   lastEventAt?: number | null;
+  lastTransportActivityAt?: number | null;
   lastError?: string | null;
   healthState?: WebChannelHealthState;
 };
@@ -35,6 +36,7 @@ export type WebMonitorTuning = {
   reconnect?: Partial<ReconnectPolicy>;
   socketTiming?: WhatsAppSocketTimingOptions;
   heartbeatSeconds?: number;
+  transportTimeoutMs?: number;
   messageTimeoutMs?: number;
   watchdogCheckMs?: number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;

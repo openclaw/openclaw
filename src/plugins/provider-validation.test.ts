@@ -101,6 +101,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
                 initialSelections: [" demo/model "],
+                loadCatalog: true,
                 message: " Demo models ",
               },
             },
@@ -140,6 +141,7 @@ describe("normalizeRegisteredProvider", () => {
               modelAllowlist: {
                 allowedKeys: ["demo/model"],
                 initialSelections: ["demo/model"],
+                loadCatalog: true,
                 message: "Demo models",
               },
             },
@@ -217,8 +219,34 @@ describe("normalizeRegisteredProvider", () => {
         'provider "demo" registered both catalog and discovery; using catalog',
       ],
       assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
-        expect(provider?.catalog).toBeDefined();
-        expect(provider?.discovery).toBeUndefined();
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(typeof provider.catalog?.run).toBe("function");
+        expect(provider.discovery).toBeUndefined();
+      },
+    },
+    {
+      name: "warns for legacy discovery-only providers",
+      provider: makeProvider({
+        id: "legacy-discovery-only",
+        discovery: {
+          run: async () => ({
+            provider: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          }),
+        },
+      }),
+      expectedDiagnosticText: [
+        'provider "legacy-discovery-only" uses deprecated discovery; use catalog',
+      ],
+      assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(provider).toMatchObject({ discovery: { run: expect.any(Function) } });
       },
     },
   ] as const)(

@@ -3,9 +3,13 @@ import type { MigrationApplyResult, MigrationItem, MigrationPlan } from "../../p
 import { writeRuntimeJson } from "../../runtime.js";
 import type { RuntimeEnv } from "../../runtime.js";
 import { theme } from "../../terminal/theme.js";
+import {
+  formatMigrationPluginSelectionLabel,
+  getSelectableMigrationPluginItems,
+} from "./selection.js";
 import type { MigrateApplyOptions } from "./types.js";
 
-export function formatCount(value: number, label: string): string {
+function formatCount(value: number, label: string): string {
   return `${value} ${label}${value === 1 ? "" : "s"}`;
 }
 
@@ -32,6 +36,16 @@ export function formatMigrationPlan(plan: MigrationPlan): string[] {
     }
   }
   const visibleItems = plan.items.slice(0, 25);
+  const visibleItemIds = new Set(visibleItems.map((item) => item.id));
+  const pluginItems = getSelectableMigrationPluginItems(plan);
+  const hasPluginHiddenByTruncation = pluginItems.some((item) => !visibleItemIds.has(item.id));
+  if (plan.providerId === "codex" && hasPluginHiddenByTruncation) {
+    lines.push("");
+    lines.push(theme.heading("Native Codex plugins:"));
+    for (const item of pluginItems) {
+      lines.push(`- ${formatMigrationPluginSelectionLabel(item)}`);
+    }
+  }
   if (visibleItems.length > 0) {
     lines.push("");
     lines.push(theme.heading("Items:"));
@@ -52,7 +66,7 @@ export function formatMigrationPlan(plan: MigrationPlan): string[] {
   return lines;
 }
 
-export function formatMigrationItem(item: MigrationItem): string {
+function formatMigrationItem(item: MigrationItem): string {
   const target = item.target ? ` -> ${item.target}` : "";
   const message = item.message ? ` (${item.message})` : item.reason ? ` (${item.reason})` : "";
   const sensitive = item.sensitive ? " [sensitive]" : "";

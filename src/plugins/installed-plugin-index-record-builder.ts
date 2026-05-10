@@ -3,10 +3,11 @@ import path from "node:path";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
+import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import type { PluginCandidate } from "./discovery.js";
 import type { PluginInstallSourceInfo } from "./install-source-info.js";
 import { describePluginInstallSource } from "./install-source-info.js";
-import { hashJson, safeHashFile } from "./installed-plugin-index-hash.js";
+import { hashJson, safeFileSignature, safeHashFile } from "./installed-plugin-index-hash.js";
 import { hasOptionalMissingPluginManifestFile } from "./installed-plugin-index-manifest.js";
 import type {
   InstalledPluginIndexRecord,
@@ -29,44 +30,9 @@ function sortUnique(values: readonly string[] | undefined): readonly string[] {
   );
 }
 
-function hasRuntimeContractSurface(record: PluginManifestRecord): boolean {
-  const providers = record.providers ?? [];
-  const cliBackends = record.cliBackends ?? [];
-  return Boolean(
-    providers.length > 0 ||
-    cliBackends.length > 0 ||
-    record.contracts?.speechProviders?.length ||
-    record.contracts?.mediaUnderstandingProviders?.length ||
-    record.contracts?.documentExtractors?.length ||
-    record.contracts?.imageGenerationProviders?.length ||
-    record.contracts?.videoGenerationProviders?.length ||
-    record.contracts?.musicGenerationProviders?.length ||
-    record.contracts?.webContentExtractors?.length ||
-    record.contracts?.webFetchProviders?.length ||
-    record.contracts?.webSearchProviders?.length ||
-    record.contracts?.migrationProviders?.length ||
-    record.contracts?.memoryEmbeddingProviders?.length ||
-    hasKind(record.kind, "memory"),
-  );
-}
-
-/**
- * @deprecated Compatibility classification for plugins that predate explicit
- * `activation.onStartup`. Every plugin manifest should move to an explicit
- * startup decision so Gateway boot can avoid importing inert plugins.
- */
-function isLegacyImplicitStartupSidecar(record: PluginManifestRecord): boolean {
-  const channels = Array.isArray(record.channels) ? record.channels : [];
-  return (
-    channels.length === 0 &&
-    !hasRuntimeContractSurface(record) &&
-    record.activation?.onStartup === undefined
-  );
-}
-
 function buildStartupInfo(record: PluginManifestRecord): InstalledPluginStartupInfo {
   return {
-    sidecar: record.activation?.onStartup === true || isLegacyImplicitStartupSidecar(record),
+    sidecar: record.activation?.onStartup === true,
     memory: hasKind(record.kind, "memory"),
     deferConfiguredChannelFullLoadUntilAfterListen:
       record.startupDeferConfiguredChannelFullLoadUntilAfterListen === true,
@@ -81,9 +47,6 @@ export function collectPluginManifestCompatCodes(
   record: PluginManifestRecord,
 ): readonly PluginCompatCode[] {
   const codes: PluginCompatCode[] = [];
-  if (isLegacyImplicitStartupSidecar(record)) {
-    codes.push("legacy-implicit-startup-sidecar");
-  }
   if (record.providerAuthEnvVars && Object.keys(record.providerAuthEnvVars).length > 0) {
     codes.push("provider-auth-env-vars");
   }
@@ -147,9 +110,11 @@ function resolvePackageJsonRecord(params: {
   if (!hash) {
     return undefined;
   }
+  const fileSignature = safeFileSignature(params.packageJsonPath);
   return {
     path: resolvePackageJsonRelativePath(params.candidate.rootDir, params.packageJsonPath),
     hash,
+    ...(fileSignature ? { fileSignature } : {}),
   };
 }
 
@@ -173,19 +138,6 @@ function normalizeStringField(value: unknown): string | undefined {
   return normalized ? normalized : undefined;
 }
 
-function normalizeStringListField(value: unknown): readonly string[] | undefined {
-  if (!Array.isArray(value)) {
-    return undefined;
-  }
-  const normalized = value
-    .flatMap((entry) => {
-      const normalizedEntry = normalizeStringField(entry);
-      return normalizedEntry ? [normalizedEntry] : [];
-    })
-    .filter((entry, index, all) => all.indexOf(entry) === index);
-  return normalized.length > 0 ? normalized : undefined;
-}
-
 function normalizePackageChannel(
   channel: PluginPackageChannel | undefined,
 ): InstalledPluginPackageChannelInfo | undefined {
@@ -193,30 +145,9 @@ function normalizePackageChannel(
   if (!id) {
     return undefined;
   }
-  const label = normalizeStringField(channel?.label);
-  const blurb = normalizeStringField(channel?.blurb);
-  const preferOver = normalizeStringListField(channel?.preferOver);
-  const commands =
-    channel?.commands &&
-    typeof channel.commands === "object" &&
-    !Array.isArray(channel.commands) &&
-    (typeof channel.commands.nativeCommandsAutoEnabled === "boolean" ||
-      typeof channel.commands.nativeSkillsAutoEnabled === "boolean")
-      ? {
-          ...(typeof channel.commands.nativeCommandsAutoEnabled === "boolean"
-            ? { nativeCommandsAutoEnabled: channel.commands.nativeCommandsAutoEnabled }
-            : {}),
-          ...(typeof channel.commands.nativeSkillsAutoEnabled === "boolean"
-            ? { nativeSkillsAutoEnabled: channel.commands.nativeSkillsAutoEnabled }
-            : {}),
-        }
-      : undefined;
   return {
+    ...structuredClone(channel),
     id,
-    ...(label ? { label } : {}),
-    ...(blurb ? { blurb } : {}),
-    ...(preferOver ? { preferOver } : {}),
-    ...(commands ? { commands } : {}),
   };
 }
 
@@ -278,8 +209,13 @@ export function buildInstalledPluginIndexRecords(params: {
     const packageJsonPath = resolvePackageJsonPath(candidate);
     const installRecord = params.installRecords[record.id];
     const packageInstall = describePackageInstallSource(candidate);
-    const packageChannel = normalizePackageChannel(candidate?.packageManifest?.channel);
+    const packageChannel = normalizePackageChannel(
+      record.packageChannel ?? candidate?.packageManifest?.channel,
+    );
     const manifestHash = resolveManifestHash({ record, diagnostics: params.diagnostics });
+    const manifestFile = hasOptionalMissingPluginManifestFile(record)
+      ? undefined
+      : safeFileSignature(record.manifestPath);
     const packageJson = resolvePackageJsonRecord({
       candidate,
       packageJsonPath,
@@ -291,12 +227,13 @@ export function buildInstalledPluginIndexRecords(params: {
       origin: record.origin,
       config: normalizedConfig,
       rootConfig: params.config,
-      enabledByDefault: record.enabledByDefault,
+      enabledByDefault: isPluginEnabledByDefaultForPlatform(record),
     }).enabled;
     const indexRecord: InstalledPluginIndexRecord = {
       pluginId: record.id,
       manifestPath: record.manifestPath,
       manifestHash,
+      ...(manifestFile ? { manifestFile } : {}),
       source: record.source,
       rootDir: record.rootDir,
       origin: record.origin,
@@ -312,6 +249,9 @@ export function buildInstalledPluginIndexRecords(params: {
     }
     if (record.enabledByDefault === true) {
       indexRecord.enabledByDefault = true;
+    }
+    if (record.enabledByDefaultOnPlatforms?.length) {
+      indexRecord.enabledByDefaultOnPlatforms = [...record.enabledByDefaultOnPlatforms];
     }
     if (record.syntheticAuthRefs?.length) {
       indexRecord.syntheticAuthRefs = [...record.syntheticAuthRefs];

@@ -13,7 +13,7 @@ Gemini Grounding.
 - Provider: `google`
 - Auth: `GEMINI_API_KEY` or `GOOGLE_API_KEY`
 - API: Google Gemini API
-- Runtime option: `agents.defaults.agentRuntime.id: "google-gemini-cli"`
+- Runtime option: provider/model `agentRuntime.id: "google-gemini-cli"`
   reuses Gemini CLI OAuth while keeping model refs canonical as `google/*`.
 
 ## Getting started
@@ -144,6 +144,36 @@ Choose your preferred auth method and follow the setup steps.
 | Thinking/reasoning     | Yes (Gemini 2.5+ / Gemini 3+) |
 | Gemma 4 models         | Yes                           |
 
+## Web search
+
+The bundled `gemini` web-search provider uses Gemini Google Search grounding.
+Configure a dedicated search key under `plugins.entries.google.config.webSearch`,
+or let it reuse `models.providers.google.apiKey` after `GEMINI_API_KEY`:
+
+```json5
+{
+  plugins: {
+    entries: {
+      google: {
+        config: {
+          webSearch: {
+            apiKey: "AIza...", // optional if GEMINI_API_KEY or models.providers.google.apiKey is set
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta", // falls back to models.providers.google.baseUrl
+            model: "gemini-2.5-flash",
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+Credential precedence is dedicated `webSearch.apiKey`, then `GEMINI_API_KEY`,
+then `models.providers.google.apiKey`. `webSearch.baseUrl` is optional and
+exists for operator proxies or compatible Gemini API endpoints; when omitted,
+Gemini web search reuses `models.providers.google.baseUrl`. See
+[Gemini search](/tools/gemini-search) for the provider-specific tool behavior.
+
 <Tip>
 Gemini 3 models use `thinkingLevel` rather than `thinkingBudget`. OpenClaw maps
 Gemini 3, Gemini 3.1, and `gemini-*-latest` alias reasoning controls to
@@ -257,6 +287,11 @@ The bundled `google` speech provider uses the Gemini API TTS path with
 - Output: WAV for regular TTS attachments, Opus for voice-note targets, PCM for Talk/telephony
 - Voice-note output: Google PCM is wrapped as WAV and transcoded to 48 kHz Opus with `ffmpeg`
 
+Google's batch Gemini TTS path returns generated audio in the completed
+`generateContent` response. For lowest-latency spoken conversations, use the
+Google realtime voice provider backed by the Gemini Live API instead of batch
+TTS.
+
 To use Google as the default TTS provider:
 
 ```json5
@@ -313,6 +348,8 @@ Gemini Live API for backend audio bridges such as Voice Call and Google Meet.
 | Activity handling     | `...google.activityHandling`                                        | Google default, `start-of-activity-interrupts`                                        |
 | Turn coverage         | `...google.turnCoverage`                                            | Google default, `only-activity`                                                       |
 | Disable auto VAD      | `...google.automaticActivityDetectionDisabled`                      | `false`                                                                               |
+| Session resumption    | `...google.sessionResumption`                                       | `true`                                                                                |
+| Context compression   | `...google.contextWindowCompression`                                | `true`                                                                                |
 | API key               | `...google.apiKey`                                                  | Falls back to `models.providers.google.apiKey`, `GEMINI_API_KEY`, or `GOOGLE_API_KEY` |
 
 Example Voice Call realtime config:
@@ -361,9 +398,10 @@ Gateway relay transport, which keeps provider credentials on the Gateway.
 
 For maintainer live verification, run
 `OPENAI_API_KEY=... GEMINI_API_KEY=... node --import tsx scripts/dev/realtime-talk-live-smoke.ts`.
-The Google leg mints the same constrained Live API token shape used by Control
-UI Talk, opens the browser WebSocket endpoint, sends the initial setup payload,
-and waits for `setupComplete`.
+The smoke also covers OpenAI backend/WebRTC paths; the Google leg mints the same
+constrained Live API token shape used by Control UI Talk, opens the browser
+WebSocket endpoint, sends the initial setup payload, and waits for
+`setupComplete`.
 
 ## Advanced configuration
 

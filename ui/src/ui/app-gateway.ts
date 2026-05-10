@@ -15,11 +15,13 @@ import {
   loadCron,
   refreshActiveTab,
   setLastActiveSessionKey,
+  syncUrlWithSessionKey,
 } from "./app-settings.ts";
 import { handleAgentEvent, resetToolStream, type AgentEventPayload } from "./app-tool-stream.ts";
 import { shouldReloadHistoryForFinalEvent } from "./chat-event-reload.ts";
 import { parseChatSideResult, type ChatSideResult } from "./chat/side-result.ts";
 import { formatConnectError } from "./connect-error.ts";
+import { recordControlUiRpcTiming } from "./control-ui-performance.ts";
 import { loadAgents, type AgentsState } from "./controllers/agents.ts";
 import {
   loadAssistantIdentity,
@@ -57,6 +59,7 @@ import {
 } from "./gateway.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 import type { Tab } from "./navigation.ts";
+import { buildAgentMainSessionKey, normalizeAgentId, parseAgentSessionKey } from "./session-key.ts";
 import type { UiSettings } from "./storage.ts";
 import type {
   AgentsListResult,
@@ -101,7 +104,7 @@ type GatewayHost = {
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   sessionKey: string;
   chatRunId: string | null;
-  pendingAbort?: { runId: string; sessionKey: string } | null;
+  pendingAbort?: { runId?: string | null; sessionKey: string } | null;
   refreshSessionsAfterChat: Set<string>;
   execApprovalQueue: ExecApprovalRequest[];
   execApprovalError: string | null;
@@ -153,6 +156,21 @@ function isTerminalChatState(
   state: ChatEventPayload["state"] | ReturnType<typeof handleChatEvent> | null | undefined,
 ): state is "final" | "aborted" | "error" {
   return state === "final" || state === "aborted" || state === "error";
+}
+
+function isChatTurnSessionChangedPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as { phase?: unknown; reason?: unknown };
+  return (
+    record.phase === "start" ||
+    record.phase === "message" ||
+    record.phase === "end" ||
+    record.phase === "error" ||
+    record.reason === "send" ||
+    record.reason === "steer"
+  );
 }
 
 type ConnectGatewayOptions = {
@@ -385,6 +403,60 @@ function applySessionDefaults(host: GatewayHost, defaults?: SessionDefaultsSnaps
   }
 }
 
+function resolveMainSessionFallback(host: GatewayHost): string {
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  const mainSessionKey = snapshot?.sessionDefaults?.mainSessionKey?.trim();
+  if (mainSessionKey) {
+    return mainSessionKey;
+  }
+  const configuredMainKey =
+    snapshot?.sessionDefaults?.mainKey?.trim() || host.agentsList?.mainKey?.trim();
+  if (configuredMainKey && parseAgentSessionKey(configuredMainKey)) {
+    return configuredMainKey;
+  }
+  const defaultAgentId = host.agentsList?.defaultId?.trim() || "main";
+  return buildAgentMainSessionKey({
+    agentId: defaultAgentId,
+    mainKey: configuredMainKey,
+  });
+}
+
+function fallbackUnconfiguredSessionSelection(host: GatewayHost) {
+  const parsed = parseAgentSessionKey(host.sessionKey);
+  if (!parsed) {
+    return;
+  }
+  const configuredAgentIds = new Set(
+    (host.agentsList?.agents ?? []).map((entry) => normalizeAgentId(entry.id)),
+  );
+  if (configuredAgentIds.size === 0 || configuredAgentIds.has(normalizeAgentId(parsed.agentId))) {
+    return;
+  }
+  const nextSessionKey = resolveMainSessionFallback(host);
+  host.sessionKey = nextSessionKey;
+  applySettings(host as unknown as Parameters<typeof applySettings>[0], {
+    ...host.settings,
+    sessionKey: nextSessionKey,
+    lastActiveSessionKey: nextSessionKey,
+  });
+  syncUrlWithSessionKey(
+    host as unknown as Parameters<typeof syncUrlWithSessionKey>[0],
+    nextSessionKey,
+    true,
+  );
+}
+
+async function loadAgentsThenRefreshActiveTab(host: GatewayHost) {
+  try {
+    await loadAgents(host as unknown as AgentsState);
+    fallbackUnconfiguredSessionSelection(host);
+  } finally {
+    await refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+  }
+}
+
 export function connectGateway(host: GatewayHost, options?: ConnectGatewayOptions) {
   const shutdownHost = host as GatewayHostWithShutdownMessage;
   const reconnectReason = options?.reason ?? "initial";
@@ -438,10 +510,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         const abort = host.pendingAbort;
         host.pendingAbort = null;
         void host.client
-          .request("chat.abort", {
-            sessionKey: abort.sessionKey,
-            runId: abort.runId,
-          })
+          .request(
+            "chat.abort",
+            abort.runId
+              ? { sessionKey: abort.sessionKey, runId: abort.runId }
+              : { sessionKey: abort.sessionKey },
+          )
           .catch((err) => {
             // Log to console for diagnostics; user sees no feedback for a stale abort
             // since the run likely completed during the disconnect window anyway.
@@ -465,12 +539,13 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
       }
       void subscribeSessions(host as unknown as SessionsState);
       void loadAssistantIdentity(host as unknown as AssistantIdentityState);
-      void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
-      void loadAgents(host as unknown as AgentsState);
+      if (host.tab !== "chat") {
+        void refreshChatAvatar(host as unknown as Parameters<typeof refreshChatAvatar>[0]);
+      }
       void loadHealthState(host as unknown as HealthState);
       void loadNodes(host as unknown as NodesState, { quiet: true });
       void loadDevices(host as unknown as DevicesState, { quiet: true });
-      void refreshActiveTab(host as unknown as Parameters<typeof refreshActiveTab>[0]);
+      void loadAgentsThenRefreshActiveTab(host);
       // Re-run push reconciliation now that the gateway client is available.
       void host.reconcileWebPushState?.();
       void verifyPendingUpdateVersion(host, client);
@@ -510,6 +585,12 @@ export function connectGateway(host: GatewayHost, options?: ConnectGatewayOption
         return;
       }
       handleGatewayEvent(host, evt);
+    },
+    onRequestTiming: (timing) => {
+      if (host.client !== client) {
+        return;
+      }
+      recordControlUiRpcTiming(host, timing);
     },
     onGap: ({ expected, received }) => {
       if (host.client !== client) {
@@ -560,6 +641,7 @@ function handleTerminalChatEvent(
     if (state === "final") {
       void loadSessions(host as unknown as SessionsState, {
         activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+        agentId: resolveChatEventSessionListAgentId(host, payload),
       });
     }
   }
@@ -586,6 +668,21 @@ function isEventForDifferentActiveRun(
   activeRunId: string | null,
 ): boolean {
   return Boolean(activeRunId && payload && payload.runId !== activeRunId);
+}
+
+function resolveChatEventSessionListAgentId(
+  host: GatewayHost,
+  payload: ChatEventPayload | undefined,
+): string {
+  const sessionKey = payload?.sessionKey?.trim() || host.sessionKey;
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (parsed?.agentId) {
+    return parsed.agentId;
+  }
+  const snapshot = host.hello?.snapshot as
+    | { sessionDefaults?: SessionDefaultsSnapshot }
+    | undefined;
+  return normalizeAgentId(snapshot?.sessionDefaults?.defaultAgentId);
 }
 
 function handleChatGatewayEvent(host: GatewayHost, payload: ChatEventPayload | undefined) {
@@ -731,7 +828,10 @@ function handleGatewayEventUnsafe(host: GatewayHost, evt: GatewayEventFrame) {
   }
 
   if (evt.event === "sessions.changed") {
-    applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    const result = applySessionsChangedEvent(host as unknown as SessionsState, evt.payload);
+    if (result.applied || isChatTurnSessionChangedPayload(evt.payload)) {
+      return;
+    }
     void loadSessions(host as unknown as SessionsState);
     return;
   }

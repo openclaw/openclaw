@@ -17,6 +17,7 @@ import {
   loadDeviceIdentity,
   openTrackedWs,
 } from "./device-authz.test-helpers.js";
+import { withOperatorApprovalsGatewayClient } from "./operator-approvals-client.js";
 import {
   connectOk,
   connectReq,
@@ -268,6 +269,46 @@ describe("gateway silent scope-upgrade reconnect", () => {
     }
   });
 
+  test("keeps local native approval clients off stale paired gateway-client baseline", async () => {
+    const started = await startServerWithClient("secret");
+    const identity = loadOrCreateDeviceIdentity();
+    const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
+    const request = await requestDevicePairing({
+      deviceId: identity.deviceId,
+      publicKey,
+      role: "operator",
+      scopes: ["operator.read"],
+      clientId: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientMode: GATEWAY_CLIENT_MODES.BACKEND,
+    });
+    await approveDevicePairing(request.request.requestId, {
+      callerScopes: ["operator.read"],
+    });
+
+    try {
+      await expect(
+        withOperatorApprovalsGatewayClient(
+          {
+            config: {
+              gateway: { port: started.port, auth: { mode: "token", token: "secret" } },
+            } as never,
+            clientDisplayName: "test native approvals",
+          },
+          async () => undefined,
+        ),
+      ).resolves.toBeUndefined();
+
+      const pending = await devicePairingModule.listDevicePairing();
+      expect(pending.pending).toHaveLength(0);
+      const paired = await getPairedDevice(identity.deviceId);
+      expect(paired?.approvedScopes).toEqual(["operator.read"]);
+    } finally {
+      started.ws.close();
+      await started.server.close();
+      started.envSnapshot.restore();
+    }
+  });
+
   test("accepts local silent reconnect when pairing was concurrently approved", async () => {
     const started = await startServerWithClient("secret");
     const loaded = loadDeviceIdentity("silent-reconnect-race");
@@ -305,7 +346,11 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       const paired = await getPairedDevice(loaded.identity.deviceId);
       expect(paired?.publicKey).toBe(loaded.publicKey);
-      expect(paired?.tokens?.operator?.token).toBeTruthy();
+      const operatorToken = paired?.tokens?.operator?.token;
+      if (typeof operatorToken !== "string") {
+        throw new Error("expected approved device operator token");
+      }
+      expect(operatorToken.length).toBeGreaterThan(0);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
@@ -357,7 +402,7 @@ describe("gateway silent scope-upgrade reconnect", () => {
       expect((requested.error as Error).message).toContain("timeout");
 
       const pending = await devicePairingModule.listDevicePairing();
-      expect(pending.pending).toEqual([]);
+      expect(pending.pending).toStrictEqual([]);
     } finally {
       approveSpy.mockRestore();
       ws?.close();
@@ -398,7 +443,8 @@ describe("gateway silent scope-upgrade reconnect", () => {
 
       expect(res.ok).toBe(false);
       expect(res.error?.message).toBe("pairing required: device is not approved yet");
-      expect(replacementRequestId).toBeTruthy();
+      expect(replacementRequestId).toBeTypeOf("string");
+      expect(replacementRequestId.length).toBeGreaterThan(0);
       expect(
         (res.error?.details as { requestId?: unknown; code?: string } | undefined)?.requestId,
       ).toBe(replacementRequestId);

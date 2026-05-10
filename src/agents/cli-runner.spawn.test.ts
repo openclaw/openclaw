@@ -25,7 +25,11 @@ import {
   resetClaudeLiveSessionsForTest,
   runClaudeLiveSessionTurn,
 } from "./cli-runner/claude-live-session.js";
-import { buildCliEnvAuthLog, executePreparedCliRun } from "./cli-runner/execute.js";
+import {
+  buildCliEnvAuthLog,
+  buildCliExecLogLine,
+  executePreparedCliRun,
+} from "./cli-runner/execute.js";
 import { buildSystemPrompt } from "./cli-runner/helpers.js";
 import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
@@ -55,9 +59,11 @@ function buildPreparedCliRunContext(params: {
   sessionId?: string;
   sessionKey?: string;
   backend?: Partial<PreparedCliRunContext["preparedBackend"]["backend"]>;
+  resolveExecutionArgs?: PreparedCliRunContext["backendResolved"]["resolveExecutionArgs"];
   config?: PreparedCliRunContext["params"]["config"];
   mcpConfigHash?: string;
   skillsSnapshot?: PreparedCliRunContext["params"]["skillsSnapshot"];
+  thinkLevel?: PreparedCliRunContext["params"]["thinkLevel"];
   workspaceDir?: string;
 }): PreparedCliRunContext {
   const workspaceDir = params.workspaceDir ?? "/tmp";
@@ -99,6 +105,7 @@ function buildPreparedCliRunContext(params: {
       prompt: params.prompt ?? "hi",
       provider: params.provider,
       model: params.model,
+      thinkLevel: params.thinkLevel,
       timeoutMs: 1_000,
       runId: params.runId,
       skillsSnapshot: params.skillsSnapshot,
@@ -110,6 +117,7 @@ function buildPreparedCliRunContext(params: {
       config: backend,
       bundleMcp: params.provider === "claude-cli",
       pluginId: params.provider === "claude-cli" ? "anthropic" : "openai",
+      resolveExecutionArgs: params.resolveExecutionArgs,
     },
     preparedBackend: {
       backend,
@@ -126,7 +134,89 @@ function buildPreparedCliRunContext(params: {
   };
 }
 
+function requireArgAfter(argv: string[] | undefined, flag: string): string {
+  const index = argv?.indexOf(flag) ?? -1;
+  if (index < 0) {
+    throw new Error(`expected CLI arg ${flag}`);
+  }
+  const value = argv?.[index + 1]?.trim();
+  if (!value) {
+    throw new Error(`expected value after CLI arg ${flag}`);
+  }
+  return value;
+}
+
+function requireRegexMatch(value: string, pattern: RegExp): RegExpExecArray {
+  const match = pattern.exec(value);
+  if (!match) {
+    throw new Error(`expected ${value} to match ${pattern}`);
+  }
+  return match;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+async function expectRejectsWithFields(
+  promise: Promise<unknown>,
+  expected: Record<string, unknown>,
+): Promise<Record<string, unknown>> {
+  try {
+    await promise;
+  } catch (error) {
+    const actual = requireRecord(error, "rejection");
+    for (const [key, value] of Object.entries(expected)) {
+      expect(actual[key]).toBe(value);
+    }
+    return actual;
+  }
+  throw new Error("expected promise to reject");
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    expect(requireRecord(error, "filesystem error").code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected ${targetPath} to be missing`);
+}
+
 describe("runCliAgent spawn path", () => {
+  it("formats redacted CLI resume diagnostics without exposing raw session ids", () => {
+    const logLine = buildCliExecLogLine({
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      promptChars: 42,
+      trigger: "heartbeat",
+      useResume: true,
+      cliSessionId: "claude-session-secret",
+      resolvedSessionId: "claude-session-secret",
+      reusableSessionId: "claude-session-secret",
+      hasHistoryPrompt: false,
+    });
+
+    expect(logLine).toContain("trigger=heartbeat");
+    expect(logLine).toContain("useResume=true");
+    expect(logLine).toContain("session=present");
+    expect(logLine).toContain("reuse=reusable");
+    expect(logLine).toContain("historyPrompt=none");
+    expect(logLine).not.toContain("claude-session-secret");
+  });
+
   it("does not inject hardcoded 'Tools are disabled' text into CLI arguments", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -208,7 +298,7 @@ describe("runCliAgent spawn path", () => {
       ].join("\n"),
     });
 
-    expect(systemPrompt).toContain("## Skills (mandatory)");
+    expect(systemPrompt).toContain("## Skills");
     expect(systemPrompt).toContain("<name>weather</name>");
     expect(systemPrompt).toContain("/tmp/skills/weather/SKILL.md");
   });
@@ -276,7 +366,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    await expect(fs.access(systemPromptPath)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(systemPromptPath);
   });
 
   it("passes --session-id for new Claude sessions", async () => {
@@ -297,11 +387,35 @@ describe("runCliAgent spawn path", () => {
     };
     expect(input.mode).toBe("child");
     expect(input.argv).toContain("claude");
-    const sessionArgIndex = input.argv?.indexOf("--session-id") ?? -1;
-    expect(sessionArgIndex).toBeGreaterThanOrEqual(0);
-    expect(input.argv?.[sessionArgIndex + 1]?.trim()).toBeTruthy();
+    expect(requireArgAfter(input.argv, "--session-id")).not.toBe("");
     expect(input.input).toContain("hi");
     expect(input.argv).not.toContain("hi");
+  });
+
+  it("applies backend-owned per-run args before spawning", async () => {
+    mockSuccessfulCliRun();
+    const resolveExecutionArgs = vi.fn(({ baseArgs }) => [...baseArgs, "--effort", "high"]);
+
+    await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-claude-thinking-args",
+        thinkLevel: "high",
+        resolveExecutionArgs,
+      }),
+    );
+
+    const resolveArgsInput = requireRecord(mockCallArg(resolveExecutionArgs), "resolved args");
+    expect(resolveArgsInput.provider).toBe("claude-cli");
+    expect(resolveArgsInput.modelId).toBe("sonnet");
+    expect(resolveArgsInput.thinkingLevel).toBe("high");
+    expect(resolveArgsInput.useResume).toBe(false);
+    expect(resolveArgsInput.baseArgs).toEqual(["-p", "--output-format", "stream-json"]);
+    const input = supervisorSpawnMock.mock.calls[0]?.[0] as { argv?: string[] };
+    const effortArgIndex = input.argv?.indexOf("--effort") ?? -1;
+    expect(effortArgIndex).toBeGreaterThanOrEqual(0);
+    expect(input.argv?.[effortArgIndex + 1]).toBe("high");
   });
 
   it("passes OpenClaw skills to Claude as a session plugin", async () => {
@@ -330,10 +444,8 @@ describe("runCliAgent spawn path", () => {
       const manifest = JSON.parse(
         await fs.readFile(path.join(pluginDir, ".claude-plugin", "plugin.json"), "utf-8"),
       ) as { name?: string; skills?: string };
-      expect(manifest).toMatchObject({
-        name: "openclaw-skills",
-        skills: "./skills",
-      });
+      expect(manifest.name).toBe("openclaw-skills");
+      expect(manifest.skills).toBe("./skills");
       await expect(
         fs.readFile(path.join(pluginDir, "skills", "weather", "SKILL.md"), "utf-8"),
       ).resolves.toContain("Read forecast data before replying.");
@@ -379,7 +491,7 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       );
-      await expect(fs.access(pluginDir)).rejects.toThrow();
+      await expectPathMissing(pluginDir);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
@@ -570,9 +682,8 @@ describe("runCliAgent spawn path", () => {
       const configArgIndex = input.argv?.indexOf("-c") ?? -1;
       expect(configArgIndex).toBeGreaterThanOrEqual(0);
       const configArg = input.argv?.[configArgIndex + 1] ?? "";
-      const match = /^model_instructions_file="(.+)"$/.exec(configArg);
-      expect(match?.[1]).toBeTruthy();
-      promptFileText = await fs.readFile(match?.[1] ?? "", "utf-8");
+      const match = requireRegexMatch(configArg, /^model_instructions_file="(.+)"$/);
+      promptFileText = await fs.readFile(match[1], "utf-8");
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
@@ -598,23 +709,28 @@ describe("runCliAgent spawn path", () => {
 
   it("cancels the managed CLI run when the abort signal fires", async () => {
     const abortController = new AbortController();
-    let resolveWait!: (value: {
-      reason:
-        | "manual-cancel"
-        | "overall-timeout"
-        | "no-output-timeout"
-        | "spawn-error"
-        | "signal"
-        | "exit";
-      exitCode: number | null;
-      exitSignal: NodeJS.Signals | number | null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: boolean;
-      noOutputTimedOut: boolean;
-    }) => void;
+    let resolveWait:
+      | ((value: {
+          reason:
+            | "manual-cancel"
+            | "overall-timeout"
+            | "no-output-timeout"
+            | "spawn-error"
+            | "signal"
+            | "exit";
+          exitCode: number | null;
+          exitSignal: NodeJS.Signals | number | null;
+          durationMs: number;
+          stdout: string;
+          stderr: string;
+          timedOut: boolean;
+          noOutputTimedOut: boolean;
+        }) => void)
+      | undefined;
     const cancel = vi.fn((reason?: string) => {
+      if (!resolveWait) {
+        throw new Error("Expected managed CLI wait resolver to be initialized");
+      }
       resolveWait({
         reason: reason === "manual-cancel" ? "manual-cancel" : "signal",
         exitCode: null,
@@ -654,7 +770,7 @@ describe("runCliAgent spawn path", () => {
     });
     abortController.abort();
 
-    await expect(runPromise).rejects.toMatchObject({ name: "AbortError" });
+    await expectRejectsWithFields(runPromise, { name: "AbortError" });
     expect(cancel).toHaveBeenCalledWith("manual-cancel");
   });
 
@@ -684,27 +800,19 @@ describe("runCliAgent spawn path", () => {
           event: { type: "content_block_delta", delta: { type: "text_delta", text: " world" } },
         }) + "\n",
       );
+      input.onStdout?.(
+        JSON.stringify({
+          type: "result",
+          session_id: "session-123",
+          result: "Hello world",
+        }) + "\n",
+      );
       return createManagedRun({
         reason: "exit",
         exitCode: 0,
         exitSignal: null,
         durationMs: 50,
-        stdout: [
-          JSON.stringify({ type: "init", session_id: "session-123" }),
-          JSON.stringify({
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: "Hello" } },
-          }),
-          JSON.stringify({
-            type: "stream_event",
-            event: { type: "content_block_delta", delta: { type: "text_delta", text: " world" } },
-          }),
-          JSON.stringify({
-            type: "result",
-            session_id: "session-123",
-            result: "Hello world",
-          }),
-        ].join("\n"),
+        stdout: "",
         stderr: "",
         timedOut: false,
         noOutputTimedOut: false,
@@ -932,6 +1040,107 @@ describe("runCliAgent spawn path", () => {
     expect(result.text).toBe(largeText);
   });
 
+  it("honors configured Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-tight-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-tight-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    await expectRejectsWithFields(
+      executePreparedCliRun(
+        buildPreparedCliRunContext({
+          provider: "claude-cli",
+          model: "sonnet",
+          runId: "run-live-tight-output-limit",
+          backend: {
+            liveSession: "claude-stdio",
+            reliability: {
+              outputLimits: {
+                maxTurnRawChars: 1024,
+              },
+            },
+          },
+        }),
+      ),
+      {
+        name: "FailoverError",
+        message: "Claude CLI JSONL line exceeded output limit.",
+      },
+    );
+  });
+
+  it("accepts operator-raised Claude live stream-json raw turn limits", async () => {
+    const largeText = "x".repeat(1500);
+    let stdoutListener: ((chunk: string) => void) | undefined;
+    const stdin = {
+      write: vi.fn((_data: string, cb?: (err?: Error | null) => void) => {
+        stdoutListener?.(
+          JSON.stringify({
+            type: "result",
+            session_id: "live-session-raised-output-limit",
+            result: largeText,
+          }) + "\n",
+        );
+        cb?.();
+      }),
+      end: vi.fn(),
+    };
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = (args[0] ?? {}) as { onStdout?: (chunk: string) => void };
+      stdoutListener = input.onStdout;
+      return {
+        runId: "live-run-raised-output-limit",
+        pid: 2345,
+        startedAtMs: Date.now(),
+        stdin,
+        wait: vi.fn(() => new Promise(() => {})),
+        cancel: vi.fn(),
+      };
+    });
+
+    const result = await executePreparedCliRun(
+      buildPreparedCliRunContext({
+        provider: "claude-cli",
+        model: "sonnet",
+        runId: "run-live-raised-output-limit",
+        backend: {
+          liveSession: "claude-stdio",
+          reliability: {
+            outputLimits: {
+              maxTurnRawChars: 4096,
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.text).toHaveLength(largeText.length);
+    expect(result.text).toBe(largeText);
+  });
+
   it("reports Claude live session reply backends as streaming until the turn finishes", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let markWriteReady: (() => void) | undefined;
@@ -997,7 +1206,8 @@ describe("runCliAgent spawn path", () => {
       ].join("\n") + "\n",
     );
 
-    await expect(run).resolves.toMatchObject({ text: "done" });
+    const result = await run;
+    expect(result.text).toBe("done");
     expect(replyRunRegistry.isStreaming("agent:main:main")).toBe(false);
     operation.complete();
   });
@@ -1207,7 +1417,6 @@ describe("runCliAgent spawn path", () => {
 
     await vi.waitFor(() => expect(supervisorSpawnMock).toHaveBeenCalledTimes(16));
     const rejectedRun = runs[16];
-    expect(rejectedRun).toBeDefined();
     await expect(rejectedRun).rejects.toThrow("Too many Claude CLI live sessions are active.");
     releaseSpawn?.();
     await expect(Promise.all(runs.slice(0, 16))).resolves.toHaveLength(16);
@@ -1273,16 +1482,9 @@ describe("runCliAgent spawn path", () => {
       useResume: false,
     });
 
-    expect(args).toEqual(
-      expect.arrayContaining([
-        "--input-format",
-        "stream-json",
-        "--output-format",
-        "stream-json",
-        "--permission-prompt-tool",
-        "stdio",
-      ]),
-    );
+    expect(requireArgAfter(args, "--input-format")).toBe("stream-json");
+    expect(requireArgAfter(args, "--output-format")).toBe("stream-json");
+    expect(requireArgAfter(args, "--permission-prompt-tool")).toBe("stdio");
   });
 
   it("restarts Claude live sessions for env changes and fresh retries", async () => {
@@ -1457,7 +1659,7 @@ describe("runCliAgent spawn path", () => {
       };
     });
 
-    await expect(
+    await expectRejectsWithFields(
       executePreparedCliRun(
         buildPreparedCliRunContext({
           provider: "claude-cli",
@@ -1468,10 +1670,11 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       ),
-    ).rejects.toMatchObject({
-      name: "FailoverError",
-      message: "Credit balance is too low",
-    });
+      {
+        name: "FailoverError",
+        message: "Credit balance is too low",
+      },
+    );
   });
 
   it("fails when Claude exits before a live turn starts", async () => {
@@ -1582,7 +1785,7 @@ describe("runCliAgent spawn path", () => {
     });
     abortController.abort();
 
-    await expect(first).rejects.toMatchObject({ name: "AbortError" });
+    await expectRejectsWithFields(first, { name: "AbortError" });
     expect(cancels[0]).toHaveBeenCalledWith("manual-cancel");
     stdoutListener?.(
       [
@@ -1797,16 +2000,18 @@ describe("runCliAgent spawn path", () => {
   it("does not surface stale stderr after a later Claude live exit", async () => {
     let stdoutListener: ((chunk: string) => void) | undefined;
     let stderrListener: ((chunk: string) => void) | undefined;
-    let resolveExit!: (value: {
-      reason: "exit";
-      exitCode: number;
-      exitSignal: null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: false;
-      noOutputTimedOut: false;
-    }) => void;
+    let resolveExit:
+      | ((value: {
+          reason: "exit";
+          exitCode: number;
+          exitSignal: null;
+          durationMs: number;
+          stdout: string;
+          stderr: string;
+          timedOut: false;
+          noOutputTimedOut: false;
+        }) => void)
+      | undefined;
     const wait = new Promise<{
       reason: "exit";
       exitCode: number;
@@ -1839,6 +2044,9 @@ describe("runCliAgent spawn path", () => {
           return;
         }
         cb?.();
+        if (!resolveExit) {
+          throw new Error("Expected Claude live exit resolver to be initialized");
+        }
         resolveExit({
           reason: "exit",
           exitCode: 1,
@@ -1893,7 +2101,7 @@ describe("runCliAgent spawn path", () => {
     );
 
     expect(first.text).toBe("first-ok");
-    await expect(second).rejects.toMatchObject({
+    await expectRejectsWithFields(second, {
       name: "FailoverError",
       message: "Claude CLI failed.",
     });
@@ -1923,7 +2131,7 @@ describe("runCliAgent spawn path", () => {
       }),
     );
 
-    await expect(run).rejects.toMatchObject({
+    await expectRejectsWithFields(run, {
       name: "FailoverError",
       message,
       reason: "billing",
@@ -2213,7 +2421,7 @@ describe("runCliAgent spawn path", () => {
       expect(allArgs).toContain(`## ${soulPath}`);
       expect(allArgs).toContain("SOUL-SECRET");
       expect(allArgs).toContain(
-        "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+        "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
       );
       expect(allArgs).toContain(`## ${identityPath}`);
       expect(allArgs).toContain("IDENTITY-SECRET");

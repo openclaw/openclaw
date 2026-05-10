@@ -1,5 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __testing, resolveCliChannelOptions } from "./channel-options.js";
+import { __testing as startupMetadataTesting } from "./startup-metadata.js";
 
 const readFileSyncMock = vi.hoisted(() => vi.fn());
 
@@ -21,12 +22,18 @@ vi.mock("../channels/ids.js", () => ({
 }));
 
 describe("resolveCliChannelOptions", () => {
-  afterEach(() => {
+  beforeEach(() => {
     __testing.resetPrecomputedChannelOptionsForTests();
+    startupMetadataTesting.clearStartupMetadataCache();
     vi.clearAllMocks();
   });
 
-  it("uses precomputed startup metadata when available", async () => {
+  afterEach(() => {
+    __testing.resetPrecomputedChannelOptionsForTests();
+    delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
+  });
+
+  it("uses precomputed startup metadata when available", () => {
     readFileSyncMock.mockReturnValue(
       JSON.stringify({ channelOptions: ["cached", "quietchat", "cached"] }),
     );
@@ -34,7 +41,7 @@ describe("resolveCliChannelOptions", () => {
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
   });
 
-  it("falls back to core channel order when metadata is missing", async () => {
+  it("falls back to core channel order when metadata is missing", () => {
     readFileSyncMock.mockImplementation(() => {
       throw new Error("ENOENT");
     });
@@ -42,11 +49,10 @@ describe("resolveCliChannelOptions", () => {
     expect(resolveCliChannelOptions()).toEqual(["quietchat", "forum"]);
   });
 
-  it("ignores external catalog env during CLI bootstrap", async () => {
+  it("ignores external catalog env during CLI bootstrap", () => {
     process.env.OPENCLAW_PLUGIN_CATALOG_PATHS = "/tmp/plugins-catalog.json";
     readFileSyncMock.mockReturnValue(JSON.stringify({ channelOptions: ["cached", "quietchat"] }));
 
     expect(resolveCliChannelOptions()).toEqual(["cached", "quietchat"]);
-    delete process.env.OPENCLAW_PLUGIN_CATALOG_PATHS;
   });
 });

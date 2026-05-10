@@ -10,7 +10,7 @@ import {
 import { resolveLiveToolResultMaxChars } from "./pi-embedded-runner/tool-result-truncation.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 
-export type GuardedSessionManager = SessionManager & {
+type GuardedSessionManager = SessionManager & {
   /** Flush any synthetic tool results for pending tool calls. Idempotent. */
   flushPendingToolResults?: () => void;
   /** Clear pending tool calls without persisting synthetic tool results. Idempotent. */
@@ -97,6 +97,10 @@ export function guardSessionManager(
     allowSyntheticToolResults?: boolean;
     missingToolResultText?: string;
     allowedToolNames?: Iterable<string>;
+    suppressNextUserMessagePersistence?: boolean;
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
   },
 ): GuardedSessionManager {
   if (typeof (sessionManager as GuardedSessionManager).flushPendingToolResults === "function") {
@@ -170,6 +174,8 @@ export function guardSessionManager(
             agentId: opts.agentId,
           })
         : undefined,
+    suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
+    onUserMessagePersisted: opts?.onUserMessagePersisted,
   });
   (sessionManager as GuardedSessionManager).flushPendingToolResults = guard.flushPendingToolResults;
   (sessionManager as GuardedSessionManager).clearPendingToolResults = guard.clearPendingToolResults;

@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearProbeCache, FEISHU_PROBE_REQUEST_TIMEOUT_MS, probeFeishu } from "./probe.js";
 
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
@@ -22,6 +22,11 @@ const BOT1_RESPONSE = {
   code: 0,
   data: { pingBotInfo: { botName: "Bot1", botID: "ou_1" } },
 } as const;
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.resetModules();
+});
 
 function makeRequestFn(response: Record<string, unknown>) {
   return vi.fn().mockResolvedValue(response);
@@ -133,14 +138,12 @@ describe("probeFeishu", () => {
 
     await probeFeishu(DEFAULT_CREDS);
 
-    expect(requestFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        url: "/open-apis/bot/v1/openclaw_bot/ping",
-        data: { needBotInfo: true },
-        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
-      }),
-    );
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/bot/v1/openclaw_bot/ping",
+      data: { needBotInfo: true },
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("returns timeout error when request exceeds timeout", async () => {

@@ -6,8 +6,6 @@ read_when:
 title: "Token use and costs"
 ---
 
-# Token use & costs
-
 OpenClaw tracks **tokens**, not characters. Tokens are model-specific, but most
 OpenAI-style models average ~4 characters per token for English text.
 
@@ -63,7 +61,7 @@ For a practical breakdown (per injected file, tools, skills, and system prompt s
 
 Use these in chat:
 
-- `/status` → **emoji‑rich status card** with the session model, context usage,
+- `/status` → **emoji-rich status card** with the session model, context usage,
   last response input/output tokens, and **estimated cost** (API key only).
 - `/usage off|tokens|full` → appends a **per-response usage footer** to every reply.
   - Persists per session (stored as `responseUsage`).
@@ -120,12 +118,13 @@ These are **USD per 1M tokens** for `input`, `output`, `cacheRead`, and
 `cacheWrite`. If pricing is missing, OpenClaw shows tokens only. OAuth tokens
 never show dollar cost.
 
-Gateway startup also performs an optional background pricing bootstrap for
-configured model refs that do not already have local pricing. That bootstrap
-fetches remote OpenRouter and LiteLLM pricing catalogs. Set
-`models.pricing.enabled: false` to skip those startup catalog fetches on offline
-or restricted networks; explicit `models.providers.*.models[].cost` entries
-continue to drive local cost estimates.
+After sidecars and channels reach the Gateway ready path, OpenClaw starts an
+optional background pricing bootstrap for configured model refs that do not
+already have local pricing. That bootstrap fetches remote OpenRouter and LiteLLM
+pricing catalogs. Set `models.pricing.enabled: false` to skip those catalog
+fetches on offline or restricted networks; explicit
+`models.providers.*.models[].cost` entries continue to drive local cost
+estimates.
 
 ## Cache TTL and pruning impact
 
@@ -148,7 +147,7 @@ per agent with `agents.list[].params.cacheRetention`.
 For a full knob-by-knob guide, see [Prompt Caching](/reference/prompt-caching).
 
 For Anthropic API pricing, cache reads are significantly cheaper than input
-tokens, while cache writes are billed at a higher multiplier. See Anthropic’s
+tokens, while cache writes are billed at a higher multiplier. See Anthropic's
 prompt caching pricing for the latest rates and TTL multipliers:
 [https://docs.anthropic.com/docs/build-with-claude/prompt-caching](https://docs.anthropic.com/docs/build-with-claude/prompt-caching)
 

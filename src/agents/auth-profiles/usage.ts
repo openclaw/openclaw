@@ -1,13 +1,12 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeProviderId } from "../provider-id.js";
+import { resolveProviderRequestHeaders } from "../provider-request-config.js";
 import { logAuthProfileFailureStateChange } from "./state-observation.js";
 import { saveAuthProfileStore, updateAuthProfileStoreWithLock } from "./store.js";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
 import {
-  clearExpiredCooldowns,
   isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
-  isProfileInCooldown,
   resolveProfileUnusableUntil,
 } from "./usage-state.js";
 export {
@@ -149,7 +148,7 @@ function applyWhamCooldownResult(params: {
   };
 }
 
-export async function probeWhamForCooldown(
+async function probeWhamForCooldown(
   store: AuthProfileStore,
   profileId: string,
 ): Promise<WhamCooldownProbeResult | null> {
@@ -161,14 +160,21 @@ export async function probeWhamForCooldown(
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), WHAM_TIMEOUT_MS);
   try {
-    const headers: Record<string, string> = {
+    const defaultHeaders: Record<string, string> = {
       Authorization: `Bearer ${profile.access}`,
       Accept: "application/json",
-      "User-Agent": "CodexBar",
     };
     if (profile.accountId) {
-      headers["ChatGPT-Account-Id"] = profile.accountId;
+      defaultHeaders["ChatGPT-Account-Id"] = profile.accountId;
     }
+    const headers =
+      resolveProviderRequestHeaders({
+        provider: "openai-codex",
+        baseUrl: WHAM_USAGE_URL,
+        capability: "other",
+        transport: "http",
+        defaultHeaders,
+      }) ?? defaultHeaders;
 
     const res = await fetch(WHAM_USAGE_URL, {
       method: "GET",
@@ -314,42 +320,6 @@ export function resolveProfilesUnavailableReason(params: {
     }
   }
   return best;
-}
-
-/**
- * Mark a profile as successfully used. Resets error count and updates lastUsed.
- * Uses store lock to avoid overwriting concurrent usage updates.
- */
-export async function markAuthProfileUsed(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  agentDir?: string;
-}): Promise<void> {
-  const { store, profileId, agentDir } = params;
-  const updated = await authProfileUsageDeps.updateAuthProfileStoreWithLock({
-    agentDir,
-    updater: (freshStore) => {
-      if (!freshStore.profiles[profileId]) {
-        return false;
-      }
-      updateUsageStatsEntry(freshStore, profileId, (existing) =>
-        resetUsageStats(existing, { lastUsed: Date.now() }),
-      );
-      return true;
-    },
-  });
-  if (updated) {
-    store.usageStats = updated.usageStats;
-    return;
-  }
-  if (!store.profiles[profileId]) {
-    return;
-  }
-
-  updateUsageStatsEntry(store, profileId, (existing) =>
-    resetUsageStats(existing, { lastUsed: Date.now() }),
-  );
-  authProfileUsageDeps.saveAuthProfileStore(store, agentDir);
 }
 
 export function calculateAuthProfileCooldownMs(errorCount: number): number {

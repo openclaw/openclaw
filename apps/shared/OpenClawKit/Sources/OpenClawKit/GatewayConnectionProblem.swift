@@ -30,6 +30,9 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         case connectionRefused
         case reachabilityFailed
         case websocketCancelled
+        case tlsPinMismatch
+        case tlsCertificateUntrusted
+        case tlsCertificateUnavailable
         case unknown
     }
 
@@ -52,6 +55,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
     public let retryable: Bool
     public let pauseReconnect: Bool
     public let technicalDetails: String?
+    public let tlsStoreKey: String?
+    public let tlsExpectedFingerprint: String?
+    public let tlsObservedFingerprint: String?
+    public let tlsSystemTrustOk: Bool
 
     public init(
         kind: Kind,
@@ -64,7 +71,11 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         requestId: String? = nil,
         retryable: Bool,
         pauseReconnect: Bool,
-        technicalDetails: String? = nil)
+        technicalDetails: String? = nil,
+        tlsStoreKey: String? = nil,
+        tlsExpectedFingerprint: String? = nil,
+        tlsObservedFingerprint: String? = nil,
+        tlsSystemTrustOk: Bool = false)
     {
         self.kind = kind
         self.owner = owner
@@ -77,6 +88,10 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         self.retryable = retryable
         self.pauseReconnect = pauseReconnect
         self.technicalDetails = Self.trimmedOrNil(technicalDetails)
+        self.tlsStoreKey = Self.trimmedOrNil(tlsStoreKey)
+        self.tlsExpectedFingerprint = Self.trimmedOrNil(tlsExpectedFingerprint)
+        self.tlsObservedFingerprint = Self.trimmedOrNil(tlsObservedFingerprint)
+        self.tlsSystemTrustOk = tlsSystemTrustOk
     }
 
     public var needsPairingApproval: Bool {
@@ -116,6 +131,13 @@ public struct GatewayConnectionProblem: Equatable, Sendable {
         default:
             return self.title
         }
+    }
+
+    public var canTrustRotatedCertificate: Bool {
+        self.kind == .tlsPinMismatch
+            && self.tlsSystemTrustOk
+            && self.tlsStoreKey != nil
+            && self.tlsObservedFingerprint != nil
     }
 
     private static func trimmedOrNil(_ value: String?) -> String? {
@@ -169,6 +191,9 @@ public enum GatewayConnectionProblemMapper {
         }
         if let responseError = error as? GatewayResponseError {
             return self.map(responseError)
+        }
+        if let tlsError = error as? GatewayTLSValidationError {
+            return self.map(tlsError)
         }
         return self.mapTransportError(error)
     }
@@ -516,6 +541,55 @@ public enum GatewayConnectionProblemMapper {
             return self.map(authError)
         }
         return nil
+    }
+
+    private static func map(_ tlsError: GatewayTLSValidationError) -> GatewayConnectionProblem {
+        let failure = tlsError.failure
+        switch failure.kind {
+        case .pinMismatch:
+            let trustedSuffix = failure.systemTrustOk
+                ? " The new certificate is trusted by this device; this is commonly caused by certificate rotation."
+                : " This device could not verify the new certificate."
+            return GatewayConnectionProblem(
+                kind: .tlsPinMismatch,
+                owner: failure.systemTrustOk ? .network : .unknown,
+                title: "Gateway certificate changed",
+                message: "The saved TLS certificate pin for \(failure.host) no longer matches the gateway certificate.\(trustedSuffix)",
+                actionLabel: "Review certificate",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription,
+                tlsStoreKey: failure.storeKey,
+                tlsExpectedFingerprint: failure.expectedFingerprint,
+                tlsObservedFingerprint: failure.observedFingerprint,
+                tlsSystemTrustOk: failure.systemTrustOk)
+        case .certificateUnavailable:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUnavailable,
+                owner: .network,
+                title: "Gateway certificate unavailable",
+                message: "OpenClaw could not read the gateway certificate for \(failure.host).",
+                actionLabel: "Retry",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: true,
+                pauseReconnect: false,
+                technicalDetails: tlsError.localizedDescription)
+        case .untrustedCertificate:
+            return GatewayConnectionProblem(
+                kind: .tlsCertificateUntrusted,
+                owner: .network,
+                title: "Gateway certificate is not trusted",
+                message: "This device does not trust the TLS certificate presented by \(failure.host).",
+                actionLabel: "Check certificate",
+                actionCommand: nil,
+                docsURL: URL(string: "https://docs.openclaw.ai/gateway/troubleshooting"),
+                retryable: false,
+                pauseReconnect: true,
+                technicalDetails: tlsError.localizedDescription)
+        }
     }
 
     private static func mapTransportError(_ error: Error) -> GatewayConnectionProblem? {

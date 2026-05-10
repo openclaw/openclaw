@@ -49,6 +49,17 @@ vi.mock("../runtime.js", () => ({
   defaultRuntime: runtimeState.defaultRuntime,
 }));
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function runtimeErrors(): string[] {
+  return runtimeState.defaultRuntime.error.mock.calls.map(([message]) => String(message));
+}
+
 describe("registerDirectoryCli", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -96,23 +107,16 @@ describe("registerDirectoryCli", () => {
       from: "user",
     });
 
-    expect(mocks.resolveInstallableChannelPlugin).toHaveBeenCalledWith(
-      expect.objectContaining({
-        rawChannel: "demo-directory",
-        allowInstall: true,
-      }),
-    );
-    expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
-      nextConfig: expect.objectContaining({
-        plugins: { entries: { "demo-directory": { enabled: true } } },
-      }),
-      baseHash: "config-1",
+    const installArgs = requireRecord(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0]);
+    expect(installArgs.rawChannel).toBe("demo-directory");
+    expect(installArgs.allowInstall).toBe(true);
+    const replaceArgs = requireRecord(mocks.replaceConfigFile.mock.calls[0]?.[0]);
+    expect(replaceArgs.nextConfig).toEqual({
+      channels: {},
+      plugins: { entries: { "demo-directory": { enabled: true } } },
     });
-    expect(self).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "default",
-      }),
-    );
+    expect(replaceArgs.baseHash).toBe("config-1");
+    expect(requireRecord(self.mock.calls[0]?.[0]).accountId).toBe("default");
     expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
       JSON.stringify({ id: "self-1", name: "Family Phone" }, null, 2),
     );
@@ -149,14 +153,108 @@ describe("registerDirectoryCli", () => {
       cfg: autoEnabledConfig,
       channel: null,
     });
-    expect(self).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: autoEnabledConfig,
-      }),
-    );
+    expect(requireRecord(self.mock.calls[0]?.[0]).cfg).toBe(autoEnabledConfig);
     expect(mocks.replaceConfigFile).toHaveBeenCalledWith({
       nextConfig: autoEnabledConfig,
       baseHash: "config-1",
     });
+  });
+
+  it("prefers live directory list readers when available", async () => {
+    const listPeers = vi.fn().mockResolvedValue([{ id: "user:config", kind: "user" }]);
+    const listPeersLive = vi.fn().mockResolvedValue([{ id: "user:live", kind: "user" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listPeers, listPeersLive },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(
+      [
+        "directory",
+        "peers",
+        "list",
+        "--channel",
+        "slack",
+        "--query",
+        "ada",
+        "--limit",
+        "5",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    const listPeersLiveArgs = requireRecord(listPeersLive.mock.calls[0]?.[0]);
+    expect(listPeersLiveArgs.accountId).toBe("default");
+    expect(listPeersLiveArgs.query).toBe("ada");
+    expect(listPeersLiveArgs.limit).toBe(5);
+    expect(listPeers).not.toHaveBeenCalled();
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "user:live", kind: "user" }], null, 2),
+    );
+  });
+
+  it("falls back to config-backed directory list readers when live readers are absent", async () => {
+    const listGroups = vi.fn().mockResolvedValue([{ id: "channel:config", kind: "group" }]);
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { slack: {} } },
+      channelId: "slack",
+      plugin: {
+        id: "slack",
+        directory: { listGroups },
+      },
+      configChanged: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await program.parseAsync(["directory", "groups", "list", "--channel", "slack", "--json"], {
+      from: "user",
+    });
+
+    expect(requireRecord(listGroups.mock.calls[0]?.[0]).accountId).toBe("default");
+    expect(runtimeState.defaultRuntime.log).toHaveBeenCalledWith(
+      JSON.stringify([{ id: "channel:config", kind: "group" }], null, 2),
+    );
+  });
+
+  it("reports unsupported directory capability instead of continuing setup for installed plugins", async () => {
+    mocks.resolveInstallableChannelPlugin.mockResolvedValue({
+      cfg: { channels: { "openclaw-weixin": {} } },
+      channelId: "openclaw-weixin",
+      plugin: {
+        id: "openclaw-weixin",
+      },
+      configChanged: false,
+      pluginInstalled: false,
+    });
+
+    const program = new Command().name("openclaw");
+    registerDirectoryCli(program);
+
+    await expect(
+      program.parseAsync(["directory", "peers", "list", "--channel", "openclaw-weixin"], {
+        from: "user",
+      }),
+    ).rejects.toThrow("exit:1");
+
+    const installArgs = requireRecord(mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0]);
+    expect(installArgs.rawChannel).toBe("openclaw-weixin");
+    expect(installArgs.allowInstall).toBe(true);
+    expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
+    expect(
+      runtimeErrors().some((message) =>
+        message.includes("Channel openclaw-weixin does not support directory peers"),
+      ),
+    ).toBe(true);
   });
 });

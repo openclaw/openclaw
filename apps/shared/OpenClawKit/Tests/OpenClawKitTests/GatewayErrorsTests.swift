@@ -89,4 +89,62 @@ import Testing
 
         #expect(mapped == nil)
     }
+
+    @Test func tlsPinMismatchMapsToActionableProblem() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: true),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+        #expect(problem?.actionLabel == "Review certificate")
+        #expect(problem?.canTrustRotatedCertificate == true)
+        #expect(problem?.tlsStoreKey == "gateway.example.ts.net:443")
+        #expect(problem?.tlsExpectedFingerprint == "old")
+        #expect(problem?.tlsObservedFingerprint == "new")
+    }
+
+    @Test func untrustedTLSCertificatePausesReconnect() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .untrustedCertificate,
+                host: "gateway.example.com",
+                storeKey: "gateway.example.com:443",
+                expectedFingerprint: nil,
+                observedFingerprint: nil,
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsCertificateUntrusted)
+        #expect(problem?.retryable == false)
+        #expect(problem?.pauseReconnect == true)
+    }
+
+    @Test func untrustedTLSMismatchCannotBeRecoveredInApp() {
+        let error = GatewayTLSValidationError(
+            failure: GatewayTLSValidationFailure(
+                kind: .pinMismatch,
+                host: "gateway.example.ts.net",
+                storeKey: "gateway.example.ts.net:443",
+                expectedFingerprint: "old",
+                observedFingerprint: "new",
+                systemTrustOk: false),
+            context: "connect to gateway")
+
+        let problem = GatewayConnectionProblemMapper.map(error: error)
+
+        #expect(problem?.kind == .tlsPinMismatch)
+        #expect(problem?.canTrustRotatedCertificate == false)
+    }
 }

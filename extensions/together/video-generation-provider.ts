@@ -1,3 +1,4 @@
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
@@ -9,7 +10,7 @@ import {
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -113,7 +114,7 @@ async function downloadTogetherVideo(params: {
   return {
     buffer: Buffer.from(arrayBuffer),
     mimeType,
-    fileName: `video-1.${mimeType.includes("webm") ? "webm" : "mp4"}`,
+    fileName: `video-1.${extensionForMime(mimeType)?.slice(1) ?? "mp4"}`,
   };
 }
 

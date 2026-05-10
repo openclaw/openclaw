@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import {
   buildMatrixQaConfig,
@@ -122,7 +122,7 @@ describe("matrix qa config", () => {
         threadBindings: {
           enabled: true,
           idleHours: 1,
-          spawnSubagentSessions: true,
+          spawnSessions: true,
         },
         threadReplies: "always",
         toolProfile: "coding",
@@ -182,7 +182,7 @@ describe("matrix qa config", () => {
       threadBindings: {
         enabled: true,
         idleHours: 1,
-        spawnSubagentSessions: true,
+        spawnSessions: true,
       },
       threadReplies: "always",
     });

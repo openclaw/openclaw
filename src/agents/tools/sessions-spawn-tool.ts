@@ -1,8 +1,13 @@
 import { Type } from "typebox";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
+import {
+  resolveThreadBindingSpawnPolicy,
+  supportsAutomaticThreadBindingSpawn,
+} from "../../channels/thread-bindings-policy.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGateway } from "../../gateway/call.js";
+import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { optionalStringEnum } from "../schema/typebox.js";
@@ -13,13 +18,19 @@ import {
   SUBAGENT_SPAWN_MODES,
   spawnSubagentDirect,
 } from "../subagent-spawn.js";
+import { normalizeSubagentTaskName } from "../subagent-task-name.js";
 import {
   describeSessionsSpawnTool,
   SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
   SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY,
 } from "../tool-description-presets.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  normalizeToolModelOverride,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   resolveDisplaySessionKey,
   resolveInternalSessionKey,
@@ -43,11 +54,12 @@ const UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS = [
 
 type AcpSpawnModule = typeof import("../acp-spawn.js");
 
-let acpSpawnModulePromise: Promise<AcpSpawnModule> | undefined;
+const acpSpawnModuleLoader = createLazyImportLoader<AcpSpawnModule>(
+  () => import("../acp-spawn.js"),
+);
 
 async function loadAcpSpawnModule(): Promise<AcpSpawnModule> {
-  acpSpawnModulePromise ??= import("../acp-spawn.js");
-  return await acpSpawnModulePromise;
+  return await acpSpawnModuleLoader.load();
 }
 
 function summarizeError(err: unknown): string {
@@ -100,9 +112,53 @@ async function cleanupUntrackedAcpSession(sessionKey: string): Promise<void> {
   }
 }
 
-function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
+type SessionsSpawnThreadAvailability = {
+  subagent: boolean;
+  acp: boolean;
+};
+
+function hasAnyThreadAvailability(availability: SessionsSpawnThreadAvailability): boolean {
+  return availability.subagent || availability.acp;
+}
+
+function resolveSessionsSpawnThreadAvailability(opts?: {
+  config?: OpenClawConfig;
+  agentChannel?: GatewayMessageChannel;
+  agentAccountId?: string;
+}): SessionsSpawnThreadAvailability {
+  const channel = opts?.agentChannel;
+  const cfg = opts?.config;
+  if (!channel || !cfg || !supportsAutomaticThreadBindingSpawn(channel)) {
+    return { subagent: false, acp: false };
+  }
+  const resolve = (kind: "subagent" | "acp") => {
+    const policy = resolveThreadBindingSpawnPolicy({
+      cfg,
+      channel,
+      accountId: opts?.agentAccountId,
+      kind,
+    });
+    return policy.enabled && policy.spawnEnabled;
+  };
+  return {
+    subagent: resolve("subagent"),
+    acp: resolve("acp"),
+  };
+}
+
+function createSessionsSpawnToolSchema(params: {
+  acpAvailable: boolean;
+  threadAvailable: boolean;
+}) {
+  const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
+    taskName: Type.Optional(
+      Type.String({
+        description:
+          "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+      }),
+    ),
     label: Type.Optional(Type.String()),
     runtime: optionalStringEnum(
       params.acpAvailable ? SESSIONS_SPAWN_RUNTIMES : (["subagent"] as const),
@@ -114,8 +170,17 @@ function createSessionsSpawnToolSchema(params: { acpAvailable: boolean }) {
     runTimeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
     // Back-compat: older callers used timeoutSeconds for this tool.
     timeoutSeconds: Type.Optional(Type.Number({ minimum: 0 })),
-    thread: Type.Optional(Type.Boolean()),
-    mode: optionalStringEnum(SUBAGENT_SPAWN_MODES),
+    ...(params.threadAvailable
+      ? {
+          thread: Type.Optional(
+            Type.Boolean({
+              description:
+                'Bind the spawned session to a new chat thread when the current channel/account supports thread-bound session spawns. `thread=true` defaults mode to "session".',
+            }),
+          ),
+        }
+      : {}),
+    mode: optionalStringEnum(spawnModes),
     cleanup: optionalStringEnum(["delete", "keep"] as const),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES),
     context: optionalStringEnum(SUBAGENT_SPAWN_CONTEXT_MODES, {
@@ -194,14 +259,16 @@ export function createSessionsSpawnTool(
     config: opts?.config,
     sandboxed: opts?.sandboxed,
   });
+  const threadAvailability = resolveSessionsSpawnThreadAvailability(opts);
+  const threadAvailable = hasAnyThreadAvailability(threadAvailability);
   return {
     label: "Sessions",
     name: "sessions_spawn",
     displaySummary: acpAvailable
       ? SESSIONS_SPAWN_TOOL_DISPLAY_SUMMARY
       : SESSIONS_SPAWN_SUBAGENT_TOOL_DISPLAY_SUMMARY,
-    description: describeSessionsSpawnTool({ acpAvailable }),
-    parameters: createSessionsSpawnToolSchema({ acpAvailable }),
+    description: describeSessionsSpawnTool({ acpAvailable, threadAvailable }),
+    parameters: createSessionsSpawnToolSchema({ acpAvailable, threadAvailable }),
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const unsupportedParam = UNSUPPORTED_SESSIONS_SPAWN_PARAM_KEYS.find((key) =>
@@ -213,11 +280,19 @@ export function createSessionsSpawnTool(
         );
       }
       const task = readStringParam(params, "task", { required: true });
+      const taskNameResult = normalizeSubagentTaskName(params.taskName);
+      if (taskNameResult.error) {
+        return jsonResult({
+          status: "error",
+          error: taskNameResult.error,
+        });
+      }
+      const taskName = taskNameResult.taskName;
       const label = readStringParam(params, "label") ?? "";
       const runtime = params.runtime === "acp" ? "acp" : "subagent";
       const requestedAgentId = readStringParam(params, "agentId");
       const resumeSessionId = readStringParam(params, "resumeSessionId");
-      const modelOverride = readStringParam(params, "model");
+      const modelOverride = normalizeToolModelOverride(readStringParam(params, "model"));
       const thinkingOverrideRaw = readStringParam(params, "thinking");
       const cwd = readStringParam(params, "cwd");
       const mode = params.mode === "run" || params.mode === "session" ? params.mode : undefined;
@@ -227,7 +302,7 @@ export function createSessionsSpawnTool(
       const sandbox = params.sandbox === "require" ? "require" : "inherit";
       const context =
         params.context === "fork" || params.context === "isolated" ? params.context : undefined;
-      const streamTo = params.streamTo === "parent" ? "parent" : undefined;
+      const streamTo = runtime === "acp" && params.streamTo === "parent" ? "parent" : undefined;
       const lightContext = params.lightContext === true;
       const roleContext = requestedAgentId ? { role: requestedAgentId } : {};
       if (runtime === "acp" && !acpAvailable) {
@@ -334,6 +409,9 @@ export function createSessionsSpawnTool(
             to: opts?.agentTo,
             threadId: opts?.agentThreadId,
           });
+          const shouldExpectCompletionMessage = result.inlineDelivery
+            ? false
+            : expectsCompletionMessage;
           try {
             registerSubagentRun({
               runId: childRunId,
@@ -342,10 +420,11 @@ export function createSessionsSpawnTool(
               requesterOrigin,
               requesterDisplayKey,
               task,
+              taskName,
               cleanup: trackedCleanup,
               label: label || undefined,
               runTimeoutSeconds,
-              expectsCompletionMessage,
+              expectsCompletionMessage: shouldExpectCompletionMessage,
               spawnMode: trackedSpawnMode,
             });
           } catch (err) {
@@ -367,6 +446,7 @@ export function createSessionsSpawnTool(
       const result = await spawnSubagentDirect(
         {
           task,
+          taskName,
           label: label || undefined,
           agentId: requestedAgentId,
           model: modelOverride,

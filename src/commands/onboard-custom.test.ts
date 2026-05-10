@@ -2,8 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ensureApiKeyFromEnvOrPrompt } from "../plugins/provider-auth-input.js";
 import { promptCustomApiConfig } from "./onboard-custom.js";
 
-const OLLAMA_DEFAULT_BASE_URL_FOR_TEST = "http://127.0.0.1:11434";
-
 vi.mock("../plugins/provider-auth-input.js", () => ({
   ensureApiKeyFromEnvOrPrompt: vi.fn(
     async (params: Parameters<typeof ensureApiKeyFromEnvOrPrompt>[0]) => {
@@ -138,7 +136,7 @@ describe("promptCustomApiConfig", () => {
     });
   });
 
-  it("defaults custom setup to the native Ollama base URL", async () => {
+  it("does not seed custom setup with a provider-specific base URL", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434", "", "llama3", "custom", ""],
       select: ["plaintext", "openai"],
@@ -147,12 +145,10 @@ describe("promptCustomApiConfig", () => {
 
     await runPromptCustomApi(prompter);
 
-    expect(prompter.text).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: "API Base URL",
-        initialValue: OLLAMA_DEFAULT_BASE_URL_FOR_TEST,
-      }),
+    const apiBaseUrlCall = prompter.text.mock.calls.find(
+      ([options]) => options.message === "API Base URL",
     );
+    expect(apiBaseUrlCall?.[0].initialValue).toBeUndefined();
   });
 
   it("retries when verification fails", async () => {

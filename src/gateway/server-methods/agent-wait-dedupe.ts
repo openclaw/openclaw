@@ -1,3 +1,4 @@
+import { isNonTerminalAgentRunStatus } from "../../shared/agent-run-status.js";
 import { setSafeTimeout } from "../../utils/timer-delay.js";
 import type { DedupeEntry } from "../server-shared.js";
 
@@ -76,9 +77,7 @@ function notifyWaiters(runId: string): void {
   }
 }
 
-export function readTerminalSnapshotFromDedupeEntry(
-  entry: DedupeEntry,
-): AgentWaitTerminalSnapshot | null {
+function readTerminalSnapshotFromDedupeEntry(entry: DedupeEntry): AgentWaitTerminalSnapshot | null {
   const payload = entry.payload as
     | {
         status?: unknown;
@@ -93,7 +92,7 @@ export function readTerminalSnapshotFromDedupeEntry(
       }
     | undefined;
   const status = typeof payload?.status === "string" ? payload.status : undefined;
-  if (status === "accepted" || status === "started" || status === "in_flight") {
+  if (isNonTerminalAgentRunStatus(status)) {
     return null;
   }
 
@@ -235,13 +234,18 @@ export function setGatewayDedupeEntry(params: {
   key: string;
   entry: DedupeEntry;
 }) {
+  const existing = params.dedupe.get(params.key);
+  const existingSnapshot = existing ? readTerminalSnapshotFromDedupeEntry(existing) : null;
+  const incomingSnapshot = readTerminalSnapshotFromDedupeEntry(params.entry);
+  if (existingSnapshot?.status === "timeout" && existingSnapshot.stopReason === "rpc") {
+    return;
+  }
   params.dedupe.set(params.key, params.entry);
   const runId = parseRunIdFromDedupeKey(params.key);
   if (!runId) {
     return;
   }
-  const snapshot = readTerminalSnapshotFromDedupeEntry(params.entry);
-  if (!snapshot) {
+  if (!incomingSnapshot) {
     return;
   }
   notifyWaiters(runId);

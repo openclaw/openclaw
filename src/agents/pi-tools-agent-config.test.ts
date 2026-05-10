@@ -218,7 +218,11 @@ describe("Agent-specific tool filtering", () => {
       await expect(applyPatchTool.execute("tc1", { input: patch })).rejects.toThrow(
         /Path escapes sandbox root/,
       );
-      await expect(fs.readFile(escapedPath, "utf8")).rejects.toBeDefined();
+      const readError = await fs.readFile(escapedPath, "utf8").then(
+        () => undefined,
+        (err: NodeJS.ErrnoException) => err,
+      );
+      expect(readError?.code).toBe("ENOENT");
     });
   });
 
@@ -460,6 +464,36 @@ describe("Agent-specific tool filtering", () => {
     expect(resolveChannelGroupToolsPolicy({ cfg, channel: "telegram", groupId: "123" })).toEqual({
       allow: ["read"],
     });
+  });
+
+  it("should not apply forged caller group tool policy for non-group sessions", () => {
+    const cfg: OpenClawConfig = {
+      tools: { allow: ["read"] },
+      channels: {
+        whatsapp: {
+          groups: {
+            "trusted-group": {
+              tools: { allow: ["exec", "read", "write", "edit"] },
+            },
+          },
+        },
+      },
+    };
+
+    const tools = createOpenClawCodingTools({
+      config: cfg,
+      sessionKey: "agent:main:main",
+      messageProvider: "whatsapp",
+      groupId: "trusted-group",
+      workspaceDir: "/tmp/test-forged-group-policy",
+      agentDir: "/tmp/agent-forged-group-policy",
+    });
+    const names = tools.map((t) => t.name);
+    expect(names).toContain("read");
+    expect(names).not.toContain("exec");
+    expect(names).not.toContain("write");
+    expect(names).not.toContain("edit");
+    expect(names).not.toContain("apply_patch");
   });
 
   it("should resolve feishu group tool policy for sender-scoped session keys", () => {

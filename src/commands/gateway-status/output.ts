@@ -18,6 +18,26 @@ export type GatewayStatusWarning = {
   targetIds?: string[];
 };
 
+const noReachableGatewayDiagnostic =
+  "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.";
+
+function readModelPricingDegradedDetail(health: unknown): string | null {
+  if (!health || typeof health !== "object") {
+    return null;
+  }
+  const modelPricing = (health as { modelPricing?: unknown }).modelPricing;
+  if (!modelPricing || typeof modelPricing !== "object") {
+    return null;
+  }
+  const record = modelPricing as { state?: unknown; detail?: unknown };
+  if (record.state !== "degraded") {
+    return null;
+  }
+  return typeof record.detail === "string" && record.detail.trim()
+    ? record.detail.trim()
+    : "pricing bootstrap or refresh failed";
+}
+
 export function pickPrimaryProbedTarget(probed: GatewayStatusProbedTarget[]) {
   const reachable = probed.filter((entry) => isProbeReachable(entry.probe));
   return (
@@ -35,6 +55,7 @@ export function buildGatewayStatusWarnings(params: {
   sshTunnelStarted: boolean;
   sshTunnelError: string | null;
   localTlsLoadError?: string | null;
+  discoveryCount?: number;
 }): GatewayStatusWarning[] {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
   const degradedScopeLimited = params.probed.filter((entry) =>
@@ -57,6 +78,13 @@ export function buildGatewayStatusWarnings(params: {
       code: "local_tls_runtime_unavailable",
       message: `Local gateway TLS is enabled but OpenClaw could not load the local certificate fingerprint: ${params.localTlsLoadError}`,
       targetIds: ["localLoopback"],
+    });
+  }
+  if (reachable.length === 0 && params.discoveryCount === 0) {
+    warnings.push({
+      code: "no_gateway_reachable",
+      message: noReachableGatewayDiagnostic,
+      targetIds: params.probed.map((entry) => entry.target.id),
     });
   }
   if (reachable.length > 1) {
@@ -95,6 +123,17 @@ export function buildGatewayStatusWarnings(params: {
       targetIds: [result.target.id],
     });
   }
+  for (const result of reachable) {
+    const detail = readModelPricingDegradedDetail(result.probe.health);
+    if (!detail) {
+      continue;
+    }
+    warnings.push({
+      code: "model_pricing_degraded",
+      message: `Model pricing degraded: ${detail}`,
+      targetIds: [result.target.id],
+    });
+  }
   return warnings;
 }
 
@@ -110,7 +149,9 @@ export function writeGatewayStatusJson(params: {
   primaryTargetId: string | null;
 }) {
   const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
-  const degraded = params.probed.some((entry) => isPostConnectProbeFailure(entry.probe));
+  const degraded =
+    params.probed.some((entry) => isPostConnectProbeFailure(entry.probe)) ||
+    reachable.some((entry) => readModelPricingDegradedDetail(entry.probe.health));
   const capability = summarizeGatewayProbeCapability(reachable.map((entry) => entry.probe));
   writeRuntimeJson(params.runtime, {
     ok: reachable.length > 0,

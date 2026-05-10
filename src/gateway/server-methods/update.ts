@@ -3,6 +3,7 @@ import { extractDeliveryInfo } from "../../config/sessions.js";
 import { resolveOpenClawPackageRoot } from "../../infra/openclaw-root.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import {
+  buildRestartSuccessContinuation,
   formatDoctorNonInteractiveHint,
   type RestartSentinelPayload,
   writeRestartSentinel,
@@ -40,6 +41,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext: requestedDeliveryContext,
       threadId: requestedThreadId,
       note,
+      continuationMessage,
       restartDelayMs,
     } = parseRestartRequestParams(params);
     const { deliveryContext: sessionDeliveryContext, threadId: sessionThreadId } =
@@ -99,6 +101,10 @@ export const updateHandlers: GatewayRequestHandlers = {
       };
     }
 
+    const continuation =
+      result.status === "ok"
+        ? buildRestartSuccessContinuation({ sessionKey, continuationMessage })
+        : null;
     const payload: RestartSentinelPayload = {
       kind: "update",
       status: result.status,
@@ -107,6 +113,7 @@ export const updateHandlers: GatewayRequestHandlers = {
       deliveryContext,
       threadId,
       message: note ?? null,
+      ...(continuation ? { continuation } : {}),
       doctorHint: formatDoctorNonInteractiveHint(),
       stats: {
         mode: result.mode,
@@ -140,11 +147,14 @@ export const updateHandlers: GatewayRequestHandlers = {
     // Only restart the gateway when the update actually succeeded.
     // Restarting after a failed update leaves the process in a broken state
     // (corrupted node_modules, partial builds) and causes a crash loop.
+    const updateWasPackageSwap = result.status === "ok" && result.mode !== "git";
     const restart =
       result.status === "ok"
         ? scheduleGatewaySigusr1Restart({
-            delayMs: restartDelayMs,
+            delayMs: updateWasPackageSwap ? 0 : restartDelayMs,
             reason: "update.run",
+            skipDeferral: updateWasPackageSwap,
+            skipCooldown: updateWasPackageSwap,
             audit: {
               actor: actor.actor,
               deviceId: actor.deviceId,

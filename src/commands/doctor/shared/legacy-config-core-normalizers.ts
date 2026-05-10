@@ -1,5 +1,4 @@
 import { migrateLegacyRuntimeModelRef } from "../../../agents/model-runtime-aliases.js";
-import { isLegacyModelsAddCodexMetadataModel } from "../../../agents/openai-codex-models-add-legacy.js";
 import { normalizeProviderId } from "../../../agents/provider-id.js";
 import { resolveSingleAccountKeysToMove } from "../../../channels/plugins/setup-promotion-helpers.js";
 import { resolveNormalizedProviderModelMaxTokens } from "../../../config/defaults.js";
@@ -12,7 +11,44 @@ import {
 } from "../../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../../terminal/ansi.js";
 import { isRecord } from "./legacy-config-record-shared.js";
+import { isLegacyModelsAddCodexMetadataModel } from "./legacy-models-add-metadata.js";
 export { normalizeLegacyTalkConfig } from "./legacy-talk-config-normalizer.js";
+
+function hasConfiguredChannels(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels;
+  if (!isRecord(channels)) {
+    return false;
+  }
+  return Object.keys(channels).some((channelId) => channelId !== "defaults");
+}
+
+export function normalizeMissingGroupVisibleRepliesDefault(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  const messages = cfg.messages;
+  if (
+    !hasConfiguredChannels(cfg) ||
+    messages?.visibleReplies !== undefined ||
+    messages?.groupChat?.visibleReplies !== undefined
+  ) {
+    return cfg;
+  }
+
+  const nextMessages = messages ? { ...messages } : {};
+  nextMessages.groupChat = {
+    ...messages?.groupChat,
+    visibleReplies: "message_tool",
+  };
+  changes.push(
+    'Set messages.groupChat.visibleReplies to "message_tool" so group/channel replies use the message tool by default.',
+  );
+
+  return {
+    ...cfg,
+    messages: nextMessages,
+  };
+}
 
 export function normalizeLegacyCommandsConfig(
   cfg: OpenClawConfig,
@@ -193,9 +229,6 @@ type ModelProviderEntry = Partial<
 >;
 type ModelsConfigPatch = Partial<NonNullable<OpenClawConfig["models"]>>;
 type ModelDefinitionEntry = NonNullable<ModelProviderEntry["models"]>[number];
-type AgentRuntimePolicyPatch = NonNullable<
-  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["agentRuntime"]
->;
 
 function mergeModelEntry(legacyEntry: unknown, currentEntry: unknown): unknown {
   if (!isRecord(legacyEntry) || !isRecord(currentEntry)) {
@@ -208,40 +241,79 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
   value?: unknown;
   changed: boolean;
   selectedRuntime?: string;
+  selectedRefs: string[];
 } {
   if (typeof raw === "string") {
     const migrated = migrateLegacyRuntimeModelRef(raw);
     return migrated
-      ? { value: migrated.ref, changed: true, selectedRuntime: migrated.runtime }
-      : { value: raw, changed: false };
+      ? {
+          value: migrated.ref,
+          changed: true,
+          selectedRuntime: migrated.runtime,
+          selectedRefs: [migrated.ref],
+        }
+      : { value: raw, changed: false, selectedRefs: [] };
   }
   if (!isRecord(raw)) {
-    return { value: raw, changed: false };
+    return { value: raw, changed: false, selectedRefs: [] };
   }
 
   const migratedPrimary =
     typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
   if (!migratedPrimary) {
-    return { value: raw, changed: false };
+    return { value: raw, changed: false, selectedRefs: [] };
   }
 
   const next: Record<string, unknown> = { ...raw, primary: migratedPrimary.ref };
+  const selectedRefs = [migratedPrimary.ref];
   if (Array.isArray(raw.fallbacks)) {
     next.fallbacks = raw.fallbacks.map((fallback) => {
       if (typeof fallback !== "string") {
         return fallback;
       }
       const migratedFallback = migrateLegacyRuntimeModelRef(fallback);
-      return migratedFallback?.runtime === migratedPrimary.runtime
-        ? migratedFallback.ref
-        : fallback;
+      if (migratedFallback?.runtime === migratedPrimary.runtime) {
+        selectedRefs.push(migratedFallback.ref);
+        return migratedFallback.ref;
+      }
+      return fallback;
     });
   }
   return {
     value: next,
     changed: true,
     selectedRuntime: migratedPrimary.runtime,
+    selectedRefs,
   };
+}
+
+function runtimeNeedsExplicitModelPolicy(runtime: string | undefined): runtime is string {
+  return Boolean(runtime && runtime !== "codex");
+}
+
+function modelEntryWithRuntimePolicy(entry: unknown, runtime: string): Record<string, unknown> {
+  const base = isRecord(entry) ? { ...entry } : {};
+  const currentRuntime = isRecord(base.agentRuntime)
+    ? normalizeOptionalLowercaseString(base.agentRuntime.id)
+    : undefined;
+  if (!currentRuntime || currentRuntime === "auto") {
+    base.agentRuntime = {
+      ...(isRecord(base.agentRuntime) ? base.agentRuntime : {}),
+      id: runtime,
+    };
+  }
+  return base;
+}
+
+function mergeModelEntryWithRuntimePolicy(
+  legacyEntry: unknown,
+  currentEntry: unknown,
+  runtime: string | undefined,
+): unknown {
+  const merged = mergeModelEntry(legacyEntry, currentEntry);
+  return runtimeNeedsExplicitModelPolicy(runtime)
+    ? modelEntryWithRuntimePolicy(merged, runtime)
+    : merged;
 }
 
 function normalizeLegacyRuntimeAllowlistModels(
@@ -262,35 +334,37 @@ function normalizeLegacyRuntimeAllowlistModels(
     const migrated = migrateLegacyRuntimeModelRef(rawKey);
     if (migrated?.runtime === selectedRuntime) {
       changed = true;
+      next[rawKey] = mergeModelEntry(entry, next[rawKey]);
       legacyEntries.push([migrated.ref, entry]);
       continue;
     }
     next[rawKey] = mergeModelEntry(entry, next[rawKey]);
   }
   for (const [migratedKey, entry] of legacyEntries) {
-    next[migratedKey] = mergeModelEntry(entry, next[migratedKey]);
+    next[migratedKey] = mergeModelEntryWithRuntimePolicy(entry, next[migratedKey], selectedRuntime);
   }
   return { value: next, changed };
 }
 
-function ensureAgentRuntimePolicy(
-  raw: unknown,
-  selectedRuntime: string,
-): {
-  value: AgentRuntimePolicyPatch;
-  changed: boolean;
-} {
-  if (!isRecord(raw)) {
-    return { value: { id: selectedRuntime }, changed: true };
+function ensureSelectedModelRuntimePolicies(
+  rawModels: unknown,
+  selectedRefs: readonly string[],
+  selectedRuntime: string | undefined,
+): { value?: unknown; changed: boolean } {
+  if (!runtimeNeedsExplicitModelPolicy(selectedRuntime) || selectedRefs.length === 0) {
+    return { value: rawModels, changed: false };
   }
-  const currentRuntime = normalizeOptionalLowercaseString(raw.id);
-  if (!currentRuntime || currentRuntime === "auto") {
-    return {
-      value: { ...raw, id: selectedRuntime } as AgentRuntimePolicyPatch,
-      changed: currentRuntime !== selectedRuntime,
-    };
+  const next: Record<string, unknown> = isRecord(rawModels) ? { ...rawModels } : {};
+  let changed = false;
+  for (const ref of selectedRefs) {
+    const current = next[ref];
+    const updated = modelEntryWithRuntimePolicy(current, selectedRuntime);
+    if (JSON.stringify(updated) !== JSON.stringify(current ?? {})) {
+      next[ref] = updated;
+      changed = true;
+    }
   }
-  return { value: raw as AgentRuntimePolicyPatch, changed: false };
+  return { value: next, changed };
 }
 
 function normalizeLegacyRuntimeAgentContainer(
@@ -321,10 +395,15 @@ function normalizeLegacyRuntimeAgentContainer(
   }
 
   if (model.selectedRuntime) {
-    const agentRuntime = ensureAgentRuntimePolicy(raw.agentRuntime, model.selectedRuntime);
-    if (agentRuntime.changed) {
-      next.agentRuntime = agentRuntime.value;
+    const modelRuntimes = ensureSelectedModelRuntimePolicies(
+      next.models,
+      model.selectedRefs,
+      model.selectedRuntime,
+    );
+    if (modelRuntimes.changed) {
+      next.models = modelRuntimes.value;
       changed = true;
+      changes.push(`Selected ${model.selectedRuntime} runtime for ${path}.models entries.`);
     }
   }
 

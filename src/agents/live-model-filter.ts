@@ -4,7 +4,7 @@ import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { liveProvidersShareOwningPlugin } from "./live-provider-owner.js";
 import { normalizeProviderId } from "./provider-id.js";
 
-export type ModelRef = {
+type ModelRef = {
   provider?: string | null;
   id?: string | null;
 };
@@ -24,10 +24,8 @@ const HIGH_SIGNAL_LIVE_MODEL_PRIORITY = [
   "openrouter/minimax/minimax-m2.7",
   "opencode-go/glm-5",
   "openrouter/ai21/jamba-large-1.7",
-  "xai/grok-4-1-fast-non-reasoning",
+  "xai/grok-4.3",
   "zai/glm-5.1",
-  "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/glm-5p1",
   "minimax-portal/minimax-m2.7",
@@ -194,6 +192,21 @@ export function isHighSignalLiveModelRef(ref: ModelRef): boolean {
     return false;
   }
   return isHighSignalClaudeModelId(id);
+}
+
+export function isPrioritizedHighSignalLiveModelRef(ref: ModelRef): boolean {
+  const key = toCanonicalHighSignalLiveModelKey(ref);
+  return key !== null && HIGH_SIGNAL_LIVE_MODEL_PRIORITY_INDEX.has(key);
+}
+
+export function listPrioritizedHighSignalLiveModelRefs(): Array<{ provider: string; id: string }> {
+  return HIGH_SIGNAL_LIVE_MODEL_PRIORITY.map((key) => {
+    const separatorIndex = key.indexOf("/");
+    return {
+      provider: key.slice(0, separatorIndex),
+      id: key.slice(separatorIndex + 1),
+    };
+  });
 }
 
 export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {

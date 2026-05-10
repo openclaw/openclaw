@@ -1,43 +1,26 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { updateSessionStore, type SessionEntry } from "../config/sessions.js";
 import { resetDiagnosticSessionStateForTest } from "../logging/diagnostic-session-state.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { addTestHook, createMockPluginRegistry } from "../plugins/hooks.test-helpers.js";
+import { patchPluginSessionExtension } from "../plugins/host-hook-state.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginHookRegistration } from "../plugins/types.js";
-
-type ToolDefinitionAdapterModule = typeof import("./pi-tool-definition-adapter.js");
-type PiToolsAbortModule = typeof import("./pi-tools.abort.js");
-type BeforeToolCallModule = typeof import("./pi-tools.before-tool-call.js");
-
-type ToClientToolDefinitions = ToolDefinitionAdapterModule["toClientToolDefinitions"];
-type ToToolDefinitions = ToolDefinitionAdapterModule["toToolDefinitions"];
-type WrapToolWithAbortSignal = PiToolsAbortModule["wrapToolWithAbortSignal"];
-type BeforeToolCallTesting = BeforeToolCallModule["__testing"];
-type ConsumeAdjustedParamsForToolCall = BeforeToolCallModule["consumeAdjustedParamsForToolCall"];
-type WrapToolWithBeforeToolCallHook = BeforeToolCallModule["wrapToolWithBeforeToolCallHook"];
-
-let toClientToolDefinitions!: ToClientToolDefinitions;
-let toToolDefinitions!: ToToolDefinitions;
-let wrapToolWithAbortSignal!: WrapToolWithAbortSignal;
-let beforeToolCallTesting!: BeforeToolCallTesting;
-let consumeAdjustedParamsForToolCall!: ConsumeAdjustedParamsForToolCall;
-let wrapToolWithBeforeToolCallHook!: WrapToolWithBeforeToolCallHook;
-
-beforeEach(async () => {
-  if (!wrapToolWithBeforeToolCallHook) {
-    ({ toClientToolDefinitions, toToolDefinitions } =
-      await import("./pi-tool-definition-adapter.js"));
-    ({ wrapToolWithAbortSignal } = await import("./pi-tools.abort.js"));
-    ({
-      __testing: beforeToolCallTesting,
-      consumeAdjustedParamsForToolCall,
-      wrapToolWithBeforeToolCallHook,
-    } = await import("./pi-tools.before-tool-call.js"));
-  }
-});
+import { toClientToolDefinitions, toToolDefinitions } from "./pi-tool-definition-adapter.js";
+import { wrapToolWithAbortSignal } from "./pi-tools.abort.js";
+import {
+  __testing as beforeToolCallTesting,
+  consumeAdjustedParamsForToolCall,
+  isToolWrappedWithBeforeToolCallHook,
+  wrapToolWithBeforeToolCallHook,
+} from "./pi-tools.before-tool-call.js";
 
 type BeforeToolCallHandlerMock = ReturnType<typeof vi.fn>;
 
@@ -46,6 +29,20 @@ type BeforeToolCallHookInstall = {
   priority?: number;
   handler: BeforeToolCallHandlerMock;
 };
+
+function collectMatching<T, U>(
+  items: readonly T[],
+  predicate: (item: T) => boolean,
+  map: (item: T) => U,
+): U[] {
+  const matches: U[] = [];
+  for (const item of items) {
+    if (predicate(item)) {
+      matches.push(map(item));
+    }
+  }
+  return matches;
+}
 
 function installBeforeToolCallHook(params?: {
   enabled?: boolean;
@@ -315,6 +312,18 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
     expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
   });
+
+  it("preserves the hook marker when abort wrapping a hooked tool", () => {
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const baseTool = { name: "Bash", execute, description: "bash", parameters: {} } as any;
+    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
+      agentId: "main",
+      sessionKey: "main",
+    });
+    const withAbort = wrapToolWithAbortSignal(wrapped, new AbortController().signal);
+
+    expect(isToolWrappedWithBeforeToolCallHook(withAbort)).toBe(true);
+  });
 });
 
 describe("before_tool_call hook integration for client tools", () => {
@@ -350,5 +359,195 @@ describe("before_tool_call hook integration for client tools", () => {
       value: "ok",
       extra: true,
     });
+  });
+
+  it("preserves client tool source order when hooks resolve out of order", async () => {
+    let releaseFirstHook: (() => void) | undefined;
+    const firstHookGate = new Promise<void>((resolve) => {
+      releaseFirstHook = resolve;
+    });
+    installBeforeToolCallHook({
+      runBeforeToolCallImpl: async (event: unknown) => {
+        const toolName = (event as { toolName?: string }).toolName;
+        if (toolName === "first_tool") {
+          await firstHookGate;
+        }
+        return { params: { marker: toolName } };
+      },
+    });
+
+    const slots: Array<{
+      toolCallId: string;
+      name: string;
+      params?: Record<string, unknown>;
+      completed: boolean;
+    }> = [];
+    const indexes = new Map<string, number>();
+    const reserve = (toolCallId: string, name: string) => {
+      indexes.set(toolCallId, slots.length);
+      slots.push({ toolCallId, name, completed: false });
+    };
+    const complete = (toolCallId: string, name: string, params: Record<string, unknown>) => {
+      const index = indexes.get(toolCallId);
+      if (index === undefined) {
+        throw new Error(`missing reserved client tool slot for ${toolCallId}`);
+      }
+      const slot = slots[index];
+      if (!slot) {
+        throw new Error(`missing client tool slot at ${index}`);
+      }
+      slot.name = name;
+      slot.params = params;
+      slot.completed = true;
+    };
+    const [firstTool, secondTool] = toClientToolDefinitions(
+      [
+        {
+          type: "function",
+          function: {
+            name: "first_tool",
+            description: "First client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+        {
+          type: "function",
+          function: {
+            name: "second_tool",
+            description: "Second client tool",
+            parameters: { type: "object", properties: { value: { type: "string" } } },
+          },
+        },
+      ],
+      { reserve, complete },
+      { agentId: "main", sessionKey: "main" },
+    );
+    if (!firstTool || !secondTool) {
+      throw new Error("missing client tool definitions");
+    }
+    const extensionContext = {} as Parameters<typeof firstTool.execute>[4];
+
+    const firstRun = firstTool.execute(
+      "client-call-1",
+      { value: "first" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+    const secondRun = secondTool.execute(
+      "client-call-2",
+      { value: "second" },
+      undefined,
+      undefined,
+      extensionContext,
+    );
+
+    await secondRun;
+    expect(slots.map((slot) => ({ name: slot.name, completed: slot.completed }))).toEqual([
+      { name: "first_tool", completed: false },
+      { name: "second_tool", completed: true },
+    ]);
+
+    if (!releaseFirstHook) {
+      throw new Error("Expected first before-tool-call hook release callback to be initialized");
+    }
+    releaseFirstHook();
+    await firstRun;
+
+    expect(
+      collectMatching(
+        slots,
+        (slot) => slot.completed,
+        (slot) => slot.name,
+      ),
+    ).toEqual(["first_tool", "second_tool"]);
+    expect(slots.map((slot) => slot.params)).toEqual([
+      { value: "first", marker: "first_tool" },
+      { value: "second", marker: "second_tool" },
+    ]);
+  });
+
+  it("lets trusted policies read session extensions for client tools when config is provided", async () => {
+    resetGlobalHookRunner();
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-client-tool-policy-"));
+    const storePath = path.join(stateDir, "sessions.json");
+    const config = { session: { store: storePath } };
+    const seen: unknown[] = [];
+    const registry = createEmptyPluginRegistry();
+    registry.sessionExtensions = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        extension: {
+          namespace: "policy",
+          description: "policy state",
+        },
+      },
+    ];
+    registry.trustedToolPolicies = [
+      {
+        pluginId: "policy-plugin",
+        pluginName: "Policy Plugin",
+        source: "test",
+        policy: {
+          id: "client-tool-session-extension-policy",
+          description: "client tool session extension policy",
+          evaluate(_event, ctx) {
+            seen.push(ctx.getSessionExtension?.("policy"));
+            return undefined;
+          },
+        },
+      },
+    ];
+    setActivePluginRegistry(registry);
+    try {
+      await updateSessionStore(storePath, (store) => {
+        store["agent:main:client"] = {
+          sessionId: "session-client",
+          updatedAt: Date.now(),
+        } as SessionEntry;
+      });
+      await expect(
+        patchPluginSessionExtension({
+          cfg: config as never,
+          sessionKey: "agent:main:client",
+          pluginId: "policy-plugin",
+          namespace: "policy",
+          value: { gate: "client" },
+        }),
+      ).resolves.toEqual({
+        ok: true,
+        key: "agent:main:client",
+        value: { gate: "client" },
+      });
+
+      const [tool] = toClientToolDefinitions(
+        [
+          {
+            type: "function",
+            function: {
+              name: "client_tool",
+              description: "Client tool",
+              parameters: { type: "object", properties: {} },
+            },
+          },
+        ],
+        undefined,
+        {
+          agentId: "main",
+          sessionKey: "agent:main:client",
+          sessionId: "session-client",
+          config: config as never,
+        },
+      );
+      const extensionContext = {} as Parameters<typeof tool.execute>[4];
+      await tool.execute("client-call-policy", {}, undefined, undefined, extensionContext);
+
+      expect(seen).toEqual([{ gate: "client" }]);
+    } finally {
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      await fs.rm(stateDir, { recursive: true, force: true });
+    }
   });
 });

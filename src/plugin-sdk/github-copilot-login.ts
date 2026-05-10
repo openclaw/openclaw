@@ -4,7 +4,7 @@ import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 
 type FacadeModule = {
   githubCopilotLoginCommand: (
-    opts: { profileId?: string; yes?: boolean },
+    opts: { profileId?: string; yes?: boolean; agentDir?: string },
     runtime: RuntimeEnv,
   ) => Promise<void>;
 };
@@ -15,6 +15,8 @@ function loadFacadeModule(): FacadeModule {
     artifactBasename: "api.js",
   });
 }
+
+/** @deprecated GitHub Copilot provider-owned login helper; use provider auth hooks instead. */
 export const githubCopilotLoginCommand: FacadeModule["githubCopilotLoginCommand"] = ((...args) =>
   loadFacadeModule()["githubCopilotLoginCommand"](
     ...args,

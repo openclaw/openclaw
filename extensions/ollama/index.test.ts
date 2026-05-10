@@ -1,4 +1,9 @@
+import {
+  describeImageWithModel,
+  describeImagesWithModel,
+} from "openclaw/plugin-sdk/media-understanding";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 
@@ -20,6 +25,25 @@ const promptAndConfigureOllamaMock = vi.hoisted(() =>
 );
 const ensureOllamaModelPulledMock = vi.hoisted(() => vi.fn(async () => {}));
 const buildOllamaProviderMock = vi.hoisted(() => vi.fn());
+const queryOllamaModelShowInfoMock = vi.hoisted(() => vi.fn());
+const buildOllamaModelDefinitionMock = vi.hoisted(() =>
+  vi.fn((modelId: string, contextWindow?: number, capabilities?: string[]) => {
+    const normalized = modelId.trim().toLowerCase();
+    const isKnownCloudReasoningModel = /^deepseek-v4-(?:flash|pro):cloud$/.test(normalized);
+    return {
+      id: modelId,
+      name: modelId,
+      reasoning: isKnownCloudReasoningModel || (capabilities?.includes("thinking") ?? false),
+      input: capabilities?.includes("vision") ? ["text", "image"] : ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: contextWindow ?? 8192,
+      maxTokens: 8192,
+      compat: capabilities
+        ? { supportsTools: capabilities.includes("tools"), supportsUsageInStreaming: true }
+        : { supportsUsageInStreaming: true },
+    };
+  }),
+);
 const createConfiguredOllamaStreamFnMock = vi.hoisted(() =>
   vi.fn((_params: { model: unknown; providerBaseUrl?: string }) => ({}) as never),
 );
@@ -29,6 +53,8 @@ vi.mock("./api.js", () => ({
   ensureOllamaModelPulled: ensureOllamaModelPulledMock,
   configureOllamaNonInteractive: vi.fn(),
   buildOllamaProvider: buildOllamaProviderMock,
+  queryOllamaModelShowInfo: queryOllamaModelShowInfoMock,
+  buildOllamaModelDefinition: buildOllamaModelDefinitionMock,
 }));
 
 vi.mock("./src/stream.js", async (importOriginal) => {
@@ -40,9 +66,12 @@ vi.mock("./src/stream.js", async (importOriginal) => {
 });
 
 beforeEach(() => {
+  clearLiveCatalogCacheForTests();
   promptAndConfigureOllamaMock.mockClear();
   ensureOllamaModelPulledMock.mockClear();
   buildOllamaProviderMock.mockReset();
+  queryOllamaModelShowInfoMock.mockReset();
+  buildOllamaModelDefinitionMock.mockClear();
   createConfiguredOllamaStreamFnMock.mockClear();
 });
 
@@ -110,8 +139,10 @@ function captureWrappedOllamaPayload(
     streamFn: baseStreamFn,
   });
 
-  expect(typeof wrapped).toBe("function");
-  void wrapped?.(
+  if (!wrapped) {
+    throw new Error("expected Ollama thinking stream wrapper");
+  }
+  void wrapped(
     {
       api: "ollama",
       provider: "ollama",
@@ -186,7 +217,7 @@ describe("ollama plugin", () => {
   it("skips ambient discovery when plugin discovery is disabled", async () => {
     const provider = registerProviderWithPluginConfig({ discovery: { enabled: false } });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         plugins: {
           entries: {
@@ -214,7 +245,7 @@ describe("ollama plugin", () => {
       models: [{ id: "llama3.2", name: "Llama 3.2" }],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         plugins: {
           entries: {
@@ -244,7 +275,7 @@ describe("ollama plugin", () => {
   it("skips ambient discovery without Ollama auth or meaningful config", async () => {
     const provider = registerProvider();
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {},
       env: { NODE_ENV: "development" },
       resolveProviderApiKey: () => ({ apiKey: "" }),
@@ -262,7 +293,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -290,7 +321,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -320,7 +351,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -350,7 +381,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {},
       env: { NODE_ENV: "development" },
       resolveProviderApiKey: () => ({ apiKey: "ollama-local" }),
@@ -420,10 +451,106 @@ describe("ollama plugin", () => {
     }
   });
 
+  it("resolves requested Ollama cloud models that are omitted from tags but confirmed by show", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [
+        {
+          id: "kimi-k2.5:cloud",
+          name: "kimi-k2.5:cloud",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 262144,
+          maxTokens: 8192,
+        },
+      ],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({
+      contextWindow: 1048576,
+      capabilities: ["completion", "tools"],
+    });
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "deepseek-v4-pro:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(queryOllamaModelShowInfoMock).toHaveBeenCalledWith(
+        "http://127.0.0.1:11434",
+        "deepseek-v4-pro:cloud",
+      );
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "deepseek-v4-pro:cloud",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toMatchObject({
+        provider: "ollama",
+        id: "deepseek-v4-pro:cloud",
+        api: "ollama",
+        baseUrl: "http://127.0.0.1:11434",
+        reasoning: true,
+        compat: { supportsTools: true },
+      });
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
+  it("keeps unknown requested Ollama models unresolved when show has no metadata", async () => {
+    const provider = registerProvider();
+    const previous = process.env.OLLAMA_API_KEY;
+    process.env.OLLAMA_API_KEY = "ollama-local";
+    buildOllamaProviderMock.mockResolvedValueOnce({
+      baseUrl: "http://127.0.0.1:11434",
+      api: "ollama",
+      models: [],
+    });
+    queryOllamaModelShowInfoMock.mockResolvedValueOnce({});
+
+    try {
+      await provider.prepareDynamicModel?.({
+        config: {},
+        provider: "ollama",
+        modelId: "depseek-v4-pro:cloud",
+        modelRegistry: { find: vi.fn(() => null) },
+      } as never);
+
+      expect(
+        provider.resolveDynamicModel?.({
+          config: {},
+          provider: "ollama",
+          modelId: "depseek-v4-pro:cloud",
+          modelRegistry: { find: vi.fn(() => null) },
+        } as never),
+      ).toBeUndefined();
+    } finally {
+      if (previous === undefined) {
+        delete process.env.OLLAMA_API_KEY;
+      } else {
+        process.env.OLLAMA_API_KEY = previous;
+      }
+    }
+  });
+
   it("skips implicit localhost discovery when a custom remote Ollama provider is configured", async () => {
     const provider = registerProvider();
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -451,7 +578,7 @@ describe("ollama plugin", () => {
       models: [],
     });
 
-    const result = await provider.discovery.run({
+    const result = await provider.catalog.run({
       config: {
         models: {
           providers: {
@@ -590,8 +717,10 @@ describe("ollama plugin", () => {
       streamFn: baseStreamFn,
     });
 
-    expect(typeof wrapped).toBe("function");
-    void wrapped?.({} as never, {} as never, {});
+    if (!wrapped) {
+      throw new Error("expected Ollama OpenAI-compatible stream wrapper");
+    }
+    void wrapped({} as never, {} as never, {});
     expect(baseStreamFn).toHaveBeenCalledTimes(1);
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
@@ -829,8 +958,8 @@ describe("ollama plugin", () => {
     const [ollamaMedia] = mediaProviders;
     expect(ollamaMedia.id).toBe("ollama");
     expect(ollamaMedia.capabilities).toEqual(["image"]);
-    expect(typeof ollamaMedia.describeImage).toBe("function");
-    expect(typeof ollamaMedia.describeImages).toBe("function");
+    expect(ollamaMedia.describeImage).toBe(describeImageWithModel);
+    expect(ollamaMedia.describeImages).toBe(describeImagesWithModel);
     // Intentional: no defaultModels or autoPriority. Ollama vision models are
     // user-installed (llava, qwen2.5vl, …) with no universal default, and we
     // don't want Ollama to auto-steal image duty from configured providers.

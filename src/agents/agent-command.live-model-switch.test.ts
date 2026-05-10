@@ -3,6 +3,18 @@ import { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END } from "./
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 
 const state = vi.hoisted(() => ({
+  defaultRuntimeConfig: {
+    agents: {
+      defaults: {
+        models: {
+          "anthropic/claude": {},
+          "openai/claude": {},
+          "openai/gpt-5.4": {},
+        },
+      },
+    },
+  },
+  runtimeConfigMock: undefined as unknown,
   acpResolveSessionMock: vi.fn((..._args: unknown[]): unknown => null),
   acpRunTurnMock: vi.fn((..._args: unknown[]): unknown => undefined),
   buildAcpResultMock: vi.fn(),
@@ -22,6 +34,15 @@ const state = vi.hoisted(() => ({
   trajectoryRecordEventMock: vi.fn(),
   trajectoryFlushMock: vi.fn(async () => undefined),
   clearSessionAuthProfileOverrideMock: vi.fn(),
+  isThinkingLevelSupportedMock: vi.fn((_args: unknown) => true),
+  resolveThinkingDefaultMock: vi.fn((_args: unknown) => "low"),
+  loadManifestModelCatalogMock: vi.fn(() => []),
+  buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]): unknown => ({
+    prompt: "",
+    skills: [],
+    resolvedSkills: [],
+    version: 0,
+  })),
   authProfileStoreMock: { profiles: {} } as { profiles: Record<string, unknown> },
   sessionEntryMock: undefined as unknown,
   sessionStoreMock: undefined as unknown,
@@ -109,7 +130,7 @@ vi.mock("../auto-reply/thinking.js", () => ({
   formatXHighModelHint: () => "model-x",
   normalizeThinkLevel: (v?: string) => v || undefined,
   normalizeVerboseLevel: (v?: string) => v || undefined,
-  isThinkingLevelSupported: () => true,
+  isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
   resolveSupportedThinkingLevel: ({ level }: { level?: string }) => level,
   supportsXHighThinking: () => false,
 }));
@@ -134,39 +155,18 @@ vi.mock("../cli/deps.js", () => ({
 }));
 
 vi.mock("../config/io.js", () => ({
-  getRuntimeConfig: () => ({
-    agents: {
-      defaults: {
-        models: {
-          "anthropic/claude": {},
-          "openai/claude": {},
-          "openai/gpt-5.4": {},
-        },
-      },
-    },
-  }),
+  getRuntimeConfig: () => state.runtimeConfigMock ?? state.defaultRuntimeConfig,
   readConfigFileSnapshotForWrite: async () => ({
     snapshot: { valid: false },
   }),
 }));
 
 vi.mock("./agent-runtime-config.js", () => {
-  const cfg = {
-    agents: {
-      defaults: {
-        models: {
-          "anthropic/claude": {},
-          "openai/claude": {},
-          "openai/gpt-5.4": {},
-        },
-      },
-    },
-  };
   return {
     resolveAgentRuntimeConfig: async () => ({
-      loadedRaw: cfg,
-      sourceConfig: cfg,
-      cfg,
+      loadedRaw: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+      sourceConfig: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
+      cfg: state.runtimeConfigMock ?? state.defaultRuntimeConfig,
     }),
   };
 });
@@ -241,6 +241,7 @@ vi.mock("../sessions/level-overrides.js", () => ({
 
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  repairProviderWrappedModelOverride: () => ({ updated: false }),
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({
@@ -265,10 +266,12 @@ vi.mock("../utils/message-channel.js", () => ({
 }));
 
 vi.mock("./agent-scope.js", () => ({
+  listAgentEntries: () => [],
   listAgentIds: () => ["default"],
   resolveAgentConfig: () => undefined,
   resolveAgentDir: () => "/tmp/agent",
   resolveEffectiveModelFallbacks: state.resolveEffectiveModelFallbacksMock,
+  resolveSessionAgentIds: () => ({ defaultAgentId: "default", sessionAgentId: "default" }),
   resolveSessionAgentId: () => "default",
   resolveAgentSkillsFilter: () => undefined,
   resolveAgentWorkspaceDir: () => "/tmp/workspace",
@@ -297,26 +300,251 @@ vi.mock("./lanes.js", () => ({
 }));
 
 vi.mock("./model-catalog.js", () => ({
-  loadModelCatalog: async () => [],
+  loadManifestModelCatalog: state.loadManifestModelCatalogMock,
 }));
 
-vi.mock("./model-selection.js", () => ({
-  buildAllowedModelSet: () => ({
-    allowedKeys: new Set<string>([
-      "anthropic/claude",
-      "codex-cli/gpt-5.4",
-      "openai/claude",
-      "openai/gpt-5.4",
-    ]),
-    allowedCatalog: [],
-    allowAny: false,
-  }),
-  modelKey: (p: string, m: string) => `${p}/${m}`,
-  normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
-  parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
-  resolveConfiguredModelRef: () => ({ provider: "anthropic", model: "claude" }),
-  resolveDefaultModelForAgent: () => ({ provider: "anthropic", model: "claude" }),
-  resolveThinkingDefault: () => "low",
+vi.mock("./model-selection.js", () => {
+  const buildAllowedModelSet = ({
+    cfg,
+    catalog,
+    defaultProvider,
+    defaultModel,
+  }: {
+    cfg?: unknown;
+    catalog?: Array<{ provider: string; id: string }>;
+    defaultProvider: string;
+    defaultModel?: string;
+  }) => {
+    const modelMap =
+      (cfg as { agents?: { defaults?: { models?: Record<string, unknown> } } } | undefined)?.agents
+        ?.defaults?.models ?? {};
+    const configuredCatalog = (
+      (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } } | undefined)
+        ?.models?.providers
+        ? Object.entries(
+            (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } }).models!
+              .providers!,
+          ).flatMap(([provider, entry]) =>
+            Array.isArray(entry?.models)
+              ? entry.models
+                  .filter(
+                    (model): model is Record<string, unknown> =>
+                      !!model && typeof model === "object",
+                  )
+                  .map((model) => {
+                    const id = typeof model.id === "string" ? model.id : "";
+                    return {
+                      provider,
+                      id,
+                      name: typeof model.name === "string" ? model.name : id,
+                      reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
+                      compat: model.compat,
+                    };
+                  })
+                  .filter((model) => model.id)
+              : [],
+          )
+        : []
+    ) as Array<{ provider: string; id: string }>;
+    const combinedCatalog = [...(catalog ?? []), ...configuredCatalog];
+    const allowedKeys = new Set<string>(
+      Object.keys(modelMap).map((ref) => {
+        const [provider, ...modelParts] = ref.split("/");
+        return `${provider}/${modelParts.join("/")}`;
+      }),
+    );
+    if (defaultModel) {
+      allowedKeys.add(`${defaultProvider}/${defaultModel}`);
+    }
+    if (Object.keys(modelMap).length === 0) {
+      return {
+        allowedKeys,
+        allowedCatalog: combinedCatalog,
+        allowAny: true,
+      };
+    }
+    return {
+      allowedKeys,
+      allowedCatalog: combinedCatalog.filter((entry) =>
+        allowedKeys.has(`${entry.provider}/${entry.id}`),
+      ),
+      allowAny: false,
+    };
+  };
+
+  return {
+    buildAllowedModelSet,
+    createModelVisibilityPolicy: (params: {
+      cfg?: unknown;
+      catalog?: Array<{ provider: string; id: string }>;
+      defaultProvider: string;
+      defaultModel?: string;
+    }) => {
+      const allowed = buildAllowedModelSet(params);
+      const allowsKey = (key: string) => {
+        if (allowed.allowAny || allowed.allowedKeys.has(key)) {
+          return true;
+        }
+        const slash = key.indexOf("/");
+        return slash > 0 && allowed.allowedKeys.has(`${key.slice(0, slash)}/*`);
+      };
+      return {
+        ...allowed,
+        exactModelRefs: [],
+        providerWildcards: new Set<string>(),
+        hasConfiguredEntries: !allowed.allowAny,
+        hasProviderWildcards: [...allowed.allowedKeys].some((key) => key.endsWith("/*")),
+        allowsKey,
+        allows: ({ provider, model }: { provider: string; model: string }) =>
+          allowsKey(`${provider}/${model}`),
+        resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
+          const key = `${provider}/${model}`;
+          if (allowsKey(key)) {
+            return { provider, model };
+          }
+          const fallback = allowed.allowedCatalog[0];
+          return fallback ? { provider: fallback.provider, model: fallback.id } : null;
+        },
+        visibleCatalog: ({ catalog }: { catalog: Array<{ provider: string; id: string }> }) =>
+          catalog,
+      };
+    },
+    buildConfiguredModelCatalog: ({ cfg }: { cfg?: unknown }) => {
+      const providers = (cfg as { models?: { providers?: Record<string, { models?: unknown[] }> } })
+        ?.models?.providers;
+      if (!providers) {
+        return [];
+      }
+      return Object.entries(providers).flatMap(([provider, entry]) =>
+        Array.isArray(entry?.models)
+          ? entry.models
+              .filter(
+                (model): model is Record<string, unknown> => !!model && typeof model === "object",
+              )
+              .map((model) => {
+                const id = typeof model.id === "string" ? model.id : "";
+                return {
+                  provider,
+                  id,
+                  name: typeof model.name === "string" ? model.name : id,
+                  reasoning: typeof model.reasoning === "boolean" ? model.reasoning : undefined,
+                  compat: model.compat,
+                };
+              })
+              .filter((model) => model.id)
+          : [],
+      );
+    },
+    isModelKeyAllowedBySet: (allowedKeys: ReadonlySet<string>, key: string) => {
+      if (allowedKeys.has(key)) {
+        return true;
+      }
+      const slash = key.indexOf("/");
+      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+    },
+    resolveAllowedModelSelection: ({
+      provider,
+      model,
+      allowAny,
+      allowedKeys,
+      allowedCatalog,
+    }: {
+      provider: string;
+      model: string;
+      allowAny: boolean;
+      allowedKeys: ReadonlySet<string>;
+      allowedCatalog: Array<{ provider: string; id: string }>;
+    }) => {
+      const key = `${provider}/${model}`;
+      if (
+        allowAny ||
+        allowedKeys.has(key) ||
+        (key.includes("/") && allowedKeys.has(`${key.slice(0, key.indexOf("/"))}/*`))
+      ) {
+        return { provider, model };
+      }
+      const fallback = allowedCatalog[0];
+      return fallback ? { provider: fallback.provider, model: fallback.id } : null;
+    },
+    modelKey: (p: string, m: string) => `${p}/${m}`,
+    normalizeModelRef: (p: string, m: string) => ({ provider: p, model: m }),
+    parseModelRef: (m: string, p: string) => ({ provider: p, model: m }),
+    resolveConfiguredModelRef: ({ cfg }: { cfg?: unknown }) => {
+      const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
+        ?.agents?.defaults?.model;
+      const primary = typeof raw === "string" ? raw : raw?.primary;
+      const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
+      return { provider, model: modelParts.join("/") || "claude" };
+    },
+    resolveDefaultModelForAgent: ({ cfg }: { cfg?: unknown }) => {
+      const raw = (cfg as { agents?: { defaults?: { model?: string | { primary?: string } } } })
+        ?.agents?.defaults?.model;
+      const primary = typeof raw === "string" ? raw : raw?.primary;
+      const [provider, ...modelParts] = (primary ?? "anthropic/claude").split("/");
+      return { provider, model: modelParts.join("/") || "claude" };
+    },
+    resolveThinkingDefault: (args: unknown) => state.resolveThinkingDefaultMock(args),
+  };
+});
+
+vi.mock("./model-visibility-policy.js", () => ({
+  createModelVisibilityPolicy: ({
+    cfg,
+    catalog,
+    defaultProvider,
+    defaultModel,
+  }: {
+    cfg?: unknown;
+    catalog?: Array<{ provider: string; id: string }>;
+    defaultProvider: string;
+    defaultModel?: string;
+  }) => {
+    const modelMap =
+      (cfg as { agents?: { defaults?: { models?: Record<string, unknown> } } } | undefined)?.agents
+        ?.defaults?.models ?? {};
+    const allowedKeys = new Set<string>(
+      Object.keys(modelMap).map((ref) => {
+        const [provider, ...modelParts] = ref.split("/");
+        return `${provider}/${modelParts.join("/")}`;
+      }),
+    );
+    if (defaultModel) {
+      allowedKeys.add(`${defaultProvider}/${defaultModel}`);
+    }
+    const allowAny = Object.keys(modelMap).length === 0;
+    const allowedCatalog = allowAny
+      ? (catalog ?? [])
+      : (catalog ?? []).filter((entry) => allowedKeys.has(`${entry.provider}/${entry.id}`));
+    const allowsKey = (key: string) => {
+      if (allowAny || allowedKeys.has(key)) {
+        return true;
+      }
+      const slash = key.indexOf("/");
+      return slash > 0 && allowedKeys.has(`${key.slice(0, slash)}/*`);
+    };
+    return {
+      allowAny,
+      allowedKeys,
+      allowedCatalog,
+      exactModelRefs: [],
+      providerWildcards: new Set<string>(),
+      hasConfiguredEntries: !allowAny,
+      hasProviderWildcards: [...allowedKeys].some((key) => key.endsWith("/*")),
+      allowsKey,
+      allows: ({ provider, model }: { provider: string; model: string }) =>
+        allowsKey(`${provider}/${model}`),
+      resolveSelection: ({ provider, model }: { provider: string; model: string }) => {
+        const key = `${provider}/${model}`;
+        if (allowsKey(key)) {
+          return { provider, model };
+        }
+        const fallback = allowedCatalog[0];
+        return fallback ? { provider: fallback.provider, model: fallback.id } : null;
+      },
+      visibleCatalog: ({ catalog }: { catalog: Array<{ provider: string; id: string }> }) =>
+        catalog,
+    };
+  },
 }));
 
 vi.mock("./provider-auth-aliases.js", () => ({
@@ -326,7 +554,8 @@ vi.mock("./provider-auth-aliases.js", () => ({
 }));
 
 vi.mock("./skills.js", () => ({
-  buildWorkspaceSkillSnapshot: () => ({}),
+  buildWorkspaceSkillSnapshot: (workspaceDir: string, opts: unknown) =>
+    state.buildWorkspaceSkillSnapshotMock(workspaceDir, opts),
 }));
 
 vi.mock("./skills/filter.js", () => ({
@@ -421,6 +650,35 @@ function setupModelSwitchRetry(switchOptions: ModelSwitchOptions) {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {
+  const call = mock.mock.calls[callIndex] as unknown[] | undefined;
+  if (!call) {
+    throw new Error(`expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectRecordFields(value: unknown, expected: Record<string, unknown>): void {
+  const actual = requireRecord(value, "record");
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(expectedValue);
+  }
+}
+
 async function runBasicAgentCommand() {
   await agentCommand({
     message: "hello",
@@ -431,10 +689,10 @@ async function runBasicAgentCommand() {
 
 function expectFallbackOverrideCalls(first: boolean, second: boolean) {
   expect(state.resolveEffectiveModelFallbacksMock).toHaveBeenCalledTimes(2);
-  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[0][0]).toMatchObject({
+  expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock, 0), {
     hasSessionModelOverride: first,
   });
-  expect(state.resolveEffectiveModelFallbacksMock.mock.calls[1][0]).toMatchObject({
+  expectRecordFields(mockCallArg(state.resolveEffectiveModelFallbacksMock, 1), {
     hasSessionModelOverride: second,
   });
 }
@@ -446,6 +704,10 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.resolveAcpAgentPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpDispatchPolicyErrorMock.mockReturnValue(null);
     state.resolveAcpExplicitTurnPolicyErrorMock.mockReturnValue(null);
+    state.runtimeConfigMock = undefined;
+    state.isThinkingLevelSupportedMock.mockReturnValue(true);
+    state.resolveThinkingDefaultMock.mockReturnValue("low");
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
     state.acpRunTurnMock.mockImplementation(async (params: unknown) => {
       const onEvent = (params as { onEvent?: (event: unknown) => void }).onEvent;
       onEvent?.({ type: "text_delta", stream: "output", text: "done" });
@@ -472,6 +734,12 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.authProfileStoreMock = { profiles: {} };
     state.sessionEntryMock = undefined;
     state.sessionStoreMock = undefined;
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "",
+      skills: [],
+      resolvedSkills: [],
+      version: 0,
+    });
     state.deliverAgentCommandResultMock.mockResolvedValue(undefined);
     state.updateSessionStoreAfterAgentRunMock.mockResolvedValue(undefined);
     state.trajectoryFlushMock.mockResolvedValue(undefined);
@@ -506,6 +774,121 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(lifecycleEndCalls.length).toBeGreaterThanOrEqual(1);
   });
 
+  it("validates explicit thinking against configured model compat without an allowlist", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "gmn/gpt-5.4" },
+        },
+      },
+      models: {
+        providers: {
+          gmn: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4 via GMN",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      thinking: "xhigh",
+    });
+
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.provider).toBe("gmn");
+    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect(thinkingArgs.level).toBe("xhigh");
+    const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    expectRecordFields(catalog[0], {
+      provider: "gmn",
+      id: "gpt-5.4",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
+  });
+
+  it("validates explicit thinking against allowlisted configured model compat when manifest catalog is empty", async () => {
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          model: { primary: "gmn/gpt-5.4" },
+          models: {
+            "gmn/gpt-5.4": {},
+          },
+        },
+      },
+      models: {
+        providers: {
+          gmn: {
+            models: [
+              {
+                id: "gpt-5.4",
+                name: "GPT 5.4 via GMN",
+                reasoning: true,
+                compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+              },
+            ],
+          },
+        },
+      },
+    };
+    state.loadManifestModelCatalogMock.mockReturnValue([]);
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("gmn", "gpt-5.4"));
+
+    await agentCommand({
+      message: "hello",
+      to: "+1234567890",
+      senderIsOwner: true,
+      thinking: "xhigh",
+    });
+
+    expect(state.loadManifestModelCatalogMock).toHaveBeenCalled();
+    const thinkingArgs = requireRecord(
+      mockCallArg(state.isThinkingLevelSupportedMock),
+      "thinking args",
+    );
+    expect(thinkingArgs.provider).toBe("gmn");
+    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect(thinkingArgs.level).toBe("xhigh");
+    const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
+    expectRecordFields(catalog[0], {
+      provider: "gmn",
+      id: "gpt-5.4",
+      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+    });
+  });
+
   it("records fallback steps to the session trajectory runtime", async () => {
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
       await params.onFallbackStep?.({
@@ -528,18 +911,86 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    expect(state.trajectoryRecordEventMock).toHaveBeenCalledWith(
-      "model.fallback_step",
-      expect.objectContaining({
-        fallbackStepType: "fallback_step",
-        fallbackStepFromModel: "ollama/llama3",
-        fallbackStepToModel: "openai/gpt-5.4",
-        fallbackStepFromFailureReason: "overloaded",
-        fallbackStepChainPosition: 1,
-        fallbackStepFinalOutcome: "next_fallback",
-      }),
-    );
+    expect(state.trajectoryRecordEventMock).toHaveBeenCalledTimes(1);
+    expect(state.trajectoryRecordEventMock.mock.calls[0]?.[0]).toBe("model.fallback_step");
+    expectRecordFields(state.trajectoryRecordEventMock.mock.calls[0]?.[1], {
+      fallbackStepType: "fallback_step",
+      fallbackStepFromModel: "ollama/llama3",
+      fallbackStepToModel: "openai/gpt-5.4",
+      fallbackStepFromFailureReason: "overloaded",
+      fallbackStepChainPosition: 1,
+      fallbackStepFinalOutcome: "next_fallback",
+    });
     expect(state.trajectoryFlushMock).toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate user persistence only after the current turn has flushed", async () => {
+    type AttemptCall = {
+      onUserMessagePersisted?: () => void;
+      suppressPromptPersistenceOnRetry?: boolean;
+    };
+    const attemptCalls: AttemptCall[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const first = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [first],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      const firstAttempt = attemptCalls.length === 0;
+      attemptCalls.push(attemptParams);
+      if (firstAttempt) {
+        if (!attemptParams.onUserMessagePersisted) {
+          throw new Error("expected retry persistence callback on first attempt");
+        }
+        attemptParams.onUserMessagePersisted();
+      } else {
+        attemptParams.onUserMessagePersisted?.();
+      }
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await runBasicAgentCommand();
+
+    expect(attemptCalls).toHaveLength(2);
+    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).not.toBe(true);
+    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
+  });
+
+  it("suppresses prompt persistence for internal handoffs on every fallback attempt", async () => {
+    type AttemptCall = {
+      suppressPromptPersistenceOnRetry?: boolean;
+    };
+    const attemptCalls: AttemptCall[] = [];
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const first = await params.run(params.provider, params.model);
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [first],
+      };
+    });
+    state.runAgentAttemptMock.mockImplementation(async (attemptParams: AttemptCall) => {
+      attemptCalls.push(attemptParams);
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "internal handoff",
+      to: "+1234567890",
+      senderIsOwner: true,
+      suppressPromptPersistence: true,
+    });
+
+    expect(attemptCalls).toHaveLength(2);
+    expect(attemptCalls[0]?.suppressPromptPersistenceOnRetry).toBe(true);
+    expect(attemptCalls[1]?.suppressPromptPersistenceOnRetry).toBe(true);
   });
 
   it("propagates non-switch errors without retrying and emits lifecycle error", async () => {
@@ -595,6 +1046,15 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       skillsSnapshot: { prompt: "", skills: [], version: 0 },
     };
     state.sessionEntryMock = sessionEntry;
+    state.runtimeConfigMock = {
+      agents: {
+        defaults: {
+          models: {
+            "codex-cli/gpt-5.4": {},
+          },
+        },
+      },
+    };
     state.authProfileStoreMock = {
       profiles: {
         "openai-codex:work": {
@@ -625,6 +1085,59 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     expect(state.clearSessionAuthProfileOverrideMock).not.toHaveBeenCalled();
   });
 
+  it("hydrates stripped persisted skill snapshots before running the CLI path", async () => {
+    const persistedSnapshot = {
+      prompt: "persisted prompt",
+      skills: [{ name: "cli-skill" }],
+      skillFilter: ["cli-skill"],
+      version: 0,
+    };
+    const rebuiltSkills = [
+      {
+        name: "cli-skill",
+        description: "CLI skill",
+        filePath: "/tmp/workspace/skills/cli-skill/SKILL.md",
+        baseDir: "/tmp/workspace/skills/cli-skill",
+        source: "# CLI skill",
+      },
+    ];
+    state.sessionEntryMock = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+      skillsSnapshot: persistedSnapshot,
+    };
+    state.buildWorkspaceSkillSnapshotMock.mockReturnValue({
+      prompt: "rebuilt prompt",
+      skills: [{ name: "different-skill" }],
+      resolvedSkills: rebuiltSkills,
+      version: 99,
+    });
+    state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
+      const result = await params.run(params.provider, params.model);
+      return {
+        result,
+        provider: params.provider,
+        model: params.model,
+        attempts: [],
+      };
+    });
+    state.runAgentAttemptMock.mockResolvedValue(makeSuccessResult("anthropic", "claude"));
+
+    await runBasicAgentCommand();
+
+    const attemptParams = state.runAgentAttemptMock.mock.calls[0]?.[0] as
+      | { skillsSnapshot?: Record<string, unknown> }
+      | undefined;
+    expectRecordFields(attemptParams?.skillsSnapshot, {
+      prompt: "persisted prompt",
+      skills: [{ name: "cli-skill" }],
+      skillFilter: ["cli-skill"],
+      version: 0,
+      resolvedSkills: rebuiltSkills,
+    });
+    expect(state.buildWorkspaceSkillSnapshotMock).toHaveBeenCalledTimes(1);
+  });
+
   it("classifies empty embedded run results before model fallback accepts them", async () => {
     let observedClassification: unknown;
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => {
@@ -645,6 +1158,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
           {
             provider: params.provider,
             model: params.model,
+            error: "empty result",
             reason: "format",
             code: "empty_result",
           },
@@ -657,15 +1171,28 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    expect(observedClassification).toMatchObject({
+    expectRecordFields(observedClassification, {
       reason: "format",
       code: "empty_result",
     });
     expect(state.runAgentAttemptMock).toHaveBeenCalledTimes(2);
-    expect(state.runAgentAttemptMock.mock.calls[1]?.[0]).toMatchObject({
+    expectRecordFields(state.runAgentAttemptMock.mock.calls[1]?.[0], {
       providerOverride: "openai",
       modelOverride: "gpt-5.4",
       isFallbackRetry: true,
+    });
+    const deliveryParams = requireRecord(
+      state.deliverAgentCommandResultMock.mock.calls[0]?.[0],
+      "delivery params",
+    );
+    const result = requireRecord(deliveryParams.result, "delivery result");
+    const meta = requireRecord(result.meta, "delivery result meta");
+    const agentMeta = requireRecord(meta.agentMeta, "delivery agent meta");
+    const fallbackAttempts = requireArray(agentMeta.fallbackAttempts, "fallback attempts");
+    expectRecordFields(fallbackAttempts[0], {
+      provider: "anthropic",
+      model: "claude",
+      reason: "format",
     });
   });
 

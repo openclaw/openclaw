@@ -13,6 +13,7 @@ export {
 } from "../channels/ack-reactions.js";
 export {
   expectChannelInboundContextContract,
+  expectChannelTurnDispatchResultContract,
   primeChannelOutboundSendMock,
 } from "../channels/plugins/contracts/test-helpers.js";
 export {
@@ -34,6 +35,7 @@ export type { ChannelGatewayContext } from "../channels/plugins/types.adapters.j
 export type { OpenClawConfig } from "../config/config.js";
 export { isAtLeast, parseSemver } from "../infra/runtime-guard.js";
 export { callGateway } from "../gateway/call.js";
+/** @deprecated Direct outbound delivery is runtime substrate; use channel message runtime helpers. */
 export { deliverOutboundPayloads } from "../infra/outbound/deliver.js";
 export {
   createEmptyPluginRegistry,

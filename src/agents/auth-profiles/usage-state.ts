@@ -22,7 +22,7 @@ export function isActiveUnusableWindow(until: number | undefined, now: number): 
   return typeof until === "number" && Number.isFinite(until) && until > 0 && now < until;
 }
 
-export function shouldBypassModelScopedCooldown(
+function shouldBypassModelScopedCooldown(
   stats: Pick<ProfileUsageStats, "cooldownReason" | "cooldownModel" | "disabledUntil">,
   now: number,
   forModel?: string,
@@ -125,7 +125,7 @@ export function getSoonestCooldownExpiry(
  * has both and only one has expired, only that field is cleared.
  *
  * Mutates the in-memory store; disk persistence happens lazily on the next
- * store write (e.g. `markAuthProfileUsed` / `markAuthProfileFailure`), which
+ * store write (e.g. `markAuthProfileSuccess` / `markAuthProfileFailure`), which
  * matches the existing save pattern throughout the auth-profiles module.
  *
  * @returns `true` if any profile was modified.

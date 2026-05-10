@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -8,7 +9,31 @@ import {
   resetPluginLoaderTestStateForTest,
   useNoBundledPlugins,
 } from "../../plugins/loader.test-fixtures.js";
-import { listReadOnlyChannelPluginsForConfig } from "./read-only.js";
+import {
+  listPluginLoaderModuleCandidateUrls,
+  listReadOnlyChannelPluginsForConfig,
+} from "./read-only.js";
+
+const moduleLoaderParams = vi.hoisted(
+  () =>
+    [] as Array<{
+      modulePath: string;
+      tryNative?: boolean;
+    }>,
+);
+
+function pluginIds(plugins: ReturnType<typeof listReadOnlyChannelPluginsForConfig>): string[] {
+  return plugins.map((entry) => entry.id);
+}
+
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -19,8 +44,9 @@ vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   };
 });
 
-vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../../plugins/jiti-loader-cache.js")>();
+vi.mock("../../plugins/plugin-module-loader-cache.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../../plugins/plugin-module-loader-cache.js")>();
   const { createRequire } = await import("node:module");
   const require = createRequire(import.meta.url);
 
@@ -93,8 +119,12 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
 
   return {
     ...actual,
-    getCachedPluginJitiLoader: ((params) => {
-      const actualLoader = actual.getCachedPluginJitiLoader(params);
+    getCachedPluginModuleLoader: ((params) => {
+      moduleLoaderParams.push({
+        modulePath: params.modulePath,
+        tryNative: params.tryNative,
+      });
+      const actualLoader = actual.getCachedPluginModuleLoader(params);
       return ((modulePath: string) => {
         if (
           modulePath.endsWith("/plugins/loader.js") ||
@@ -103,8 +133,8 @@ vi.mock("../../plugins/jiti-loader-cache.js", async (importOriginal) => {
           return { loadOpenClawPlugins };
         }
         return actualLoader(modulePath);
-      }) as ReturnType<typeof actual.getCachedPluginJitiLoader>;
-    }) satisfies typeof actual.getCachedPluginJitiLoader,
+      }) as ReturnType<typeof actual.getCachedPluginModuleLoader>;
+    }) satisfies typeof actual.getCachedPluginModuleLoader,
   };
 });
 
@@ -415,6 +445,7 @@ function expectExternalChatSetupOnlyPluginLoaded(params: {
 }
 
 afterEach(() => {
+  moduleLoaderParams.length = 0;
   resetPluginLoaderTestStateForTest();
 });
 
@@ -423,6 +454,20 @@ afterAll(() => {
 });
 
 describe("listReadOnlyChannelPluginsForConfig", () => {
+  it("keeps built plugin loader candidates inside the installed package dist root", () => {
+    const packageRoot = path.join(makeTempDir(), "node_modules", "openclaw");
+    const importerPath = path.join(packageRoot, "dist", "read-only-B4EkEtUx.js");
+    const candidates = listPluginLoaderModuleCandidateUrls(pathToFileURL(importerPath).href).map(
+      (candidate) => fileURLToPath(candidate),
+    );
+
+    expect(candidates).toEqual([
+      path.join(packageRoot, "dist", "plugins", "loader.js"),
+      path.join(packageRoot, "dist", "plugins", "build-smoke-entry.js"),
+    ]);
+    expect(candidates).not.toContain(path.join(packageRoot, "..", "plugins", "loader.js"));
+  });
+
   it("does not load setup-only channel plugin runtime by default", () => {
     const { pluginDir, fullMarker, setupMarker } = writeExternalSetupChannelPlugin();
     const plugins = listReadOnlyChannelPluginsForConfig(
@@ -441,7 +486,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    expect(plugins.some((entry) => entry.id === "external-chat")).toBe(false);
+    expect(pluginIds(plugins)).not.toContain("external-chat");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -461,11 +506,19 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
     expectExternalChatSetupOnlyPluginLoaded({ plugins, setupMarker, fullMarker });
+    expect(
+      moduleLoaderParams.some(
+        (entry) =>
+          entry.tryNative === true &&
+          (entry.modulePath.endsWith("/plugins/loader.js") ||
+            entry.modulePath.endsWith("/plugins/loader.ts")),
+      ),
+    ).toBe(true);
   });
 
   it("matches setup-only plugins by manifest-owned channel ids when plugin id differs", () => {
@@ -487,7 +540,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -519,7 +572,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -540,8 +593,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
           "alpha-chat": { token: "alpha-token" },
           "beta-chat": { token: "beta-token" },
         },
-      } as never),
-    ).toMatchObject({ token: "beta-token" });
+      } as never).token,
+    ).toBe("beta-token");
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -566,11 +619,11 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
-    expect(plugins.some((entry) => entry.id === "alpha-chat")).toBe(false);
+    expect(pluginIds(plugins)).not.toContain("alpha-chat");
     const betaPlugin = plugins.find((entry) => entry.id === "beta-chat");
     expect(betaPlugin?.meta.id).toBe("beta-chat");
     expect(
@@ -583,8 +636,8 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
         channels: {
           "beta-chat": { token: "beta-token" },
         },
-      } as never),
-    ).toMatchObject({ token: "beta-token" });
+      } as never).token,
+    ).toBe("beta-token");
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -606,7 +659,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -636,7 +689,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -674,26 +727,24 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     expect(plugin?.meta.label).toBe("External Chat Manifest");
     expect(plugin?.meta.blurb).toBe("manifest config");
     expect(plugin?.meta.preferOver).toEqual(["legacy-external-chat"]);
-    expect(plugin?.configSchema?.schema).toMatchObject({
-      properties: {
-        token: { type: "string" },
-      },
-    });
-    expect(plugin?.configSchema?.uiHints?.token).toMatchObject({
+    const schema = plugin?.configSchema?.schema as
+      | { properties?: Record<string, { type?: string }> }
+      | undefined;
+    expect(schema?.properties?.token?.type).toBe("string");
+    expectRecordFields(plugin?.configSchema?.uiHints?.token, {
       label: "Token",
       sensitive: true,
     });
     expect(
       plugin?.config.listAccountIds({ channels: { "external-chat": { token: "t" } } } as never),
     ).toEqual(["default"]);
-    expect(
-      plugin?.config.resolveAccount({
-        channels: { "external-chat": { token: "configured" } },
-      } as never),
-    ).toMatchObject({
+    const account = plugin?.config.resolveAccount({
+      channels: { "external-chat": { token: "configured" } },
+    } as never);
+    const accountFields = expectRecordFields(account, {
       accountId: "default",
-      config: { token: "configured" },
     });
+    expectRecordFields(accountFields.config, { token: "configured" });
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -752,7 +803,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    expect(plugins.some((entry) => entry.id === unsafeChannelId)).toBe(false);
+    expect(pluginIds(plugins)).not.toContain(unsafeChannelId);
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -786,13 +837,15 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
     }).find((entry) => entry.id === "external-chat");
 
     expect(plugin?.config.listAccountIds(cfg)).toEqual(["default", "named"]);
-    expect(plugin?.config.resolveAccount(cfg, "__proto__")).toMatchObject({
+    const defaultAccount = plugin?.config.resolveAccount(cfg, "__proto__");
+    const defaultFields = expectRecordFields(defaultAccount, {
       accountId: "default",
-      config: { token: "default-token" },
     });
-    expect(plugin?.config.resolveAccount(cfg, "inherited")).not.toMatchObject({
-      config: { token: "prototype-token" },
-    });
+    expectRecordFields(defaultFields.config, { token: "default-token" });
+    const inheritedAccount = plugin?.config.resolveAccount(cfg, "inherited") as
+      | { config?: { token?: string } }
+      | undefined;
+    expect(inheritedAccount?.config?.token).not.toBe("prototype-token");
   });
 
   it("keeps setup-entry precedence when channel config descriptors are not runtime cutoffs", () => {
@@ -814,7 +867,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -839,7 +892,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, EXTERNAL_CHAT_TOKEN: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -867,7 +920,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       },
     );
 
-    expect(plugins.some((entry) => entry.id === "external-chat")).toBe(false);
+    expect(pluginIds(plugins)).not.toContain("external-chat");
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -883,11 +936,11 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
-    expect(plugins.some((entry) => entry.id === channelId)).toBe(false);
+    expect(pluginIds(plugins)).not.toContain(channelId);
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -909,11 +962,11 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
-    expect(plugins.some((entry) => entry.id === channelId)).toBe(false);
+    expect(pluginIds(plugins)).not.toContain(channelId);
     expect(fs.existsSync(setupMarker)).toBe(false);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });
@@ -957,7 +1010,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env, [envVar]: "configured" },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -987,7 +1040,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
           EXTERNAL_CHAT_TOKEN: "configured",
           workspaceDir: "workspace-env-value",
         },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1023,7 +1076,7 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       {
         env: { ...process.env },
         includePersistedAuthState: false,
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
@@ -1052,12 +1105,12 @@ describe("listReadOnlyChannelPluginsForConfig", () => {
       } as never,
       {
         env: { ...process.env },
-        includeSetupRuntimeFallback: true,
+        includeSetupFallbackPlugins: true,
       },
     );
 
-    expect(plugins.some((entry) => entry.id === "spoofed-chat")).toBe(false);
-    expect(plugins.some((entry) => entry.id === "external-chat")).toBe(false);
+    expect(pluginIds(plugins)).not.toContain("spoofed-chat");
+    expect(pluginIds(plugins)).not.toContain("external-chat");
     expect(fs.existsSync(setupMarker)).toBe(true);
     expect(fs.existsSync(fullMarker)).toBe(false);
   });

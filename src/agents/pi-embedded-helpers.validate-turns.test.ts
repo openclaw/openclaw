@@ -49,8 +49,8 @@ function expectAssistantToolCallsOmitted(result: AgentMessage[], expectedLength:
 
 describe("validate turn edge cases", () => {
   it("returns empty array unchanged", () => {
-    expect(validateGeminiTurns([])).toEqual([]);
-    expect(validateAnthropicTurns([])).toEqual([]);
+    expect(validateGeminiTurns([])).toStrictEqual([]);
+    expect(validateAnthropicTurns([])).toStrictEqual([]);
   });
 
   it("returns single message unchanged", () => {
@@ -357,6 +357,26 @@ describe("mergeConsecutiveUserTurns", () => {
     expect(merged.timestamp).toBe(2000);
   });
 
+  it("preserves string content while merging content", () => {
+    const previous = {
+      role: "user",
+      content: "before",
+      timestamp: 1000,
+    } as Extract<AgentMessage, { role: "user" }>;
+    const current = {
+      role: "user",
+      content: "after",
+      timestamp: 2000,
+    } as Extract<AgentMessage, { role: "user" }>;
+
+    const merged = mergeConsecutiveUserTurns(previous, current);
+
+    expect(merged.content).toEqual([
+      { type: "text", text: "before" },
+      { type: "text", text: "after" },
+    ]);
+  });
+
   it("backfills timestamp from earlier message when missing", () => {
     const previous = {
       role: "user",
@@ -460,7 +480,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     const result = validateAnthropicTurns(msgs);
 
     expect(result).toHaveLength(3);
-    expect((result[1] as { content?: unknown[] }).content).toEqual([]);
+    expect((result[1] as { content?: unknown[] }).content).toStrictEqual([]);
   });
 
   it("should handle multiple dangling tool_use blocks", () => {
@@ -686,7 +706,7 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
     expect(secondPass).toEqual(firstPass);
   });
 
-  it("does not crash when assistant content is non-array", () => {
+  it("keeps malformed non-array assistant content in the validated turn list", () => {
     const msgs = [
       { role: "user", content: [{ type: "text", text: "Use tool" }] },
       {
@@ -696,7 +716,6 @@ describe("validateAnthropicTurns strips dangling tool_use blocks", () => {
       { role: "user", content: [{ type: "text", text: "Thanks" }] },
     ] as unknown as AgentMessage[];
 
-    expect(() => validateAnthropicTurns(msgs)).not.toThrow();
     const result = validateAnthropicTurns(msgs);
     expect(result).toHaveLength(3);
   });

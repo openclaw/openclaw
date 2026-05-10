@@ -11,7 +11,9 @@ import {
   isValidDiagnosticTraceId,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
+import { expandHomePrefix } from "../infra/home-dir.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
+import { appendRegularFileSync } from "../infra/regular-file.js";
 import {
   POSIX_OPENCLAW_TMP_DIR,
   resolvePreferredOpenClawTmpDir,
@@ -69,6 +71,7 @@ type ResolvedSettings = {
 };
 export type LoggerResolvedSettings = ResolvedSettings;
 type TsLogRecord = Record<string, unknown>;
+type LoggerConfigLoader = () => OpenClawConfig["logging"] | undefined;
 
 type DiagnosticLogCode = {
   line?: number;
@@ -77,6 +80,15 @@ type DiagnosticLogCode = {
 
 const MAX_DIAGNOSTIC_LOG_BINDINGS_JSON_CHARS = 8 * 1024;
 const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
+
+const loadLoggerConfigDefault: LoggerConfigLoader = () => readLoggingConfig();
+let loadLoggerConfig: LoggerConfigLoader = loadLoggerConfigDefault;
+
+export function setLoggerConfigLoaderForTests(loader?: LoggerConfigLoader): void {
+  loadLoggerConfig = loader ?? loadLoggerConfigDefault;
+  loggingState.cachedLogger = null;
+  loggingState.cachedSettings = null;
+}
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT = 32;
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
 const MAX_DIAGNOSTIC_LOG_NAME_CHARS = 120;
@@ -472,7 +484,7 @@ function resolveSettings(): ResolvedSettings {
   }
 
   const cfg: OpenClawConfig["logging"] | undefined =
-    (loggingState.overrideSettings as LoggerSettings | null) ?? readLoggingConfig();
+    (loggingState.overrideSettings as LoggerSettings | null) ?? loadLoggerConfig();
   const defaultLevel =
     process.env.VITEST === "true" && process.env.OPENCLAW_TEST_FILE_LOG !== "1" ? "silent" : "info";
   const fromConfig = normalizeLogLevel(cfg?.level, defaultLevel);
@@ -586,7 +598,7 @@ function getCurrentLogFileBytes(file: string): number {
 
 function appendLogLine(file: string, line: string): boolean {
   try {
-    fs.appendFileSync(file, line, { encoding: "utf8" });
+    appendRegularFileSync({ filePath: file, content: line });
     return true;
   } catch {
     return false;
@@ -669,9 +681,11 @@ export function resetLogger() {
   loggingState.cachedSettings = null;
   loggingState.cachedConsoleSettings = null;
   loggingState.overrideSettings = null;
+  loadLoggerConfig = loadLoggerConfigDefault;
 }
 
 export const __test__ = {
+  resolveActiveLogFile,
   shouldSkipMutatingLoggingConfigRead,
 };
 
@@ -692,10 +706,11 @@ function rollingPathForDate(dir: string, date: Date): string {
 }
 
 function resolveActiveLogFile(file: string): string {
-  if (!isRollingPath(file)) {
-    return file;
+  const expandedFile = expandHomePrefix(file);
+  if (!isRollingPath(expandedFile)) {
+    return expandedFile;
   }
-  return rollingPathForDate(path.dirname(file), new Date());
+  return rollingPathForDate(path.dirname(expandedFile), new Date());
 }
 
 function isRollingPath(file: string): boolean {

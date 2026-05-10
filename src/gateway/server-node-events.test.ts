@@ -91,7 +91,7 @@ const runtimeMocks = vi.hoisted(() => ({
   normalizeRpcAttachmentsToChatAttachments: vi.fn((attachments?: unknown[]) => attachments ?? []),
   parseMessageWithAttachments: parseMessageWithAttachmentsMock,
   registerApnsRegistration: registerApnsRegistrationMock,
-  requestHeartbeatNow: vi.fn(),
+  requestHeartbeat: vi.fn(),
   resolveChatAttachmentMaxBytes: vi.fn(() => 20 * 1024 * 1024),
   resolveGatewayModelSupportsImages: vi.fn(
     async ({
@@ -151,7 +151,7 @@ import {
 } from "./server-node-events.js";
 
 const enqueueSystemEventMock = runtimeMocks.enqueueSystemEvent;
-const requestHeartbeatNowMock = runtimeMocks.requestHeartbeatNow;
+const requestHeartbeatMock = runtimeMocks.requestHeartbeat;
 const loadConfigMock = runtimeMocks.getRuntimeConfig;
 const agentCommandMock = runtimeMocks.agentCommandFromIngress;
 const updateSessionStoreMock = runtimeMocks.updateSessionStore;
@@ -182,12 +182,34 @@ function buildCtx(): NodeEventContext {
   };
 }
 
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
+function expectPresencePersistCall(
+  mock: ReturnType<typeof vi.fn>,
+  deviceId: string,
+  reason: string,
+): void {
+  expect(mock).toHaveBeenCalledTimes(1);
+  const [actualDeviceId, metadata] = mock.mock.calls[0] ?? [];
+  expect(actualDeviceId).toBe(deviceId);
+  expectFields(metadata, { lastSeenReason: reason });
+  const lastSeenAtMs = (metadata as { lastSeenAtMs?: unknown } | undefined)?.lastSeenAtMs;
+  expect(typeof lastSeenAtMs).toBe("number");
+}
+
 describe("node exec events", () => {
   beforeEach(() => {
     resetNodeEventDeduplicationForTests();
     enqueueSystemEventMock.mockClear();
     enqueueSystemEventMock.mockReturnValue(true);
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     registerApnsRegistrationVi.mockClear();
     loadOrCreateDeviceIdentityMock.mockClear();
     normalizeChannelIdVi.mockClear();
@@ -214,7 +236,7 @@ describe("node exec events", () => {
       "Exec started (node=node-1 id=run-1): ls -la",
       { sessionKey: "agent:main:main", contextKey: "exec:run-1", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:main:main",
     });
@@ -236,7 +258,7 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "node-node-2", contextKey: "exec:run-2", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("dedupes duplicate exec.finished events for the same runId on the same session", async () => {
@@ -259,7 +281,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
     expect(enqueueSystemEventMock).toHaveBeenCalledWith(
       "Exec finished (node=node-2 id=run-dup-finished, code 0)\ndone",
       {
@@ -291,7 +313,7 @@ describe("node exec events", () => {
       "Exec finished (node=node-2 id=run-2, code 0)\ndone",
       { sessionKey: "agent:main:node-node-2", contextKey: "exec:run-2", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:main:node-node-2",
     });
@@ -310,7 +332,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("truncates long exec.finished output in system events", async () => {
@@ -330,7 +352,7 @@ describe("node exec events", () => {
     expect(text.startsWith("Exec finished (node=node-2 id=run-long, code 0)\n")).toBe(true);
     expect(text.endsWith("…")).toBe(true);
     expect(text.length).toBeLessThan(280);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({ reason: "exec-event" });
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({ reason: "exec-event" });
   });
 
   it("enqueues exec.denied events with reason", async () => {
@@ -349,7 +371,7 @@ describe("node exec events", () => {
       "Exec denied (node=node-3 id=run-3, allowlist-miss): rm -rf /",
       { sessionKey: "agent:demo:main", contextKey: "exec:run-3", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
       reason: "exec-event",
       sessionKey: "agent:demo:main",
     });
@@ -374,7 +396,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.finished when notifyOnExit is false", async () => {
@@ -397,7 +419,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("suppresses exec.denied when notifyOnExit is false", async () => {
@@ -420,7 +442,7 @@ describe("node exec events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("sanitizes remote exec event content before enqueue", async () => {
@@ -588,22 +610,25 @@ describe("voice transcript events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     const [opts] = agentCommandMock.mock.calls[0] ?? [];
-    expect(opts).toMatchObject({
+    expectFields(opts, {
       message: "check provenance",
       deliver: false,
       messageChannel: "node",
-      inputProvenance: {
-        kind: "external_user",
-        sourceChannel: "voice",
-        sourceTool: "gateway.voice.transcript",
-      },
     });
-    expect(typeof opts.runId).toBe("string");
-    expect(opts.runId).not.toBe(opts.sessionId);
-    expect(addChatRun).toHaveBeenCalledWith(
-      opts.runId,
-      expect.objectContaining({ clientRunId: expect.stringMatching(/^voice-/) }),
-    );
+    const optsRecord = opts as Record<string, unknown>;
+    expectFields(optsRecord.inputProvenance, {
+      kind: "external_user",
+      sourceChannel: "voice",
+      sourceTool: "gateway.voice.transcript",
+    });
+    expect(typeof optsRecord.runId).toBe("string");
+    expect(optsRecord.runId).not.toBe(optsRecord.sessionId);
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    const [runId, runMetadata] = addChatRun.mock.calls[0] ?? [];
+    expect(runId).toBe(optsRecord.runId);
+    const clientRunId = (runMetadata as { clientRunId?: unknown } | undefined)?.clientRunId;
+    expect(typeof clientRunId).toBe("string");
+    expect(clientRunId).toMatch(/^voice-/);
   });
 
   it("does not block agent dispatch when session-store touch fails", async () => {
@@ -622,7 +647,8 @@ describe("voice transcript events", () => {
     await Promise.resolve();
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("voice session-store update failed"));
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain("voice session-store update failed");
   });
 
   it("preserves existing session metadata when touching the store for voice transcripts", async () => {
@@ -669,17 +695,15 @@ describe("voice transcript events", () => {
     });
     await Promise.resolve();
 
-    expect(updatedStore).toMatchObject({
-      "voice-preserve-session": {
-        sessionId: "sess-preserve",
-        label: "existing label",
-        spawnedBy: "agent:main:parent",
-        parentSessionKey: "agent:main:parent",
-        lastChannel: "discord",
-        lastTo: "thread-1",
-        lastAccountId: "acct-1",
-        lastThreadId: 42,
-      },
+    expectFields(updatedStore?.["voice-preserve-session"], {
+      sessionId: "sess-preserve",
+      label: "existing label",
+      spawnedBy: "agent:main:parent",
+      parentSessionKey: "agent:main:parent",
+      lastChannel: "discord",
+      lastTo: "thread-1",
+      lastAccountId: "acct-1",
+      lastThreadId: 42,
     });
   });
 });
@@ -687,7 +711,7 @@ describe("voice transcript events", () => {
 describe("notifications changed events", () => {
   beforeEach(() => {
     enqueueSystemEventMock.mockClear();
-    requestHeartbeatNowMock.mockClear();
+    requestHeartbeatMock.mockClear();
     loadSessionEntryMock.mockClear();
     normalizeChannelIdVi.mockClear();
     normalizeChannelIdVi.mockImplementation((channel?: string | null) => channel ?? null);
@@ -712,7 +736,9 @@ describe("notifications changed events", () => {
       "Notification posted (node=node-n1 key=notif-1 package=com.example.chat): Message - Ping from Alex",
       { sessionKey: "node-node-n1", contextKey: "notification:notif-1", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "event",
       reason: "notifications-event",
       sessionKey: "node-node-n1",
     });
@@ -733,7 +759,9 @@ describe("notifications changed events", () => {
       "Notification removed (node=node-n2 key=notif-2 package=com.example.mail)",
       { sessionKey: "node-node-n2", contextKey: "notification:notif-2", trusted: false },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "event",
       reason: "notifications-event",
       sessionKey: "node-node-n2",
     });
@@ -750,7 +778,9 @@ describe("notifications changed events", () => {
       }),
     });
 
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "event",
       reason: "notifications-event",
       sessionKey: "agent:main:main",
     });
@@ -779,7 +809,9 @@ describe("notifications changed events", () => {
         trusted: false,
       },
     );
-    expect(requestHeartbeatNowMock).toHaveBeenCalledWith({
+    expect(requestHeartbeatMock).toHaveBeenCalledWith({
+      source: "notifications-event",
+      intent: "event",
       reason: "notifications-event",
       sessionKey: "agent:main:node-node-n5",
     });
@@ -795,7 +827,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 
   it("sanitizes notification text before enqueueing an untrusted system event", async () => {
@@ -838,7 +870,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).toHaveBeenCalledTimes(2);
-    expect(requestHeartbeatNowMock).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
   });
 
   it("suppresses exec notifyOnExit events when payload opts out", async () => {
@@ -855,7 +887,7 @@ describe("notifications changed events", () => {
     });
 
     expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(requestHeartbeatNowMock).not.toHaveBeenCalled();
+    expect(requestHeartbeatMock).not.toHaveBeenCalled();
   });
 });
 
@@ -896,15 +928,16 @@ describe("agent request events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     const [opts] = agentCommandMock.mock.calls[0] ?? [];
-    expect(opts).toMatchObject({
+    expectFields(opts, {
       message: "summarize this",
       sessionKey: "agent:main:main",
       deliver: false,
       channel: undefined,
       to: undefined,
     });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("agent delivery disabled node=node-route-miss"),
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toContain(
+      "agent delivery disabled node=node-route-miss",
     );
   });
 
@@ -930,7 +963,7 @@ describe("agent request events", () => {
 
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     const [opts] = agentCommandMock.mock.calls[0] ?? [];
-    expect(opts).toMatchObject({
+    expectFields(opts, {
       message: "route on session",
       sessionKey: "agent:main:main",
       deliver: true,
@@ -974,11 +1007,11 @@ describe("agent request events", () => {
       }),
     });
 
-    expect(parseMessageWithAttachmentsMock).toHaveBeenCalledWith(
-      "describe",
-      expect.any(Array),
-      expect.objectContaining({ supportsInlineImages: false }),
-    );
+    expect(parseMessageWithAttachmentsMock).toHaveBeenCalledTimes(1);
+    const parseCall = parseMessageWithAttachmentsMock.mock.calls[0];
+    expect(parseCall?.[0]).toBe("describe");
+    expect(Array.isArray(parseCall?.[1])).toBe(true);
+    expectFields(parseCall?.[2], { supportsInlineImages: false });
   });
 
   it("declines non-image attachments cleanly when parse throws UnsupportedAttachmentError", async () => {
@@ -1044,14 +1077,8 @@ describe("agent request events", () => {
       handled: true,
       reason: "persisted",
     });
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "bg_app_refresh",
-    });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "bg_app_refresh",
-    });
+    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "bg_app_refresh");
+    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "bg_app_refresh");
     expect(getRecentNodePresencePersistCountForTests()).toBe(1);
   });
 
@@ -1085,14 +1112,8 @@ describe("agent request events", () => {
       { deviceId: "ios-node" },
     );
 
-    expect(updatePairedNodeMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "background",
-    });
-    expect(updatePairedDeviceMetadataMock).toHaveBeenCalledWith("ios-node", {
-      lastSeenAtMs: expect.any(Number),
-      lastSeenReason: "background",
-    });
+    expectPresencePersistCall(updatePairedNodeMetadataMock, "ios-node", "background");
+    expectPresencePersistCall(updatePairedDeviceMetadataMock, "ios-node", "background");
   });
 
   it("does not throttle unknown node presence alive identities", async () => {

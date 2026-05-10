@@ -34,13 +34,13 @@ import { performGatewaySessionReset } from "../gateway/session-reset-service.js"
 import { capArrayByJsonBytes } from "../gateway/session-utils.fs.js";
 import {
   listAgentsForGateway,
-  listSessionsFromStore,
+  listSessionsFromStoreAsync,
   loadCombinedSessionStoreForGateway,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
   resolveSessionModelRef,
-  readSessionMessages,
+  readSessionMessagesAsync,
 } from "../gateway/session-utils.js";
 import { applySessionsPatchToStore } from "../gateway/sessions-patch.js";
 import { type AgentEventPayload, onAgentEvent } from "../infra/agent-events.js";
@@ -66,6 +66,8 @@ type LocalRunState = {
   registered: boolean;
 };
 
+const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
   error: (..._args: unknown[]) => undefined,
@@ -75,7 +77,7 @@ const silentRuntime = {
 };
 
 function resolveBtwQuestion(message: string): string | undefined {
-  const match = /^\/btw(?::|\s)+(.*)$/i.exec(message.trim());
+  const match = /^\/(?:btw|side)(?::|\s)+(.*)$/i.exec(message.trim());
   const question = match?.[1]?.trim();
   return question ? question : undefined;
 }
@@ -118,6 +120,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   private previousRuntimeLog?: typeof defaultRuntime.log;
   private previousRuntimeError?: typeof defaultRuntime.error;
   private seq = 0;
+  private readonly pendingLifecycleErrors = new Map<string, ReturnType<typeof setTimeout>>();
 
   start() {
     if (this.unsubscribe) {
@@ -144,6 +147,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     for (const run of this.runs.values()) {
       run.controller.abort();
     }
+    this.clearPendingLifecycleErrors();
     this.runs.clear();
     defaultRuntime.log = this.previousRuntimeLog ?? defaultRuntime.log;
     defaultRuntime.error = this.previousRuntimeError ?? defaultRuntime.error;
@@ -196,14 +200,21 @@ export class EmbeddedTuiBackend implements TuiBackend {
     const sessionId = entry?.sessionId;
     const sessionAgentId = resolveSessionAgentId({ sessionKey: opts.sessionKey, config: cfg });
     const resolvedSessionModel = resolveSessionModelRef(cfg, entry, sessionAgentId);
+    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
+    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const localMessages =
-      sessionId && storePath ? readSessionMessages(sessionId, storePath, entry?.sessionFile) : [];
+      sessionId && storePath
+        ? await readSessionMessagesAsync(sessionId, storePath, entry?.sessionFile, {
+            mode: "recent",
+            maxMessages: max,
+            maxBytes: Math.max(maxHistoryBytes * 2, 1024 * 1024),
+          })
+        : [];
     const rawMessages = augmentChatHistoryWithCliSessionImports({
       entry,
       provider: resolvedSessionModel.provider,
       localMessages,
     });
-    const max = Math.min(1000, typeof opts.limit === "number" ? opts.limit : 200);
     const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg);
     const normalized = augmentChatHistoryWithCanvasBlocks(
       projectRecentChatDisplayMessages(rawMessages, {
@@ -211,7 +222,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         maxMessages: max,
       }),
     );
-    const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
     const perMessageHardCap = Math.min(CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);
     const replaced = replaceOversizedChatHistoryMessages({
       messages: normalized,
@@ -245,12 +255,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
   async listSessions(opts?: Parameters<TuiBackend["listSessions"]>[0]): Promise<TuiSessionList> {
     const cfg = getRuntimeConfig();
     const { storePath, store } = loadCombinedSessionStoreForGateway(cfg);
-    return listSessionsFromStore({
+    return (await listSessionsFromStoreAsync({
       cfg,
       storePath,
       store,
       opts: opts ?? {},
-    }) as TuiSessionList;
+    })) as TuiSessionList;
   }
 
   async listAgents(): Promise<TuiAgentsList> {
@@ -352,6 +362,32 @@ export class EmbeddedTuiBackend implements TuiBackend {
     });
   }
 
+  private clearPendingLifecycleError(runId: string) {
+    const pending = this.pendingLifecycleErrors.get(runId);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending);
+    this.pendingLifecycleErrors.delete(runId);
+  }
+
+  private clearPendingLifecycleErrors() {
+    for (const pending of this.pendingLifecycleErrors.values()) {
+      clearTimeout(pending);
+    }
+    this.pendingLifecycleErrors.clear();
+  }
+
+  private scheduleChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
+    const timer = setTimeout(() => {
+      this.pendingLifecycleErrors.delete(runId);
+      this.emitChatError(runId, run, errorMessage);
+    }, LIFECYCLE_ERROR_RETRY_GRACE_MS);
+    timer.unref?.();
+    this.pendingLifecycleErrors.set(runId, timer);
+  }
+
   private emitChatDelta(runId: string, run: LocalRunState) {
     const projected = projectLiveAssistantBufferedText(run.buffer.trim(), {
       suppressLeadFragments: true,
@@ -374,6 +410,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatFinal(runId: string, run: LocalRunState, stopReason?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -402,6 +439,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatAborted(runId: string, run: LocalRunState) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -415,6 +453,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   }
 
   private emitChatError(runId: string, run: LocalRunState, errorMessage?: string) {
+    this.clearPendingLifecycleError(runId);
     if (run.finalSent) {
       return;
     }
@@ -451,6 +490,12 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
+    const lifecyclePhase =
+      evt.stream === "lifecycle" && typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    if (evt.stream !== "lifecycle" || lifecyclePhase !== "error") {
+      this.clearPendingLifecycleError(evt.runId);
+    }
+
     if (evt.stream !== "assistant") {
       this.ensureRunRegistered(evt.runId, run);
     }
@@ -484,7 +529,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       return;
     }
 
-    const phase = typeof evt.data?.phase === "string" ? evt.data.phase : "";
+    const phase = lifecyclePhase;
     const aborted = evt.data?.aborted === true || run.controller.signal.aborted;
     if (phase === "end") {
       if (aborted) {
@@ -505,7 +550,8 @@ export class EmbeddedTuiBackend implements TuiBackend {
         return;
       }
       const errorMessage = typeof evt.data?.error === "string" ? evt.data.error : undefined;
-      this.emitChatError(evt.runId, run, errorMessage);
+      run.buffer = "";
+      this.scheduleChatError(evt.runId, run, errorMessage);
     }
   }
 

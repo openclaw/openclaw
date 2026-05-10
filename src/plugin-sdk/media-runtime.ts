@@ -1,4 +1,7 @@
-// Public media/payload helpers for plugins that fetch, transform, or send attachments.
+/**
+ * @deprecated Broad public SDK barrel. Prefer focused media-store, media-mime,
+ * outbound-media, and capability runtime subpaths.
+ */
 
 export * from "../media/audio.js";
 export * from "../media/audio-transcode.js";
@@ -20,6 +23,7 @@ export * from "../media/qr-terminal.ts";
 export * from "../media/read-response-with-limit.js";
 export * from "../media/store.js";
 export * from "../media/temp-files.js";
+export * from "../media/video-dimensions.js";
 export { resolveChannelMediaMaxBytes } from "../channels/plugins/media-limits.js";
 export * from "./agent-media-payload.js";
 export * from "../media-understanding/audio-preflight.ts";

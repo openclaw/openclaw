@@ -12,7 +12,7 @@ const mocks = vi.hoisted(() => {
       defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
     }),
     writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
+      defaultRuntime.writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
     }),
     exit: vi.fn((code: number) => {
       throw new Error(`__exit__:${code}`);
@@ -125,6 +125,24 @@ function resetGatewayMock() {
   defaultRuntime.writeStdout.mockClear();
   defaultRuntime.writeJson.mockClear();
   defaultRuntime.exit.mockClear();
+}
+
+function runtimeErrorMessages(): string[] {
+  return defaultRuntime.error.mock.calls
+    .map(([message]) => message)
+    .filter((message): message is string => typeof message === "string");
+}
+
+function expectRuntimeErrorContaining(text: string): void {
+  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(true);
+}
+
+function expectNoRuntimeErrorContaining(text: string): void {
+  expect(runtimeErrorMessages().some((message) => message.includes(text))).toBe(false);
+}
+
+function stdoutText(): string {
+  return defaultRuntime.writeStdout.mock.calls.map(([value]) => value).join("\n");
 }
 
 async function runCronCommand(args: string[]): Promise<void> {
@@ -481,6 +499,20 @@ describe("cron cli", () => {
     expect(patch.enabled).toBe(expectedEnabled);
   });
 
+  it("leaves cron list unfiltered when --agent is omitted", async () => {
+    await runCronCommand(["cron", "list"]);
+
+    const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
+    expect(listCall?.[2]).toEqual({ includeDisabled: false });
+  });
+
+  it("sends normalized agent id on cron list --agent", async () => {
+    await runCronCommand(["cron", "list", "--agent", " Ops "]);
+
+    const listCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.list");
+    expect(listCall?.[2]).toEqual({ includeDisabled: false, agentId: "ops" });
+  });
+
   it("paginates cron show lookups", async () => {
     resetGatewayMock();
     callGatewayFromCli.mockImplementation(
@@ -497,8 +529,10 @@ describe("cron cli", () => {
               nextOffset: 200,
             };
           }
+          const targetJob = createCronJob("target-job", "Target Job");
+          targetJob.state.lastDiagnosticSummary = "exec stderr tail";
           return {
-            jobs: [createCronJob("target-job", "Target Job")],
+            jobs: [targetJob],
             hasMore: false,
             nextOffset: null,
             deliveryPreviews: {
@@ -527,6 +561,7 @@ describe("cron cli", () => {
     expect(defaultRuntime.log).toHaveBeenCalledWith(
       "delivery: announce -> telegram:-100 (resolved from last, main session)",
     );
+    expect(defaultRuntime.log).toHaveBeenCalledWith("diagnostic: exec stderr tail");
   });
 
   it("sends agent id on cron add", async () => {
@@ -548,6 +583,100 @@ describe("cron cli", () => {
     const addCall = callGatewayFromCli.mock.calls.find((call) => call[0] === "cron.add");
     const params = addCall?.[2] as { agentId?: string };
     expect(params?.agentId).toBe("ops");
+    expectNoRuntimeErrorContaining("No --agent specified");
+  });
+
+  it("warns when --agent is not specified on cron add with --message", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "No agent",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+    ]);
+
+    expectRuntimeErrorContaining("No --agent specified");
+    expectRuntimeErrorContaining("configured default agent");
+  });
+
+  it("keeps the missing --agent warning off cron add JSON stdout", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "No agent JSON",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--json",
+    ]);
+
+    expectRuntimeErrorContaining("No --agent specified");
+    const stdout = stdoutText();
+    expect(stdout).not.toContain("No --agent specified");
+    const output = JSON.parse(stdout) as {
+      ok?: unknown;
+      params?: {
+        name?: unknown;
+        payload?: { kind?: unknown; message?: unknown };
+      };
+    };
+    expect(output.ok).toBe(true);
+    expect(output.params?.name).toBe("No agent JSON");
+    expect(output.params?.payload?.kind).toBe("agentTurn");
+    expect(output.params?.payload?.message).toBe("hello");
+  });
+
+  it("warns when --agent is blank on cron add with --message", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Blank agent",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--agent",
+      "   ",
+    ]);
+
+    expect(params?.agentId).toBeUndefined();
+    expectRuntimeErrorContaining("No --agent specified");
+  });
+
+  it("does not warn when --system-event is used (no agent needed)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "System event",
+      "--cron",
+      "* * * * *",
+      "--system-event",
+      "tick",
+    ]);
+
+    expectNoRuntimeErrorContaining("No --agent specified");
+  });
+
+  it("warns even when --session-key is provided (user should still specify agent explicitly)", async () => {
+    await runCronCommand([
+      "cron",
+      "add",
+      "--name",
+      "With session key",
+      "--cron",
+      "* * * * *",
+      "--message",
+      "hello",
+      "--session-key",
+      "agent:my-agent:my-session",
+    ]);
+
+    expectRuntimeErrorContaining("No --agent specified");
   });
 
   it("sets lightContext on cron add when --light-context is passed", async () => {
@@ -1053,9 +1182,7 @@ describe("cron cli", () => {
       program.parseAsync(["cron", "edit", "job-1", "--exact"], { from: "user" }),
     ).rejects.toThrow("__exit__:1");
 
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron.list pagination did not advance"),
-    );
+    expectRuntimeErrorContaining("cron.list pagination did not advance");
   });
 
   it("rejects excessive cron edit lookup pagination", async () => {
@@ -1084,9 +1211,7 @@ describe("cron cli", () => {
 
     const listCalls = callGatewayFromCli.mock.calls.filter((call) => call[0] === "cron.list");
     expect(listCalls).toHaveLength(50);
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("cron.list pagination exceeded maximum pages"),
-    );
+    expectRuntimeErrorContaining("cron.list pagination exceeded maximum pages");
   });
 
   it("rejects --exact on edit when existing job is not cron", async () => {
@@ -1234,9 +1359,7 @@ describe("cron cli", () => {
         { from: "user" },
       ),
     ).rejects.toThrow("__exit__:1");
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Use either --failure-alert-include-skipped"),
-    );
+    expectRuntimeErrorContaining("Use either --failure-alert-include-skipped");
     expect(callGatewayFromCli).not.toHaveBeenCalled();
   });
 });

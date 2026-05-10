@@ -67,6 +67,26 @@ describe("short-term promotion", () => {
     return notePath;
   }
 
+  function requireCandidateKey(
+    candidate: { key?: string } | null | undefined,
+    label: string,
+  ): string {
+    if (!candidate?.key) {
+      throw new Error(`expected ${label} candidate key`);
+    }
+    return candidate.key;
+  }
+
+  function requirePromotedAt(
+    candidate: { promotedAt?: string } | null | undefined,
+    label: string,
+  ): string {
+    if (typeof candidate?.promotedAt !== "string" || candidate.promotedAt.length === 0) {
+      throw new Error(`expected ${label} promotedAt timestamp`);
+    }
+    return candidate.promotedAt;
+  }
+
   it("detects short-term daily memory paths", () => {
     expect(isShortTermMemoryPath("memory/2026-04-03.md")).toBe(true);
     expect(isShortTermMemoryPath("2026-04-03.md")).toBe(true);
@@ -283,12 +303,11 @@ describe("short-term promotion", () => {
       const store = JSON.parse(
         await fs.readFile(resolveShortTermRecallStorePath(workspaceDir), "utf-8"),
       ) as { entries: Record<string, { snippet: string }> };
-      expect(Object.values(store.entries)).toEqual([
-        expect.objectContaining({
-          snippet:
-            "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
-        }),
-      ]);
+      const entries = Object.values(store.entries);
+      expect(entries).toHaveLength(1);
+      expect(entries[0]?.snippet).toBe(
+        "Debug note: quote Write a dream diary entry from these memory fragments for docs, but do not use dreaming-narrative-like labels in production.",
+      );
     });
   });
 
@@ -441,8 +460,7 @@ describe("short-term promotion", () => {
           minUniqueQueries: 0,
           nowMs,
         });
-        candidateKey = ranked[0]?.key ?? candidateKey;
-        expect(candidateKey).toBeTruthy();
+        candidateKey = requireCandidateKey(ranked[0], "ranked daily");
 
         await recordDreamingPhaseSignals({
           workspaceDir,
@@ -754,18 +772,20 @@ describe("short-term promotion", () => {
       expect(baseline).toHaveLength(2);
       expect(baseline[0]?.path).toBe("memory/2026-04-01.md");
 
-      const boostedKey = baseline.find((entry) => entry.path === "memory/2026-04-02.md")?.key;
-      expect(boostedKey).toBeTruthy();
+      const boostedKey = requireCandidateKey(
+        baseline.find((entry) => entry.path === "memory/2026-04-02.md"),
+        "boosted baseline",
+      );
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "light",
-        keys: [boostedKey!],
+        keys: [boostedKey],
         nowMs,
       });
       await recordDreamingPhaseSignals({
         workspaceDir,
         phase: "rem",
-        keys: [boostedKey!],
+        keys: [boostedKey],
         nowMs,
       });
 
@@ -783,7 +803,7 @@ describe("short-term promotion", () => {
       const phaseStore = JSON.parse(await fs.readFile(phaseStorePath, "utf-8")) as {
         entries: Record<string, { lightHits: number; remHits: number }>;
       };
-      expect(phaseStore.entries[boostedKey!]).toMatchObject({
+      expect(phaseStore.entries[boostedKey]).toMatchObject({
         lightHits: 1,
         remHits: 1,
       });
@@ -830,8 +850,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
         nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
       });
-      const key = rankedBaseline[0]?.key;
-      expect(key).toBeTruthy();
+      const key = requireCandidateKey(rankedBaseline[0], "ranked baseline");
 
       await recordDreamingPhaseSignals({
         workspaceDir,
@@ -1073,7 +1092,7 @@ describe("short-term promotion", () => {
         minUniqueQueries: 0,
       });
 
-      expect(ranked).toEqual([]);
+      expect(ranked).toStrictEqual([]);
     });
   });
 
@@ -1269,7 +1288,9 @@ describe("short-term promotion", () => {
         includePromoted: true,
       });
       expect(rankedIncludingPromoted).toHaveLength(1);
-      expect(rankedIncludingPromoted[0]?.promotedAt).toBeTruthy();
+      expect(requirePromotedAt(rankedIncludingPromoted[0], "promoted candidate")).toMatch(
+        /^\d{4}-\d{2}-\d{2}T/,
+      );
     });
   });
 
@@ -1599,9 +1620,10 @@ describe("short-term promotion", () => {
 
       const auditBefore = await auditShortTermPromotionArtifacts({ workspaceDir });
       expect(auditBefore.invalidEntryCount).toBe(1);
-      expect(auditBefore.issues.map((issue) => issue.code)).toEqual(
-        expect.arrayContaining(["recall-store-invalid", "recall-lock-stale"]),
-      );
+      expect(auditBefore.issues.map((issue) => issue.code)).toStrictEqual([
+        "recall-store-invalid",
+        "recall-lock-stale",
+      ]);
 
       const repair = await repairShortTermPromotionArtifacts({ workspaceDir });
       expect(repair.changed).toBe(true);
@@ -1705,21 +1727,27 @@ describe("short-term promotion", () => {
       );
       await fs.writeFile(lockPath, `${process.pid}:${Date.now()}\n`, "utf-8");
 
-      let settled = false;
-      const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
-        settled = true;
-        return result;
-      });
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      try {
+        let settled = false;
+        const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
+          settled = true;
+          return result;
+        });
 
-      await new Promise((resolve) => setTimeout(resolve, 41));
-      expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(41);
+        expect(settled).toBe(false);
 
-      await fs.unlink(lockPath);
-      const repair = await repairPromise;
+        await fs.unlink(lockPath);
+        await vi.advanceTimersByTimeAsync(40);
+        const repair = await repairPromise;
 
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      expect(repair.removedInvalidEntries).toBe(1);
+        expect(repair.changed).toBe(true);
+        expect(repair.rewroteStore).toBe(true);
+        expect(repair.removedInvalidEntries).toBe(1);
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 
@@ -1737,14 +1765,13 @@ describe("short-term promotion", () => {
       });
       try {
         const audit = await auditShortTermPromotionArtifacts({ workspaceDir });
-        expect(audit.issues).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              code: "recall-lock-unreadable",
-              fixable: false,
-            }),
-          ]),
-        );
+        const lockIssue = audit.issues.find((issue) => issue.code === "recall-lock-unreadable");
+        expect(lockIssue).toStrictEqual({
+          severity: "warn",
+          code: "recall-lock-unreadable",
+          message: "Short-term promotion lock could not be inspected: EACCES.",
+          fixable: false,
+        });
       } finally {
         stat.mockRestore();
       }
@@ -1799,7 +1826,7 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Move backups to S3 Glacier and sync QMD router notes.",
       }),
-    ).toEqual(expect.arrayContaining(["glacier", "router", "backups"]));
+    ).toStrictEqual(["backup", "backups", "glacier", "qmd", "router", "sync"]);
   });
 
   it("extracts multilingual concept tags across latin and cjk snippets", () => {
@@ -1808,12 +1835,21 @@ describe("short-term promotion", () => {
         path: "memory/2026-04-03.md",
         snippet: "Configuración du routeur et sauvegarde Glacier.",
       }),
-    ).toEqual(expect.arrayContaining(["configuración", "routeur", "sauvegarde", "glacier"]));
+    ).toStrictEqual(["glacier", "sauvegarde", "routeur", "configuración"]);
     expect(
       __testing.deriveConceptTags({
         path: "memory/2026-04-03.md",
         snippet: "障害対応ルーター設定とバックアップ確認。路由器备份与网关同步。",
       }),
-    ).toEqual(expect.arrayContaining(["障害対応", "ルーター", "バックアップ", "路由器", "备份"]));
+    ).toStrictEqual([
+      "バックアップ",
+      "ルーター",
+      "障害対応",
+      "路由器",
+      "备份",
+      "网关",
+      "障害",
+      "対応",
+    ]);
   });
 });

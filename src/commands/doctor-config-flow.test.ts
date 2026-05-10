@@ -196,11 +196,17 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
     return changes.length > 0 ? { next, changes } : { next: null, changes: [] };
   }
 
+  let partiallyValidOverride: boolean | undefined;
+
   return {
     migrate,
     migrateLegacyConfig: (raw: unknown) => {
       const { next, changes } = migrate(raw);
-      return { config: next, changes };
+      const partiallyValid = partiallyValidOverride;
+      return { config: next, changes, ...(partiallyValid ? { partiallyValid } : {}) };
+    },
+    setPartiallyValidOverride(value: boolean | undefined) {
+      partiallyValidOverride = value;
     },
   };
 });
@@ -595,7 +601,7 @@ vi.mock("./doctor/shared/channel-legacy-config-migrate.js", () => ({
 }));
 
 vi.mock("./doctor/shared/legacy-config-migrate.js", () => ({
-  migrateLegacyConfig: legacyConfigMigrationForTest.migrateLegacyConfig,
+  migrateLegacyConfig: (raw: unknown) => legacyConfigMigrationForTest.migrateLegacyConfig(raw),
 }));
 
 vi.mock("./doctor/shared/bundled-plugin-load-paths.js", () => ({
@@ -823,6 +829,26 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
         match: hasLegacyTalkFields,
       },
     ],
+  };
+});
+
+vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
+  const {
+    collectRelevantDoctorPluginIds,
+    listPluginDoctorLegacyConfigRules,
+  }: typeof import("../plugins/doctor-contract-registry.js") =
+    await import("../plugins/doctor-contract-registry.js");
+  const { findLegacyConfigIssues }: typeof import("../config/legacy.js") =
+    await import("../config/legacy.js");
+  return {
+    findDoctorLegacyConfigIssues: (raw: unknown, sourceRaw?: unknown) =>
+      findLegacyConfigIssues(
+        raw,
+        sourceRaw,
+        listPluginDoctorLegacyConfigRules({
+          pluginIds: collectRelevantDoctorPluginIds(raw),
+        }),
+      ),
   };
 });
 
@@ -1326,7 +1352,13 @@ async function collectDoctorWarnings(config: Record<string, unknown>): Promise<s
     config,
     run: loadAndMaybeMigrateDoctorConfig,
   });
-  return noteSpy.mock.calls.filter((call) => call[1] === "Doctor warnings").map((call) => call[0]);
+  const warnings: string[] = [];
+  for (const [message, title] of noteSpy.mock.calls) {
+    if (title === "Doctor warnings") {
+      warnings.push(message);
+    }
+  }
+  return warnings;
 }
 
 type DiscordGuildRule = {
@@ -1383,6 +1415,30 @@ describe("doctor config flow", () => {
       },
     });
     expect(doctorWarnings.some((line) => line.includes("mutable allowlist"))).toBe(false);
+  });
+
+  it("warns when hooks transformsDir points outside the hook transforms root", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        enabled: true,
+        token: "hook-secret",
+        transformsDir: "/virtual/.openclaw/workspace/skills/linear-webhook",
+        mappings: [
+          {
+            match: { path: "linear" },
+            action: "agent",
+            messageTemplate: "Linear event",
+            transform: { module: "./openclaw-linear-transform.js" },
+          },
+        ],
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.transformsDir:");
+    expect(warning).toContain("/virtual/.openclaw/workspace/skills/linear-webhook");
+    expect(warning).toContain("/virtual/.openclaw/hooks/transforms");
+    expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -1613,6 +1669,24 @@ describe("doctor config flow", () => {
     ).toBe("existing-session");
     expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+  });
+
+  it("preserves commitments config on repair", async () => {
+    const result = await runDoctorConfigWithInput({
+      repair: true,
+      config: {
+        commitments: {
+          enabled: true,
+          maxPerDay: 2,
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(result.cfg.commitments).toEqual({
+      enabled: true,
+      maxPerDay: 2,
+    });
   });
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
@@ -1948,8 +2022,8 @@ describe("doctor config flow", () => {
         .filter((call) => call[1] === "Doctor warnings" || call[1] === "Doctor changes")
         .map((call) => call[0]);
       const joinedOutputs = outputs.join("\n");
-      expect(outputs.filter((line) => line.includes("\u001b"))).toEqual([]);
-      expect(outputs.filter((line) => line.includes("\nforged"))).toEqual([]);
+      expect(outputs.some((line) => line.includes("\u001b"))).toBe(false);
+      expect(outputs.some((line) => line.includes("\nforged"))).toBe(false);
       expect(joinedOutputs).toContain('channels.slack.accounts.opsopen.allowFrom: set to ["*"]');
       expect(joinedOutputs).toContain('required by dmPolicy="open"');
       expect(
@@ -2364,28 +2438,18 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.heartbeat).toBeUndefined();
-    expect(cfg.agents?.defaults?.heartbeat).toMatchObject({
-      model: "anthropic/claude-3-5-haiku-20241022",
-      every: "30m",
-    });
+    expect(cfg.agents?.defaults?.heartbeat?.model).toBe("anthropic/claude-3-5-haiku-20241022");
+    expect(cfg.agents?.defaults?.heartbeat?.every).toBe("30m");
     expect(cfg.gateway?.bind).toBe("lan");
     expect(cfg.session?.maintenance?.rotateBytes).toBeUndefined();
-    expect(cfg.session?.threadBindings).toMatchObject({
-      idleHours: 24,
-    });
-    expect(cfg.channels?.discord?.threadBindings).toMatchObject({
-      idleHours: 12,
-    });
-    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings).toMatchObject({
-      idleHours: 6,
-    });
+    expect(cfg.session?.threadBindings?.idleHours).toBe(24);
+    expect(cfg.channels?.discord?.threadBindings?.idleHours).toBe(12);
+    expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.idleHours).toBe(6);
     expect(cfg.session?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.threadBindings?.ttlHours).toBeUndefined();
     expect(cfg.channels?.discord?.accounts?.alpha?.threadBindings?.ttlHours).toBeUndefined();
-    expect(cfg.channels?.defaults?.heartbeat).toMatchObject({
-      showOk: true,
-      showAlerts: false,
-    });
+    expect(cfg.channels?.defaults?.heartbeat?.showOk).toBe(true);
+    expect(cfg.channels?.defaults?.heartbeat?.showAlerts).toBe(false);
   });
 
   it("warns clearly about legacy config surfaces and points to doctor --fix", async () => {
@@ -2525,7 +2589,7 @@ describe("doctor config flow", () => {
       };
     };
     expect(cfg.channels.googlechat.dm.allowFrom).toEqual(["*"]);
-    expect(cfg.channels.googlechat.allowFrom).toEqual(["*"]);
+    expect(cfg.channels.googlechat.allowFrom).toBeUndefined();
   });
 
   it("does not report repeat talk provider normalization on consecutive repair runs", async () => {
@@ -2573,12 +2637,31 @@ describe("doctor config flow", () => {
             .filter((call) => call[1] === "Doctor changes")
             .map((call) => call[0])
             .filter((line) => line.includes("Normalized talk.provider/providers shape"));
-          expect(secondRunTalkNormalizationLines).toEqual([]);
+          expect(secondRunTalkNormalizationLines).toStrictEqual([]);
         } finally {
           noteSpy.mockClear();
         }
       },
       { skipSessionCleanup: true },
     );
+  });
+
+  it("sets skipPluginValidationOnWrite when legacy migration is only partially valid (#76800)", async () => {
+    legacyConfigMigrationForTest.setPartiallyValidOverride(true);
+    try {
+      const result = await runDoctorConfigWithInput({
+        config: {
+          heartbeat: { model: "openai/gpt-4o", every: 60 },
+          tools: { web: { search: { provider: "brave" } } },
+        },
+        repair: true,
+        preflightMode: "compat",
+        run: ({ options, confirm }) =>
+          loadAndMaybeMigrateDoctorConfig({ options, confirm: async () => confirm() }),
+      });
+      expect(result.skipPluginValidationOnWrite).toBe(true);
+    } finally {
+      legacyConfigMigrationForTest.setPartiallyValidOverride(undefined);
+    }
   });
 });

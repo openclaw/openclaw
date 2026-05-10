@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import tsdownConfig from "../../tsdown.config.ts";
@@ -25,10 +26,18 @@ type TsdownOnLog = (
 ) => void;
 
 type TsdownInputOptions = (
-  options: { onLog?: TsdownOnLog },
+  options: { external?: TsdownExternalOption; onLog?: TsdownOnLog },
   format?: unknown,
   context?: unknown,
-) => { onLog?: TsdownOnLog } | undefined;
+) => { external?: TsdownExternalOption; onLog?: TsdownOnLog } | undefined;
+
+type TsdownExternalOption = string | RegExp | Array<string | RegExp> | TsdownExternalFunction;
+
+type TsdownExternalFunction = (
+  id: string,
+  parentId: string | undefined,
+  isResolved: boolean,
+) => boolean | null | undefined;
 
 function asConfigArray(config: unknown): TsdownConfigEntry[] {
   return Array.isArray(config) ? (config as TsdownConfigEntry[]) : [config as TsdownConfigEntry];
@@ -41,9 +50,11 @@ function entryKeys(config: TsdownConfigEntry): string[] {
   return Object.keys(config.entry);
 }
 
-function hasBundledPluginRuntimeEntry(config: TsdownConfigEntry): boolean {
-  const keys = entryKeys(config);
-  return keys.includes("index") || keys.includes("runtime-api");
+function entrySources(config: TsdownConfigEntry): Record<string, string> {
+  if (!config.entry || Array.isArray(config.entry)) {
+    return {};
+  }
+  return config.entry;
 }
 
 function bundledEntry(pluginId: string): string {
@@ -56,16 +67,28 @@ function unifiedDistGraph(): TsdownConfigEntry | undefined {
   );
 }
 
+function requireUnifiedDistGraph(): TsdownConfigEntry {
+  const distGraph = unifiedDistGraph();
+  if (!distGraph) {
+    throw new Error("expected unified dist graph");
+  }
+  return distGraph;
+}
+
+function readGatewayRunLoopSource(): string {
+  return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
+}
+
 describe("tsdown config", () => {
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
-    const distGraph = unifiedDistGraph();
+    const distGraph = requireUnifiedDistGraph();
 
-    expect(distGraph).toBeDefined();
-    expect(entryKeys(distGraph as TsdownConfigEntry)).toEqual(
+    expect(entryKeys(distGraph)).toEqual(
       expect.arrayContaining([
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
+        "cli/gateway-lifecycle.runtime",
         "plugins/memory-state",
         "subagent-registry.runtime",
         "task-registry-control.runtime",
@@ -74,63 +97,101 @@ describe("tsdown config", () => {
         "media-understanding/apply.runtime",
         "index",
         "commands/status.summary.runtime",
+        "provider-dispatcher.runtime",
         "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
         "plugin-sdk/compat",
         "plugin-sdk/index",
-        bundledEntry("openai"),
+        bundledEntry("active-memory"),
         "bundled/boot-md/handler",
       ]),
     );
   });
 
-  it("emits staged bundled plugins as separate extension graphs", () => {
-    const stagedGraphs = asConfigArray(tsdownConfig).filter(
+  it("keeps gateway lifecycle lazy runtime behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)).toEqual(
+      expect.objectContaining({
+        "cli/gateway-lifecycle.runtime": "src/cli/gateway-cli/lifecycle.runtime.ts",
+      }),
+    );
+  });
+
+  it("keeps reply dispatcher lazy runtime behind one root stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)).toEqual(
+      expect.objectContaining({
+        "provider-dispatcher.runtime": "src/auto-reply/reply/provider-dispatcher.runtime.ts",
+      }),
+    );
+  });
+
+  it("routes gateway run-loop lifecycle imports through the stable runtime boundary", () => {
+    const importSpecifiers = [
+      ...readGatewayRunLoopSource().matchAll(/import\(["']([^"']+)["']\)/gu),
+    ].map((match) => match[1]);
+
+    expect(new Set(importSpecifiers)).toEqual(new Set(["./lifecycle.runtime.js"]));
+  });
+
+  it("keeps bundled plugins out of separate dependency-staging graphs", () => {
+    const extensionGraphs = asConfigArray(tsdownConfig).filter(
       (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
     );
 
-    expect(stagedGraphs.length).toBeGreaterThan(0);
-    expect(stagedGraphs.every(hasBundledPluginRuntimeEntry)).toBe(true);
-    expect(stagedGraphs.every((config) => !entryKeys(config).includes("plugin-sdk/index"))).toBe(
-      true,
-    );
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/discord")).toBe(true);
-    expect(stagedGraphs.some((config) => config.outDir === "dist/extensions/msteams")).toBe(true);
-    expect(
-      stagedGraphs.some(
-        (config) =>
-          config.outDir === "dist/extensions/media-understanding-core" &&
-          entryKeys(config).includes("image-ops"),
-      ),
-    ).toBe(true);
+    expect(extensionGraphs).toStrictEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
     const configs = asConfigArray(tsdownConfig);
+    const hookEntries = configs.flatMap((config) =>
+      Array.isArray(config.entry)
+        ? config.entry.filter((entry) => entry.includes("src/hooks/"))
+        : [],
+    );
 
-    expect(configs.some((config) => config.outDir === "dist/plugin-sdk")).toBe(false);
-    expect(
-      configs.some((config) =>
-        Array.isArray(config.entry)
-          ? config.entry.some((entry) => entry.includes("src/hooks/"))
-          : false,
-      ),
-    ).toBe(false);
+    expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
+    expect(hookEntries).toStrictEqual([]);
   });
 
-  it("externalizes staged bundled plugin runtime dependencies", () => {
+  it("externalizes known heavy native dependencies", () => {
     const unifiedGraph = unifiedDistGraph();
     const neverBundle = unifiedGraph?.deps?.neverBundle;
+    const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
-      expect(neverBundle("silk-wasm")).toBe(true);
-      expect(neverBundle("ws")).toBe(true);
-      expect(neverBundle("ws/lib/websocket.js")).toBe(true);
+      expect(neverBundle("@discordjs/voice")).toBe(true);
+      expect(neverBundle("@lancedb/lancedb")).toBe(true);
+      expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
+      expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("@vitest/expect")).toBe(true);
+      expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("prism-media")).toBe(true);
+      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
+      expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
-      expect(neverBundle).toEqual(expect.arrayContaining(["silk-wasm", "ws"]));
+      expect(neverBundle).toEqual(
+        expect.arrayContaining([
+          "@discordjs/voice",
+          "@lancedb/lancedb",
+          "@larksuiteoapi/node-sdk",
+          "@vitest/expect",
+          "matrix-js-sdk",
+          "prism-media",
+          "qrcode-terminal",
+          "vitest",
+        ]),
+      );
     }
+    if (typeof external !== "function") {
+      throw new Error("expected unified graph external predicate");
+    }
+    const externalize = external;
+    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
   });
 
   it("suppresses unresolved imports from extension source", () => {
@@ -146,7 +207,7 @@ describe("tsdown config", () => {
       (_level, log) => handled.push(log),
     );
 
-    expect(handled).toEqual([]);
+    expect(handled).toStrictEqual([]);
   });
 
   it("keeps unresolved imports outside extension source visible", () => {

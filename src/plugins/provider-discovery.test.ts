@@ -27,8 +27,6 @@ function makeTempDir() {
 function hermeticEnv(overrides: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: undefined,
-    OPENCLAW_DISABLE_PLUGIN_DISCOVERY_CACHE: "1",
-    OPENCLAW_DISABLE_PLUGIN_MANIFEST_CACHE: "1",
     OPENCLAW_VERSION: "2026.4.25",
     VITEST: "true",
     ...overrides,
@@ -219,7 +217,7 @@ describe("resolveInstalledPluginProviderContributionIds", () => {
       preferPersisted: false,
     };
 
-    expect(resolveInstalledPluginProviderContributionIds(params)).toEqual([]);
+    expect(resolveInstalledPluginProviderContributionIds(params)).toStrictEqual([]);
     expect(
       resolveInstalledPluginProviderContributionIds({
         ...params,

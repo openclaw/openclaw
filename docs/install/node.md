@@ -1,5 +1,5 @@
 ---
-summary: "Install and configure Node.js for OpenClaw — version requirements, install options, and PATH troubleshooting"
+summary: "Install and configure Node.js for OpenClaw - version requirements, install options, and PATH troubleshooting"
 title: "Node.js"
 read_when:
   - "You need to install Node.js before installing OpenClaw"
@@ -15,7 +15,7 @@ OpenClaw requires **Node 22.14 or newer**. **Node 24 is the default and recommen
 node -v
 ```
 
-If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.14.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
+If this prints `v24.x.x` or higher, you're on the recommended default. If it prints `v22.16.x` or higher, you're on the supported Node 22 LTS path, but we still recommend upgrading to Node 24 when convenient. If Node isn't installed or the version is too old, pick an install method below.
 
 ## Install Node
 
@@ -68,9 +68,9 @@ If this prints `v24.x.x` or higher, you're on the recommended default. If it pri
 <Accordion title="Using a version manager (nvm, fnm, mise, asdf)">
   Version managers let you switch between Node versions easily. Popular options:
 
-- [**fnm**](https://github.com/Schniz/fnm) — fast, cross-platform
-- [**nvm**](https://github.com/nvm-sh/nvm) — widely used on macOS/Linux
-- [**mise**](https://mise.jdx.dev/) — polyglot (Node, Python, Ruby, etc.)
+- [**fnm**](https://github.com/Schniz/fnm) - fast, cross-platform
+- [**nvm**](https://github.com/nvm-sh/nvm) - widely used on macOS/Linux
+- [**mise**](https://mise.jdx.dev/) - polyglot (Node, Python, Ruby, etc.)
 
 Example with fnm:
 
@@ -137,6 +137,6 @@ Add the `export PATH=...` line to your `~/.bashrc` or `~/.zshrc` to make it perm
 
 ## Related
 
-- [Install Overview](/install) — all installation methods
-- [Updating](/install/updating) — keeping OpenClaw up to date
-- [Getting Started](/start/getting-started) — first steps after install
+- [Install Overview](/install) - all installation methods
+- [Updating](/install/updating) - keeping OpenClaw up to date
+- [Getting Started](/start/getting-started) - first steps after install

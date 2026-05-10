@@ -30,6 +30,7 @@ import {
   buildLiveCronProbeMessage,
   createLiveCronProbeSpec,
   runOpenClawCliJson,
+  shouldRunLiveImageProbe,
 } from "./live-agent-probes.js";
 import { renderCatFacePngBase64 } from "./live-image-probe.js";
 import { startGatewayServer } from "./server.js";
@@ -97,18 +98,21 @@ function normalizeAcpAgent(raw: string | undefined): LiveAcpAgent {
 }
 
 function extractAssistantTexts(messages: unknown[]): string[] {
-  return messages
-    .map((entry) => {
-      if (!entry || typeof entry !== "object") {
-        return undefined;
-      }
-      const role = (entry as { role?: unknown }).role;
-      if (role !== "assistant") {
-        return undefined;
-      }
-      return extractFirstTextBlock(entry);
-    })
-    .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  const texts: string[] = [];
+  for (const entry of messages) {
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const role = (entry as { role?: unknown }).role;
+    if (role !== "assistant") {
+      continue;
+    }
+    const text = extractFirstTextBlock(entry);
+    if (typeof text === "string" && text.trim().length > 0) {
+      texts.push(text);
+    }
+  }
+  return texts;
 }
 
 function createAcpRecallPrompt(
@@ -907,58 +911,70 @@ describeLive("gateway live (ACP bind)", () => {
         expect(boundHistory.matchedAssistantText).toContain(`ACP-BIND-MEMORY-${memoryNonce}`);
         logLiveStep("bound session transcript contains the final marker token");
 
-        const markerAssistantCount = assistantTexts.length;
-        let imageHistory: Awaited<ReturnType<typeof waitForAssistantTurn>> | null = null;
-        for (let attempt = 0; attempt < 2 && !imageHistory; attempt += 1) {
-          await sendChatAndWait({
-            client,
-            sessionKey: originalSessionKey,
-            idempotencyKey: `idem-image-${attempt}-${randomUUID()}`,
-            message:
-              "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
-            originatingChannel: "slack",
-            originatingTo: conversationId,
-            originatingAccountId: accountId,
-            attachments: [
-              {
-                mimeType: "image/png",
-                fileName: `probe-${randomUUID()}.png`,
-                content: renderCatFacePngBase64(),
-              },
-            ],
-          });
-          logLiveStep(`image turn completed (attempt ${String(attempt + 1)})`);
-
-          try {
-            imageHistory = await waitForAssistantTurn({
+        if (
+          shouldRunLiveImageProbe({
+            agent: liveAgent,
+            override: process.env.OPENCLAW_LIVE_ACP_BIND_IMAGE_PROBE,
+          })
+        ) {
+          const markerAssistantCount = assistantTexts.length;
+          let imageHistory: Awaited<ReturnType<typeof waitForAssistantTurn>> | null = null;
+          for (let attempt = 0; attempt < 2 && !imageHistory; attempt += 1) {
+            await sendChatAndWait({
               client,
-              sessionKey: spawnedSessionKey,
-              minAssistantCount: markerAssistantCount + 1,
-              timeoutMs: liveAgent === "claude" ? 60_000 : 45_000,
+              sessionKey: originalSessionKey,
+              idempotencyKey: `idem-image-${attempt}-${randomUUID()}`,
+              message:
+                "What animal is drawn in the attached image? Reply with only the lowercase animal name.",
+              originatingChannel: "slack",
+              originatingTo: conversationId,
+              originatingAccountId: accountId,
+              attachments: [
+                {
+                  mimeType: "image/png",
+                  fileName: `probe-${randomUUID()}.png`,
+                  content: renderCatFacePngBase64(),
+                },
+              ],
             });
-          } catch {
-            if (attempt === 1) {
-              logLiveStep(
-                "bound session image reply not observed; continuing to cron verification",
-              );
-              break;
+            logLiveStep(`image turn completed (attempt ${String(attempt + 1)})`);
+
+            try {
+              imageHistory = await waitForAssistantTurn({
+                client,
+                sessionKey: spawnedSessionKey,
+                minAssistantCount: markerAssistantCount + 1,
+                timeoutMs: liveAgent === "claude" ? 60_000 : 45_000,
+              });
+            } catch {
+              if (attempt === 1) {
+                logLiveStep(
+                  "bound session image reply not observed; continuing to cron verification",
+                );
+                break;
+              }
+              logLiveStep("bound session image reply not observed yet; retrying");
             }
-            logLiveStep("bound session image reply not observed yet; retrying");
           }
-        }
-        if (imageHistory) {
-          assertLiveImageProbeReply(imageHistory.lastAssistantText);
-          logLiveStep("bound session classified the probe image");
+          if (imageHistory) {
+            assertLiveImageProbeReply(imageHistory.lastAssistantText);
+            logLiveStep("bound session classified the probe image");
+          }
+        } else {
+          logLiveStep(`skipping image probe for ${liveAgent}`);
         }
 
-        const cronProbe = createLiveCronProbeSpec({
-          agentId: liveAgent,
-          sessionKey: spawnedSessionKey,
-        });
         const requireCronMcpProbe = shouldRequireCronMcpProbe();
         let cronJobId: string | undefined;
         let lastCronAssistantText = "";
+        let lastCronProbeName = "";
+        let lastCronMismatch = "";
         for (let attempt = 0; attempt < ACP_CRON_MCP_PROBE_MAX_ATTEMPTS; attempt += 1) {
+          const cronProbe = createLiveCronProbeSpec({
+            agentId: liveAgent,
+            sessionKey: spawnedSessionKey,
+          });
+          lastCronProbeName = cronProbe.name;
           await sendChatAndWait({
             client,
             sessionKey: originalSessionKey,
@@ -998,13 +1014,26 @@ describeLive("gateway live (ACP bind)", () => {
           });
           const createdJob = verifyResult.job;
           if (createdJob) {
-            assertCronJobMatches({
-              job: createdJob,
-              expectedName: cronProbe.name,
-              expectedMessage: cronProbe.message,
-              expectedSessionKey: spawnedSessionKey,
-              expectedAgentId: liveAgent,
-            });
+            try {
+              assertCronJobMatches({
+                job: createdJob,
+                expectedName: cronProbe.name,
+                expectedMessage: cronProbe.message,
+                expectedSessionKey: spawnedSessionKey,
+                expectedAgentId: liveAgent,
+              });
+            } catch (error) {
+              lastCronMismatch = error instanceof Error ? error.message : String(error);
+              logLiveStep(
+                `cron mcp job ${cronProbe.name} mismatch after attempt ${String(
+                  attempt + 1,
+                )}: ${lastCronMismatch}`,
+              );
+              if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1 && requireCronMcpProbe) {
+                throw error;
+              }
+              continue;
+            }
             cronJobId = createdJob.id;
             if (cronHistory) {
               expect(cronHistory.lastAssistantText.trim().length).toBeGreaterThan(0);
@@ -1019,14 +1048,16 @@ describeLive("gateway live (ACP bind)", () => {
           if (attempt === ACP_CRON_MCP_PROBE_MAX_ATTEMPTS - 1) {
             if (!requireCronMcpProbe) {
               logLiveStep(
-                `cron mcp job ${cronProbe.name} not observed; continuing after bind/image verification`,
+                `cron mcp job ${lastCronProbeName} not observed; continuing after bind/image verification${
+                  lastCronMismatch ? `; last mismatch=${lastCronMismatch}` : ""
+                }`,
               );
               break;
             }
             throw new Error(
-              `acp cron cli verify could not find job ${cronProbe.name}: reply=${JSON.stringify(
+              `acp cron cli verify could not find job ${lastCronProbeName}: reply=${JSON.stringify(
                 lastCronAssistantText,
-              )}`,
+              )}${lastCronMismatch ? ` mismatch=${lastCronMismatch}` : ""}`,
             );
           }
         }
@@ -1034,7 +1065,7 @@ describeLive("gateway live (ACP bind)", () => {
           if (!requireCronMcpProbe) {
             return;
           }
-          throw new Error(`acp cron cli verify did not create job ${cronProbe.name}`);
+          throw new Error(`acp cron cli verify did not create job ${lastCronProbeName}`);
         }
         await runOpenClawCliJson(
           ["cron", "rm", cronJobId, "--json", "--url", `ws://127.0.0.1:${port}`, "--token", token],

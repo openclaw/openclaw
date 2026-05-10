@@ -172,9 +172,7 @@ describe("loadProviderCatalogModelsForList", () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalled();
-    expect(rows.map((row) => `${row.provider}/${row.id}`)).toEqual(
-      expect.arrayContaining(["moonshot/kimi-k2.6"]),
-    );
+    expect(rows.map((row) => `${row.provider}/${row.id}`)).toContain("moonshot/kimi-k2.6");
   });
 
   it("requires complete discovery-entry coverage for static-only loads", async () => {
@@ -184,13 +182,11 @@ describe("loadProviderCatalogModelsForList", () => {
       staticOnly: true,
     });
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["moonshot"],
-        requireCompleteDiscoveryEntryCoverage: true,
-        discoveryEntriesOnly: true,
-      }),
-    );
+    const discoveryRequest =
+      providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0]?.[0];
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["moonshot"]);
+    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
   });
 
   it("resolves provider owners from the installed plugin index before manifest fallback", async () => {
@@ -205,7 +201,6 @@ describe("loadProviderCatalogModelsForList", () => {
     expect(providerDiscoveryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
       config: baseParams.cfg,
       env: baseParams.env,
-      cache: true,
     });
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
@@ -246,7 +241,7 @@ describe("loadProviderCatalogModelsForList", () => {
         env: baseParams.env,
         providerFilter: "moonshot",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(providerDiscoveryMocks.resolveOwningPluginIdsForProvider).not.toHaveBeenCalled();
   });
@@ -272,7 +267,7 @@ describe("loadProviderCatalogModelsForList", () => {
         providerFilter: "moonshot",
         staticOnly: true,
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 
   it("only skips registry for providers with actual static catalogs", async () => {
@@ -288,13 +283,11 @@ describe("loadProviderCatalogModelsForList", () => {
       }),
     ).resolves.toBe(false);
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["ollama"],
-        requireCompleteDiscoveryEntryCoverage: true,
-        discoveryEntriesOnly: true,
-      }),
-    );
+    const discoveryRequest =
+      providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0]?.[0];
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["ollama"]);
+    expect(discoveryRequest?.requireCompleteDiscoveryEntryCoverage).toBe(true);
+    expect(discoveryRequest?.discoveryEntriesOnly).toBe(true);
   });
 
   it("does not skip registry when a bundled provider has no lightweight static entry", async () => {
@@ -369,14 +362,12 @@ describe("loadProviderCatalogModelsForList", () => {
       ...baseParams,
     });
 
-    expect(providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        onlyPluginIds: ["bundled-demo"],
-        includeUntrustedWorkspacePlugins: false,
-      }),
-    );
+    const discoveryRequest =
+      providerDiscoveryMocks.resolveRuntimePluginDiscoveryProviders.mock.calls[0]?.[0];
+    expect(discoveryRequest?.onlyPluginIds).toStrictEqual(["bundled-demo"]);
+    expect(discoveryRequest?.includeUntrustedWorkspacePlugins).toBe(false);
     expect(workspaceStaticCatalog).not.toHaveBeenCalled();
-    expect(rows).toEqual([]);
+    expect(rows).toStrictEqual([]);
   });
 
   it("keeps unknown provider filters eligible for early empty results", async () => {

@@ -16,6 +16,7 @@ export type OpenAiEmbeddingClient = {
   inputType?: string;
   queryInputType?: string;
   documentInputType?: string;
+  outputDimensionality?: number;
 };
 
 const DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1";
@@ -26,7 +27,7 @@ const OPENAI_MAX_INPUT_TOKENS: Record<string, number> = {
   "text-embedding-ada-002": 8191,
 };
 
-export function normalizeOpenAiModel(model: string): string {
+function normalizeOpenAiModel(model: string): string {
   const trimmed = model.trim();
   if (!trimmed) {
     return DEFAULT_OPENAI_EMBEDDING_MODEL;
@@ -59,6 +60,9 @@ export async function createOpenAiEmbeddingProvider(
       body: {
         model: client.model,
         input,
+        ...(typeof client.outputDimensionality === "number"
+          ? { dimensions: client.outputDimensionality }
+          : {}),
         ...(inputType ? { input_type: inputType } : {}),
       },
       errorPrefix: "openai embeddings failed",
@@ -82,7 +86,7 @@ export async function createOpenAiEmbeddingProvider(
   };
 }
 
-export async function resolveOpenAiEmbeddingClient(
+async function resolveOpenAiEmbeddingClient(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<OpenAiEmbeddingClient> {
   const client = await resolveRemoteEmbeddingClient({
@@ -96,5 +100,6 @@ export async function resolveOpenAiEmbeddingClient(
     inputType: options.inputType,
     queryInputType: options.queryInputType,
     documentInputType: options.documentInputType,
+    outputDimensionality: options.outputDimensionality,
   };
 }

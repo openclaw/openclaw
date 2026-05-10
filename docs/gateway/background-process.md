@@ -6,16 +6,14 @@ read_when:
 title: "Background exec and process tool"
 ---
 
-# Background Exec + Process Tool
-
-OpenClaw runs shell commands through the `exec` tool and keeps long‑running tasks in memory. The `process` tool manages those background sessions.
+OpenClaw runs shell commands through the `exec` tool and keeps long-running tasks in memory. The `process` tool manages those background sessions.
 
 ## exec tool
 
 Key parameters:
 
 - `command` (required)
-- `yieldMs` (default 10000): auto‑background after this delay
+- `yieldMs` (default 10000): auto-background after this delay
 - `background` (bool): background immediately
 - `timeout` (seconds, default `tools.exec.timeoutSec`): kill the process after this timeout; set `timeout: 0` only to disable the exec process timeout for that call
 - `elevated` (bool): run outside the sandbox if elevated mode is enabled/allowed (`gateway` by default, or `node` when the exec target is `node`)
@@ -45,9 +43,10 @@ When spawning long-running child processes outside the exec/process tools (for e
 Environment overrides:
 
 - `PI_BASH_YIELD_MS`: default yield (ms)
-- `PI_BASH_MAX_OUTPUT_CHARS`: in‑memory output cap (chars)
+- `PI_BASH_MAX_OUTPUT_CHARS`: in-memory output cap (chars)
 - `OPENCLAW_BASH_PENDING_MAX_OUTPUT_CHARS`: pending stdout/stderr cap per stream (chars)
 - `PI_BASH_JOB_TTL_MS`: TTL for finished sessions (ms, bounded to 1m–3h)
+- `OPENCLAW_PROCESS_INPUT_WAIT_IDLE_MS`: idle-output threshold before writable background sessions are marked as likely waiting for input (default 15000 ms)
 
 Config (preferred):
 
@@ -63,7 +62,7 @@ Actions:
 
 - `list`: running + finished sessions
 - `poll`: drain new output for a session (also reports exit status)
-- `log`: read the aggregated output (supports `offset` + `limit`)
+- `log`: read the aggregated output and show input recovery hints (supports `offset` + `limit`)
 - `write`: send stdin (`data`, optional `eof`)
 - `send-keys`: send explicit key tokens or bytes to a PTY-backed session
 - `submit`: send Enter / carriage return to a PTY-backed session
@@ -80,9 +79,14 @@ Notes:
 - `process` is scoped per agent; it only sees sessions started by that agent.
 - Use `poll` / `log` for status, logs, quiet-success confirmation, or
   completion confirmation when automatic completion wake is unavailable.
+- Use `log` before recovering an interactive CLI so the current transcript,
+  stdin state, and input-wait hint are visible together.
 - Use `write` / `send-keys` / `submit` / `paste` / `kill` when you need input
   or intervention.
 - `process list` includes a derived `name` (command verb + target) for quick scans.
+- `process list`, `poll`, and `log` report `waitingForInput` only
+  when the session still has writable stdin and has been idle longer than the
+  input-wait threshold.
 - `process log` uses line-based `offset`/`limit`.
 - When both `offset` and `limit` are omitted, it returns the last 200 lines and includes a paging hint.
 - When `offset` is provided and `limit` is omitted, it returns from `offset` to the end (not capped to 200).
@@ -99,6 +103,12 @@ Run a long task and poll later:
 
 ```json
 { "tool": "process", "action": "poll", "sessionId": "<id>" }
+```
+
+Inspect an interactive session before sending input:
+
+```json
+{ "tool": "process", "action": "log", "sessionId": "<id>" }
 ```
 
 Start immediately in background:

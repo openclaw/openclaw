@@ -17,6 +17,7 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
+import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/ffmpeg-exec.js";
@@ -27,8 +28,7 @@ import {
   CLI_OUTPUT_MAX_BUFFER,
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
-  resolveDefaultMediaModel,
-} from "./defaults.js";
+} from "./defaults.constants.js";
 import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { describeImageWithModel } from "./image-runtime.js";
@@ -253,18 +253,25 @@ async function resolveCliMediaPath(params: {
   }
 
   const wavPath = path.join(params.outputDir, `${path.parse(params.mediaPath).name}.wav`);
-  await runFfmpeg([
-    "-y",
-    "-i",
-    params.mediaPath,
-    "-ac",
-    "1",
-    "-ar",
-    "16000",
-    "-c:a",
-    "pcm_s16le",
-    wavPath,
-  ]);
+  await fs.mkdir(params.outputDir, { recursive: true });
+  await writeExternalFileWithinRoot({
+    rootDir: params.outputDir,
+    path: path.basename(wavPath),
+    write: async (outputPath) => {
+      await runFfmpeg([
+        "-y",
+        "-i",
+        params.mediaPath,
+        "-ac",
+        "1",
+        "-ar",
+        "16000",
+        "-c:a",
+        "pcm_s16le",
+        outputPath,
+      ]);
+    },
+  });
   return wavPath;
 }
 
@@ -632,7 +639,7 @@ export async function runProviderEntry(params: {
     });
     const model =
       entry.model?.trim() ||
-      resolveDefaultMediaModel({
+      (await import("./defaults.js")).resolveDefaultMediaModel({
         cfg,
         providerId,
         capability: "audio",
