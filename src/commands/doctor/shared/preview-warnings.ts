@@ -115,6 +115,40 @@ function collectMessageToolUnavailableTargets(cfg: OpenClawConfig): string[] {
   );
 }
 
+export function collectAgentChannelMessageToolWarnings(cfg: OpenClawConfig): string[] {
+  const bindings = cfg.bindings;
+  if (!Array.isArray(bindings) || bindings.length === 0) {
+    return [];
+  }
+  const agentList = cfg.agents?.list ?? [];
+  const agentById = new Map(
+    agentList
+      .filter((a): a is { id: string; tools?: AgentToolsConfig } => Boolean(a?.id))
+      .map((a) => [a.id, a.tools]),
+  );
+  const warned = new Set<string>();
+  const warnings: string[] = [];
+  for (const binding of bindings) {
+    if (!binding?.agentId || !binding.match?.channel) {
+      continue;
+    }
+    const { agentId } = binding;
+    const channel = binding.match.channel;
+    if (warned.has(agentId)) {
+      continue;
+    }
+    const agentTools = agentById.get(agentId);
+    const available = resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools });
+    if (!available) {
+      warned.add(agentId);
+      warnings.push(
+        `- agent "${agentId}" is bound to channel "${channel}" but the message tool is not in its resolved tool policy. Channel explicit actions (sendAttachment, reply, thread-reply) will fail. Add "message" to agents.list[].tools.allow or use a profile that includes it (e.g. tools.profile: "messaging").`,
+      );
+    }
+  }
+  return warnings;
+}
+
 function resolveGroupVisibleReplyProvenance(cfg: OpenClawConfig): {
   path: "messages.groupChat.visibleReplies" | "messages.visibleReplies";
   provenance: VisibleReplyPolicyProvenance;
@@ -195,6 +229,7 @@ export async function collectDoctorPreviewWarnings(params: {
   const hasPluginConfig = hasPlugins(params.cfg);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectAgentChannelMessageToolWarnings(params.cfg));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)

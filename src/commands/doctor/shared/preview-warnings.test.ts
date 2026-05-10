@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectAgentChannelMessageToolWarnings,
   collectDoctorPreviewWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
@@ -488,5 +489,114 @@ describe("doctor preview warnings", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+});
+
+describe("collectAgentChannelMessageToolWarnings", () => {
+  it("warns when a channel-bound agent has an explicit tools.allow that excludes message", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [
+        {
+          agentId: "commander",
+          match: { channel: "discord" },
+        },
+      ],
+      agents: {
+        list: [
+          {
+            id: "commander",
+            tools: {
+              allow: ["read", "write", "edit", "bash", "exec"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('agent "commander"');
+    expect(warnings[0]).toContain('"discord"');
+    expect(warnings[0]).toContain("message tool is not in its resolved tool policy");
+    expect(warnings[0]).toContain('"message"');
+  });
+
+  it("does not warn when the channel-bound agent has message in its allow list", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [
+        {
+          agentId: "responder",
+          match: { channel: "telegram" },
+        },
+      ],
+      agents: {
+        list: [
+          {
+            id: "responder",
+            tools: {
+              allow: ["read", "write", "message"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when the channel-bound agent uses a profile that includes message", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [
+        {
+          agentId: "main",
+          match: { channel: "slack" },
+        },
+      ],
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("does not warn when there are no bindings", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      agents: {
+        list: [
+          {
+            id: "main",
+            tools: { allow: ["read"] },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("emits at most one warning per agent even when the agent is bound to multiple channels", () => {
+    const warnings = collectAgentChannelMessageToolWarnings({
+      bindings: [
+        { agentId: "worker", match: { channel: "discord" } },
+        { agentId: "worker", match: { channel: "telegram" } },
+      ],
+      agents: {
+        list: [
+          {
+            id: "worker",
+            tools: { allow: ["read"] },
+          },
+        ],
+      },
+    });
+
+    expect(warnings).toHaveLength(1);
   });
 });
