@@ -15,6 +15,7 @@ import WebSocket from "ws";
 export type ContainerRpcOptions = {
   baseUrl: string;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 };
 
 export type ContainerWebSocketMessage = {
@@ -43,6 +44,7 @@ export type ContainerWebSocketMessage = {
 };
 
 const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES = 1_048_576;
 const CONTAINER_TEXT_STYLE_MARKERS: Record<string, string> = {
   BOLD: "**",
   ITALIC: "*",
@@ -80,6 +82,59 @@ async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs: numbe
   } finally {
     clearTimeout(timer);
   }
+}
+
+function normalizeMaxResponseBytes(value: number | undefined): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    return DEFAULT_ATTACHMENT_RESPONSE_MAX_BYTES;
+  }
+  return Math.floor(value);
+}
+
+function readContentLength(res: Response): number | undefined {
+  const raw = res.headers?.get("content-length");
+  if (!raw) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+async function readCappedResponseBuffer(res: Response, maxResponseBytes: number): Promise<Buffer> {
+  const contentLength = readContentLength(res);
+  if (contentLength !== undefined && contentLength > maxResponseBytes) {
+    throw new Error("Signal REST attachment exceeded size limit");
+  }
+
+  const reader = res.body?.getReader();
+  if (!reader) {
+    const arrayBuffer = await res.arrayBuffer();
+    if (arrayBuffer.byteLength > maxResponseBytes) {
+      throw new Error("Signal REST attachment exceeded size limit");
+    }
+    return Buffer.from(arrayBuffer);
+  }
+
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      const chunk = Buffer.from(value ?? new Uint8Array());
+      totalBytes += chunk.byteLength;
+      if (totalBytes > maxResponseBytes) {
+        await reader.cancel().catch(() => {});
+        throw new Error("Signal REST attachment exceeded size limit");
+      }
+      chunks.push(chunk);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks);
 }
 
 /**
@@ -222,8 +277,7 @@ export async function containerFetchAttachment(
     return null;
   }
 
-  const arrayBuffer = await res.arrayBuffer();
-  return Buffer.from(arrayBuffer);
+  return readCappedResponseBuffer(res, normalizeMaxResponseBytes(opts.maxResponseBytes));
 }
 
 /**
@@ -642,7 +696,7 @@ export async function containerRpcRequest<T = unknown>(
       const formattedGroupId = groupId ? formatGroupIdForContainer(groupId) : undefined;
       // Container API uses `recipient` for both DMs and groups.
       // For groups, pass the formatted group ID as recipient.
-      const effectiveRecipient = recipient || formattedGroupId || "";
+      const effectiveRecipient = formattedGroupId || recipient || "";
       const reactionParams = {
         baseUrl: opts.baseUrl,
         account: (p.account as string) ?? "",
@@ -650,6 +704,7 @@ export async function containerRpcRequest<T = unknown>(
         emoji: (p.emoji as string) ?? "",
         targetAuthor: stripUuidPrefix((p.targetAuthor as string) ?? recipient),
         targetTimestamp: p.targetTimestamp as number,
+        groupId: formattedGroupId,
         timeoutMs: opts.timeoutMs,
       };
       const fn = p.remove ? containerRemoveReaction : containerSendReaction;
@@ -661,6 +716,7 @@ export async function containerRpcRequest<T = unknown>(
       const buffer = await containerFetchAttachment(attachmentId, {
         baseUrl: opts.baseUrl,
         timeoutMs: opts.timeoutMs,
+        maxResponseBytes: opts.maxResponseBytes,
       });
       // Convert to native format: { data: base64String }
       if (!buffer) {

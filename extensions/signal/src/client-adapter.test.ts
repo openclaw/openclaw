@@ -378,6 +378,32 @@ describe("streamSignalEvents", () => {
     );
   });
 
+  it("uses a positive probe timeout while preserving zero stream timeout", async () => {
+    setApiMode("auto");
+    mockNativeCheck.mockResolvedValue({ ok: true, status: 200 });
+    mockContainerCheck.mockResolvedValue({ ok: false, status: 404 });
+    mockNativeStreamEvents.mockResolvedValue(undefined);
+
+    await streamSignalEvents({
+      baseUrl: "http://zero-timeout.local:8080",
+      account: "+14259798283",
+      timeoutMs: 0,
+      onEvent: vi.fn(),
+    });
+
+    expect(mockNativeCheck).toHaveBeenCalledWith("http://zero-timeout.local:8080", 10000);
+    expect(mockContainerCheck).toHaveBeenCalledWith(
+      "http://zero-timeout.local:8080",
+      10000,
+      "+14259798283",
+    );
+    expect(mockNativeStreamEvents).toHaveBeenCalledWith(
+      expect.objectContaining({
+        timeoutMs: 0,
+      }),
+    );
+  });
+
   it("forwards timeout to container event stream", async () => {
     setApiMode("container");
     mockStreamContainerEvents.mockResolvedValue(undefined);
@@ -540,6 +566,24 @@ describe("fetchAttachment", () => {
       "attachment-123",
       expect.objectContaining({
         timeoutMs: 60000,
+      }),
+    );
+  });
+
+  it("passes max response bytes to container fetch", async () => {
+    setApiMode("container");
+    mockContainerFetchAttachment.mockResolvedValue(Buffer.from([]));
+
+    await fetchAttachment({
+      baseUrl: "http://localhost:8080",
+      attachmentId: "attachment-123",
+      maxResponseBytes: 4096,
+    });
+
+    expect(mockContainerFetchAttachment).toHaveBeenCalledWith(
+      "attachment-123",
+      expect.objectContaining({
+        maxResponseBytes: 4096,
       }),
     );
   });

@@ -49,6 +49,12 @@ function formatErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function resolveAutoProbeTimeoutMs(timeoutMs: number | undefined): number {
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : DEFAULT_TIMEOUT_MS;
+}
+
 async function resolveAutoApiMode(
   baseUrl: string,
   timeoutMs = DEFAULT_TIMEOUT_MS,
@@ -186,7 +192,7 @@ export async function streamSignalEvents(params: {
     accountId: params.accountId,
     account: params.account,
     requireContainerReceive: true,
-    timeoutMs: params.timeoutMs,
+    timeoutMs: resolveAutoProbeTimeoutMs(params.timeoutMs),
   });
 
   if (mode === "container") {
@@ -220,6 +226,7 @@ export async function fetchAttachment(params: {
   sender?: string;
   groupId?: string;
   timeoutMs?: number;
+  maxResponseBytes?: number;
 }): Promise<Buffer | null> {
   const mode = await resolveApiModeForOperation({
     baseUrl: params.baseUrl,
@@ -231,6 +238,7 @@ export async function fetchAttachment(params: {
     return containerFetchAttachment(params.attachmentId, {
       baseUrl: params.baseUrl,
       timeoutMs: params.timeoutMs,
+      maxResponseBytes: params.maxResponseBytes,
     });
   }
 
@@ -250,6 +258,7 @@ export async function fetchAttachment(params: {
   const result = await nativeRpcRequest<{ data?: string }>("getAttachment", rpcParams, {
     baseUrl: params.baseUrl,
     timeoutMs: params.timeoutMs,
+    maxResponseBytes: params.maxResponseBytes,
   });
   if (!result?.data) {
     return null;

@@ -7,6 +7,7 @@ import {
   containerSendTyping,
   containerSendReceipt,
   containerFetchAttachment,
+  containerRpcRequest,
   containerSendReaction,
   containerRemoveReaction,
   streamContainerEvents,
@@ -554,6 +555,47 @@ describe("containerFetchAttachment", () => {
       expect.anything(),
     );
   });
+
+  it("rejects attachments above the content-length cap", async () => {
+    const arrayBuffer = vi.fn();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "5" }),
+      arrayBuffer,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("Signal REST attachment exceeded size limit");
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it("rejects streamed attachments that exceed the response cap", async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array([1, 2, 3]));
+        controller.enqueue(new Uint8Array([4, 5]));
+        controller.close();
+      },
+    });
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      body: stream,
+    });
+
+    await expect(
+      containerFetchAttachment("attachment-123", {
+        baseUrl: "http://localhost:8080",
+        maxResponseBytes: 4,
+      }),
+    ).rejects.toThrow("Signal REST attachment exceeded size limit");
+  });
 });
 
 describe("normalizeBaseUrl edge cases", () => {
@@ -721,6 +763,39 @@ describe("containerSendReaction", () => {
     const callArgs = mockFetch.mock.calls[0];
     const body = JSON.parse(callArgs[1].body);
     expect(body.group_id).toBe("group-123");
+  });
+});
+
+describe("containerRpcRequest reactions", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("routes group reactions to the formatted group recipient", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({}),
+    });
+
+    await containerRpcRequest(
+      "sendReaction",
+      {
+        account: "+14259798283",
+        recipients: ["uuid:author-uuid"],
+        groupIds: ["group-123"],
+        emoji: "👍",
+        targetAuthor: "uuid:author-uuid",
+        targetTimestamp: 1699999999999,
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const callArgs = mockFetch.mock.calls[0];
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+    expect(body.group_id).toBe("group.Z3JvdXAtMTIz");
+    expect(body.target_author).toBe("author-uuid");
   });
 });
 
