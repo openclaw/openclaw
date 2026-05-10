@@ -405,9 +405,11 @@ function rewriteModelsMap(params: {
 }
 
 function rewriteAgentModelRefs(params: {
+  cfg: OpenClawConfig;
   hits: CodexRouteHit[];
   agent: MutableRecord | undefined;
   path: string;
+  agentId?: string;
   currentRuntime?: string;
   rewriteModelsMap?: boolean;
   runtimePolicyChanges: string[];
@@ -428,50 +430,61 @@ function rewriteAgentModelRefs(params: {
   };
   for (const key of AGENT_MODEL_CONFIG_KEYS) {
     const start = params.hits.length;
-    rewriteModelConfigSlot({
-      hits: params.hits,
-      container: agent,
-      key,
-      path: `${params.path}.${key}`,
-      runtime: key === "model" ? params.currentRuntime : undefined,
-    });
-    preserveCodexRuntimePolicyForNewHits(start);
+    if (key === "model") {
+      rewriteModelConfigSlot({
+        hits: params.hits,
+        container: agent,
+        key,
+        path: `${params.path}.${key}`,
+        runtime: params.currentRuntime,
+      });
+      preserveCodexRuntimePolicyForNewHits(start);
+    } else {
+      rewriteModelConfigSlotIfCanonicalCodexRuntime({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        hits: params.hits,
+        container: agent,
+        key,
+        path: `${params.path}.${key}`,
+      });
+    }
   }
-  let start = params.hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
     hits: params.hits,
     container: asMutableRecord(agent.heartbeat),
     key: "model",
     path: `${params.path}.heartbeat.model`,
   });
-  preserveCodexRuntimePolicyForNewHits(start);
-  start = params.hits.length;
-  rewriteModelConfigSlot({
+  rewriteModelConfigSlotIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
     hits: params.hits,
     container: asMutableRecord(agent.subagents),
     key: "model",
     path: `${params.path}.subagents.model`,
   });
-  preserveCodexRuntimePolicyForNewHits(start);
   const compaction = asMutableRecord(agent.compaction);
-  start = params.hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
     hits: params.hits,
     container: compaction,
     key: "model",
     path: `${params.path}.compaction.model`,
   });
-  preserveCodexRuntimePolicyForNewHits(start);
-  start = params.hits.length;
-  rewriteStringModelSlot({
+  rewriteStringModelSlotIfCanonicalCodexRuntime({
+    cfg: params.cfg,
+    agentId: params.agentId,
     hits: params.hits,
     container: asMutableRecord(compaction?.memoryFlush),
     key: "model",
     path: `${params.path}.compaction.memoryFlush.model`,
   });
-  preserveCodexRuntimePolicyForNewHits(start);
   if (params.rewriteModelsMap) {
-    start = params.hits.length;
+    const start = params.hits.length;
     rewriteModelsMap({
       hits: params.hits,
       models: asMutableRecord(agent.models),
@@ -496,7 +509,8 @@ function ensureCodexRuntimePolicy(params: {
     models[params.modelRef] = entry;
   }
   const priorRuntime = asMutableRecord(entry.agentRuntime);
-  if (normalizeString(priorRuntime?.id)) {
+  const runtimeId = normalizeString(priorRuntime?.id);
+  if (runtimeId && runtimeId !== "auto" && runtimeId !== "default") {
     return;
   }
   entry.agentRuntime = {
@@ -511,6 +525,7 @@ function ensureCodexRuntimePolicy(params: {
 function canonicalOpenAIModelUsesCodexRuntime(params: {
   cfg: OpenClawConfig;
   modelRef: string;
+  agentId?: string;
 }): boolean {
   const slash = params.modelRef.indexOf("/");
   if (slash <= 0 || slash >= params.modelRef.length - 1) {
@@ -523,6 +538,7 @@ function canonicalOpenAIModelUsesCodexRuntime(params: {
       config: params.cfg,
       provider,
       modelId,
+      agentId: params.agentId,
     }).policy?.id,
   );
   if (configured && configured !== "auto" && configured !== "default") {
@@ -533,6 +549,7 @@ function canonicalOpenAIModelUsesCodexRuntime(params: {
 
 function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   hits: CodexRouteHit[];
   container: MutableRecord | undefined;
   key: string;
@@ -545,7 +562,11 @@ function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
   const canonicalModel = toCanonicalOpenAIModelRef(value.trim());
   if (
     !canonicalModel ||
-    !canonicalOpenAIModelUsesCodexRuntime({ cfg: params.cfg, modelRef: canonicalModel })
+    !canonicalOpenAIModelUsesCodexRuntime({
+      cfg: params.cfg,
+      modelRef: canonicalModel,
+      agentId: params.agentId,
+    })
   ) {
     return;
   }
@@ -559,6 +580,7 @@ function rewriteStringModelSlotIfCanonicalCodexRuntime(params: {
 
 function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   hits: CodexRouteHit[];
   container: MutableRecord | undefined;
   key: string;
@@ -575,6 +597,7 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
   }
   rewriteStringModelSlotIfCanonicalCodexRuntime({
     cfg: params.cfg,
+    agentId: params.agentId,
     hits: params.hits,
     container: record,
     key: "primary",
@@ -591,7 +614,11 @@ function rewriteModelConfigSlotIfCanonicalCodexRuntime(params: {
     const canonicalModel = toCanonicalOpenAIModelRef(entry.trim());
     if (
       !canonicalModel ||
-      !canonicalOpenAIModelUsesCodexRuntime({ cfg: params.cfg, modelRef: canonicalModel })
+      !canonicalOpenAIModelUsesCodexRuntime({
+        cfg: params.cfg,
+        modelRef: canonicalModel,
+        agentId: params.agentId,
+      })
     ) {
       continue;
     }
@@ -641,6 +668,7 @@ function rewriteConfigModelRefs(params: {
   const runtimePolicyChanges: string[] = [];
   const defaultsRuntime = nextConfig.agents?.defaults?.agentRuntime;
   rewriteAgentModelRefs({
+    cfg: nextConfig,
     hits,
     agent: asMutableRecord(nextConfig.agents?.defaults),
     path: "agents.defaults",
@@ -651,9 +679,11 @@ function rewriteConfigModelRefs(params: {
   for (const [index, agent] of (nextConfig.agents?.list ?? []).entries()) {
     const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
     rewriteAgentModelRefs({
+      cfg: nextConfig,
       hits,
       agent: agent as MutableRecord,
       path: `agents.list.${id}`,
+      agentId: id,
       currentRuntime: resolveRuntime({
         env: params.env,
         agentRuntime: agent.agentRuntime,
