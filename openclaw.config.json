@@ -1,0 +1,14 @@
+{
+  "channels": {
+    "discord": {
+      "token": "MTUwMjYyNTcwNzI5NjI5MjkwNA.GtCf7P.2amxu4SoWXUh_KhjFoJqIl4zybfgzdKJjgBud4",
+      "dmPolicy": "open"
+    }
+  },
+  "models": {
+    "default": "gemini/gemini-2.0-flash"
+  },
+  "keys": {
+    "google": "AIzaSyC7NE4Twk_kz5u98U5siOtouUrst46HusE"
+  }
+}
