@@ -1,12 +1,14 @@
 import {
+  type JsonSchemaObject,
+  validateJsonSchemaValue,
+} from "openclaw/plugin-sdk/json-schema-runtime";
+import {
   type ImagesDescriptionRequest,
   type ImagesDescriptionResult,
   type MediaUnderstandingProvider,
   type StructuredExtractionRequest,
   type StructuredExtractionResult,
 } from "openclaw/plugin-sdk/media-understanding";
-import { validateJsonSchemaValue } from "../../src/plugins/schema-validator.js";
-import type { JsonSchemaObject } from "../../src/shared/json-schema.types.js";
 import { CODEX_PROVIDER_ID, FALLBACK_CODEX_MODELS } from "./provider-catalog.js";
 import { type CodexAppServerClientFactory } from "./src/app-server/client-factory.js";
 import type { CodexAppServerClient } from "./src/app-server/client.js";
@@ -392,7 +394,7 @@ function normalizeStructuredExtractionResult(params: {
         const message = validation.errors.map((error) => error.text).join("; ") || "invalid";
         throw new Error(`Codex structured extraction JSON did not match schema: ${message}`);
       }
-      result.parsed = validation.value as typeof result.parsed;
+      result.parsed = validation.value;
     }
   }
   return result;
