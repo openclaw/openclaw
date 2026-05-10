@@ -49,12 +49,12 @@ describe("Kimi implicit provider (#22409)", () => {
 
     expect(provider).toMatchObject({
       apiKey: "test-key",
-      baseUrl: "https://api.kimi.com/coding/",
-      api: "anthropic-messages",
+      baseUrl: "https://api.kimi.com/coding/v1",
+      api: "openai-completions",
     });
   });
 
-  it("uses explicit legacy kimi-coding baseUrl when provided", async () => {
+  it("migrates explicit legacy kimi-coding baseUrl to the OpenAI-compatible route", async () => {
     const provider = await runKimiCatalogProvider({
       apiKey: "test-key",
       explicitProvider: {
@@ -62,7 +62,7 @@ describe("Kimi implicit provider (#22409)", () => {
       },
     });
 
-    expect(provider.baseUrl).toBe("https://kimi.example.test/coding/");
+    expect(provider.baseUrl).toBe("https://kimi.example.test/coding/v1");
   });
 
   it("merges explicit legacy kimi-coding headers on top of the built-in user agent", async () => {

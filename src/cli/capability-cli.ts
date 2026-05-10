@@ -14,11 +14,16 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import { loadModelCatalog } from "../agents/model-catalog.js";
 import { canonicalizeCaseOnlyCatalogModelRef } from "../agents/model-selection.js";
+import { normalizeProviderId } from "../agents/provider-id.js";
 import {
   completeWithPreparedSimpleCompletionModel,
   prepareSimpleCompletionModelForAgent,
 } from "../agents/simple-completion-runtime.js";
-import { normalizeThinkLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import {
+  normalizeThinkLevel,
+  resolveSupportedThinkingLevel,
+  type ThinkLevel,
+} from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -667,6 +672,44 @@ function normalizeModelRunThinking(value: unknown): ThinkLevel | undefined {
   return normalized;
 }
 
+function resolveModelRunThinkingForProvider(params: {
+  thinking?: ThinkLevel;
+  provider?: string;
+  model?: string;
+}): ThinkLevel | undefined {
+  if (!params.thinking || !params.provider || !params.model) {
+    return params.thinking;
+  }
+  return resolveSupportedThinkingLevel({
+    provider: params.provider,
+    model: params.model,
+    level: params.thinking,
+  });
+}
+
+function resolveModelRunGatewayTimeoutMs(params: {
+  cfg: OpenClawConfig;
+  provider?: string;
+}): number {
+  const normalizedProvider = params.provider ? normalizeProviderId(params.provider) : "";
+  const providers = params.cfg.models?.providers;
+  const providerConfig =
+    normalizedProvider && providers
+      ? Object.entries(providers).find(
+          ([providerId]) => normalizeProviderId(providerId) === normalizedProvider,
+        )?.[1]
+      : undefined;
+  const timeoutSeconds = providerConfig?.timeoutSeconds;
+  if (
+    typeof timeoutSeconds !== "number" ||
+    !Number.isFinite(timeoutSeconds) ||
+    timeoutSeconds <= 0
+  ) {
+    return 120_000;
+  }
+  return Math.max(120_000, Math.floor(timeoutSeconds) * 1000 + 10_000);
+}
+
 async function runModelRun(params: {
   prompt: string;
   files?: string[];
@@ -714,6 +757,11 @@ async function runModelRun(params: {
         'The codex provider is served by the Codex app-server agent runtime, not the local simple-completion transport. Use an openai/<model> ref with agents.defaults.agentRuntime.id: "codex", run through the gateway, or use /codex commands.',
       );
     }
+    const effectiveThinking = resolveModelRunThinkingForProvider({
+      thinking: params.thinking,
+      provider: prepared.selection.provider,
+      model: prepared.selection.modelId,
+    });
     const localModelRunSystemPrompt =
       prepared.selection.provider === "openai-codex" ||
       prepared.model.api === "openai-codex-responses"
@@ -738,7 +786,7 @@ async function runModelRun(params: {
           typeof prepared.model.maxTokens === "number" && Number.isFinite(prepared.model.maxTokens)
             ? prepared.model.maxTokens
             : undefined,
-        ...(params.thinking ? { reasoning: params.thinking } : {}),
+        ...(effectiveThinking ? { reasoning: effectiveThinking } : {}),
       },
     });
     const text = collectModelRunText(result.content);
@@ -777,6 +825,12 @@ async function runModelRun(params: {
   }
 
   const { provider, model } = resolveModelRefOverride(modelRef);
+  const effectiveThinking = resolveModelRunThinkingForProvider({
+    thinking: params.thinking,
+    provider,
+    model,
+  });
+  const gatewayTimeoutMs = resolveModelRunGatewayTimeoutMs({ cfg, provider });
   // Provider/model overrides require trusted-operator scope. Use the backend
   // shared-secret lane so local gateway smokes do not depend on paired CLI device scopes.
   const hasModelOverride = Boolean(provider || model);
@@ -807,14 +861,14 @@ async function runModelRun(params: {
           : undefined,
       provider,
       model,
-      ...(params.thinking ? { thinking: params.thinking } : {}),
+      ...(effectiveThinking ? { thinking: effectiveThinking } : {}),
       modelRun: true,
       promptMode: "none",
       cleanupBundleMcpOnRunEnd: true,
       idempotencyKey: randomIdempotencyKey(),
     },
     expectFinal: true,
-    timeoutMs: 120_000,
+    timeoutMs: gatewayTimeoutMs,
     clientName: hasModelOverride ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT : GATEWAY_CLIENT_NAMES.CLI,
     mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
     ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),

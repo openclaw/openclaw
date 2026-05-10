@@ -18,6 +18,9 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
+type KimiThinkingConfig = {
+  type: KimiThinkingType;
+};
 type KimiThinkingLevel =
   | "off"
   | "minimal"
@@ -51,18 +54,47 @@ function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined
   return undefined;
 }
 
+function normalizeKimiThinkingConfig(
+  thinkingConfig: KimiThinkingConfig | KimiThinkingType,
+): KimiThinkingConfig {
+  if (typeof thinkingConfig !== "string") {
+    if (thinkingConfig.type === "disabled") {
+      return { type: "disabled" };
+    }
+    return { type: "enabled" };
+  }
+  if (thinkingConfig === "disabled") {
+    return { type: "disabled" };
+  }
+  return { type: "enabled" };
+}
+
+export function resolveKimiThinkingConfig(params: {
+  configuredThinking: unknown;
+  thinkingLevel?: KimiThinkingLevel;
+}): KimiThinkingConfig {
+  const configured = normalizeKimiThinkingType(params.configuredThinking);
+  if (configured === "disabled") {
+    return { type: "disabled" };
+  }
+  if (configured === "enabled") {
+    return { type: "enabled" };
+  }
+  if (!params.thinkingLevel || params.thinkingLevel === "off") {
+    return { type: "disabled" };
+  }
+  // Kimi's OpenAI-compatible coding endpoint supports binary thinking only.
+  // OpenClaw effort levels therefore map to enabled/disabled without budgets.
+  // The OpenAI stream adapter consumes Kimi's reasoning_content deltas as
+  // thinking activity, so long thinking no longer trips the idle watchdog.
+  return { type: "enabled" };
+}
+
 export function resolveKimiThinkingType(params: {
   configuredThinking: unknown;
   thinkingLevel?: KimiThinkingLevel;
 }): KimiThinkingType {
-  const configured = normalizeKimiThinkingType(params.configuredThinking);
-  if (configured) {
-    return configured;
-  }
-  if (!params.thinkingLevel || params.thinkingLevel === "off") {
-    return "disabled";
-  }
-  return "enabled";
+  return resolveKimiThinkingConfig(params).type;
 }
 
 function stripTaggedToolCallCounter(value: string): string {
@@ -232,12 +264,12 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
 
 export function createKimiThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingType: KimiThinkingType,
+  thinkingConfig: KimiThinkingConfig | KimiThinkingType,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      payloadObj.thinking = { type: thinkingType };
+      payloadObj.thinking = normalizeKimiThinkingConfig(thinkingConfig);
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
@@ -245,9 +277,9 @@ export function createKimiThinkingWrapper(
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
-  const thinkingType = resolveKimiThinkingType({
+  const thinkingConfig = resolveKimiThinkingConfig({
     configuredThinking: ctx.extraParams?.thinking,
     thinkingLevel: ctx.thinkingLevel,
   });
-  return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingType));
+  return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingConfig));
 }

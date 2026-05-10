@@ -302,6 +302,7 @@ describe("capability cli", () => {
     mocks.runtime.log.mockClear();
     mocks.runtime.error.mockClear();
     mocks.runtime.writeJson.mockClear();
+    mocks.loadConfig.mockReset().mockReturnValue({});
     mocks.loadModelCatalog
       .mockReset()
       .mockResolvedValue([{ id: "gpt-5.4", provider: "openai", name: "GPT-5.4" }] as never);
@@ -635,6 +636,50 @@ describe("capability cli", () => {
     });
 
     expect(firstCompletionCall()?.options?.reasoning).toBe("high");
+  });
+
+  it("remaps unsupported Kimi thinking high to binary on before local model probes", async () => {
+    mocks.prepareSimpleCompletionModelForAgent.mockResolvedValueOnce({
+      selection: {
+        provider: "kimi-coding",
+        modelId: "k2p5",
+        agentDir: "/tmp/agent",
+      },
+      model: {
+        provider: "kimi",
+        id: "k2p5",
+        maxTokens: 128,
+      },
+      auth: {
+        apiKey: "sk-test",
+        source: "env:TEST_API_KEY",
+        mode: "api-key",
+      },
+    } as never);
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "kimi-coding/k2p5",
+        "--prompt",
+        "hello",
+        "--thinking",
+        "high",
+        "--json",
+      ],
+    });
+
+    expect(mocks.completeWithPreparedSimpleCompletionModel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.objectContaining({
+          reasoning: "low",
+        }),
+      }),
+    );
   });
 
   it("passes image files to gateway model probes as attachments", async () => {
@@ -976,6 +1021,49 @@ describe("capability cli", () => {
     expect(gatewayCall?.params?.thinking).toBe("high");
     expect(gatewayCall?.params?.modelRun).toBe(true);
     expect(gatewayCall?.params?.promptMode).toBe("none");
+  });
+
+  it("remaps unsupported Kimi thinking high to binary on and provider timeout before gateway model probes", async () => {
+    mocks.loadConfig.mockReturnValue({
+      models: {
+        providers: {
+          kimi: {
+            timeoutSeconds: 300,
+          },
+        },
+      },
+    });
+
+    await runRegisteredCli({
+      register: registerCapabilityCli as (program: Command) => void,
+      argv: [
+        "capability",
+        "model",
+        "run",
+        "--model",
+        "kimi-coding/k2p5",
+        "--prompt",
+        "hello",
+        "--gateway",
+        "--thinking",
+        "high",
+        "--json",
+      ],
+    });
+
+    expect(mocks.callGateway).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "agent",
+        params: expect.objectContaining({
+          provider: "kimi-coding",
+          model: "k2p5",
+          thinking: "low",
+          modelRun: true,
+          promptMode: "none",
+        }),
+        timeoutMs: 310000,
+      }),
+    );
   });
 
   it("rejects invalid model run thinking overrides before dispatch", async () => {

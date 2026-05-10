@@ -234,6 +234,47 @@ describe("provider public artifacts", () => {
     expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
   });
 
+  it("loads provider policy aliases from the bundled plugin directory when id differs", async () => {
+    const loadBundledPluginPublicArtifactModuleSync = vi.fn(({ dirName }: { dirName: string }) => {
+      if (dirName !== "kimi-coding") {
+        throw new Error(`Unable to resolve bundled plugin public surface ${dirName}`);
+      }
+      return {
+        resolveThinkingProfile: () => ({ levels: [{ id: dirName }] }),
+      };
+    });
+    vi.doMock("./public-surface-loader.js", () => ({
+      loadBundledPluginPublicArtifactModuleSync,
+    }));
+
+    const { resolveBundledProviderPolicySurface: resolvePolicySurface } = await importFreshModule<
+      typeof import("./provider-public-artifacts.js")
+    >(import.meta.url, "./provider-public-artifacts.js?scope=provider-dir-name");
+
+    const surface = resolvePolicySurface("kimi", {
+      manifestRegistry: {
+        plugins: [
+          {
+            id: "kimi",
+            channels: [],
+            cliBackends: [],
+            hooks: [],
+            origin: "bundled",
+            manifestPath: "/tmp/kimi-coding/openclaw.plugin.json",
+            providers: ["kimi"],
+            rootDir: "/tmp/kimi-coding",
+            skills: [],
+            source: "/tmp/kimi-coding/index.js",
+          },
+        ],
+      },
+    });
+
+    expect(surface?.resolveThinkingProfile?.({ provider: "kimi", modelId: "k2p5" })).toEqual({
+      levels: [{ id: "kimi-coding" }],
+    });
+  });
+
   it("loads provider policy surfaces without package-manager repair", async () => {
     const loadBundledPluginPublicArtifactModuleSync = vi.fn(() => ({
       normalizeConfig: (ctx: { providerConfig: ModelProviderConfig }) => ctx.providerConfig,

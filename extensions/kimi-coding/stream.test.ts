@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   createKimiThinkingWrapper,
   createKimiToolCallMarkupWrapper,
+  resolveKimiThinkingConfig,
   resolveKimiThinkingType,
   wrapKimiProviderStream,
 } from "./stream.js";
@@ -83,7 +84,7 @@ function createPayloadCapturingStream(initialPayload: Record<string, unknown> = 
 }
 
 describe("kimi tool-call markup wrapper", () => {
-  it("defaults Kimi thinking to disabled unless explicitly enabled", () => {
+  it("maps OpenClaw thinking levels to Kimi binary thinking", () => {
     expect(resolveKimiThinkingType({ configuredThinking: undefined })).toBe("disabled");
     expect(resolveKimiThinkingType({ configuredThinking: undefined, thinkingLevel: "high" })).toBe(
       "enabled",
@@ -281,6 +282,40 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
+  it("enables Kimi thinking through an explicit wrapper flag without inventing a budget", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+
+    const wrapped = createKimiThinkingWrapper(baseStreamFn, "enabled");
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "enabled" },
+    });
+  });
+
+  it("enables Kimi thinking for non-off OpenClaw thinking levels", () => {
+    const cases = ["minimal", "low", "medium", "adaptive", "high", "xhigh", "max"] as const;
+
+    for (const thinkingLevel of cases) {
+      expect(
+        resolveKimiThinkingConfig({
+          configuredThinking: undefined,
+          thinkingLevel,
+        }),
+      ).toEqual({
+        type: "enabled",
+      });
+    }
+  });
+
   it("lets explicit model params keep Kimi thinking disabled even when session thinking is on", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
@@ -288,6 +323,32 @@ describe("kimi tool-call markup wrapper", () => {
       provider: "kimi",
       modelId: "kimi-code",
       extraParams: { thinking: "off" },
+      thinkingLevel: "high",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "openai-completions",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"openai-completions">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "disabled" },
+    });
+  });
+
+  it("enables Kimi thinking when explicitly requested by model params", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      extraParams: { thinking: { type: "enabled", budget_tokens: 4096 } },
       thinkingLevel: "high",
       streamFn: baseStreamFn,
     } as never);
@@ -303,11 +364,11 @@ describe("kimi tool-call markup wrapper", () => {
     );
 
     expect(getCapturedPayload()).toEqual({
-      thinking: { type: "disabled" },
+      thinking: { type: "enabled" },
     });
   });
 
-  it("enables Kimi thinking only when explicitly requested", () => {
+  it("enables Kimi thinking for generic session thinking levels", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
     const wrapped = wrapKimiProviderStream({
@@ -319,10 +380,10 @@ describe("kimi tool-call markup wrapper", () => {
 
     void wrapped(
       {
-        api: "anthropic-messages",
+        api: "openai-completions",
         provider: "kimi",
         id: "kimi-code",
-      } as Model<"anthropic-messages">,
+      } as Model<"openai-completions">,
       { messages: [] } as Context,
       {},
     );

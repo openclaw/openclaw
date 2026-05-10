@@ -14,13 +14,13 @@ describe("kimi provider plugin", () => {
           id: "kimi-code",
           name: "Kimi Code",
           provider: "kimi",
-          api: "anthropic-messages",
+          api: "openai-completions",
         },
       } as never),
     ).toMatchObject({ id: "kimi-for-coding" });
   });
 
-  it("uses binary thinking with thinking off by default", async () => {
+  it("exposes Kimi as binary thinking with default off", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
     expect(

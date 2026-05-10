@@ -4,9 +4,14 @@ import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import type { SecretInput } from "openclaw/plugin-sdk/secret-input";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyKimiCodeConfig, KIMI_CODING_MODEL_REF } from "./onboard.js";
-import { buildKimiCodingProvider, normalizeKimiCodingModelId } from "./provider-catalog.js";
+import {
+  buildKimiCodingProvider,
+  normalizeKimiCodingBaseUrl,
+  normalizeKimiCodingModelId,
+} from "./provider-catalog.js";
 import { KIMI_REPLAY_POLICY } from "./replay-policy.js";
 import { wrapKimiProviderStream } from "./stream.js";
+import { resolveKimiThinkingProfile } from "./thinking-policy.js";
 
 const PLUGIN_ID = "kimi";
 const PROVIDER_ID = "kimi";
@@ -81,7 +86,7 @@ export default definePluginEntry({
           return {
             provider: {
               ...builtInProvider,
-              ...(explicitBaseUrl ? { baseUrl: explicitBaseUrl } : {}),
+              ...(explicitBaseUrl ? { baseUrl: normalizeKimiCodingBaseUrl(explicitBaseUrl) } : {}),
               ...(explicitHeaders
                 ? {
                     headers: {
@@ -100,13 +105,7 @@ export default definePluginEntry({
         const normalizedId = normalizeKimiCodingModelId(model.id);
         return normalizedId === model.id ? undefined : { ...model, id: normalizedId };
       },
-      resolveThinkingProfile: () => ({
-        levels: [
-          { id: "off", label: "off" },
-          { id: "low", label: "on" },
-        ],
-        defaultLevel: "off",
-      }),
+      resolveThinkingProfile: resolveKimiThinkingProfile,
       wrapStreamFn: wrapKimiProviderStream,
     });
   },

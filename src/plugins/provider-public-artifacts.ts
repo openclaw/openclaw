@@ -1,3 +1,4 @@
+import path from "node:path";
 import { normalizeProviderId } from "../agents/provider-id.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -63,7 +64,7 @@ function tryLoadBundledProviderPolicySurface(
   return null;
 }
 
-function resolveBundledProviderPolicyPluginId(
+function resolveBundledProviderPolicyPluginDirName(
   providerId: string,
   options: { manifestRegistry?: Pick<PluginManifestRegistry, "plugins"> } = {},
 ): string | null {
@@ -87,7 +88,7 @@ function resolveBundledProviderPolicyPluginId(
       (provider) => normalizeProviderId(provider) === normalizedProviderId,
     );
     if (ownsProvider) {
-      return plugin.id;
+      return path.basename(plugin.rootDir) || plugin.id;
     }
   }
 
@@ -106,9 +107,12 @@ export function resolveBundledProviderPolicySurface(
   if (directSurface) {
     return directSurface;
   }
-  const ownerPluginId = resolveBundledProviderPolicyPluginId(normalizedProviderId, options);
-  if (!ownerPluginId || ownerPluginId === normalizedProviderId) {
+  const ownerPluginDirName = resolveBundledProviderPolicyPluginDirName(
+    normalizedProviderId,
+    options,
+  );
+  if (!ownerPluginDirName || ownerPluginDirName === normalizedProviderId) {
     return null;
   }
-  return tryLoadBundledProviderPolicySurface(ownerPluginId);
+  return tryLoadBundledProviderPolicySurface(ownerPluginDirName);
 }

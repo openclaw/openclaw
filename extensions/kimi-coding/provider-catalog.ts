@@ -3,7 +3,7 @@ import type {
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
 
-const KIMI_BASE_URL = "https://api.kimi.com/coding/";
+const KIMI_BASE_URL = "https://api.kimi.com/coding/v1";
 const KIMI_CODING_USER_AGENT = "claude-code/0.1.0";
 const KIMI_DEFAULT_MODEL_ID = "kimi-for-coding";
 const KIMI_LEGACY_MODEL_IDS = ["kimi-code", "k2p5"] as const;
@@ -16,11 +16,20 @@ const KIMI_CODING_DEFAULT_COST = {
   cacheWrite: 0,
 };
 const KIMI_CODING_INPUT = ["text", "image"] satisfies NonNullable<ModelDefinitionConfig["input"]>;
+const KIMI_OPENAI_COMPAT = {
+  maxTokensField: "max_tokens",
+  supportsDeveloperRole: false,
+  supportsReasoningEffort: false,
+  supportsStore: false,
+  supportsStrictMode: false,
+  supportsUsageInStreaming: true,
+  thinkingFormat: "openai",
+} satisfies NonNullable<ModelDefinitionConfig["compat"]>;
 
 export function buildKimiCodingProvider(): ModelProviderConfig {
   return {
     baseUrl: KIMI_BASE_URL,
-    api: "anthropic-messages",
+    api: "openai-completions",
     headers: {
       "User-Agent": KIMI_CODING_USER_AGENT,
     },
@@ -33,6 +42,7 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         cost: KIMI_CODING_DEFAULT_COST,
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
+        compat: { ...KIMI_OPENAI_COMPAT },
       },
       ...KIMI_LEGACY_MODEL_IDS.map((id) => ({
         id,
@@ -42,6 +52,7 @@ export function buildKimiCodingProvider(): ModelProviderConfig {
         cost: KIMI_CODING_DEFAULT_COST,
         contextWindow: KIMI_CODING_DEFAULT_CONTEXT_WINDOW,
         maxTokens: KIMI_CODING_DEFAULT_MAX_TOKENS,
+        compat: { ...KIMI_OPENAI_COMPAT },
       })),
     ],
   };
@@ -56,3 +67,15 @@ export function normalizeKimiCodingModelId(modelId: string): string {
 export const KIMI_CODING_BASE_URL = KIMI_BASE_URL;
 export const KIMI_CODING_DEFAULT_MODEL_ID = KIMI_DEFAULT_MODEL_ID;
 export const KIMI_CODING_LEGACY_MODEL_IDS = KIMI_LEGACY_MODEL_IDS;
+
+export function normalizeKimiCodingBaseUrl(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return KIMI_BASE_URL;
+  }
+  const withoutTrailingSlash = trimmed.replace(/\/+$/, "");
+  if (withoutTrailingSlash.endsWith("/coding")) {
+    return `${withoutTrailingSlash}/v1`;
+  }
+  return withoutTrailingSlash;
+}
