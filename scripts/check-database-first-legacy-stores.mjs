@@ -209,6 +209,14 @@ const forbiddenRuntimeLocatorContractMarkers = [
     label: "context engine compaction transcript locator output",
     pattern: /\bresult\??\.transcriptLocator\b/u,
   },
+  {
+    label: "session JSONL export downloader",
+    pattern: /\bdownloadSessionJson\b/u,
+  },
+  {
+    label: "session JSONL export button",
+    pattern: /\bdownload-json-btn\b/u,
+  },
 ];
 
 const allowedExactPaths = new Set([

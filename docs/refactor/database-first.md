@@ -791,8 +791,9 @@ sessionId}` and session key context.
   legacy store names with write-style filesystem APIs. It also fails runtime
   source that reintroduces transcript bridge contracts such as
   `transcriptLocator`, `sqlite-transcript://...`, or `sessionFile`, and scans
-  tests for those bridge-contract names too. Migration, doctor, import, and
-  explicit export code remain allowed. The guard now also covers runtime
+  tests for those bridge-contract names too. It also bans the old session JSONL
+  downloader hook/class from export UI. Migration, doctor, import, and explicit
+  non-session export code remain allowed. The guard now also covers runtime
   `cache/*.json` stores, generic `thread-bindings.json` sidecars, cron
   state/run-log JSON, config health JSON, restart and lock sidecars, Voice Wake
   settings, plugin binding approvals, installed plugin index JSON, File
