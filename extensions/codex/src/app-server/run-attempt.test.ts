@@ -4040,7 +4040,7 @@ describe("runCodexAppServerAttempt", () => {
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
-    expect("config" in (requestCalls[0]?.[1] ?? {})).toBe(false);
+    expect(requestCalls[0]?.[1].config).toEqual({ "features.code_mode": true });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
@@ -4152,7 +4152,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
-    expect("config" in (requestCalls[0]?.[1] ?? {})).toBe(false);
+    expect(requestCalls[0]?.[1].config).toEqual({ "features.code_mode": true });
   });
 
   it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
@@ -4371,6 +4371,10 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: expect.objectContaining({
+        "features.codex_hooks": true,
+        "features.code_mode": true,
+      }),
       sandbox: "danger-full-access",
       serviceTier: "priority",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
@@ -4473,6 +4477,7 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: { "features.code_mode": true },
       sandbox: "danger-full-access",
       serviceTier: "flex",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
