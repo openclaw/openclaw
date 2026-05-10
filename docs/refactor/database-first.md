@@ -220,6 +220,10 @@ The branch already has a real shared SQLite base:
   Runtime config read/write no longer migrates or preserves old
   `plugins.installs` authored-config data; doctor imports that legacy config
   shape into SQLite before normal runtime use.
+- Gateway reload planning compares SQLite installed-plugin index snapshots under
+  an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
+  reload decisions no longer wrap those rows in fake `plugins.installs` config
+  objects.
 - Matrix named-account credential upgrade no longer happens during runtime
   reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
   rename when a single/default Matrix account can be resolved.
