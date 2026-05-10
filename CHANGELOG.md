@@ -491,6 +491,7 @@ Docs: https://docs.openclaw.ai
 - Exec approvals: omit generated command highlights for non-POSIX Windows and shell-wrapper approval commands until those command languages have native highlighting support. (#80566) Thanks @jesse-merhi.
 - Telegram: keep verbose tool progress and result drafts separate from the final assistant answer so tool output no longer blends into the final Telegram message. (#80294) Thanks @jalehman.
 - Plugin SDK/Windows: enable the native require fast path for root `openclaw/plugin-sdk` dist aliases instead of forcing Jiti transforms. (#80878) Thanks @medns.
+- Gateway: throttle high-volume assistant and thinking agent event fanout without dropping buffered stream deltas, and clear pending throttle state when runs abort. (#80335) Thanks @samzong.
 
 ## 2026.5.9
 
