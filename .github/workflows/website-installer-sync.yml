@@ -99,8 +99,21 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
       - name: install.sh dry run
         run: bash scripts/install.sh --dry-run --no-onboard --no-prompt
+
+      - name: install.sh on macOS
+        env:
+          OPENCLAW_NO_ONBOARD: "1"
+          OPENCLAW_NO_PROMPT: "1"
+        run: |
+          bash scripts/install.sh --no-onboard --no-prompt --version latest
+          openclaw --version
 
   windows-installer:
     runs-on: windows-latest
