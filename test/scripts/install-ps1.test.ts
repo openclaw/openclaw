@@ -81,15 +81,19 @@ describe("install.ps1 failure handling", () => {
     expect(completeInstallBody).toMatch(/\bthrow "OpenClaw installation failed with exit code/);
   });
 
-  it("runs npm capture commands from a writable installer temp directory", () => {
-    const nativeCaptureBody = extractFunctionBody(source, "Invoke-NativeCommandCapture");
-    const npmInstallBody = extractFunctionBody(source, "Install-OpenClawNpm");
-    const mainBody = extractFunctionBody(source, "Main");
-    expect(source).toContain("function Get-NpmWorkingDirectory {");
-    expect(nativeCaptureBody).toContain('[string]$WorkingDirectory = ""');
-    expect(nativeCaptureBody).toContain("$startProcessArgs.WorkingDirectory = $WorkingDirectory");
-    expect(npmInstallBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
-    expect(mainBody).toContain("-WorkingDirectory (Get-NpmWorkingDirectory)");
+  it("runs npm install through the resolved command with quiet CI defaults", () => {
+    const npmInstallBody = extractFunctionBody(source, "Install-OpenClaw");
+    expect(npmInstallBody).toContain("$npmOutput = & (Get-NpmCommandPath) install -g");
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_LOGLEVEL = "error"');
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_UPDATE_NOTIFIER = "false"');
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_FUND = "false"');
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_AUDIT = "false"');
+    expect(npmInstallBody).toContain('$env:NPM_CONFIG_SCRIPT_SHELL = "cmd.exe"');
+    expect(npmInstallBody).toContain('$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = "1"');
+    expect(npmInstallBody).toContain("$env:NPM_CONFIG_LOGLEVEL = $prevLogLevel");
+    expect(npmInstallBody).toContain(
+      "$env:NODE_LLAMA_CPP_SKIP_DOWNLOAD = $prevNodeLlamaSkipDownload",
+    );
   });
 
   runIfPowerShell("creates a temp npm working directory", () => {

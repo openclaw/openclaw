@@ -1426,7 +1426,7 @@ load_nvm_for_node_detection() {
     fi
 
     export NVM_DIR="$nvm_dir"
-    # shellcheck disable=SC1090
+    # shellcheck disable=SC1090,SC1091
     . "$NVM_DIR/nvm.sh" --no-use >/dev/null 2>&1 || . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
     if command -v nvm >/dev/null 2>&1; then
         nvm use default --silent >/dev/null 2>&1 || nvm use node --silent >/dev/null 2>&1 || true
@@ -2350,10 +2350,15 @@ load_install_version_helpers() {
     if [[ -z "$source_path" || ! -f "$source_path" ]]; then
         return 0
     fi
-    script_dir="$(cd "$(dirname "$source_path")" && pwd 2>/dev/null || true)"
+    if script_dir="$(cd "$(dirname "$source_path")" && pwd 2>/dev/null)"; then
+        :
+    else
+        script_dir=""
+    fi
     helper_path="${script_dir}/docker/install-sh-common/version-parse.sh"
     if [[ -n "$script_dir" && -r "$helper_path" ]]; then
         # shellcheck source=docker/install-sh-common/version-parse.sh
+        # shellcheck disable=SC1091
         source "$helper_path"
     fi
 }
