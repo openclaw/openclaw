@@ -17,6 +17,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
+  type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
@@ -72,9 +73,10 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
 
 async function createProjector(
   params?: EmbeddedRunAttemptParams,
+  options?: CodexAppServerEventProjectorOptions,
 ): Promise<CodexAppServerEventProjector> {
   const resolvedParams = params ?? (await createParams());
-  return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID);
+  return new CodexAppServerEventProjector(resolvedParams, THREAD_ID, TURN_ID, options);
 }
 
 async function createProjectorWithAssistantHooks() {
@@ -1032,6 +1034,134 @@ describe("CodexAppServerEventProjector", () => {
         toolCallId: "cmd-declined",
       },
     ]);
+  });
+
+  it("emits after_tool_call observations for Codex-native tool item completions", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector({
+      ...(await createParams()),
+      agentId: "main",
+      sessionKey: "agent:main:session-1",
+    });
+
+    await projector.handleNotification(
+      forCurrentTurn("item/started", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-observed",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "inProgress",
+          commandActions: [],
+          aggregatedOutput: null,
+          exitCode: null,
+          durationMs: null,
+        },
+      }),
+    );
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-observed",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event).toMatchObject({
+      toolName: "bash",
+      params: { command: "pnpm test extensions/codex", cwd: "/workspace" },
+      runId: "run-1",
+      toolCallId: "cmd-observed",
+      result: { status: "completed", exitCode: 0, durationMs: 42 },
+    });
+    expect(event.durationMs).toBeGreaterThanOrEqual(42);
+    const context = requireRecord(
+      mockCallArg(afterToolCall, 0, 1, "after_tool_call context"),
+      "after_tool_call context",
+    );
+    expect(context).toMatchObject({
+      agentId: "main",
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      toolName: "bash",
+      toolCallId: "cmd-observed",
+    });
+  });
+
+  it("does not duplicate native items already covered by PostToolUse relay", async () => {
+    const afterToolCall = vi.fn();
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([{ hookName: "after_tool_call", handler: afterToolCall }]),
+    );
+    const projector = await createProjector(
+      { ...(await createParams()), sessionKey: "agent:main:session-1" },
+      { nativePostToolUseRelayEnabled: true },
+    );
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "commandExecution",
+          id: "cmd-relayed",
+          command: "pnpm test extensions/codex",
+          cwd: "/workspace",
+          processId: null,
+          source: "agent",
+          status: "completed",
+          commandActions: [],
+          aggregatedOutput: "ok",
+          exitCode: 0,
+          durationMs: 42,
+        },
+      }),
+    );
+    expect(afterToolCall).not.toHaveBeenCalled();
+
+    await projector.handleNotification(
+      forCurrentTurn("item/completed", {
+        item: {
+          type: "webSearch",
+          id: "search-observed",
+          query: "opik openclaw codex",
+          status: "completed",
+          durationMs: 5,
+        },
+      }),
+    );
+
+    await vi.waitFor(() => expect(afterToolCall).toHaveBeenCalledTimes(1));
+    const event = requireRecord(
+      mockCallArg(afterToolCall, 0, 0, "after_tool_call event"),
+      "after_tool_call event",
+    );
+    expect(event).toMatchObject({
+      toolName: "web_search",
+      params: { query: "opik openclaw codex" },
+      runId: "run-1",
+      toolCallId: "search-observed",
+      result: { status: "completed" },
+    });
   });
 
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
