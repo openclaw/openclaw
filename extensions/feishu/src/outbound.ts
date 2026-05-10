@@ -2,13 +2,20 @@ import fs from "fs";
 import path from "path";
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { resolveFeishuAccount } from "./accounts.js";
+import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
+import { FEISHU_APPROVAL_CONFIRM_ACTION } from "./card-ux-approval.js";
 import { createFeishuClient } from "./client.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
 import { replyComment } from "./drive.js";
 import { sendMediaFeishu } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { getFeishuRuntime } from "./runtime.js";
-import { sendMarkdownCardFeishu, sendMessageFeishu, sendStructuredCardFeishu } from "./send.js";
+import {
+  sendCardFeishu,
+  sendMarkdownCardFeishu,
+  sendMessageFeishu,
+  sendStructuredCardFeishu,
+} from "./send.js";
 
 function normalizePossibleLocalImagePath(text: string | undefined): string | null {
   const raw = text?.trim();
@@ -115,11 +122,103 @@ async function sendOutboundText(params: {
   return sendMessageFeishu({ cfg, to, text, accountId, replyToMessageId });
 }
 
+function mapInteractiveButtonStyle(style?: string): "default" | "primary" | "danger" {
+  if (style === "danger") return "danger";
+  if (style === "primary" || style === "success") return "primary";
+  return "default";
+}
+
+function buildExecApprovalFeishuCard(params: {
+  text: string;
+  interactive: Record<string, unknown>;
+  sessionKey?: string;
+}): Record<string, unknown> {
+  const blocks = Array.isArray(params.interactive?.blocks) ? params.interactive.blocks : [];
+  const actionButtons: Record<string, unknown>[] = [];
+  for (const block of blocks) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+    if (b.type !== "buttons" || !Array.isArray(b.buttons)) continue;
+    for (const btn of b.buttons as Array<Record<string, unknown>>) {
+      const label = typeof btn.label === "string" ? btn.label : String(btn.label ?? "");
+      const value = typeof btn.value === "string" ? btn.value : "";
+      if (!label || !value) continue;
+      const style = mapInteractiveButtonStyle(
+        typeof btn.style === "string" ? btn.style : undefined,
+      );
+      const envelope = createFeishuCardInteractionEnvelope({
+        k: "button",
+        a: FEISHU_APPROVAL_CONFIRM_ACTION,
+        q: value,
+        c: params.sessionKey
+          ? { s: params.sessionKey, e: Date.now() + 300_000, t: "p2p" as const }
+          : { e: Date.now() + 300_000 },
+      });
+      actionButtons.push({
+        tag: "button",
+        text: { tag: "plain_text", content: label },
+        type: style,
+        value: envelope,
+      });
+    }
+  }
+  return {
+    schema: "2.0",
+    config: { width_mode: "fill" },
+    header: { title: { tag: "plain_text", content: "Exec 审批" }, template: "orange" },
+    body: {
+      elements: [
+        { tag: "markdown", content: params.text },
+        ...(actionButtons.length > 0 ? [{ tag: "action", actions: actionButtons }] : []),
+      ],
+    },
+  };
+}
+
+function resolveExecApprovalChannelData(channelData: unknown): { sessionKey?: string } | null {
+  if (!channelData || typeof channelData !== "object") return null;
+  const cd = channelData as Record<string, unknown>;
+  const ea = cd.execApproval;
+  if (!ea || typeof ea !== "object") return null;
+  const record = ea as Record<string, unknown>;
+  const sessionKey = typeof record.sessionKey === "string" ? record.sessionKey : undefined;
+  return { sessionKey };
+}
+
 export const feishuOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: chunkTextForOutbound,
   chunkerMode: "markdown",
   textChunkLimit: 4000,
+  sendPayload: async ({ cfg, to, payload, accountId, replyToId }) => {
+    const text = payload.text ?? "";
+    const interactive = payload.interactive;
+    const execData = resolveExecApprovalChannelData(payload.channelData);
+    const replyToMessageId = resolveReplyToMessageId({ replyToId, threadId: undefined });
+    if (interactive && execData && typeof interactive === "object") {
+      const card = buildExecApprovalFeishuCard({
+        text,
+        interactive: interactive as Record<string, unknown>,
+        sessionKey: execData.sessionKey,
+      });
+      const result = await sendCardFeishu({
+        cfg,
+        to,
+        card,
+        accountId: accountId ?? undefined,
+        replyToMessageId,
+      });
+      return { channel: "feishu" as const, messageId: result.messageId, chatId: result.chatId };
+    }
+    const result = await sendOutboundText({
+      cfg,
+      to,
+      text,
+      accountId: accountId ?? undefined,
+      replyToMessageId,
+    });
+    return { channel: "feishu" as const, messageId: result.messageId, chatId: result.chatId };
+  },
   ...createAttachedChannelResultAdapter({
     channel: "feishu",
     sendText: async ({
