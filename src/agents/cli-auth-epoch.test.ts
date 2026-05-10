@@ -380,9 +380,8 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).toBe(first);
     expect(third).toBe(second);
     expect(fourth).toBe(third);
-    expectCliAuthEpoch(fifth);
+    expect(fifth).toBe(fourth);
     expectCliAuthEpoch(sixth);
-    expect(fifth).not.toBe(fourth);
     expect(sixth).not.toBe(fifth);
   });
 
@@ -467,5 +466,53 @@ describe("resolveCliAuthEpoch", () => {
       ttlMs: 5000,
       allowKeychainPrompt: false,
     });
+  });
+
+  it("keeps epoch stable when local credential file appears or disappears while profile credential is present", async () => {
+    let localCredential: {
+      type: "oauth";
+      provider: string;
+      access: string;
+      refresh: string;
+      expires: number;
+    } | null = null;
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "profile-access",
+          refresh: "profile-refresh",
+          expires: 1,
+          email: "user@example.com",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => localCredential,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const beforeFile = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:claude-cli",
+    });
+
+    localCredential = {
+      type: "oauth",
+      provider: "anthropic",
+      access: "local-access",
+      refresh: "local-refresh",
+      expires: 1,
+    };
+
+    const afterFile = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:claude-cli",
+    });
+
+    expectCliAuthEpoch(beforeFile);
+    expect(afterFile).toBe(beforeFile);
   });
 });

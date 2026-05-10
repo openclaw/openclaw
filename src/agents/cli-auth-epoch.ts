@@ -27,7 +27,7 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 4;
+export const CLI_AUTH_EPOCH_VERSION = 5;
 
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
@@ -179,22 +179,24 @@ export async function resolveCliAuthEpoch(params: {
   const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
-  if (params.skipLocalCredential !== true) {
+  let profileCredential: AuthProfileCredential | undefined;
+  if (authProfileId) {
+    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    profileCredential = getAuthProfileCredential(store, authProfileId);
+  }
+
+  if (params.skipLocalCredential !== true && !profileCredential) {
     const localFingerprint = getLocalCliCredentialFingerprint(provider);
     if (localFingerprint) {
       parts.push(`local:${provider}:${localFingerprint}`);
     }
   }
 
-  if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-    });
-    const credential = getAuthProfileCredential(store, authProfileId);
-    if (credential) {
-      parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
-    }
+  if (profileCredential) {
+    parts.push(encodeAuthProfileEpochPart(authProfileId!, profileCredential));
   }
 
   if (parts.length === 0) {
