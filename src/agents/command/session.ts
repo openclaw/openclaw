@@ -17,7 +17,7 @@ import {
   resolveSessionResetPolicy,
 } from "../../config/sessions/reset-policy.js";
 import { resolveChannelResetConfig, resolveSessionResetType } from "../../config/sessions/reset.js";
-import { resolveSessionKey } from "../../config/sessions/session-key.js";
+import { deriveSessionKey, resolveSessionKey } from "../../config/sessions/session-key.js";
 import { loadSessionStore } from "../../config/sessions/store-load.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -225,9 +225,25 @@ export function resolveSessionKeyForRequest(opts: {
   });
   const sessionStore = loadSessionStore(storePath);
 
-  const ctx: MsgContext | undefined = opts.to?.trim() ? { From: opts.to } : undefined;
+  const toTarget = opts.to?.trim();
+  const ctx: MsgContext | undefined = toTarget ? { From: toTarget } : undefined;
   let sessionKey: string | undefined =
     explicitSessionKey ?? (ctx ? resolveSessionKey(scope, ctx, mainKey, storeAgentId) : undefined);
+
+  // When --to is provided for outbound CLI messages, create per-recipient
+  // session keys so different recipients get isolated sessions instead of
+  // sharing the same main bucket (fixes #41483).
+  if (ctx && !explicitSessionKey && !requestedSessionId && sessionKey) {
+    const rawDerived = deriveSessionKey(scope, ctx);
+    if (
+      rawDerived &&
+      rawDerived !== "unknown" &&
+      !rawDerived.includes(":group:") &&
+      !rawDerived.includes(":channel:")
+    ) {
+      sessionKey = `agent:${storeAgentId}:${rawDerived}`;
+    }
+  }
 
   if (ctx && !requestedAgentId && !requestedSessionId && !explicitSessionKey) {
     const legacyMainSession = resolveLegacyMainStoreSessionForDefaultAgent({

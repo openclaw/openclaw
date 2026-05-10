@@ -81,7 +81,8 @@ describe("resolveSessionKeyForRequest", () => {
       cfg: baseCfg,
       to: "+15551234567",
     });
-    expect(result.sessionKey).toBe("agent:main:main");
+    // Per-recipient session keys include the --to target for DM isolation.
+    expect(result.sessionKey).toBe("agent:main:+15551234567");
   });
 
   it("uses the configured default agent store for new --to sessions", () => {
@@ -98,11 +99,12 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
 
-    expect(result.sessionKey).toBe("agent:mybot:main");
+    // Per-recipient session keys include the --to target for DM isolation.
+    expect(result.sessionKey).toBe("agent:mybot:+15551234567");
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
 
-  it("migrates legacy main-store main-key sessions for plain --to default-agent requests", () => {
+  it("creates per-recipient session for --to without migrating legacy main sessions", () => {
     setupMainAndMybotStorePaths();
     const mainStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
@@ -120,13 +122,15 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
 
-    expect(result.sessionKey).toBe("agent:mybot:main");
+    // Per-recipient session keys include the --to target. Legacy main-session
+    // migration does not apply to per-recipient sessions.
+    expect(result.sessionKey).toBe("agent:mybot:+15551234567");
     expect(result.sessionStore).toBe(mybotStore);
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
+    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBeUndefined();
   });
 
-  it("migrates legacy main-key sessions for plain --to default-agent requests with a literal shared store", () => {
+  it("creates per-recipient session for --to with shared store without legacy migration", () => {
     const sharedStore = {
       "agent:main:main": { sessionId: "legacy-session-id", updatedAt: 1 },
     };
@@ -142,10 +146,12 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
 
-    expect(result.sessionKey).toBe("agent:mybot:main");
+    // Per-recipient session keys include the --to target. Legacy migration
+    // does not apply to per-recipient sessions.
+    expect(result.sessionKey).toBe("agent:mybot:+15551234567");
     expect(result.sessionStore).toBe(sharedStore);
     expect(result.storePath).toBe(SHARED_STORE_PATH);
-    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBe("legacy-session-id");
+    expect(result.sessionStore["agent:mybot:main"]?.sessionId).toBeUndefined();
     expect(mocks.loadSessionStore).toHaveBeenCalledTimes(1);
     expect(mocks.loadSessionStore).toHaveBeenCalledWith(SHARED_STORE_PATH);
   });
@@ -169,7 +175,8 @@ describe("resolveSessionKeyForRequest", () => {
       to: "+15551234567",
     });
 
-    expect(result.sessionKey).toBe("agent:mybot:main");
+    // Per-recipient session keys include the --to target for DM isolation.
+    expect(result.sessionKey).toBe("agent:mybot:+15551234567");
     expect(result.sessionStore).toBe(mybotStore);
     expect(result.storePath).toBe(MYBOT_STORE_PATH);
   });
