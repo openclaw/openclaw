@@ -984,6 +984,110 @@ describe("wrapStreamFnWithDiagnosticModelCallEvents", () => {
     expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("input_file");
   });
 
+  it("does not capture system or developer role Responses input text", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "output text" };
+    }
+    const requestPayload = {
+      input: [
+        {
+          type: "message",
+          role: "system",
+          content: [{ type: "input_text", text: "responses system prompt" }],
+        },
+        {
+          type: "message",
+          role: "developer",
+          content: [{ type: "input_text", text: "responses developer prompt" }],
+        },
+        {
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "responses user input" }],
+        },
+      ],
+      model: "gpt-5.4",
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        options?.onPayload?.(requestPayload, model);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-filter-system-developer-input",
+        contentCapture: { inputMessages: true, outputMessages: true },
+      },
+    );
+
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = await wrapped({} as never, {} as never, {} as never);
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const completed = events.find(({ event }) => event.type === "model.call.completed");
+    expect(completed?.event).toMatchObject({ type: "model.call.completed" });
+    expect(completed?.event).not.toHaveProperty("inputMessages");
+    expect(completed?.event).not.toHaveProperty("outputMessages");
+    expect(completed?.privateData.modelContent?.inputMessages).toEqual(["responses user input"]);
+    expect(completed?.privateData.modelContent?.outputMessages).toEqual(["output text"]);
+    expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("responses system prompt");
+    expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("responses developer prompt");
+  });
+
+  it("does not capture system or developer role chat messages", async () => {
+    async function* stream() {
+      yield { type: "text_delta", delta: "output text" };
+    }
+    const requestPayload = {
+      messages: [
+        { role: "system", content: "hidden system prompt" },
+        { role: "developer", content: "hidden developer prompt" },
+        { role: "user", content: "visible user message" },
+      ],
+      model: "gpt-5.4",
+    };
+    const wrapped = wrapStreamFnWithDiagnosticModelCallEvents(
+      ((
+        model: Parameters<StreamFn>[0],
+        _context: Parameters<StreamFn>[1],
+        options: Parameters<StreamFn>[2],
+      ) => {
+        options?.onPayload?.(requestPayload, model);
+        return stream();
+      }) as unknown as StreamFn,
+      {
+        runId: "run-1",
+        provider: "openai",
+        model: "gpt-5.4",
+        trace: createDiagnosticTraceContext(),
+        nextCallId: () => "call-filter-system-developer-chat",
+        contentCapture: { inputMessages: true, outputMessages: true },
+      },
+    );
+
+    const events = await collectTrustedModelCallEvents(async () => {
+      const streamResult = await wrapped({} as never, {} as never, {} as never);
+      await drain(streamResult as unknown as AsyncIterable<unknown>);
+    });
+
+    const completed = events.find(({ event }) => event.type === "model.call.completed");
+    expect(completed?.event).toMatchObject({ type: "model.call.completed" });
+    expect(completed?.event).not.toHaveProperty("inputMessages");
+    expect(completed?.event).not.toHaveProperty("outputMessages");
+    expect(completed?.privateData.modelContent?.inputMessages).toEqual(["visible user message"]);
+    expect(completed?.privateData.modelContent?.outputMessages).toEqual(["output text"]);
+    expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("hidden system prompt");
+    expect(JSON.stringify(completed?.privateData.modelContent)).not.toContain("hidden developer prompt");
+  });
+
   it("captures output from normalized text_delta chunks", async () => {
     async function* stream() {
       yield { type: "text_delta", delta: "hello" };
