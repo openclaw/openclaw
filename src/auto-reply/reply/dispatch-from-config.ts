@@ -303,7 +303,16 @@ const resolveHarnessSourceVisibleRepliesDefault = (params: {
   sessionAgentId: string;
   sessionKey?: string;
 }): "automatic" | "message_tool" | undefined => {
-  if (params.ctx.CommandSource === "native") {
+  // Skip the harness source-visible-replies default for any explicit source-reply
+  // command turn, mirroring the consumer-site bypass at `prefersMessageToolDelivery`
+  // below. Without this, an authorized text-prefix slash command (Matrix/Tlon
+  // `/...` with `CommandSource: "text"` + `CommandAuthorized: true`) on a DM
+  // surface where `messages.visibleReplies` is unset would still pay for the
+  // harness lookup even though `prefersMessageToolDelivery` already disregards
+  // the result via `!isExplicitSourceReplyCommand(ctx)`. Keeping the two sites
+  // in sync also removes the asymmetry where only `CommandSource === "native"`
+  // short-circuited here.
+  if (isExplicitSourceReplyCommand(params.ctx)) {
     return undefined;
   }
   try {

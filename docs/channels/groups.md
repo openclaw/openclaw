@@ -87,7 +87,7 @@ To require visible output to go through the message tool for every source chat:
 }
 ```
 
-Native slash commands (Discord, Telegram, and other surfaces with native command support) bypass `visibleReplies: "message_tool"` and always reply visibly so the channel-native command UI gets the response it expects. This applies to validated native command turns only; text-typed `/...` commands and ordinary chat turns still follow the configured group default.
+Slash commands bypass `visibleReplies: "message_tool"` and always reply visibly so the command UI gets the response it expects. This covers both native slash-menu invocations (Discord, Telegram, and other surfaces with native command support) and authorized text-typed `/...` commands on channels that surface `CommandSource: "text"` with `CommandAuthorized: true` after the channel's command-auth gate (Matrix, Tlon). Ordinary chat turns and unauthorized text-prefix commands still follow the configured group default.
 
 ## Context visibility and allowlists
 
