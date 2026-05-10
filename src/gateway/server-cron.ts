@@ -202,6 +202,8 @@ export function buildGatewayCronService(params: {
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
+    const requestedSessionKey =
+      typeof opts?.sessionKey === "string" && opts.sessionKey.trim() ? opts.sessionKey : undefined;
     // Derive agentId from sessionKey only when the key is agent-prefixed
     // (`agent:<id>:...`). For relative session keys like `discord:channel:ops`,
     // `resolveAgentIdFromSessionKey` returns the literal `DEFAULT_AGENT_ID`
@@ -210,23 +212,25 @@ export function buildGatewayCronService(params: {
     // `undefined` lets `resolveCronAgent` fall back to the configured default
     // agent so wake and enqueue resolve to the same target.
     const parsedSessionKeyAgentId =
-      opts?.sessionKey && parseAgentSessionKey(opts.sessionKey)
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
+      requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
+        ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey))
         : undefined;
     const requestedOrDerived = requestedAgentId ?? parsedSessionKeyAgentId;
-    // Always run `resolveCronAgent`, including when no agent is requested —
-    // for relative session keys (e.g. `discord:channel:ops`) we want the
+    if (!requestedOrDerived && !requestedSessionKey) {
+      return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
+    }
+    // For relative session keys (e.g. `discord:channel:ops`) we want the
     // configured default agent's session, which `resolveCronAgent(undefined)`
-    // returns. Leaving agentId undefined here would strand the wake on the
-    // resolveCronSessionKey branch below.
+    // returns. For no-target wakes, the branch above preserves the existing
+    // heartbeat fanout/broadcast behavior by leaving agentId/sessionKey unset.
     const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(requestedOrDerived);
     const agentId = resolvedAgentId || undefined;
     const sessionKey =
-      opts?.sessionKey && agentId
+      requestedSessionKey && agentId
         ? resolveCronSessionKey({
             runtimeConfig,
             agentId,
-            requestedSessionKey: opts.sessionKey,
+            requestedSessionKey,
           })
         : undefined;
     return { runtimeConfig, agentId, sessionKey };

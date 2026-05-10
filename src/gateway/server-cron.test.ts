@@ -525,6 +525,58 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("preserves untargeted cron wake requests for heartbeat fanout", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: { store: path.join(os.tmpdir(), `server-cron-untargeted-${Date.now()}`, "cron.json") },
+      agents: {
+        list: [
+          { id: "primary", default: true, model: "test/primary" },
+          { id: "ops", model: "test/ops" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              requestHeartbeat?: (opts?: {
+                source?: string;
+                intent?: string;
+                reason?: string;
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:job:failure-alert",
+      });
+
+      expect(requestHeartbeatMock).toHaveBeenCalledWith({
+        source: "cron",
+        intent: "immediate",
+        reason: "cron:job:failure-alert",
+        agentId: undefined,
+        sessionKey: undefined,
+        heartbeat: undefined,
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("derives agentId symmetrically for enqueue and wake when only an agent-prefixed sessionKey is supplied", () => {
     // Multi-agent setup where the configured default ("primary") is NOT the
     // agent referenced in the sessionKey ("ops"). Pre-PR, enqueue went through
