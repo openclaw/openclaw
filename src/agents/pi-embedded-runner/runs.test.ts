@@ -93,6 +93,22 @@ describe("pi-embedded runner run registry", () => {
     expect(queueMessage).toHaveBeenCalledWith("continue", { steeringMode: "all" });
   });
 
+
+  it("logs actionable context when queueing into a missing run fails", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(queueEmbeddedPiMessage("session-missing", "late follow-up")).toBe(false);
+      const combined = warn.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
+      expect(combined).toContain("queue message failed");
+      expect(combined).toContain("sessionId=session-missing");
+      expect(combined).toContain("reason=no_active_run");
+      expect(combined).toContain("activeRuns=0");
+      expect(combined).toContain("not a gateway outage");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("force-clears an aborted run that does not drain", async () => {
     vi.useFakeTimers();
     try {

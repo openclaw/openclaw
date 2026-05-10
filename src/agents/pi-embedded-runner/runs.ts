@@ -63,6 +63,22 @@ function clearActiveRunSessionKeys(sessionId: string, sessionKey?: string): void
   }
 }
 
+function queueMessageFailureDetail(
+  sessionId: string,
+  reason: "no_active_run" | "not_streaming" | "compacting",
+): string {
+  const activeCount = getActiveEmbeddedRunCount();
+  const snapshot = ACTIVE_EMBEDDED_RUN_SNAPSHOTS.get(sessionId);
+  const knownSessionKey = [...ACTIVE_EMBEDDED_RUN_SESSION_IDS_BY_KEY.entries()].find(
+    ([, id]) => id === sessionId,
+  )?.[0];
+  const keyBits = knownSessionKey ? ` sessionKey=${knownSessionKey}` : "";
+  const snapshotBits = snapshot
+    ? ` snapshotStatus=${snapshot.status ?? "unknown"} snapshotRunId=${snapshot.runId ?? "unknown"}`
+    : "";
+  return `queue message failed: sessionId=${sessionId} reason=${reason} activeRuns=${activeCount} replyQueued=false${keyBits}${snapshotBits} hint=target run is not currently accepting queued messages; this is usually a stale/completed run, not a gateway outage`;
+}
+
 export function queueEmbeddedPiMessage(
   sessionId: string,
   text: string,
@@ -75,15 +91,15 @@ export function queueEmbeddedPiMessage(
       logMessageQueued({ sessionId, source: "pi-embedded-runner" });
       return true;
     }
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=no_active_run`);
+    diag.warn(queueMessageFailureDetail(sessionId, "no_active_run"));
     return false;
   }
   if (!handle.isStreaming()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=not_streaming`);
+    diag.warn(queueMessageFailureDetail(sessionId, "not_streaming"));
     return false;
   }
   if (handle.isCompacting()) {
-    diag.debug(`queue message failed: sessionId=${sessionId} reason=compacting`);
+    diag.warn(queueMessageFailureDetail(sessionId, "compacting"));
     return false;
   }
   logMessageQueued({ sessionId, source: "pi-embedded-runner" });
