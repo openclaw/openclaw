@@ -17,9 +17,9 @@ Use a two-level SQLite layout:
 - Global database: `~/.openclaw/state/openclaw.sqlite`
 - Agent database: one SQLite database per agent for agent-owned workspace,
   transcript, VFS, artifact, and large per-agent runtime state
-- Configuration stays file-backed: `openclaw.json` remains outside the
-  database. Runtime auth profiles move to SQLite; external provider or CLI
-  credential files remain owner-managed outside OpenClaw's database.
+- Configuration stays file-backed: `openclaw.json` and explicit credential or
+  auth-profile files remain outside the database until there is a separate
+  secrets/export design
 
 The global database is the control-plane database. It owns agent discovery,
 shared gateway state, pairing, device/node state, task and flow ledgers, plugin
@@ -42,22 +42,18 @@ This migration has one canonical runtime shape:
 - Transcript identity is always SQLite identity: `{agentId, sessionId}` plus
   optional topic metadata where the protocol needs it.
 - `sqlite-transcript://...` is not a runtime or protocol identity. New code must
-  not derive, persist, pass, parse, or migrate transcript locators. Runtime and
-  tests should not contain pseudo-locators at all; docs may mention the string
-  only to ban it.
+  not derive, persist, pass, parse, or migrate transcript locators. Remaining
+  uses are cleanup debt in tests or explicit export/debug materialization only.
 - Legacy `sessions.json`, transcript JSONL, `.jsonl.lock`, pruning, truncation,
   and old session-path logic belong only to the doctor migration/import path.
-- Legacy session config aliases belong only to doctor migration. Runtime does
-  not interpret `session.idleMinutes`, `session.resetByType.dm`, or
-  cross-agent `agent:main:*` main-session aliases for another configured agent.
 - Runtime startup, hot reply paths, compaction, reset, recovery, diagnostics,
   TTS, memory hooks, subagents, plugin command routing, protocol boundaries, and
   hooks must pass `{agentId, sessionId}` through the runtime.
 - Tests should seed and assert SQLite transcript rows through
-  `{agentId, sessionId}`. Tests that only prove JSONL path forwarding,
-  caller-supplied locator preservation, or transcript-file compatibility should
-  be deleted unless they cover doctor import, non-session support/debug
-  materialization, or protocol shape.
+  `{agentId, sessionId}`. Tests that only prove JSONL path forwarding, caller-supplied
+  locator preservation, or transcript-file compatibility should be deleted
+  unless they cover doctor import, export/debug materialization, or protocol
+  shape.
 - `runEmbeddedPiAgent(...)`, prepared worker runs, and the inner embedded
   attempt must not accept transcript locators. They open the SQLite transcript
   manager by `{agentId, sessionId}` and pass that manager to the internalized
@@ -70,6 +66,38 @@ This migration has one canonical runtime shape:
 Implementation work should keep deleting code until these statements are true
 without exceptions outside doctor/import/export/debug boundaries.
 
+## Companion Rebuild Contract
+
+Companion consumers may build their own search, audit, memory, export, or
+semantic databases from OpenClaw runtime state, but OpenClaw remains the
+canonical operational store.
+
+Supported rebuild path:
+
+- Read canonical session metadata from per-agent SQLite session rows.
+- Enumerate canonical transcripts with `listSqliteSessionTranscripts(...)`.
+- Replay canonical transcript rows with `loadSqliteSessionTranscriptEvents(...)`
+  when a lossless event stream is required.
+- Prefer `loadSqliteSessionTranscriptProjections(...)` for typed read models
+  that need `eventType`, `eventId`, `parentId`, `messageRole`, `toolCallIds`,
+  and `toolResultIds` without reparsing provider-specific blobs.
+- Prefer `loadActiveSqliteSessionTranscriptProjections(...)` when the consumer
+  needs the selected active branch rather than every historical fork. The helper
+  follows the latest transcript leaf through `parentId` links and includes the
+  nearest preceding compaction event when one anchors the kept branch.
+- Treat projection fields as derived read models. The original `event` payload
+  and `{agentId, sessionId, seq}` identity remain the durable replay source.
+- Make rebuilds idempotent. Consumers should key companion rows by
+  `{agentId, sessionId, seq}` or by a stable `eventId` where the event provides
+  one, and they should tolerate replaying already indexed rows.
+- Do not depend on runtime JSONL files. JSONL materialization is an explicit
+  import, export, or debug encoding, not a companion rebuild contract.
+
+Companion-specific semantic schemas, summary DAGs, recall indexes, and
+specialized compaction bookkeeping stay outside OpenClaw core. If multiple
+consumers need a new projection, add a small generic helper over canonical
+SQLite rows instead of letting each companion parse opaque event blobs.
+
 ## Code-Read Assumptions
 
 No follow-up product decisions are blocking this plan. The implementation should
@@ -77,21 +105,15 @@ proceed with these assumptions:
 
 - Use `node:sqlite` directly and require the Node 24+ runtime for this storage
   path.
-- Keep exactly one normal configuration file. Do not move config, plugin
-  manifests, or Git workspaces into SQLite in this refactor.
+- Keep exactly one normal configuration file. Do not move config, credentials,
+  provider auth profiles, plugin manifests, or Git workspaces into SQLite in
+  this refactor.
 - Runtime compatibility files are not required. Legacy JSON and JSONL files are
   migration inputs only. The branch-local SQLite sidecars never shipped and are
   deleted instead of imported.
 - `openclaw doctor --fix` owns the legacy file-to-database migration step.
   Runtime startup and `openclaw migrate` should not carry legacy OpenClaw
   database-upgrade paths.
-- Credential compatibility follows the same rule: runtime credentials live in
-  SQLite. Old `auth-profiles.json`, per-agent `auth.json`, and shared
-  `credentials/oauth.json` files are doctor migration inputs, then removed
-  after import.
-- Generated model catalog state is database-backed. Runtime code must not write
-  `agents/<agentId>/agent/models.json`; existing `models.json` files are legacy
-  doctor inputs and are removed after import into the global SQLite KV store.
 - Runtime must not migrate, normalize, or bridge transcript locators. Active
   transcript identity is `{agentId, sessionId}` in SQLite. File paths are
   legacy doctor inputs only, and `sqlite-transcript://...` must disappear from
@@ -114,13 +136,13 @@ database exists, Node `node:sqlite` is wired through a small runtime helper, and
 former stores now write to `state/openclaw.sqlite` or the owning
 `openclaw-agent.sqlite` database.
 
-The remaining work is not choosing SQLite; it is keeping the new boundary clean
-and deleting any compatibility-shaped interfaces that still look like the old
-file world:
+The remaining work is not choosing SQLite; it is deleting compatibility-shaped
+interfaces that still look like the old file world:
 
-- Session `storePath` is no longer a runtime identity, test fixture shape, or
-  status payload field. Remaining `storePath` names are doctor/migration inputs
-  or legacy negative assertions.
+- Some compatibility call surfaces still carry `storePath` for explicit
+  migration/export/debug metadata, but hot session reads and writes now resolve
+  the SQLite row from `{ agentId, sessionKey }` instead of treating the path as
+  the runtime identity.
 - Session writes no longer pass through the old in-process `store-writer.ts`
   queue. SQLite patch writes use conflict detection and bounded retry instead.
 - Legacy path discovery still has valid migration uses, but runtime code should
@@ -140,9 +162,6 @@ No additional product questions are blocking implementation.
 
 The branch already has a real shared SQLite base:
 
-- The runtime floor is now Node 24+: `package.json`, the CLI runtime guard,
-  installer defaults, macOS runtime locator, CI, and public install docs all
-  agree. The old Node 22 compatibility lane is removed.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
   the generated schema module derived from
@@ -163,12 +182,12 @@ The branch already has a real shared SQLite base:
   cascades from `task_runs`, and transcript identity rows cascade from
   transcript events.
 - Current shared tables include `kv`, `agents`, `agent_databases`,
-  `plugin_state_entries`, `plugin_blob_entries`, `media_blobs`,
-  `skill_uploads`, `capture_sessions`, `capture_events`, `capture_blobs`,
-  `sandbox_registry_entries`, `cron_run_logs`, `cron_jobs`, `commitments`,
-  `delivery_queue_entries`, `current_conversation_bindings`,
-  `tui_last_sessions`, `task_runs`, `task_delivery_state`, `flow_runs`,
-  `subagent_runs`, `migration_runs`, and `backup_runs`.
+  `plugin_state_entries`, `plugin_blob_entries`, `capture_sessions`,
+  `capture_events`, `capture_blobs`, `sandbox_registry_entries`,
+  `cron_run_logs`, `cron_jobs`, `commitments`, `delivery_queue_entries`,
+  `current_conversation_bindings`, `tui_last_sessions`, `task_runs`,
+  `task_delivery_state`, `flow_runs`, `subagent_runs`, `migration_runs`, and
+  `backup_runs`.
 - `src/state/openclaw-agent-db.ts` opens
   `agents/<agentId>/agent/openclaw-agent.sqlite`, registers the database in the
   global DB, and owns agent-local session, transcript, VFS, artifact, and cache
@@ -189,14 +208,6 @@ The branch already has a real shared SQLite base:
   `speech-core` plugin. The old `settings/tts.json` file is doctor migration
   input only; runtime no longer reads or writes TTS prefs JSON files, and the
   legacy path resolver lives in the doctor migration module.
-- Secret target metadata now talks about stores instead of pretending every
-  credential target is a config file. `openclaw.json` remains the config store;
-  auth-profile targets use the SQLite auth profile store.
-- Secret audit no longer scans retired per-agent `auth.json` files. Doctor owns
-  warning about, importing, and removing that legacy file.
-- Legacy auth profile path helpers now live in doctor legacy code. Core auth
-  profile path helpers expose SQLite KV store identity and display locations,
-  not `auth-profiles.json` or `auth-state.json` runtime paths.
 - Subagent run recovery and OpenRouter model capability cache runtime modules
   now keep SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.
@@ -209,10 +220,7 @@ The branch already has a real shared SQLite base:
   no longer reads or rewrites the legacy workspace marker.
 - Exec approvals now live in shared SQLite KV (`exec.approvals/current`).
   Doctor imports legacy `~/.openclaw/exec-approvals.json`; runtime writes no
-  longer create, rewrite, or report that file as its active store location.
-  The macOS companion reads and writes the same `state/openclaw.sqlite` KV row;
-  it keeps only the Unix prompt socket on disk because that is IPC, not durable
-  runtime state.
+  longer create or rewrite that file.
 - Device identity, device auth, and bootstrap runtime modules now keep their
   SQLite snapshot readers/writers separate from doctor-only legacy JSON import
   helpers.
@@ -220,10 +228,6 @@ The branch already has a real shared SQLite base:
   exists, when the SQLite identity row is invalid, or when the SQLite identity
   store cannot be opened. Doctor imports and removes that file first, so runtime
   startup cannot silently rotate pairing identity before migration.
-- Session reset compatibility now lives in doctor config migration:
-  `session.idleMinutes` is moved into `session.reset.idleMinutes`,
-  `session.resetByType.dm` is moved into `session.resetByType.direct`, and the
-  runtime reset policy only reads canonical reset keys.
 - Web push, APNs, Voice Wake, and Voice Wake routing runtime modules now keep
   their SQLite snapshot readers/writers separate from doctor-only legacy JSON
   import helpers.
@@ -231,17 +235,6 @@ The branch already has a real shared SQLite base:
   same split: runtime modules expose SQLite-backed operations and neutral
   snapshot helpers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
-- Installed plugin records now live in the SQLite installed-plugin index.
-  Runtime config read/write no longer migrates or preserves old
-  `plugins.installs` authored-config data; doctor imports that legacy config
-  shape into SQLite before normal runtime use.
-- Gateway reload planning compares SQLite installed-plugin index snapshots under
-  an internal `installedPluginIndex.installRecords.*` diff namespace. Runtime
-  reload decisions no longer wrap those rows in fake `plugins.installs` config
-  objects.
-- Matrix named-account credential upgrade no longer happens during runtime
-  reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
-  rename when a single/default Matrix account can be resolved.
 - Core pairing and cron runtime modules no longer export legacy JSON path
   builders. Doctor-owned legacy modules construct `pending.json`, `paired.json`,
   `bootstrap.json`, and `cron/jobs.json` source paths for import tests and
@@ -279,7 +272,7 @@ The remaining cleanup is mostly consolidation and deletion:
   session row helpers. The old `resolveLegacySessionStorePath` helper is gone;
   legacy `sessions.json` path construction is now local to migration and test
   fixtures.
-- `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
+- `src/config/sessions/store-backend.sqlite.ts` now stores canonical session
   entries in the per-agent database and has row-level read/upsert/delete patch
   support. Runtime upsert/patch/delete no longer scans for case variants or
   prunes legacy alias keys; doctor owns canonicalization. The
@@ -290,8 +283,8 @@ The remaining cleanup is mostly consolidation and deletion:
   records legacy source paths in durable migration rows instead.
 - Runtime transcript lookup no longer scans JSONL byte offsets or probes legacy
   transcript files. Gateway chat/media/history paths read transcript rows from
-  SQLite; session JSONL is now only a legacy doctor input, not a runtime state
-  or export format.
+  SQLite; JSONL is now a legacy doctor input or in-memory export
+  encoding, not a runtime state file.
 - Runtime transcript store APIs resolve SQLite scope, not filesystem paths. The
   old `resolve...ForPath` helper and unused `transcriptPath` write options are
   gone from runtime callers.
@@ -310,9 +303,6 @@ The remaining cleanup is mostly consolidation and deletion:
   must not receive derived `sqlite-transcript://...` handles. Export/debug code
   can materialize files from rows explicitly, but it does not feed those names
   back into runtime identity.
-- `/export-session` reads transcript rows from SQLite and writes the requested
-  standalone HTML view only. The embedded viewer no longer reconstructs or
-  downloads session JSONL from those rows.
 - Context-engine delegation no longer parses a transcript locator to recover
   agent identity. The prepared runtime context carries the resolved `agentId`
   into the built-in compaction bridge.
@@ -395,8 +385,8 @@ sessionId}` and session key context.
   SQLite transcript stats instead of filesystem stat calls.
 - Runtime session locks and the standalone legacy `.jsonl.lock` doctor
   lane have been removed.
-- The Microsoft Teams runtime barrel and public plugin SDK no longer re-export
-  the old file-lock helper; durable plugin state paths are SQLite-backed.
+- The Microsoft Teams runtime barrel no longer re-exports the old plugin SDK
+  file-lock helper; its durable state paths are SQLite-backed.
 - Session age/count pruning and explicit session cleanup have been removed.
   Doctor owns legacy import; stale sessions are reset or deleted explicitly.
 - Doctor no longer treats `agents/<agent>/sessions/` as required runtime
@@ -478,12 +468,10 @@ sessionId}` and session key context.
   `{agentId, sessionId}` identity before worker launch and again before the
   attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
   runtime write target.
-- Cache trace, Anthropic payload, diagnostics timeline records, and Gateway
-  stability bundles now write to SQLite diagnostic KV rows only. The old
-  `diagnostics.cacheTrace.filePath`, `OPENCLAW_CACHE_TRACE_FILE`,
-  `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
-  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed, and
-  normal stability capture no longer writes `logs/stability/*.json` files.
+- Cache trace, Anthropic payload, and diagnostics timeline records now write to
+  SQLite diagnostic KV rows only. The old `diagnostics.cacheTrace.filePath`,
+  `OPENCLAW_CACHE_TRACE_FILE`, `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
+  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -545,9 +533,9 @@ sessionId}` and session key context.
 - Matrix legacy crypto migration status moved from
   `legacy-crypto-migration.json` to SQLite plugin state. Doctor imports the
   old status file; Matrix SDK IndexedDB snapshots moved from
-  `crypto-idb-snapshot.json` to SQLite plugin blobs. Matrix recovery keys and
-  credentials are SQLite plugin-state rows; their old JSON files are doctor
-  migration inputs only.
+  `crypto-idb-snapshot.json` to SQLite plugin blobs. Recovery keys remain
+  file-backed because they are Matrix user secret material rather than
+  OpenClaw runtime cache rows.
 - Memory Wiki activity logs now use SQLite plugin state instead of
   `.openclaw-wiki/log.jsonl`. The Memory Wiki migration provider imports old
   JSONL logs; wiki markdown and user vault content stay file-backed as
@@ -561,10 +549,6 @@ sessionId}` and session key context.
 - Config write/observe audit entries now use core SQLite plugin state instead
   of `logs/config-audit.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
-- The macOS companion no longer writes app-local `logs/config-audit.jsonl` or
-  `logs/config-health.json` sidecars while editing `openclaw.json`. The config
-  file remains file-backed, recovery snapshots stay next to the config file,
-  and durable config audit/health state belongs to the Gateway SQLite store.
 - Crestodian rescue pending approvals now use core SQLite plugin state instead
   of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
   files and removes them after successful import.
@@ -645,28 +629,11 @@ sessionId}` and session key context.
   the canonical byte store. Local paths returned to channel and sandbox
   compatibility surfaces are temp materializations of the database row, not the
   durable media store.
-- Gateway skill-upload staging now uses shared `skill_uploads` rows. Upload
-  metadata, idempotency keys, and archive bytes live in SQLite; the installer
-  only receives a temporary materialized archive path while an install is
-  running.
-- Subagent inline attachments no longer materialize under workspace
-  `.openclaw/attachments/*`. The spawn path prepares SQLite VFS seed entries,
-  inline runs seed those entries into the per-agent runtime scratch namespace,
-  and disk-backed tools overlay that SQLite scratch for attachment paths. The
-  old subagent-run attachment-dir registry columns and cleanup hooks are gone.
-- CLI image hydration no longer maintains stable `openclaw-cli-images` cache
-  files. External CLI backends still receive file paths, but those paths are
-  per-run temp materializations with cleanup.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
-  diagnostics, diagnostics timeline events, and Gateway stability bundles now
-  write SQLite diagnostic rows instead of `logs/*.jsonl` or
-  `logs/stability/*.json` files.
+  diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
+  instead of `logs/*.jsonl` files.
   Runtime path override flags and env vars have been removed; export/debug
   commands can materialize files explicitly from database rows.
-- The macOS companion no longer has a rolling `diagnostics.jsonl` writer. App
-  logs go to unified logging, and durable Gateway diagnostics stay SQLite-backed.
-- The macOS port-guardian record list now uses shared SQLite KV under
-  `macos.port-guardian/records` instead of an Application Support JSON file.
 - Gateway singleton locks now use shared SQLite KV instead of temp-dir lock
   files. Done.
 - Gateway restart sentinel state now uses shared SQLite KV instead of
@@ -690,24 +657,7 @@ sessionId}` and session key context.
   databases during tests or shell handoffs.
 - Config health fingerprints now use shared SQLite KV instead of
   `logs/config-health.json`, keeping the normal config file as the only
-  non-credential configuration document. The macOS companion keeps only
-  process-local health state and does not recreate the old JSON sidecar.
-- Auth profile runtime no longer imports or writes credential JSON files. The
-  canonical credential store is SQLite; `auth-profiles.json`, per-agent
-  `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs
-  that are removed after import.
-- Auth profile save/state tests now assert SQLite KV rows directly and only use
-  legacy auth-profile filenames for doctor migration inputs or explicit
-  "file absent" assertions.
-- `openclaw secrets apply` scrubs the config file, env file, and SQLite
-  auth-profile store only. It no longer carries compatibility logic that edits
-  retired per-agent `auth.json`; doctor owns importing and deleting that file.
-- Hermes secret migration plans and applies imported API-key profiles directly
-  into the SQLite auth-profile store. It no longer writes or verifies
-  `auth-profiles.json` as an intermediate target.
-- PI model discovery now passes canonical credentials into in-memory
-  `pi-coding-agent` auth storage. It no longer creates, scrubs, or writes
-  per-agent `auth.json` during discovery.
+  non-credential configuration document.
 - Voice Wake trigger and routing settings now use shared SQLite KV instead of
   `settings/voicewake.json` and `settings/voicewake-routing.json`; doctor imports
   the legacy JSON files and removes them after a successful migration.
@@ -740,19 +690,11 @@ sessionId}` and session key context.
   code. Runtime plugin-index modules expose only SQLite-backed persistence
   options, not a JSON file path.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
-  startup verification cooldown state, SDK IndexedDB crypto snapshots,
-  credentials, and recovery keys now use shared SQLite plugin state/blob
-  tables. Their legacy JSON import plan lives in the Matrix plugin setup/doctor
-  migration surface.
-- Matrix startup maintenance no longer moves legacy Matrix files. Startup only
-  reports pending migration state and tells the operator to run
-  `openclaw doctor --fix`; the snapshot/import/delete step remains doctor-owned.
-- Matrix runtime migration barrels expose read-only detection/status helpers
-  only. The legacy state/crypto mutation helpers are imported by Matrix doctor
-  directly instead of being part of the runtime-heavy API surface.
-- Matrix migration snapshot reuse markers now live in SQLite plugin state
-  instead of `matrix/migration-snapshot.json`; doctor can still reuse the same
-  verified pre-migration archive without writing a sidecar state file.
+  startup verification cooldown state, and SDK IndexedDB crypto snapshots now
+  use shared SQLite plugin state/blob tables. Their legacy JSON import plan
+  lives in the Matrix plugin setup/doctor migration surface. Matrix recovery
+  keys remain explicit Matrix client files until a separate credential/secret
+  export design exists.
 - Nostr bus cursors and profile publish state now use shared SQLite plugin
   state. Their legacy JSON import plan lives in the Nostr plugin setup/doctor
   migration surface.
@@ -777,9 +719,6 @@ sessionId}` and session key context.
   snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
   sidecars, records snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest.
-- The old backup volatile-path filter is deleted. Backup no longer needs a
-  live-tar skip list for legacy session or cron JSON/JSONL files because SQLite
-  snapshots are staged before archive creation.
 - Plain setup and onboarding workspace preparation no longer create
   `agents/<agentId>/sessions/` directories. They create config/workspace only;
   SQLite session rows and transcript rows are created on demand in the
@@ -787,8 +726,6 @@ sessionId}` and session key context.
 - Security permission repair now targets the global and per-agent SQLite
   databases plus WAL/SHM sidecars instead of `sessions.json` and transcript
   JSONL files.
-- Sandbox registry runtime names now describe SQLite registry kinds directly
-  instead of carrying legacy JSON registry terminology through the active store.
 - `openclaw reset --scope config+creds+sessions` removes per-agent
   `openclaw-agent.sqlite` databases plus WAL/SHM sidecars, not only legacy
   `sessions/` directories.
@@ -799,36 +736,24 @@ sessionId}` and session key context.
   events into the per-agent SQLite database instead of creating
   `sessions.json` and a JSONL transcript.
 - The bundled session-memory hook now resolves previous-session context from
-  SQLite by `{agentId, sessionId}`. It no longer scans, stores, or synthesizes
-  transcript paths or `workspace/sessions` directories.
-- The bundled command-logger hook now writes command audit rows to the shared
-  SQLite `command_log_entries` table instead of appending
-  `logs/commands.log`.
-- Channel pairing allowlists now expose only SQLite-backed read/write helpers at
-  runtime and in the plugin SDK. The old `*-allowFrom.json` path resolver and
-  file reader live only under doctor legacy import code.
+  SQLite by `{agentId, sessionId}` and only treats retained transcript paths as
+  legacy metadata. It no longer scans or synthesizes `workspace/sessions`
+  directories.
 - `migration_runs` records legacy-state migration executions with status,
   timestamps, and JSON reports.
 - `migration_sources` records each imported legacy file source with hash, size,
   record count, target table, run id, status, and source-removal state.
 - `backup_runs` records backup archive paths, status, and JSON manifests.
-- Generated model catalog config is stored in the global SQLite KV store keyed
-  by agent directory. Runtime callers use `ensureOpenClawModelCatalog`; there is
-  no `models.json` compatibility API in runtime code. The implementation writes
-  SQLite and the embedded PI registry is hydrated from that stored payload
-  without creating a `models.json` file.
 - `check:database-first-legacy-stores` fails new runtime source that pairs
   legacy store names with write-style filesystem APIs. It also fails runtime
   source that reintroduces transcript bridge contracts such as
   `transcriptLocator`, `sqlite-transcript://...`, or `sessionFile`, and scans
-  tests for those bridge-contract names too. It also bans the old session JSONL
-  downloader hook/class from export UI. Migration, doctor, import, and explicit
-  non-session export code remain allowed. The guard now also covers runtime
+  tests for those bridge-contract names too. Migration, doctor, import, and
+  explicit export code remain allowed. The guard now also covers runtime
   `cache/*.json` stores, generic `thread-bindings.json` sidecars, cron
   state/run-log JSON, config health JSON, restart and lock sidecars, Voice Wake
   settings, plugin binding approvals, installed plugin index JSON, File
-  Transfer audit JSONL, Memory Wiki activity logs, and the old bundled
-  `command-logger` text log.
+  Transfer audit JSONL, and Memory Wiki activity logs.
 
 ## Target Schema Shape
 
@@ -850,7 +775,6 @@ tui_last_sessions(scope_key, session_key, updated_at)
 plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, expires_at)
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 media_blobs(subdir, id, content_type, size_bytes, blob, created_at, updated_at)
-skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 sandbox_registry_entries(registry_kind, container_name, entry_json, updated_at)
 cron_run_logs(...)
 commitments(id, agent_id, session_key, channel, status, due_earliest_ms, due_latest_ms, updated_at_ms, record_json)
@@ -926,9 +850,6 @@ Move these into the global database:
   index tables live in the owning agent database, and the explicit
   `memorySearch.store.path` sidecar opt-in has been retired to doctor config
   migration.
-- Builtin memory reindex resets only memory-owned tables in the agent database.
-  It must not replace the whole SQLite file, because the same database owns
-  sessions, transcripts, VFS rows, artifacts, and runtime caches.
 - Sandbox container/browser registries from monolithic and sharded JSON. Runtime
   writes now use the shared database; legacy JSON import remains.
 - Cron job definitions, schedule state, and run history now use shared SQLite;
@@ -979,15 +900,13 @@ Move these into the global database:
   `msteams-pending-uploads.json`, and `*.learnings.json`; the Microsoft Teams
   doctor/setup migration imports and removes the legacy files.
 - Matrix sync cache, storage metadata, thread bindings, inbound dedupe markers,
-  startup verification cooldown state, credentials, recovery keys, and SDK
-  IndexedDB crypto snapshots now use SQLite plugin state/blob namespaces under
-  `matrix` (`sync-store`, `storage-meta`, `thread-bindings`, `inbound-dedupe`,
-  `startup-verification`, `credentials`, `recovery-key`, `idb-snapshots`)
-  instead of `bot-storage.json`, `storage-meta.json`, `thread-bindings.json`,
-  `inbound-dedupe.json`, `startup-verification.json`, `credentials.json`,
-  `recovery-key.json`, and `crypto-idb-snapshot.json`; the Matrix doctor/setup
-  migration imports and removes those legacy files from account-scoped Matrix
-  storage roots.
+  startup verification cooldown state, and SDK IndexedDB crypto snapshots now
+  use SQLite plugin state/blob namespaces under `matrix` (`sync-store`,
+  `storage-meta`, `thread-bindings`, `inbound-dedupe`, `startup-verification`,
+  `idb-snapshots`) instead of `bot-storage.json`, `storage-meta.json`,
+  `thread-bindings.json`, `inbound-dedupe.json`, `startup-verification.json`,
+  and `crypto-idb-snapshot.json`; the Matrix doctor/setup migration imports and
+  removes those legacy files from account-scoped Matrix storage roots.
 - Nostr bus cursors and profile publish state now use SQLite plugin state under
   `nostr` namespaces (`bus-state`, `profile-state`) instead of
   `bus-state-*.json` and `profile-state-*.json`; the Nostr doctor/setup
@@ -1017,8 +936,6 @@ Move these into agent databases:
   metadata is recorded in `transcript_snapshots`. Gateway checkpoint helpers
   now name these values as transcript snapshots rather than source files.
 - Agent VFS scratch/workspace namespaces. Done for runtime VFS writes.
-- Subagent attachment payloads. Done for runtime writes: they are SQLite VFS
-  seed entries and never durable workspace files.
 - Tool artifacts. Done for runtime writes.
 - Run artifacts. Done for worker runtime writes through the per-agent
   `run_artifacts` table.
@@ -1041,6 +958,7 @@ Move these into agent databases:
 Keep these file-backed for now:
 
 - `openclaw.json`
+- `auth-profiles.json`
 - provider or CLI credential files
 - plugin/package manifests
 - user workspaces and Git repositories when disk mode is selected
@@ -1083,8 +1001,7 @@ Keep shared coordination state in `state/openclaw.sqlite`:
 - Debug proxy capture sessions, events, and payload blobs. Done for the default
   capture path: explicit `OPENCLAW_DEBUG_PROXY_DB_PATH` remains a one-off
   diagnostics escape hatch, but normal captures live in the shared state DB and
-  open through the shared state DB bootstrap, schema, WAL, and busy-timeout
-  settings.
+  use the same WAL/busy-timeout settings.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.
@@ -1146,8 +1063,8 @@ Make every agent data stream database-native:
 - ACP parent stream logs become rows, not `.acp-stream.jsonl` files. Done.
 - ACP spawn setup no longer persists transcript JSONL paths. Done.
 - Runtime trajectory capture writes event rows/artifacts directly. The explicit
-  support/export command can still produce support-bundle JSONL artifacts as an
-  export format, but session export does not recreate session JSONL. Done.
+  support/export command can still produce JSONL bundles as an export format.
+  Done.
 - Disk workspaces stay on disk when configured as disk mode.
 - VFS scratch and experimental VFS-only workspace mode use the agent DB.
 
@@ -1230,8 +1147,6 @@ keeps only the version-1 schema plus doctor file-to-database import.
      the unshipped legacy sidecar importer is deleted.
    - Move builtin memory-search tables into each agent database. Done; explicit
      custom `memorySearch.store.path` is now removed by doctor config migration.
-     Full reindex runs in place against memory tables only; the old whole-file
-     swap path is not used for managed agent databases.
    - Delete duplicate database openers, WAL setup, permission helpers, and
      close paths from those subsystems.
 
@@ -1253,10 +1168,11 @@ keeps only the version-1 schema plus doctor file-to-database import.
      Gateway/TUI/UI/macOS session-list responses now expose `databasePath`
      instead of legacy `path`; macOS debug surfaces show the per-agent database
      as read-only state instead of writing `session.store` config.
-     `/status`, chat-driven trajectory export, and CLI dependency proxies no
-     longer propagate legacy store paths; transcript usage fallback reads
-     SQLite by agent/session identity. Remaining `storePath` references are
-     doctor/migration inputs.
+     `/status` and chat-driven trajectory export no longer propagate legacy
+     store paths; transcript usage fallback reads SQLite by agent/session
+     identity. Remaining `storePath` call surfaces are migration/debug metadata
+     and older RPC response fields that still carry
+     SQLite keys for compatibility.
      Gateway combined-session loading no longer has a special runtime branch for
      non-templated `session.store` values; it aggregates per-agent SQLite rows.
      The legacy session-lock doctor lane and its `.jsonl.lock` cleanup helper
@@ -1315,7 +1231,7 @@ keeps only the version-1 schema plus doctor file-to-database import.
    - Record backup run metadata in SQLite. Done via the shared `backup_runs`
      table with archive path, status, and manifest JSON.
    - Include VFS/workspace export only when requested; do not export session
-     internals as JSON or JSONL.
+     internals as JSON.
 
 9. Delete obsolete tests and code.
 
@@ -1399,15 +1315,10 @@ keeps only the version-1 schema plus doctor file-to-database import.
 Add a repo check that fails new runtime writes to legacy state paths:
 
 - `sessions.json`
-- `*.trajectory.jsonl` except materialized support-bundle outputs
+- `*.trajectory.jsonl` except explicit export/debug paths
 - `.acp-stream.jsonl`
 - `acp/event-ledger.json`
 - `cache/*.json` runtime cache files
-- `agents/<agentId>/agent/auth.json`
-- `agents/<agentId>/agent/models.json`
-- `credentials/oauth.json`
-- `github-copilot.token.json`
-- Matrix `credentials*.json` and `recovery-key.json`
 - `cron/runs/*.jsonl`
 - `jobs-state.json`
 - `device-pair-notify.json`

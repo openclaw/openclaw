@@ -21,6 +21,23 @@ export type SqliteSessionTranscriptEvent = {
   createdAt: number;
 };
 
+export type SqliteSessionTranscriptMessageRole =
+  | "system"
+  | "user"
+  | "assistant"
+  | "tool"
+  | "toolResult"
+  | "other";
+
+export type SqliteSessionTranscriptProjectedEvent = SqliteSessionTranscriptEvent & {
+  eventType?: string;
+  eventId?: string;
+  parentId?: string | null;
+  messageRole?: SqliteSessionTranscriptMessageRole;
+  toolCallIds: string[];
+  toolResultIds: string[];
+};
+
 export type SqliteSessionTranscriptStoreOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
   sessionId: string;
@@ -33,7 +50,6 @@ export type AppendSqliteSessionTranscriptEventOptions = SqliteSessionTranscriptS
 
 export type AppendSqliteSessionTranscriptMessageOptions = SqliteSessionTranscriptStoreOptions & {
   cwd?: string;
-  dedupeLatestAssistantText?: string;
   message: unknown;
   now?: () => number;
   sessionVersion: number;
@@ -100,6 +116,125 @@ function parseCreatedAt(value: unknown): number {
   return typeof value === "bigint" ? Number(value) : Number(value);
 }
 
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
+function readTrimmedString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+function readRecordString(record: Record<string, unknown>, ...keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = readTrimmedString(record[key]);
+    if (value) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function pushUniqueId(ids: string[], value: unknown): void {
+  const id = readTrimmedString(value);
+  if (id && !ids.includes(id)) {
+    ids.push(id);
+  }
+}
+
+function normalizeProjectedMessageRole(
+  role: unknown,
+): SqliteSessionTranscriptMessageRole | undefined {
+  const normalized = readTrimmedString(role);
+  switch (normalized?.toLowerCase()) {
+    case "system":
+      return "system";
+    case "user":
+      return "user";
+    case "assistant":
+      return "assistant";
+    case "tool":
+      return "tool";
+    case "tool_result":
+    case "toolresult":
+      return "toolResult";
+    default:
+      return normalized ? "other" : undefined;
+  }
+}
+
+function collectToolCallIds(value: unknown, ids: string[]): void {
+  const items = Array.isArray(value) ? value : value ? [value] : [];
+  for (const item of items) {
+    const record = asRecord(item);
+    if (!record) {
+      continue;
+    }
+    pushUniqueId(
+      ids,
+      readRecordString(record, "id", "toolCallId", "tool_call_id", "toolUseId", "tool_use_id"),
+    );
+  }
+}
+
+function collectToolIdsFromContent(
+  content: unknown,
+  toolCallIds: string[],
+  toolResultIds: string[],
+): void {
+  if (!Array.isArray(content)) {
+    return;
+  }
+  const callTypes = new Set([
+    "toolcall",
+    "tooluse",
+    "functioncall",
+    "tool_call",
+    "tool_use",
+    "function_call",
+  ]);
+  const resultTypes = new Set(["tool", "toolresult", "tool_result"]);
+  for (const block of content) {
+    const record = asRecord(block);
+    if (!record) {
+      continue;
+    }
+    const type = readTrimmedString(record.type)?.toLowerCase();
+    if (type && callTypes.has(type)) {
+      pushUniqueId(
+        toolCallIds,
+        readRecordString(record, "id", "toolCallId", "tool_call_id", "toolUseId", "tool_use_id"),
+      );
+      continue;
+    }
+    if (type && resultTypes.has(type)) {
+      pushUniqueId(
+        toolResultIds,
+        readRecordString(record, "toolCallId", "tool_call_id", "toolUseId", "tool_use_id", "id"),
+      );
+    }
+  }
+}
+
+function collectMessageToolIds(message: Record<string, unknown>): {
+  toolCallIds: string[];
+  toolResultIds: string[];
+} {
+  const toolCallIds: string[] = [];
+  const toolResultIds: string[] = [];
+  collectToolCallIds(message.tool_calls, toolCallIds);
+  collectToolCallIds(message.toolCalls, toolCallIds);
+  collectToolCallIds(message.function_call, toolCallIds);
+  collectToolCallIds(message.functionCall, toolCallIds);
+  collectToolIdsFromContent(message.content, toolCallIds, toolResultIds);
+  pushUniqueId(
+    toolResultIds,
+    readRecordString(message, "toolCallId", "tool_call_id", "toolUseId", "tool_use_id"),
+  );
+  return { toolCallIds, toolResultIds };
+}
+
 function getAgentTranscriptKysely(db: import("node:sqlite").DatabaseSync) {
   return getNodeSqliteKysely<AgentTranscriptDatabase>(db);
 }
@@ -130,85 +265,6 @@ function readMessageIdempotencyKey(message: unknown): string | null {
   }
   const key = (message as { idempotencyKey?: unknown }).idempotencyKey;
   return typeof key === "string" && key.trim() ? key : null;
-}
-
-function extractAssistantMessageText(message: unknown): string | null {
-  if (!message || typeof message !== "object" || Array.isArray(message)) {
-    return null;
-  }
-  if ((message as { role?: unknown }).role !== "assistant") {
-    return null;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (typeof content === "string") {
-    const trimmed = content.trim();
-    return trimmed || null;
-  }
-  if (!Array.isArray(content)) {
-    return null;
-  }
-  const parts = content
-    .filter(
-      (
-        part,
-      ): part is {
-        type: string;
-        text: string;
-      } =>
-        Boolean(
-          part &&
-          typeof part === "object" &&
-          (part as { type?: unknown }).type === "text" &&
-          typeof (part as { text?: unknown }).text === "string" &&
-          (part as { text: string }).text.trim(),
-        ),
-    )
-    .map((part) => part.text.trim());
-  return parts.length > 0 ? parts.join("\n").trim() : null;
-}
-
-function extractAssistantTranscriptEventText(event: unknown): string | null {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return null;
-  }
-  return extractAssistantMessageText((event as { message?: unknown }).message);
-}
-
-function readLatestEquivalentAssistantMessageId(params: {
-  database: OpenClawAgentDatabase;
-  sessionId: string;
-  expectedText: string;
-}): string | undefined {
-  const rows = executeSqliteQuerySync(
-    params.database.db,
-    getAgentTranscriptKysely(params.database.db)
-      .selectFrom("transcript_events")
-      .select(["event_json"])
-      .where("session_id", "=", params.sessionId)
-      .orderBy("seq", "desc"),
-  ).rows;
-  for (const row of rows) {
-    const eventJson = row.event_json;
-    if (typeof eventJson !== "string") {
-      continue;
-    }
-    let event: unknown;
-    try {
-      event = JSON.parse(eventJson);
-    } catch {
-      continue;
-    }
-    const candidateText = extractAssistantTranscriptEventText(event);
-    if (candidateText === null) {
-      continue;
-    }
-    if (candidateText !== params.expectedText) {
-      return undefined;
-    }
-    const id = (event as { id?: unknown }).id;
-    return typeof id === "string" && id ? id : undefined;
-  }
-  return undefined;
 }
 
 function readTranscriptEventIdentity(params: {
@@ -401,6 +457,106 @@ export function getSqliteSessionTranscriptStats(
   };
 }
 
+export function projectSqliteSessionTranscriptEvent(
+  entry: SqliteSessionTranscriptEvent,
+): SqliteSessionTranscriptProjectedEvent {
+  const record = asRecord(entry.event);
+  const message = asRecord(record?.message);
+  const eventId = record ? readRecordString(record, "id") : undefined;
+  const eventType = record ? readRecordString(record, "type") : undefined;
+  const parentId =
+    record && Object.hasOwn(record, "parentId")
+      ? record.parentId === null
+        ? null
+        : readTrimmedString(record.parentId)
+      : undefined;
+  const toolIds = message
+    ? collectMessageToolIds(message)
+    : { toolCallIds: [] as string[], toolResultIds: [] as string[] };
+  return {
+    ...entry,
+    ...(eventType ? { eventType } : {}),
+    ...(eventId ? { eventId } : {}),
+    ...(parentId !== undefined ? { parentId } : {}),
+    ...(message ? { messageRole: normalizeProjectedMessageRole(message.role) ?? "other" } : {}),
+    toolCallIds: toolIds.toolCallIds,
+    toolResultIds: toolIds.toolResultIds,
+  };
+}
+
+function projectedEventHasTreeLink(entry: SqliteSessionTranscriptProjectedEvent): boolean {
+  return (
+    entry.eventType !== "session" &&
+    typeof entry.eventId === "string" &&
+    Object.hasOwn(entry, "parentId")
+  );
+}
+
+export function selectActiveSqliteSessionTranscriptProjections(
+  events: SqliteSessionTranscriptProjectedEvent[],
+): SqliteSessionTranscriptProjectedEvent[] {
+  if (!events.some(projectedEventHasTreeLink)) {
+    return events;
+  }
+
+  const byId = new Map<string, SqliteSessionTranscriptProjectedEvent>();
+  let leafId: string | undefined;
+  for (const event of events) {
+    if (event.eventId) {
+      byId.set(event.eventId, event);
+    }
+    if (projectedEventHasTreeLink(event)) {
+      leafId = event.eventId;
+    }
+  }
+  if (!leafId) {
+    return events;
+  }
+
+  const selected: SqliteSessionTranscriptProjectedEvent[] = [];
+  const seen = new Set<string>();
+  let currentId: string | undefined = leafId;
+  while (currentId) {
+    if (seen.has(currentId)) {
+      return [];
+    }
+    seen.add(currentId);
+    const event = byId.get(currentId);
+    if (!event) {
+      break;
+    }
+    selected.push(event);
+    currentId = event.parentId ?? undefined;
+  }
+
+  const activeBranch = selected.toReversed();
+  const firstActiveEvent = activeBranch[0];
+  const firstActiveIndex = firstActiveEvent ? events.indexOf(firstActiveEvent) : -1;
+  if (firstActiveIndex > 0) {
+    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
+      const event = events[index];
+      if (event?.eventType === "compaction") {
+        return [event, ...activeBranch];
+      }
+    }
+  }
+  return activeBranch;
+}
+
+export function loadSqliteSessionTranscriptProjections(
+  options: SqliteSessionTranscriptStoreOptions,
+): SqliteSessionTranscriptProjectedEvent[] {
+  return loadSqliteSessionTranscriptEvents(options).map(projectSqliteSessionTranscriptEvent);
+}
+
+export function loadActiveSqliteSessionTranscriptProjections(
+  options: SqliteSessionTranscriptStoreOptions,
+): SqliteSessionTranscriptProjectedEvent[] {
+  return selectActiveSqliteSessionTranscriptProjections(
+    loadSqliteSessionTranscriptProjections(options),
+  );
+}
+
 export function appendSqliteSessionTranscriptEvent(
   options: AppendSqliteSessionTranscriptEventOptions,
 ): { seq: number } {
@@ -485,18 +641,6 @@ export function appendSqliteSessionTranscriptMessage(
       );
       if (typeof existing?.event_id === "string") {
         return existing.event_id;
-      }
-    }
-
-    const dedupeLatestAssistantText = options.dedupeLatestAssistantText?.trim();
-    if (dedupeLatestAssistantText) {
-      const existingMessageId = readLatestEquivalentAssistantMessageId({
-        database,
-        sessionId,
-        expectedText: dedupeLatestAssistantText,
-      });
-      if (existingMessageId) {
-        return existingMessageId;
       }
     }
 

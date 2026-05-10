@@ -13,7 +13,9 @@ import {
   deleteSqliteSessionTranscript,
   exportSqliteSessionTranscriptJsonl,
   listSqliteSessionTranscripts,
+  loadActiveSqliteSessionTranscriptProjections,
   loadSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptProjections,
   recordSqliteSessionTranscriptSnapshot,
   replaceSqliteSessionTranscriptEvents,
 } from "./transcript-store.sqlite.js";
@@ -109,50 +111,6 @@ describe("SQLite session transcript store", () => {
     expect(identityRows).toEqual([{ message_idempotency_key: "idem-1" }]);
   });
 
-  it("dedupes delivery mirrors against the latest assistant inside the append transaction", () => {
-    const stateDir = createTempDir();
-    const scope = {
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      agentId: "main",
-      sessionId: "session-1",
-      sessionVersion: 1,
-    };
-    const first = appendSqliteSessionTranscriptMessage({
-      ...scope,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Already delivered" }],
-      },
-      now: () => 100,
-    });
-
-    const duplicate = appendSqliteSessionTranscriptMessage({
-      ...scope,
-      dedupeLatestAssistantText: "Already delivered",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Already delivered" }],
-      },
-      now: () => 200,
-    });
-
-    expect(duplicate.messageId).toBe(first.messageId);
-    const events = loadSqliteSessionTranscriptEvents({
-      env: { OPENCLAW_STATE_DIR: stateDir },
-      agentId: "main",
-      sessionId: "session-1",
-    }).map((entry) => entry.event);
-    expect(events).toHaveLength(2);
-    expect(events[1]).toMatchObject({
-      type: "message",
-      id: first.messageId,
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Already delivered" }],
-      },
-    });
-  });
-
   it("links transcript message parents inside the SQLite append transaction", () => {
     const stateDir = createTempDir();
     const first = appendSqliteSessionTranscriptMessage({
@@ -237,6 +195,133 @@ describe("SQLite session transcript store", () => {
         eventCount: 2,
       },
     ]);
+  });
+
+  it("projects message roles and tool call ids from SQLite transcript rows", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        {
+          type: "message",
+          id: "m1",
+          parentId: null,
+          message: { role: "user", content: "search" },
+        },
+        {
+          type: "message",
+          id: "m2",
+          parentId: "m1",
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call_content", name: "read", arguments: {} }],
+            tool_calls: [{ id: "call_openai", function: { name: "shell", arguments: "{}" } }],
+          },
+        },
+        {
+          type: "message",
+          id: "m3",
+          parentId: "m2",
+          message: { role: "toolResult", toolCallId: "call_content", content: "done" },
+        },
+      ],
+      now: () => 300,
+    });
+
+    expect(
+      loadSqliteSessionTranscriptProjections({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+      }).map((entry) => ({
+        seq: entry.seq,
+        eventId: entry.eventId,
+        eventType: entry.eventType,
+        parentId: entry.parentId,
+        messageRole: entry.messageRole,
+        toolCallIds: entry.toolCallIds,
+        toolResultIds: entry.toolResultIds,
+      })),
+    ).toEqual([
+      {
+        seq: 0,
+        eventId: "session-1",
+        eventType: "session",
+        parentId: undefined,
+        messageRole: undefined,
+        toolCallIds: [],
+        toolResultIds: [],
+      },
+      {
+        seq: 1,
+        eventId: "m1",
+        eventType: "message",
+        parentId: null,
+        messageRole: "user",
+        toolCallIds: [],
+        toolResultIds: [],
+      },
+      {
+        seq: 2,
+        eventId: "m2",
+        eventType: "message",
+        parentId: "m1",
+        messageRole: "assistant",
+        toolCallIds: ["call_openai", "call_content"],
+        toolResultIds: [],
+      },
+      {
+        seq: 3,
+        eventId: "m3",
+        eventType: "message",
+        parentId: "m2",
+        messageRole: "toolResult",
+        toolCallIds: [],
+        toolResultIds: ["call_content"],
+      },
+    ]);
+  });
+
+  it("selects active transcript projections without private JSONL branch helpers", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    replaceSqliteSessionTranscriptEvents({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      events: [
+        { type: "session", id: "session-1" },
+        { type: "compaction", id: "compact-1", firstKeptEntryId: "m1" },
+        { type: "message", id: "m1", parentId: null, message: { role: "user", content: "one" } },
+        {
+          type: "message",
+          id: "abandoned",
+          parentId: "m1",
+          message: { role: "assistant", content: "old branch" },
+        },
+        {
+          type: "message",
+          id: "active",
+          parentId: "m1",
+          message: { role: "assistant", content: "active branch" },
+        },
+      ],
+      now: () => 300,
+    });
+
+    expect(
+      loadActiveSqliteSessionTranscriptProjections({
+        env,
+        agentId: "main",
+        sessionId: "session-1",
+      }).map((entry) => entry.eventId),
+    ).toEqual(["compact-1", "m1", "active"]);
   });
 
   it("deletes transcript snapshots with the transcript", () => {

@@ -1,6 +1,7 @@
 import { deriveSessionTotalTokens, hasNonzeroUsage, normalizeUsage } from "../agents/usage.js";
 import {
   hasSqliteSessionTranscriptEvents,
+  loadActiveSqliteSessionTranscriptProjections,
   loadSqliteSessionTranscriptEvents,
   resolveSqliteSessionTranscriptScope,
 } from "../config/sessions/transcript-store.sqlite.js";
@@ -16,12 +17,6 @@ import type { SessionPreviewItem } from "./session-utils.types.js";
 type SessionTitleFields = {
   firstUserMessage: string | null;
   lastMessagePreview: string | null;
-};
-
-type TailTranscriptRecord = {
-  id?: string;
-  parentId?: string | null;
-  record: Record<string, unknown>;
 };
 
 export type ReadRecentSessionMessagesOptions = {
@@ -48,10 +43,6 @@ type ReadRecentSessionMessagesResult = {
   messages: unknown[];
   totalMessages: number;
 };
-
-function normalizeTailEntryString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
 
 function loadScopedTranscriptEvents(params: {
   agentId?: string;
@@ -81,86 +72,31 @@ function loadScopedTranscriptJsonLines(params: {
   return loadScopedTranscriptEvents(params)?.map((event) => JSON.stringify(event));
 }
 
-function sqliteTranscriptEventToRecord(event: unknown): TailTranscriptRecord | null {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
-    return null;
-  }
-  const record = event as Record<string, unknown>;
-  return {
-    ...(normalizeTailEntryString(record.id) ? { id: normalizeTailEntryString(record.id) } : {}),
-    ...(record.parentId === null
-      ? { parentId: null }
-      : normalizeTailEntryString(record.parentId)
-        ? { parentId: normalizeTailEntryString(record.parentId) }
-        : {}),
-    record,
-  };
-}
-
 function loadScopedTranscriptRecords(params: {
   agentId?: string;
   sessionId: string;
-}): TailTranscriptRecord[] | undefined {
-  return loadScopedTranscriptEvents(params)?.flatMap((event) => {
-    const record = sqliteTranscriptEventToRecord(event);
-    return record && record.record.type !== "session" ? [record] : [];
-  });
-}
-
-function tailRecordHasTreeLink(entry: TailTranscriptRecord): boolean {
-  return (
-    entry.record.type !== "session" &&
-    typeof entry.id === "string" &&
-    Object.hasOwn(entry.record, "parentId")
-  );
-}
-
-function selectBoundedActiveTailRecords(entries: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  const byId = new Map<string, TailTranscriptRecord>();
-  let leafId: string | undefined;
-  for (const entry of entries) {
-    if (entry.id) {
-      byId.set(entry.id, entry);
-    }
-    if (tailRecordHasTreeLink(entry) && entry.id) {
-      leafId = entry.id;
-    }
+}): Record<string, unknown>[] | undefined {
+  if (!params.sessionId.trim()) {
+    return undefined;
   }
-  if (!leafId) {
-    return entries;
-  }
-
-  const selected: TailTranscriptRecord[] = [];
-  const seen = new Set<string>();
-  let currentId: string | undefined = leafId;
-  while (currentId) {
-    if (seen.has(currentId)) {
-      return [];
+  try {
+    const scope = resolveSqliteSessionTranscriptScope({
+      agentId: params.agentId,
+      sessionId: params.sessionId,
+    });
+    if (!scope || !hasSqliteSessionTranscriptEvents(scope)) {
+      return undefined;
     }
-    seen.add(currentId);
-    const entry = byId.get(currentId);
-    if (!entry) {
-      break;
-    }
-    selected.push(entry);
-    currentId = entry.parentId ?? undefined;
-  }
-  const activeBranch = selected.toReversed();
-  const firstActiveRecord = activeBranch[0];
-  const firstActiveIndex = firstActiveRecord ? entries.indexOf(firstActiveRecord) : -1;
-  if (firstActiveIndex > 0) {
-    for (let index = firstActiveIndex - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry?.record.type === "compaction") {
-        return [entry, ...activeBranch];
+    return loadActiveSqliteSessionTranscriptProjections(scope).flatMap((entry) => {
+      if (!entry.event || typeof entry.event !== "object" || Array.isArray(entry.event)) {
+        return [];
       }
-    }
+      const record = entry.event as Record<string, unknown>;
+      return record.type !== "session" ? [record] : [];
+    });
+  } catch {
+    return undefined;
   }
-  return activeBranch;
-}
-
-function selectActiveTranscriptRecords(records: TailTranscriptRecord[]): TailTranscriptRecord[] {
-  return records.some(tailRecordHasTreeLink) ? selectBoundedActiveTailRecords(records) : records;
 }
 
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
@@ -191,11 +127,11 @@ function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   return null;
 }
 
-function transcriptRecordsToMessages(records: TailTranscriptRecord[]): unknown[] {
+function transcriptRecordsToMessages(records: Record<string, unknown>[]): unknown[] {
   const messages: unknown[] = [];
   let messageSeq = 0;
   for (const entry of records) {
-    const message = parsedSessionEntryToMessage(entry.record, messageSeq + 1);
+    const message = parsedSessionEntryToMessage(entry, messageSeq + 1);
     if (message) {
       messageSeq += 1;
       messages.push(message);
@@ -209,7 +145,7 @@ function loadScopedSessionMessages(params: {
   sessionId: string;
 }): unknown[] | undefined {
   const records = loadScopedTranscriptRecords(params);
-  return records ? transcriptRecordsToMessages(selectActiveTranscriptRecords(records)) : undefined;
+  return records ? transcriptRecordsToMessages(records) : undefined;
 }
 
 export function attachOpenClawTranscriptMeta(

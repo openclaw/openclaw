@@ -12,6 +12,16 @@ export {
   readStringParam,
 } from "./host/openclaw-runtime-agent.js";
 export { SILENT_REPLY_TOKEN } from "./host/openclaw-runtime-session.js";
+export {
+  loadActiveSqliteSessionTranscriptProjections,
+  loadSqliteSessionTranscriptProjections,
+  projectSqliteSessionTranscriptEvent,
+  selectActiveSqliteSessionTranscriptProjections,
+} from "./host/openclaw-runtime-session.js";
+export type {
+  SqliteSessionTranscriptMessageRole,
+  SqliteSessionTranscriptProjectedEvent,
+} from "./host/openclaw-runtime-session.js";
 export { parseNonNegativeByteSize } from "./host/openclaw-runtime-config.js";
 export {
   getRuntimeConfig,

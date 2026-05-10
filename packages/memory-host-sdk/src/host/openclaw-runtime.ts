@@ -49,9 +49,15 @@ export {
 export type { OpenClawConfig } from "../../../../src/config/config.js";
 export { resolveStateDir } from "../../../../src/config/paths.js";
 export {
+  loadActiveSqliteSessionTranscriptProjections,
   listSqliteSessionTranscripts,
   loadSqliteSessionTranscriptEvents,
+  loadSqliteSessionTranscriptProjections,
+  projectSqliteSessionTranscriptEvent,
   replaceSqliteSessionTranscriptEvents,
+  selectActiveSqliteSessionTranscriptProjections,
+  type SqliteSessionTranscriptMessageRole,
+  type SqliteSessionTranscriptProjectedEvent,
 } from "../../../../src/config/sessions/transcript-store.sqlite.js";
 export type { SessionSendPolicyConfig } from "../../../../src/config/types.base.js";
 export type {
