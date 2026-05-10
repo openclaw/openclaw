@@ -15,10 +15,10 @@ import { normalizeAlias } from "./models/alias-name.js";
 
 /**
  * Wizard default for non-Azure custom APIs when context length is unknown.
- * Must exceed the compaction `reserveTokensFloor` default (20000 tokens) in
- * `agent-runner-memory.ts`, or the first turns enter an infinite compact loop (#79428).
+ * Mirrors the generic persisted custom-model catalog fallback and leaves enough
+ * room above the default compaction reserve floor in `pi-settings.ts`.
  */
-export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 32_768;
+export const CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS = 128_000;
 const DEFAULT_CONTEXT_WINDOW = CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 const DEFAULT_MAX_TOKENS = 4096;
 // Azure OpenAI uses the Responses API which supports larger defaults
@@ -32,11 +32,12 @@ export type CustomModelImageInputInference = {
 
 function normalizeContextWindowForCustomModel(value: unknown): number {
   const parsed = typeof value === "number" && Number.isFinite(value) ? Math.floor(value) : 0;
-  const atLeastHardMin =
-    parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS
-      ? parsed
-      : CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
-  return Math.max(atLeastHardMin, CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS);
+  if (parsed <= 0 || parsed === CONTEXT_WINDOW_HARD_MIN_TOKENS) {
+    return CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
+  }
+  return parsed >= CONTEXT_WINDOW_HARD_MIN_TOKENS
+    ? parsed
+    : CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS;
 }
 
 function customModelInputs(supportsImageInput: boolean): CustomModelInput[] {

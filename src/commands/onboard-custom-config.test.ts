@@ -117,9 +117,14 @@ describe("applyCustomApiConfig", () => {
       expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
     },
     {
-      name: "raises context window below stable default compaction floor (#79428)",
+      name: "raises legacy generated hard-min context window (#79428)",
       existingContextWindow: CONTEXT_WINDOW_HARD_MIN_TOKENS,
       expectedContextWindow: CUSTOM_PROVIDER_DEFAULT_CONTEXT_WINDOW_TOKENS,
+    },
+    {
+      name: "preserves explicit small context window when already valid",
+      existingContextWindow: 8192,
+      expectedContextWindow: 8192,
     },
     {
       name: "preserves existing custom model context window when already above minimum",

@@ -21,6 +21,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/onboarding: give non-Azure custom providers a safe generated context window and heal legacy 4k wizard entries without overwriting explicit valid small model limits, preventing first-turn compaction loops. Fixes #79428. (#79911) Thanks @Jefsky.
 - Ollama: stop native `/api/chat` requests from copying catalog `contextWindow` or `maxTokens` into `options.num_ctx` unless `params.num_ctx` is explicitly configured, avoiding pathological prompt-ingestion latency on local large-context models. Fixes #62267. Thanks @BenSHPD.
 - Ollama: keep the model idle watchdog enabled for `*:cloud` models routed through a local Ollama host, so cloud-backed tool-loop stalls fail over visibly instead of inheriting local-model no-idle behavior. Fixes #79350. Thanks @geek111.
 - Voice/Ollama: honor routed voice agent `tools.allow` for classic embedded voice responses, including empty allowlists, so no-tool Ollama agents do not receive tool schemas. Fixes #79506. Thanks @donkeykong91.
