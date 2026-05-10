@@ -13,6 +13,7 @@ import {
 const mocks = {
   ...createStatusScanSharedMocks("status-scan"),
   buildChannelsTable: vi.fn(),
+  mergeChannelsTableWithGatewayStatus: vi.fn(),
   callGateway: vi.fn(),
 };
 
@@ -68,6 +69,9 @@ function configureScanStatus(
     rows: [],
     details: [],
   });
+  mocks.mergeChannelsTableWithGatewayStatus.mockImplementation(
+    (params: { channels: unknown }) => params.channels,
+  );
   mocks.callGateway.mockResolvedValue(null);
 }
 
@@ -202,6 +206,13 @@ describe("scanStatus", () => {
         liveChannelStatus,
       },
     ]);
+    expect(mocks.mergeChannelsTableWithGatewayStatus).toHaveBeenCalledWith({
+      channels: {
+        rows: [],
+        details: [],
+      },
+      channelsStatus: liveChannelStatus,
+    });
   });
 
   it("skips channel plugin preload for status --json with no channel config", async () => {

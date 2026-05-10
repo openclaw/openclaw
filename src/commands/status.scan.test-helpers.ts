@@ -153,6 +153,7 @@ function createStatusExecModuleMock(): { runExec: UnknownMock } {
 
 type StatusScanModuleTestMocks = StatusScanSharedMocks & {
   buildChannelsTable?: UnknownMock;
+  mergeChannelsTableWithGatewayStatus?: UnknownMock;
   callGateway?: UnknownMock;
   getStatusCommandSecretTargetIds?: UnknownMock;
   resolveMemorySearchConfig?: UnknownMock;
@@ -223,15 +224,21 @@ export async function loadStatusScanModuleForTest(
   }));
 
   if (!options.fastJson) {
+    const mergeChannelsTableWithGatewayStatus =
+      mocks.mergeChannelsTableWithGatewayStatus ??
+      vi.fn((params: { channels: unknown }) => params.channels);
+
     vi.doMock("../cli/progress.js", () => ({
       withProgress: vi.fn(async (_opts, run) => await run({ setLabel: vi.fn(), tick: vi.fn() })),
     }));
     vi.doMock("./status-all/channels.js", () => ({
       buildChannelsTable: mocks.buildChannelsTable,
+      mergeChannelsTableWithGatewayStatus,
     }));
     vi.doMock("./status.scan.runtime.js", () => ({
       statusScanRuntime: {
         buildChannelsTable: mocks.buildChannelsTable,
+        mergeChannelsTableWithGatewayStatus,
         collectChannelStatusIssues: vi.fn(() => []),
       },
     }));
