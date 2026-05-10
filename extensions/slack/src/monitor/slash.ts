@@ -26,6 +26,7 @@ import {
 import { chunkItems } from "openclaw/plugin-sdk/text-chunking";
 import type { ResolvedSlackAccount } from "../accounts.js";
 import { SLACK_MAX_BLOCKS } from "../blocks-input.js";
+import { formatSlackError } from "../errors.js";
 import { truncateSlackText } from "../truncate.js";
 import { resolveSlackCommandIngress, resolveSlackEffectiveAllowFrom } from "./auth.js";
 import { resolveSlackChannelConfig, type SlackChannelConfigResolved } from "./channel-config.js";
@@ -739,7 +740,7 @@ export async function registerSlackMonitorSlashCommands(params: {
           deliver: async (payload) => deliverSlashPayloads([payload]),
           onError: (err, info) => {
             runtime.error?.(
-              danger(`slack slash ${info.kind} reply failed: ${formatErrorMessage(err)}`),
+              danger(`slack slash ${info.kind} reply failed: ${formatSlackError(err)}`),
             );
           },
         },

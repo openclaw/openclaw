@@ -165,6 +165,35 @@ describe("applyModelDefaults", () => {
     });
   });
 
+  it("normalizes provider-prefixed Gemini ids in configured Google provider rows", () => {
+    const cfg = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+            api: "google-generative-ai",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini 3 Pro",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyModelDefaults(cfg);
+
+    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+  });
+
   it("fills missing model provider defaults", () => {
     const cfg = buildProxyProviderConfig();
 

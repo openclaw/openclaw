@@ -35,6 +35,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Gateway: avoid synchronous restart-sentinel state probes during post-attach startup, preventing slow Windows or redirected state directories from blocking channel turns. Fixes #79264. Thanks @liyi58.
 - Agents/image: honor explicit `image` tool model overrides even when `agents.defaults.imageModel` is unset, restoring one-off vision calls for configured multimodal providers. Fixes #79341. Thanks @haumanto.
 - Codex app-server: preserve prompt-local current-turn context through context-engine prompt projection, so replied-to Telegram messages stay visible to the Codex model input.
 - Telegram: pass agent-scoped media roots through gateway message actions so workspace-local media from the active agent is not rejected as cross-agent access. Thanks @frankekn.
@@ -58,6 +59,7 @@ Docs: https://docs.openclaw.ai
 - Slack: mark unresolved thread replies as ambiguous and skip them instead of treating them as root channel messages, keeping thread continuation on the SDK-backed participation store. (#75630) Thanks @soichiyo.
 - Slack: let same-channel message tool sends opt out of inherited thread context with `topLevel: true` or `threadId: null`, allowing agents to post a new parent-channel message from inside a Slack thread. Fixes #79807. Thanks @vexclawx31.
 - Slack: prefer full rich-text block content over truncated socket-mode message previews so long inbound Slack messages reach agents intact. Fixes #79027. Thanks @BobAccentWebDev.
+- Slack: include structured Slack API error details in setup, probe, streaming, and reply logs while preserving token redaction. (#53966) Thanks @deucemask.
 - Gateway/agents: keep structured reasons when active-run queueing fails and deprecate the legacy boolean queue helper, so steering and subagent wake diagnostics distinguish completed, non-streaming, and compacting runs. Fixes #80156. Thanks @markus-lassfolk.
 - Agents/UI: compact exec and tool progress rows by hiding redundant shell tool names, replacing known workspace paths with short context markers, and preserving Discord trace scrubbing for compact command lines.
 - ACPX: run and await the embedded ACP backend startup probe by default so the gateway `ready` signal no longer fires before the acpx runtime has either become usable or reported a probe failure; set `OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE=0` to restore lazy startup. Fixes #79596. Thanks @bzelones.
@@ -234,6 +236,7 @@ Docs: https://docs.openclaw.ai
 - Discord/voice: keep TTS playback running when another user starts speaking, ignore new capture during playback to avoid feedback loops, and downgrade expected receive-stream aborts to verbose diagnostics.
 - iMessage: expose native private-API message actions through `imsg rpc` for reactions, edits, unsends, replies, rich sends, attachments, and group management when `imsg status --json` reports the required bridge capabilities.
 - Gateway/tasks: reconcile stale CLI run-context tasks whose live run context disappeared even when a child session row remains, and apply the default bounded reload deferral timeout to channel hot reloads so stale task records cannot block Discord/Slack/Telegram reloads forever.
+- Gateway/heartbeat: keep stripped `HEARTBEAT_OK` acknowledgements out of pending final-delivery replay and let recent ack-only pending state proceed to the next heartbeat run instead of creating a self-refreshing requests-in-flight loop. Fixes #79258. Thanks @haumanto.
 - Gateway/sessions: keep session-store index writes atomic while skipping durable fsync inside the writer lock, reducing cron and channel-turn starvation on slow filesystems and addressing the session-store strand of #73655. Thanks @mmartoccia.
 - Discord/voice: make `openclaw channels capabilities --channel discord --target channel:<id>` and `channels status --probe` audit voice-channel permissions, including auto-join targets, so missing Connect/Speak/Read Message History permissions show up before `/vc join`.
 - Gateway/restart: expose `skipDeferral` on the `gateway.restart.request` RPC and add `openclaw gateway restart --safe --skip-deferral` so operators can bypass the safe-restart deferral gate when a pinned task run prevents the OpenClaw-aware restart from draining. Surfaces the existing internal `scheduleGatewaySigusr1Restart({ skipDeferral })` semantics added in #71637 to a public surface, complementing `gateway.reload.deferralTimeoutMs`. Refs #76162. Thanks @solomonneas.
@@ -258,6 +261,7 @@ Docs: https://docs.openclaw.ai
 - QQBot/Skills: translate QQBot skill descriptions surfaced in the Skills UI so English-language users no longer see Chinese metadata. Fixes #77810. Thanks @eabase.
 - Image generation: include enabled generation providers such as fal in provider discovery even when another image provider is already active. Fixes #78141. Thanks @leoge007.
 - Slack: keep Socket Mode's native reconnect enabled so transient ping/pong misses can recover without forcing a full provider rebuild. Fixes #77933. Thanks @bmoran1022 and @brokemac79.
+- Cron: preserve cron timeout results when an isolated agent turn's `cron-nested` lane watchdog fires, preventing internal command-lane or model-fallback timeout text from being persisted. Fixes #77703. (#78168) Thanks @brokemac79 and @transxtech.
 - PR triage: mark external pull requests with `proof: supplied` when Barnacle finds structured real behavior proof, keep stale negative proof labels in sync across CRLF-edited PR bodies, and let ClawSweeper own the stronger `proof: sufficient` judgement.
 - ACPX/Codex: preserve trusted Codex project declarations when launching isolated Codex ACP sessions, avoiding interactive trust prompts in headless runs. Thanks @Stedyclaw.
 - ACPX/Codex: reap stale OpenClaw-owned ACPX/Codex ACP process trees on startup and after ACP session close, preventing orphaned harness processes from slowing the Gateway. Thanks @91wan.
