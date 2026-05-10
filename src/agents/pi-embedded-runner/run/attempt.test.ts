@@ -179,7 +179,7 @@ describe("normalizeMessagesForLlmBoundary", () => {
 
     const output = normalizeMessagesForLlmBoundary(
       input as Parameters<typeof normalizeMessagesForLlmBoundary>[0],
-    ) as Array<Record<string, unknown>>;
+    ) as unknown as Array<Record<string, unknown>>;
 
     expect(output[0]?.content).toEqual([
       {
