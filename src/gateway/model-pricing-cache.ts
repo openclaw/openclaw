@@ -1125,7 +1125,11 @@ function scheduleRefresh(
       return;
     }
     void refreshGatewayModelPricingCache(params).catch((error: unknown) => {
-      log.warn(`pricing refresh failed: ${String(error)}`);
+      const message = `pricing refresh failed: ${String(error)}`;
+      log.warn(message);
+      if (!params.signal?.aborted) {
+        recordGatewayModelPricingSourceFailure("refresh", message);
+      }
     });
   }, CACHE_TTL_MS);
   refreshTimer.unref?.();
@@ -1340,6 +1344,7 @@ export async function refreshGatewayModelPricingCache(
       return;
     }
     clearGatewayModelPricingSourceFailure("bootstrap");
+    clearGatewayModelPricingSourceFailure("refresh");
     replaceGatewayModelPricingCache(nextPricing);
     scheduleRefresh({ ...params, fetchImpl });
   })();

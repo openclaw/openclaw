@@ -20,7 +20,7 @@ export type CachedModelPricing = {
   tieredPricing?: CachedPricingTier[];
 };
 
-export type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap";
+export type GatewayModelPricingHealthSource = "openrouter" | "litellm" | "bootstrap" | "refresh";
 
 export type GatewayModelPricingHealth = {
   state: "ok" | "degraded" | "disabled";

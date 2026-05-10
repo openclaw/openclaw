@@ -456,6 +456,84 @@ describe("model-pricing-cache", () => {
     });
   });
 
+  it("records and clears scheduled refresh rejections for health surfaces", async () => {
+    vi.useFakeTimers();
+    try {
+      const manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] };
+      let failManifestRead = false;
+      const pluginMetadataSnapshot = {
+        index: { plugins: [] } as never,
+        get manifestRegistry() {
+          if (failManifestRead) {
+            throw new Error("manifest metadata failed");
+          }
+          return manifestRegistry;
+        },
+      };
+      const config = {
+        agents: {
+          defaults: {
+            model: { primary: "custom/gpt-remote" },
+          },
+        },
+        models: {
+          providers: {
+            custom: {
+              baseUrl: "https://models.example/v1",
+              api: "openai-completions",
+              models: [{ id: "gpt-remote" }],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+      const fetchImpl = withFetchPreconnect(async (input: RequestInfo | URL) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        return new Response(JSON.stringify(url.includes("openrouter.ai") ? { data: [] } : {}), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      });
+
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+
+      failManifestRead = true;
+      await vi.runOnlyPendingTimersAsync();
+
+      expect(getGatewayModelPricingHealth()).toMatchObject({
+        state: "degraded",
+        sources: [
+          {
+            source: "refresh",
+            state: "degraded",
+            detail: "pricing refresh failed: Error: manifest metadata failed",
+          },
+        ],
+      });
+
+      failManifestRead = false;
+      await refreshGatewayModelPricingCache({
+        config,
+        fetchImpl,
+        pluginMetadataSnapshot,
+      });
+      expect(getGatewayModelPricingHealth()).toEqual({
+        state: "ok",
+        sources: [],
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("seeds pricing from explicit configured model cost without external catalog fetches", async () => {
     const config = {
       agents: {
