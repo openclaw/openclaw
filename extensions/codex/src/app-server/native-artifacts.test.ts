@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendCodexNativeArtifactsToResult,
   collectNewCodexNativeArtifacts,
@@ -38,6 +38,26 @@ describe("Codex native artifact collection", () => {
       generatedPdf,
       generatedSheet,
     ]);
+  });
+
+  it("treats generated-artifact directory read failures as non-fatal", async () => {
+    const codexHome = path.join(tempDir, "codex-home");
+    const generatedFile = path.join(codexHome, "generated_files", "report.pdf");
+    await fs.mkdir(path.dirname(generatedFile), { recursive: true });
+    await fs.writeFile(generatedFile, "pdf bytes");
+
+    const originalReadDir = fs.readdir.bind(fs) as (...args: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "readdir").mockImplementation(async (...args: unknown[]) => {
+      const [dir] = args;
+      if (String(dir).endsWith("generated_images")) {
+        throw Object.assign(new Error("locked directory"), { code: "EPERM" });
+      }
+      return (await originalReadDir(...args)) as never;
+    }) as never;
+
+    const snapshot = await snapshotCodexNativeArtifacts(codexHome);
+
+    expect(snapshot.files.has(generatedFile)).toBe(true);
   });
 
   it("adds generated artifacts to tool media unless delivery was already explicit", () => {

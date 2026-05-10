@@ -93,12 +93,11 @@ async function listArtifactsInRoot(
   let entries: Dirent[];
   try {
     entries = await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    const code = (error as NodeJS.ErrnoException).code;
-    if (code === "ENOENT" || code === "ENOTDIR" || code === "EACCES") {
-      return [];
-    }
-    throw error;
+  } catch {
+    // Artifact discovery decorates an already-completed turn. A filesystem
+    // race, platform ACL error, or locked generated subtree must not fail the
+    // assistant reply.
+    return [];
   }
 
   const artifacts: ArtifactEntry[] = [];
