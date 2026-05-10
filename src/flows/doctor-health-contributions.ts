@@ -604,10 +604,10 @@ async function runWriteConfigHealth(ctx: DoctorHealthFlowContext): Promise<void>
     if (fs.existsSync(backupPath)) {
       ctx.runtime.log(`Backup: ${shortenHomePath(backupPath)}`);
     }
+    if (!ctx.prompter.shouldRepair) {
+      ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
+    }
     return;
-  }
-  if (!ctx.prompter.shouldRepair) {
-    ctx.runtime.log(`Run "${formatCliCommand("openclaw doctor --fix")}" to apply changes.`);
   }
 }
 

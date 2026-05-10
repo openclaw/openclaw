@@ -7,6 +7,11 @@ import {
 const mocks = vi.hoisted(() => ({
   maybeRunConfiguredPluginInstallReleaseStep: vi.fn(),
   note: vi.fn(),
+  replaceConfigFile: vi.fn(),
+  logConfigUpdated: vi.fn(),
+  applyWizardMetadata: vi.fn((cfg: unknown) => cfg),
+  formatCliCommand: vi.fn((cmd: string) => cmd),
+  shortenHomePath: vi.fn((p: string) => p),
 }));
 
 vi.mock("../commands/doctor/shared/release-configured-plugin-installs.js", () => ({
@@ -19,6 +24,30 @@ vi.mock("../terminal/note.js", () => ({
 
 vi.mock("../version.js", () => ({
   VERSION: "2026.5.2-test",
+}));
+
+vi.mock("../config/config.js", () => ({
+  CONFIG_PATH: "/mock/.openclaw/openclaw.json",
+  replaceConfigFile: (...args: unknown[]) => mocks.replaceConfigFile(...args),
+}));
+
+vi.mock("../config/logging.js", () => ({
+  logConfigUpdated: (...args: unknown[]) => mocks.logConfigUpdated(...args),
+}));
+
+vi.mock("../commands/onboard-helpers.js", () => ({
+  applyWizardMetadata: (...args: Parameters<typeof mocks.applyWizardMetadata>) =>
+    mocks.applyWizardMetadata(...args),
+}));
+
+vi.mock("../cli/command-format.js", () => ({
+  formatCliCommand: (...args: Parameters<typeof mocks.formatCliCommand>) =>
+    mocks.formatCliCommand(...args),
+}));
+
+vi.mock("../utils.js", () => ({
+  shortenHomePath: (...args: Parameters<typeof mocks.shortenHomePath>) =>
+    mocks.shortenHomePath(...args),
 }));
 
 function requireDoctorContribution(id: string) {
@@ -140,5 +169,70 @@ describe("doctor health contributions", () => {
         },
       }),
     ).toBe(false);
+  });
+
+  describe("doctor:write-config trailer", () => {
+    function makeWriteConfigCtx(
+      opts: { shouldWriteConfig?: boolean; shouldRepair?: boolean; cfgDirty?: boolean } = {},
+    ) {
+      const cfg = { meta: {} } as Parameters<
+        ReturnType<typeof resolveDoctorHealthContributions>[number]["run"]
+      >[0]["cfg"];
+      const cfgForPersistence = opts.cfgDirty ? ({ meta: { dirty: true } } as typeof cfg) : cfg;
+      const logMock = vi.fn();
+      return {
+        ctx: {
+          cfg,
+          cfgForPersistence,
+          configResult: { cfg, shouldWriteConfig: opts.shouldWriteConfig ?? false },
+          sourceConfigValid: true,
+          prompter: { shouldRepair: opts.shouldRepair ?? false },
+          configPath: "/mock/.openclaw/openclaw.json",
+          options: {},
+          runtime: { log: logMock, error: vi.fn(), warn: vi.fn() },
+          env: {},
+        } as unknown as Parameters<
+          ReturnType<typeof resolveDoctorHealthContributions>[number]["run"]
+        >[0],
+        logMock,
+      };
+    }
+
+    beforeEach(() => {
+      mocks.replaceConfigFile.mockResolvedValue(undefined);
+      mocks.logConfigUpdated.mockReturnValue(undefined);
+      mocks.applyWizardMetadata.mockImplementation((cfg: unknown) => cfg);
+      mocks.formatCliCommand.mockImplementation((cmd: string) => cmd);
+    });
+
+    it("suppresses trailer on clean run with no pending changes", async () => {
+      const contribution = requireDoctorContribution("doctor:write-config");
+      const { ctx, logMock } = makeWriteConfigCtx({
+        shouldWriteConfig: false,
+        shouldRepair: false,
+      });
+
+      await contribution.run(ctx);
+
+      expect(logMock).not.toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
+    });
+
+    it("prints trailer when pending changes exist and --fix was not passed", async () => {
+      const contribution = requireDoctorContribution("doctor:write-config");
+      const { ctx, logMock } = makeWriteConfigCtx({ shouldWriteConfig: true, shouldRepair: false });
+
+      await contribution.run(ctx);
+
+      expect(logMock).toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
+    });
+
+    it("suppresses trailer when pending changes exist but --fix was passed", async () => {
+      const contribution = requireDoctorContribution("doctor:write-config");
+      const { ctx, logMock } = makeWriteConfigCtx({ shouldWriteConfig: true, shouldRepair: true });
+
+      await contribution.run(ctx);
+
+      expect(logMock).not.toHaveBeenCalledWith(expect.stringContaining("to apply changes"));
+    });
   });
 });
