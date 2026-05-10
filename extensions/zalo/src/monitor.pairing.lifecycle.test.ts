@@ -84,14 +84,15 @@ describe("Zalo pairing lifecycle", () => {
         meta: { name: "Unauthorized User" },
       });
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      const pairingTextCall = sendMessageMock.mock.calls[0];
-      const pairingTextPayload = pairingTextCall?.[1] as
-        | { chat_id?: string; text?: string }
-        | undefined;
-      expect(pairingTextCall?.[0]).toBe("zalo-token");
-      expect(pairingTextPayload?.chat_id).toBe("dm-pairing-1");
-      expect(pairingTextPayload?.text).toContain("PAIRCODE");
-      expect(pairingTextCall?.[2]).toBeUndefined();
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+        string,
+        { chat_id?: string; text?: string },
+        unknown,
+      ];
+      expect(sendToken).toBe("zalo-token");
+      expect(sendPayload.chat_id).toBe("dm-pairing-1");
+      expect(sendPayload.text).toContain("PAIRCODE");
+      expect(sendOptions).toBeUndefined();
     } finally {
       await monitor.stop();
     }

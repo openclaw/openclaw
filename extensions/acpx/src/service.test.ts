@@ -156,6 +156,19 @@ function createMockRuntime(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function readFirstRuntimeFactoryInput(runtimeFactory: { mock: { calls: Array<Array<unknown>> } }) {
+  const input = runtimeFactory.mock.calls[0]?.[0];
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Expected runtimeFactory to be called with an options object");
+  }
+  return input as {
+    pluginConfig: {
+      timeoutSeconds?: number;
+      probeAgent?: string;
+    };
+  };
+}
+
 describe("createAcpxRuntimeService", () => {
   it("registers and unregisters the embedded backend", async () => {
     const workspaceDir = await makeTempDir();
@@ -371,12 +384,13 @@ describe("createAcpxRuntimeService", () => {
     if (!backend) {
       throw new Error("expected ACPX runtime backend");
     }
-    expect(backend.runtime).toMatchObject({
-      ensureSession: expect.any(Function),
-    });
+    const backendRuntime = backend.runtime as {
+      ensureSession(input: { agent: string; mode: string; sessionKey: string }): Promise<unknown>;
+    };
+    expect(typeof backendRuntime.ensureSession).toBe("function");
     expect(acpxRuntimeConstructorMock).not.toHaveBeenCalled();
 
-    await backend.runtime.ensureSession({
+    await backendRuntime.ensureSession({
       agent: "codex",
       mode: "oneshot",
       sessionKey: "agent:codex:acp:test",
@@ -442,13 +456,7 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginConfig: expect.objectContaining({
-          timeoutSeconds: 120,
-        }),
-      }),
-    );
+    expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.timeoutSeconds).toBe(120);
 
     await service.stop?.(ctx);
   });
@@ -473,13 +481,7 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginConfig: expect.objectContaining({
-          probeAgent: "opencode",
-        }),
-      }),
-    );
+    expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe("opencode");
 
     await service.stop?.(ctx);
   });
@@ -500,13 +502,7 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginConfig: expect.objectContaining({
-          probeAgent: "opencode",
-        }),
-      }),
-    );
+    expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe("opencode");
 
     await service.stop?.(ctx);
   });
@@ -528,13 +524,7 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    expect(runtimeFactory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pluginConfig: expect.objectContaining({
-          probeAgent: "codex",
-        }),
-      }),
-    );
+    expect(readFirstRuntimeFactoryInput(runtimeFactory).pluginConfig.probeAgent).toBe("codex");
 
     await service.stop?.(ctx);
   });
@@ -579,9 +569,7 @@ describe("createAcpxRuntimeService", () => {
     await service.start(ctx);
 
     expect(probeAvailability).not.toHaveBeenCalled();
-    expect(getAcpRuntimeBackend("acpx")).toMatchObject({
-      runtime: expect.any(Object),
-    });
+    expect(getAcpRuntimeBackend("acpx")?.runtime).toBe(runtime);
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
 
     await service.stop?.(ctx);

@@ -84,7 +84,7 @@ vi.mock("openclaw/plugin-sdk/routing", () => ({
 
 const { readAllowFromStoreMock, upsertPairingRequestMock } = vi.hoisted(() => ({
   readAllowFromStoreMock: vi.fn(async () => [] as string[]),
-  upsertPairingRequestMock: vi.fn(async () => ({ code: "CODE", created: true })),
+  upsertPairingRequestMock: vi.fn(async (_args: unknown) => ({ code: "CODE", created: true })),
 }));
 
 vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({

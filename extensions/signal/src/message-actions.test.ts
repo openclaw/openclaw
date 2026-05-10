@@ -136,6 +136,12 @@ describe("signalMessageActions", () => {
 
     for (const testCase of cases) {
       sendReactionSignalMock.mockClear();
+      const expectedOptions = testCase.expectedOptions as {
+        accountId?: string;
+        groupId?: string;
+        targetAuthor?: string;
+        targetAuthorUuid?: string;
+      };
       await signalMessageActions.handleAction?.({
         channel: "signal",
         action: "react",
@@ -149,10 +155,13 @@ describe("signalMessageActions", () => {
         testCase.expectedRecipient,
         testCase.expectedTimestamp,
         testCase.expectedEmoji,
-        expect.objectContaining({
+        {
           cfg: testCase.cfg,
-          ...testCase.expectedOptions,
-        }),
+          accountId: expectedOptions.accountId,
+          groupId: expectedOptions.groupId,
+          targetAuthor: expectedOptions.targetAuthor,
+          targetAuthorUuid: expectedOptions.targetAuthorUuid,
+        },
       );
     }
   });

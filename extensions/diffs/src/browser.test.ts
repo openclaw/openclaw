@@ -83,7 +83,7 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(browser.newPage).toHaveBeenCalledTimes(2);
     const firstPageParams = (
       browser.newPage.mock.calls as Array<[{ deviceScaleFactor?: number }?]>
-    )[0]?.[0] as { deviceScaleFactor?: number } | undefined;
+    )[0]?.[0];
     expect(firstPageParams?.deviceScaleFactor).toBe(2);
     expect(pages).toHaveLength(2);
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
