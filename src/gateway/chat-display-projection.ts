@@ -534,7 +534,7 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
     return true;
   }
-  const text = extractProjectedText(message.content ?? message.text);
+  const text = extractProjectedText(message.content?.length ? message.content : message.text);
   return (
     text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
   );
@@ -548,10 +548,10 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
   }
-  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content ?? message.text)) {
+  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content?.length ? message.content : message.text)) {
     return true;
   }
-  if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
+  if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content?.length ? message.content : message.text)) {
     return false;
   }
   if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {

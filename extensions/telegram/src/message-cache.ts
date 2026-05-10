@@ -184,11 +184,11 @@ function readPersistedMessages(filePath: string, maxMessages: number) {
   if (!fs.existsSync(filePath)) {
     return { messages, persistedEntryCount };
   }
-  try {
-    for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
-      if (!line.trim()) {
-        continue;
-      }
+  for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
       const entry = parsePersistedEntry(JSON.parse(line));
       if (!entry) {
         continue;
@@ -197,9 +197,9 @@ function readPersistedMessages(filePath: string, maxMessages: number) {
       messages.delete(entry.key);
       messages.set(entry.key, entry.node);
       trimMessages(messages, maxMessages);
+    } catch (error) {
+      logVerbose(`telegram: failed to parse cache line: ${String(error)}`);
     }
-  } catch (error) {
-    logVerbose(`telegram: failed to read message cache: ${String(error)}`);
   }
   return { messages, persistedEntryCount };
 }

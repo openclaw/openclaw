@@ -298,7 +298,7 @@ function rebalanceReasoningItalics(source: string, chunks: string[]): string[] {
     const current = adjusted[i];
 
     // Ensure current chunk closes italics so Discord renders it italicized.
-    const needsClosing = !current.trimEnd().endsWith("_");
+    const needsClosing = current.includes("_") && !current.trimEnd().endsWith("_");
     if (needsClosing) {
       adjusted[i] = `${current}_`;
     }

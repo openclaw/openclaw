@@ -19,7 +19,17 @@ export function isRetryableDiscordDeliveryError(err: unknown): boolean {
     return false;
   }
   const status = (err as { status?: number }).status ?? (err as { statusCode?: number }).statusCode;
-  return status === 429 || (status !== undefined && status >= 500);
+  if (status === 408 || status === 429) {
+    return true;
+  }
+  if (status !== undefined && status >= 500) {
+    return true;
+  }
+  const code = (err as { code?: string }).code;
+  if (code === "ECONNRESET" || code === "ETIMEDOUT" || code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return true;
+  }
+  return false;
 }
 
 function getDiscordDeliveryRetryAfterMs(err: unknown): number | undefined {

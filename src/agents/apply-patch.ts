@@ -454,7 +454,7 @@ function checkPatchBoundariesLenient(lines: string[]): string[] {
   if (
     last &&
     (first === "<<EOF" || first === "<<'EOF'" || first === '<<"EOF"') &&
-    last.endsWith("EOF")
+    last.trim() === "EOF"
   ) {
     const inner = lines.slice(1, -1);
     const innerError = checkPatchBoundariesStrict(inner);
