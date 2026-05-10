@@ -308,4 +308,35 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
       expect.objectContaining({ code: "persisted-registry-stale-source" }),
     );
   });
+
+  it("treats persisted registry as stale when a diagnostic source path no longer exists", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const ghostDir = path.join(tempRoot, "extensions", "lossless-claw");
+    const staleIndex: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "warn",
+          message:
+            "installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js",
+          pluginId: "lossless-claw",
+          source: ghostDir,
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(staleIndex, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("derived");
+    expect(result.snapshot.diagnostics).not.toContainEqual(
+      expect.objectContaining({ source: ghostDir }),
+    );
+    expect(result.diagnostics).toContainEqual(
+      expect.objectContaining({ code: "persisted-registry-stale-source" }),
+    );
+  });
 });
