@@ -20,6 +20,7 @@ export function composeProviderStreamWrappers(
   );
 }
 
+/** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
 export function defaultToolStreamExtraParams(
   extraParams?: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -107,6 +108,7 @@ function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>)
   return stripped;
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   payload: Record<string, unknown>,
 ): number {
@@ -116,6 +118,7 @@ export function stripTrailingAnthropicAssistantPrefillWhenThinking(
   return stripTrailingAssistantPrefillMessages(payload);
 }
 
+/** @deprecated Anthropic-family provider stream helper; do not use from third-party plugins. */
 export function createAnthropicThinkingPrefillPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   onStripped?: (stripped: number) => void,
@@ -133,8 +136,10 @@ export function createAnthropicThinkingPrefillPayloadWrapper(
   );
 }
 
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
 export type OpenAICompatibleThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
 export function isOpenAICompatibleThinkingEnabled(params: {
   thinkingLevel: OpenAICompatibleThinkingLevel;
   options: Parameters<StreamFn>[2];
@@ -148,7 +153,9 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   return normalized !== "off" && normalized !== "none";
 }
 
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 
 function isDisabledDeepSeekV4ThinkingLevel(thinkingLevel: DeepSeekV4ThinkingLevel): boolean {
@@ -192,6 +199,7 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
   }
 }
 
+/** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   baseStreamFn: StreamFn | undefined;
   thinkingLevel: DeepSeekV4ThinkingLevel;
@@ -224,7 +232,9 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   };
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingLevel = "MINIMAL" | "LOW" | "MEDIUM" | "HIGH";
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export type GoogleThinkingInputLevel =
   | "off"
   | "minimal"
@@ -237,28 +247,34 @@ export type GoogleThinkingInputLevel =
 
 // Gemini 2.5 Pro only works in thinking mode and rejects thinkingBudget=0 with
 // "Budget 0 is invalid. This model only works in thinking mode."
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleThinkingRequiredModel(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).includes("gemini-2.5-pro");
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini25ThinkingBudgetModel(modelId: string): boolean {
   return /(?:^|\/)gemini-2\.5-/.test(normalizeLowercaseStringOrEmpty(modelId));
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3ProModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-pro|pro-latest)(?:-|$)/.test(normalized);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3FlashModel(modelId: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(modelId);
   return /(?:^|\/)gemini-(?:3(?:\.\d+)?-flash|flash(?:-lite)?-latest)(?:-|$)/.test(normalized);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function resolveGoogleGemini3ThinkingLevel(params: {
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
@@ -329,6 +345,7 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   return "HIGH";
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function stripInvalidGoogleThinkingBudget(params: {
   thinkingConfig: Record<string, unknown>;
   modelId?: string;
@@ -384,6 +401,7 @@ function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | unde
   }
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -510,6 +528,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   }
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingPayloadWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: GoogleThinkingInputLevel,
@@ -525,6 +544,7 @@ export function createGoogleThinkingPayloadWrapper(
   });
 }
 
+/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
 export function createGoogleThinkingStreamWrapper(
   ctx: ProviderWrapStreamFnContext,
 ): NonNullable<ProviderWrapStreamFnContext["streamFn"]> {

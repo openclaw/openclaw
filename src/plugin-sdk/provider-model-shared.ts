@@ -118,6 +118,7 @@ function getModelProviderHint(modelId: string): string | null {
   return trimmed.slice(0, slashIndex) || null;
 }
 
+/** @deprecated Proxy provider-owned model helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupportedModelHint(modelId: string): boolean {
   return getModelProviderHint(modelId) === "x-ai";
 }
@@ -131,10 +132,12 @@ function isClaudeOpus47ModelId(modelId: string): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
 }
 
+/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function isClaudeAdaptiveThinkingDefaultModelId(modelId: string): boolean {
   return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
 }
 
+/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
 export function resolveClaudeThinkingProfile(modelId: string): ProviderThinkingProfile {
   if (isClaudeOpus47ModelId(modelId)) {
     return {
@@ -232,18 +235,22 @@ export function buildProviderReplayFamilyHooks(
   throw new Error("Unsupported provider replay family");
 }
 
+/** @deprecated Provider-owned replay hook shortcut; use local provider hooks instead. */
 export const OPENAI_COMPATIBLE_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "openai-compatible",
 });
 
+/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const ANTHROPIC_BY_MODEL_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "anthropic-by-model",
 });
 
+/** @deprecated Anthropic provider-owned replay hook shortcut; use local provider hooks instead. */
 export const NATIVE_ANTHROPIC_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "native-anthropic-by-model",
 });
 
+/** @deprecated Google provider-owned replay hook shortcut; use local provider hooks instead. */
 export const PASSTHROUGH_GEMINI_REPLAY_HOOKS = buildProviderReplayFamilyHooks({
   family: "passthrough-gemini",
 });
