@@ -17,6 +17,12 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
+export type ToolSearchCodeDisplayTarget = {
+  toolName: string;
+  detail?: string;
+  bridgeVerb?: "call" | "describe" | "search";
+};
+
 type CoerceDisplayValueOptions = {
   includeFalse?: boolean;
   includeZero?: boolean;
@@ -350,6 +356,116 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
 
   return queries;
 }
+
+function parseToolSearchCall(code: string): { target: string; args?: string } | undefined {
+  const prefixMatch = code.match(/openclaw\.tools\.call\s*\(\s*/s);
+  if (!prefixMatch || prefixMatch.index === undefined) {
+    return undefined;
+  }
+  const rest = code.slice(prefixMatch.index + prefixMatch[0].length);
+  const targetMatch = rest.match(/^("[^"]{1,240}"|'[^']{1,240}'|[^,)\s]{1,240})/s);
+  if (!targetMatch?.[1]) {
+    return undefined;
+  }
+  const afterTarget = rest.slice(targetMatch[0].length);
+  const commaIndex = afterTarget.indexOf(",");
+  if (commaIndex < 0) {
+    return { target: targetMatch[1] };
+  }
+  const args = afterTarget.slice(commaIndex + 1);
+  return { target: targetMatch[1], args };
+}
+
+function summarizeToolSearchTarget(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw);
+  if (!value) {
+    return undefined;
+  }
+  const literalMatch = value.match(/^[\s]*["']([^"']{1,160})["'][\s]*$/s);
+  if (literalMatch?.[1]) {
+    return normalizeOptionalString(literalMatch[1]);
+  }
+  const idPropertyMatch = value.match(/\.id\b/);
+  if (idPropertyMatch) {
+    return normalizeOptionalString(value.replace(/\.id\b.*/s, ""));
+  }
+  const namePropertyMatch = value.match(/name\s*:\s*["']([^"']{1,120})["']/s);
+  if (namePropertyMatch?.[1]) {
+    return normalizeOptionalString(namePropertyMatch[1]);
+  }
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= 80 ? compact : undefined;
+}
+
+function summarizeToolSearchCallInput(raw: string | undefined): string | undefined {
+  const value = normalizeOptionalString(raw)
+    ?.replace(/[);\s]+$/g, "")
+    .trim();
+  if (!value) {
+    return undefined;
+  }
+  const queryMatch = value.match(/query\s*:\s*["']([^"']{1,80})["']/s);
+  if (queryMatch?.[1]) {
+    return "query " + queryMatch[1].trim();
+  }
+  const actionMatch = value.match(/action\s*:\s*["']([^"']{1,80})["']/s);
+  if (actionMatch?.[1]) {
+    return normalizeOptionalString(actionMatch[1]);
+  }
+  const commandMatch = value.match(/command\s*:\s*["']([^"'\n]{1,120})["']/s);
+  if (commandMatch?.[1]) {
+    return normalizeOptionalString(commandMatch[1]);
+  }
+  const sessionMatch = value.match(/sessionId\s*:\s*["']([^"']{1,80})["']/s);
+  if (sessionMatch?.[1]) {
+    return "session " + sessionMatch[1].trim();
+  }
+  const idMatch = value.match(/id\s*:\s*["']([^"']{1,80})["']/s);
+  if (idMatch?.[1]) {
+    return idMatch[1].trim();
+  }
+  return undefined;
+}
+
+export function resolveToolSearchCodeDisplayTarget(
+  args: unknown,
+): ToolSearchCodeDisplayTarget | undefined {
+  const record = asRecord(args);
+  if (!record || typeof record.code !== "string") {
+    return undefined;
+  }
+  const code = record.code;
+  const call = parseToolSearchCall(code);
+  if (call) {
+    const toolName = summarizeToolSearchTarget(call.target);
+    if (!toolName) {
+      return { toolName: "tool_search_code", detail: "call selected tool", bridgeVerb: "call" };
+    }
+    return { toolName, detail: summarizeToolSearchCallInput(call.args), bridgeVerb: "call" };
+  }
+  const describeMatch = code.match(/openclaw\.tools\.describe\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (describeMatch) {
+    const toolName = summarizeToolSearchTarget(describeMatch[1]);
+    return toolName
+      ? { toolName, detail: "describe via tool search", bridgeVerb: "describe" }
+      : { toolName: "tool_search_code", detail: "describe selected tool", bridgeVerb: "describe" };
+  }
+  const searchMatch = code.match(/openclaw\.tools\.search\s*\(\s*([^)]+?)\s*(?:,|\))/s);
+  if (searchMatch) {
+    const query = summarizeToolSearchTarget(searchMatch[1]);
+    return {
+      toolName: "tool_search_code",
+      detail: query ? "search " + query : "search tools",
+      bridgeVerb: "search",
+    };
+  }
+  return { toolName: "tool_search_code", detail: "run bridge code" };
+}
+
+function resolveToolSearchCodeDetail(args: unknown): string | undefined {
+  return resolveToolSearchCodeDisplayTarget(args)?.detail;
+}
+
 function resolveWebFetchDetail(args: unknown): string | undefined {
   const record = asRecord(args);
   if (!record) {
@@ -490,6 +606,9 @@ function resolveToolVerbAndDetail(params: {
   }
   if (!detail && params.toolKey === "web_fetch") {
     detail = resolveWebFetchDetail(params.args);
+  }
+  if (!detail && params.toolKey === "tool_search_code") {
+    detail = resolveToolSearchCodeDetail(params.args);
   }
 
   const detailKeys =

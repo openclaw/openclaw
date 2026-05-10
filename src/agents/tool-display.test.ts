@@ -1,7 +1,20 @@
 import { describe, expect, it } from "vitest";
+import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
+  it("summarizes tool-search code targets from described tool ids", () => {
+    expect(
+      resolveToolSearchCodeDisplayTarget({
+        code: "const tool = await openclaw.tools.describe('openclaw:core:exec'); return await openclaw.tools.call(tool.id, { command: 'echo hi' });",
+      }),
+    ).toEqual({
+      toolName: "tool",
+      detail: "echo hi",
+      bridgeVerb: "call",
+    });
+  });
+
   it("skips zero/false values for optional detail fields", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
