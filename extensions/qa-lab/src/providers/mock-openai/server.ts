@@ -173,6 +173,7 @@ const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
 const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
 const QA_RELEASE_AUDIT_PROMPT_RE = /release readiness audit for the small project/i;
 const QA_TOOL_SEARCH_PROMPT_RE = /tool search qa check/i;
+const QA_TOOL_SEARCH_FAILURE_PROMPT_RE = /tool search qa failure/i;
 
 type MockScenarioState = {
   subagentFanoutPhase: number;
@@ -676,6 +677,69 @@ function extractActiveMemorySummary(text: string) {
 function extractToolSearchTarget(text: string): string | null {
   const match = /\btarget=([A-Za-z0-9_.:-]+)\b/.exec(text);
   return match?.[1]?.trim() || null;
+}
+
+function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode) {
+    return { __qaFailureMode: "denied-input" };
+  }
+  if (targetTool === "exec") {
+    return { command: "echo runtime-tool-fixture", timeout: 5 };
+  }
+  if (targetTool === "read") {
+    return { path: "QA_KICKOFF_TASK.md" };
+  }
+  if (targetTool === "write") {
+    return { path: "runtime-tool-fixture-write.txt", content: "runtime tool fixture\n" };
+  }
+  if (targetTool === "edit") {
+    return {
+      path: "runtime-tool-fixture-edit.txt",
+      edits: [{ oldText: "before edit\n", newText: "after edit\n" }],
+    };
+  }
+  if (targetTool === "apply_patch") {
+    return {
+      input: [
+        "*** Begin Patch",
+        "*** Add File: runtime-tool-fixture-patch.txt",
+        "+runtime patch",
+        "*** End Patch",
+        "",
+      ].join("\n"),
+    };
+  }
+  if (targetTool === "web_search") {
+    return { query: "OpenClaw runtime parity fixed query", count: 1 };
+  }
+  if (targetTool === "web_fetch") {
+    return { url: "https://example.com/", maxChars: 500 };
+  }
+  if (targetTool === "image_generate") {
+    return { prompt: "QA lighthouse runtime parity fixture", filename: "runtime-tool-fixture" };
+  }
+  if (targetTool === "tts") {
+    return { text: "Runtime parity voice fixture." };
+  }
+  if (targetTool === "message") {
+    return { action: "send", message: "runtime parity message fixture" };
+  }
+  if (targetTool === "session_status") {
+    return { sessionKey: "current" };
+  }
+  if (targetTool === "sessions_spawn") {
+    return {
+      task: "Runtime tool fixture subagent: reply exactly RUNTIME-TOOL-FIXTURE.",
+      label: "runtime-tool-fixture",
+      mode: "run",
+      thread: false,
+      runTimeoutSeconds: 30,
+    };
+  }
+  if (targetTool === "memory_recall") {
+    return { query: "runtime parity memory fixture" };
+  }
+  return { marker: "normal" };
 }
 
 function isActiveMemorySubagentPrompt(text: string) {
@@ -1422,20 +1486,27 @@ async function buildResponsesPayload(
       path: readTargetFromPrompt(toolProgressPrompt || prompt || allInputText),
     });
   };
-  if (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) && !toolOutput) {
+  if (
+    (QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
+      QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)) &&
+    !toolOutput
+  ) {
     const targetTool = extractToolSearchTarget(allInputText);
+    const plannedArgs = targetTool
+      ? buildQaToolSearchArgs(targetTool, QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText))
+      : {};
     if (targetTool && hasDeclaredTool(body, "tool_search_code")) {
       return buildToolCallEventsWithArgs("tool_search_code", {
         code: [
           `const hits = await openclaw.tools.search(${JSON.stringify(targetTool)}, { limit: 1 });`,
           "const match = hits.find((tool) => tool.name === " + JSON.stringify(targetTool) + ");",
           "if (!match) throw new Error('target tool not found');",
-          "return await openclaw.tools.call(match.id, { marker: 'code-mode' });",
+          `return await openclaw.tools.call(match.id, ${JSON.stringify(plannedArgs)});`,
         ].join("\n"),
       });
     }
     if (targetTool && hasDeclaredTool(body, targetTool)) {
-      return buildToolCallEventsWithArgs(targetTool, { marker: "normal" });
+      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
   if (

@@ -16,6 +16,12 @@ import { buildQaCoverageInventory, renderQaCoverageMarkdownReport } from "./cove
 import { buildQaDockerHarnessImage, writeQaDockerHarnessFiles } from "./docker-harness.js";
 import { runQaDockerUp } from "./docker-up.runtime.js";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
+import {
+  createMockJsonlReplayCellRunner,
+  renderJsonlReplayMarkdownReport,
+  runJsonlReplay,
+  type JsonlReplayInput,
+} from "./jsonl-replay.js";
 import { startQaLabServer } from "./lab-server.js";
 import { runQaManualLane } from "./manual-lane.runtime.js";
 import { runQaMultipass } from "./multipass.runtime.js";
@@ -45,6 +51,16 @@ import type { RuntimeId } from "./runtime-parity.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
+import {
+  buildTokenEfficiencyReport,
+  renderTokenEfficiencyMarkdownReport,
+  type TokenEfficiencySuiteSummary,
+} from "./token-efficiency-report.js";
+import {
+  buildQaToolCoverageReport,
+  renderQaToolCoverageMarkdownReport,
+  type QaToolCoverageSuiteSummary,
+} from "./tool-coverage-report.js";
 
 const QA_SUITE_INFRA_RETRY_LIMIT = 1;
 
@@ -620,6 +636,7 @@ export async function runQaParityReportCommand(opts: {
   outputDir?: string;
   runtimeAxis?: boolean;
   summary?: string;
+  tokenEfficiency?: boolean;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const outputDir =
@@ -645,7 +662,26 @@ export async function runQaParityReportCommand(opts: {
     process.stdout.write(`QA runtime parity report: ${reportPath}\n`);
     process.stdout.write(`QA runtime parity summary: ${runtimeSummaryPath}\n`);
     process.stdout.write(`QA runtime parity verdict: ${reportPayload.pass ? "pass" : "fail"}\n`);
-    if (!reportPayload.pass) {
+
+    let tokenEfficiencyPass = true;
+    if (opts.tokenEfficiency === true) {
+      const tokenPayload = buildTokenEfficiencyReport({
+        summary: summary as TokenEfficiencySuiteSummary,
+      });
+      tokenEfficiencyPass = tokenPayload.pass;
+      const tokenReport = renderTokenEfficiencyMarkdownReport(tokenPayload);
+      const tokenReportPath = path.join(outputDir, "qa-runtime-token-efficiency-report.md");
+      const tokenSummaryPath = path.join(outputDir, "qa-runtime-token-efficiency-summary.json");
+      await fs.writeFile(tokenReportPath, tokenReport, "utf8");
+      await fs.writeFile(tokenSummaryPath, `${JSON.stringify(tokenPayload, null, 2)}\n`, "utf8");
+      process.stdout.write(`QA runtime token efficiency report: ${tokenReportPath}\n`);
+      process.stdout.write(`QA runtime token efficiency summary: ${tokenSummaryPath}\n`);
+      process.stdout.write(
+        `QA runtime token efficiency verdict: ${tokenPayload.status === "skipped" ? "skipped" : tokenPayload.pass ? "pass" : "fail"}\n`,
+      );
+    }
+
+    if (!reportPayload.pass || !tokenEfficiencyPass) {
       process.exitCode = 1;
     }
     return;
@@ -705,6 +741,87 @@ export async function runQaCoverageReportCommand(opts: {
   }
 
   process.stdout.write(body);
+}
+
+export async function runQaToolCoverageReportCommand(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+  summary?: string;
+  runtimePair?: string;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["pi", "codex"];
+  const summary = opts.summary
+    ? (JSON.parse(
+        await fs.readFile(path.resolve(repoRoot, opts.summary), "utf8"),
+      ) as QaToolCoverageSuiteSummary)
+    : undefined;
+  const report = buildQaToolCoverageReport({
+    scenarios: readQaScenarioPack().scenarios,
+    ...(summary ? { summary } : {}),
+    runtimePair,
+  });
+  const body = opts.json
+    ? `${JSON.stringify(report, null, 2)}\n`
+    : renderQaToolCoverageMarkdownReport(report);
+  const outputPath = opts.output ? path.resolve(repoRoot, opts.output) : undefined;
+
+  if (outputPath) {
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, body, "utf8");
+    process.stdout.write(`QA tool coverage report: ${outputPath}\n`);
+  } else {
+    process.stdout.write(body);
+  }
+
+  if (summary && !report.pass) {
+    process.exitCode = 1;
+  }
+}
+
+export async function runQaJsonlReplayCommand(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
+  const runtimePair = parseQaRuntimePair(opts.runtimePair) ?? ["pi", "codex"];
+  if (runtimePair[0] !== "pi" || runtimePair[1] !== "codex") {
+    throw new Error('--runtime-pair for jsonl-replay must be "pi,codex".');
+  }
+  const providerMode = normalizeQaProviderMode(opts.providerMode);
+  if (providerMode !== "mock-openai") {
+    throw new Error("qa jsonl-replay currently supports mock-openai curated fixtures only.");
+  }
+  const transcriptDir = path.resolve(repoRoot, opts.transcripts ?? "qa/scenarios/jsonl-replay");
+  const outputDir =
+    resolveRepoRelativeOutputDir(repoRoot, opts.outputDir) ??
+    path.join(repoRoot, ".artifacts", "qa-e2e", `jsonl-replay-${Date.now().toString(36)}`);
+  await fs.mkdir(outputDir, { recursive: true });
+  const result = await runJsonlReplay(
+    {
+      directory: transcriptDir,
+      runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+      providerMode,
+    },
+    { runCell: createMockJsonlReplayCellRunner() },
+  );
+  const reportPayload = {
+    generatedAt: new Date().toISOString(),
+    providerMode,
+    runtimePair: runtimePair as JsonlReplayInput["runtimePair"],
+    transcripts: result.transcripts,
+  };
+  const report = renderJsonlReplayMarkdownReport(reportPayload);
+  const reportPath = path.join(outputDir, "qa-jsonl-replay-report.md");
+  const summaryPath = path.join(outputDir, "qa-jsonl-replay-summary.json");
+  await fs.writeFile(reportPath, report, "utf8");
+  await fs.writeFile(summaryPath, `${JSON.stringify(result, null, 2)}\n`, "utf8");
+  process.stdout.write(`QA JSONL replay report: ${reportPath}\n`);
+  process.stdout.write(`QA JSONL replay summary: ${summaryPath}\n`);
 }
 
 export async function runQaCharacterEvalCommand(opts: {

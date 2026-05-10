@@ -64,6 +64,7 @@ async function runQaParityReport(opts: {
   outputDir?: string;
   runtimeAxis?: boolean;
   summary?: string;
+  tokenEfficiency?: boolean;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaParityReportCommand(opts);
@@ -72,6 +73,28 @@ async function runQaParityReport(opts: {
 async function runQaCoverageReport(opts: { repoRoot?: string; output?: string; json?: boolean }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaCoverageReportCommand(opts);
+}
+
+async function runQaToolCoverageReport(opts: {
+  repoRoot?: string;
+  output?: string;
+  json?: boolean;
+  summary?: string;
+  runtimePair?: string;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaToolCoverageReportCommand(opts);
+}
+
+async function runQaJsonlReplay(opts: {
+  repoRoot?: string;
+  transcripts?: string;
+  outputDir?: string;
+  runtimePair?: string;
+  providerMode?: QaProviderModeInput;
+}) {
+  const runtime = await loadQaLabCliRuntime();
+  await runtime.runQaJsonlReplayCommand(opts);
 }
 
 async function runQaCharacterEval(opts: {
@@ -335,6 +358,11 @@ export function registerQaLabCli(program: Command) {
     .option("--baseline-summary <path>", "Baseline qa-suite-summary.json path")
     .option("--runtime-axis", "Interpret --summary as a runtime-pair qa-suite-summary.json", false)
     .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
+    .option(
+      "--token-efficiency",
+      "When used with --runtime-axis, also emit the live-only token efficiency report",
+      false,
+    )
     .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
     .option(
       "--candidate-label <label>",
@@ -353,6 +381,7 @@ export function registerQaLabCli(program: Command) {
         outputDir?: string;
         runtimeAxis?: boolean;
         summary?: string;
+        tokenEfficiency?: boolean;
       }) => {
         await runQaParityReport(opts);
       },
@@ -366,6 +395,52 @@ export function registerQaLabCli(program: Command) {
     .action(async (opts: { repoRoot?: string; output?: string; json?: boolean }) => {
       await runQaCoverageReport(opts);
     });
+
+  qa.command("tool-coverage")
+    .description("Print runtime tool coverage from runtime parity fixtures")
+    .option("--repo-root <path>", "Repository root to target when writing --output")
+    .option("--summary <path>", "Runtime-axis qa-suite-summary.json path")
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex")
+    .option("--output <path>", "Write the tool coverage report to this path")
+    .option("--json", "Print JSON instead of Markdown", false)
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        summary?: string;
+        runtimePair?: string;
+        output?: string;
+        json?: boolean;
+      }) => {
+        await runQaToolCoverageReport(opts);
+      },
+    );
+
+  qa.command("jsonl-replay")
+    .description("Replay curated JSONL transcripts through the runtime parity replay harness")
+    .option("--repo-root <path>", "Repository root to target when running from a neutral cwd")
+    .option(
+      "--transcripts <path>",
+      "Directory of curated JSONL transcripts",
+      "qa/scenarios/jsonl-replay",
+    )
+    .option("--runtime-pair <pair>", "Runtime pair label, e.g. pi,codex", "pi,codex")
+    .option(
+      "--provider-mode <mode>",
+      `Provider mode (${formatQaProviderModeHelp()})`,
+      "mock-openai",
+    )
+    .option("--output-dir <path>", "Artifact directory for the JSONL replay report")
+    .action(
+      async (opts: {
+        repoRoot?: string;
+        transcripts?: string;
+        runtimePair?: string;
+        providerMode?: QaProviderModeInput;
+        outputDir?: string;
+      }) => {
+        await runQaJsonlReplay(opts);
+      },
+    );
 
   qa.command("character-eval")
     .description("Run the character QA scenario across live models and write a judged report")

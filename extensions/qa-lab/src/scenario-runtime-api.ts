@@ -76,6 +76,7 @@ export type QaScenarioRuntimeDeps = {
   runAgentPrompt: QaScenarioRuntimeFunction;
   ensureImageGenerationConfigured: QaScenarioRuntimeFunction;
   handleQaAction: QaScenarioRuntimeFunction;
+  runRuntimeToolFixture: QaScenarioRuntimeFunction;
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
   resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
@@ -161,6 +162,7 @@ type QaScenarioRuntimeApi<
   runAgentPrompt: TDeps["runAgentPrompt"];
   ensureImageGenerationConfigured: TDeps["ensureImageGenerationConfigured"];
   handleQaAction: TDeps["handleQaAction"];
+  runRuntimeToolFixture: TDeps["runRuntimeToolFixture"];
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
   resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
@@ -261,6 +263,7 @@ export function createQaScenarioRuntimeApi<
     runAgentPrompt: params.deps.runAgentPrompt,
     ensureImageGenerationConfigured: params.deps.ensureImageGenerationConfigured,
     handleQaAction: params.deps.handleQaAction,
+    runRuntimeToolFixture: params.deps.runRuntimeToolFixture,
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,

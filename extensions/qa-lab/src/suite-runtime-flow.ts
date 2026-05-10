@@ -22,6 +22,7 @@ import {
 import { extractQaToolPayload } from "./extract-tool-payload.js";
 import { hasModelSwitchContinuityEvidence } from "./model-switch-eval.js";
 import { qaChannelPlugin } from "./runtime-api.js";
+import { runRuntimeToolFixture } from "./runtime-tool-fixture.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import { createQaScenarioRuntimeApi, type QaScenarioRuntimeEnv } from "./scenario-runtime-api.js";
 import {
@@ -179,6 +180,17 @@ function createQaSuiteScenarioDeps(params: QaSuiteScenarioDepsParams) {
     runAgentPrompt,
     ensureImageGenerationConfigured,
     handleQaAction,
+    runRuntimeToolFixture: async (
+      envArg: QaSuiteScenarioFlowEnv,
+      configArg: Record<string, unknown>,
+    ) =>
+      runRuntimeToolFixture(envArg, configArg, {
+        createSession,
+        readEffectiveTools,
+        runAgentPrompt,
+        fetchJson,
+        ensureImageGenerationConfigured,
+      }),
     extractQaToolPayload,
     formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent,

@@ -866,6 +866,45 @@ jobs:
           retention-days: 14
           if-no-files-found: warn
 
+  qa_lab_codex_lifecycle_release_checks:
+    name: Run QA Lab Codex lifecycle cells
+    needs: [resolve_target]
+    if: contains(fromJSON('["all","qa","qa-parity"]'), needs.resolve_target.outputs.rerun_group)
+    continue-on-error: true
+    runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      OPENAI_API_KEY: ""
+      ANTHROPIC_API_KEY: ""
+      OPENCLAW_LIVE_OPENAI_KEY: ""
+      OPENCLAW_LIVE_ANTHROPIC_KEY: ""
+      OPENCLAW_LIVE_GEMINI_KEY: ""
+      OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
+      OPENCLAW_BUILD_PRIVATE_QA: "1"
+      OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
+    steps:
+      - name: Checkout selected ref
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          ref: ${{ needs.resolve_target.outputs.revision }}
+          fetch-depth: 1
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          pnpm-version: ${{ env.PNPM_VERSION }}
+          install-bun: "true"
+
+      - name: Run Codex lifecycle fixture cells
+        run: pnpm test extensions/qa-lab/src/codex-plugin-lifecycle.test.ts
+
+      - name: Validate Codex lifecycle scenario fixtures
+        run: pnpm test extensions/qa-lab/src/scenario-catalog.test.ts
+
   qa_live_matrix_release_checks:
     name: Run QA Lab live Matrix lane
     needs: [resolve_target]
@@ -1342,6 +1381,7 @@ jobs:
       - qa_lab_parity_lane_release_checks
       - qa_lab_parity_report_release_checks
       - qa_lab_runtime_parity_release_checks
+      - qa_lab_codex_lifecycle_release_checks
       - qa_live_matrix_release_checks
       - qa_live_telegram_release_checks
       - qa_live_discord_release_checks
@@ -1367,6 +1407,7 @@ jobs:
             "qa_lab_parity_lane_release_checks=${{ needs.qa_lab_parity_lane_release_checks.result }}" \
             "qa_lab_parity_report_release_checks=${{ needs.qa_lab_parity_report_release_checks.result }}" \
             "qa_lab_runtime_parity_release_checks=${{ needs.qa_lab_runtime_parity_release_checks.result }}" \
+            "qa_lab_codex_lifecycle_release_checks=${{ needs.qa_lab_codex_lifecycle_release_checks.result }}" \
             "qa_live_matrix_release_checks=${{ needs.qa_live_matrix_release_checks.result }}" \
             "qa_live_telegram_release_checks=${{ needs.qa_live_telegram_release_checks.result }}" \
             "qa_live_discord_release_checks=${{ needs.qa_live_discord_release_checks.result }}" \

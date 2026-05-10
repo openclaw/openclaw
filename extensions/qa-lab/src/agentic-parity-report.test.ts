@@ -72,6 +72,15 @@ function makeRuntimeParitySummary(): QaRuntimeParitySuiteSummary {
           scenarioId: "compaction-retry-after-mutating-tool",
           drift: "tool-call-shape",
           driftDetails: "tool call 1 differs",
+          toolBreakdown: [
+            {
+              tool: "read_file",
+              piCount: 1,
+              codexCount: 1,
+              drift: "tool-call-shape",
+              driftDetails: "tool argument shape differs",
+            },
+          ],
           cells: {
             pi: {
               runtime: "pi",
@@ -822,5 +831,8 @@ status=done`,
     expect(report).toContain("| Tool-call-shape drift | 1 |");
     expect(report).toContain("### Compaction retry after mutating tool");
     expect(report).toContain("- drift: tool-call-shape");
+    expect(report).toContain(
+      "| read_file | 1 | 1 | tool-call-shape | tool argument shape differs |",
+    );
   });
 });

@@ -11,12 +11,27 @@ export type RuntimeParityToolCall = {
   errorClass?: string;
 };
 
+export type RuntimeParityToolBreakdown = {
+  tool: string;
+  piCount: number;
+  codexCount: number;
+  drift: Extract<RuntimeParityDrift, "none" | "tool-call-shape" | "tool-result-shape">;
+  driftDetails?: string;
+};
+
 export type RuntimeParityUsage = {
   inputTokens: number;
   outputTokens: number;
   totalTokens: number;
   cacheRead?: number;
   cacheWrite?: number;
+};
+
+export type RuntimeParityPluginState = {
+  codex?: {
+    installed: boolean;
+    version?: string;
+  };
 };
 
 export type RuntimeParityCell = {
@@ -29,6 +44,7 @@ export type RuntimeParityCell = {
   transportErrorClass?: string;
   runtimeErrorClass?: string;
   bootStateLines: string[];
+  pluginState?: RuntimeParityPluginState;
 };
 
 export type RuntimeParityDrift =
@@ -44,6 +60,7 @@ export type RuntimeParityResult = {
   cells: { pi: RuntimeParityCell; codex: RuntimeParityCell };
   drift: RuntimeParityDrift;
   driftDetails?: string;
+  toolBreakdown?: RuntimeParityToolBreakdown[];
 };
 
 export type RuntimeParityScenarioExecution = {
@@ -659,6 +676,78 @@ function compareToolResultShape(
   return undefined;
 }
 
+function summarizeToolShape(calls: RuntimeParityToolCall[]) {
+  const byTool = new Map<
+    string,
+    {
+      count: number;
+      callShape: string[];
+      resultShape: string[];
+    }
+  >();
+  for (const call of calls) {
+    const entry = byTool.get(call.tool) ?? {
+      count: 0,
+      callShape: [],
+      resultShape: [],
+    };
+    entry.count += 1;
+    entry.callShape.push(call.argsHash);
+    entry.resultShape.push(`${call.resultHash}:${call.errorClass ?? ""}`);
+    byTool.set(call.tool, entry);
+  }
+  return byTool;
+}
+
+function buildRuntimeParityToolBreakdown(params: {
+  pi: RuntimeParityCell;
+  codex: RuntimeParityCell;
+}): RuntimeParityToolBreakdown[] {
+  const piTools = summarizeToolShape(params.pi.toolCalls);
+  const codexTools = summarizeToolShape(params.codex.toolCalls);
+  const toolNames = [...new Set([...piTools.keys(), ...codexTools.keys()])].toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+
+  return toolNames.map((tool) => {
+    const pi = piTools.get(tool);
+    const codex = codexTools.get(tool);
+    if (!pi || !codex || pi.count !== codex.count) {
+      return {
+        tool,
+        piCount: pi?.count ?? 0,
+        codexCount: codex?.count ?? 0,
+        drift: "tool-call-shape",
+        driftDetails: `tool call count differs (${pi?.count ?? 0} vs ${codex?.count ?? 0})`,
+      };
+    }
+    if (JSON.stringify(pi.callShape) !== JSON.stringify(codex.callShape)) {
+      return {
+        tool,
+        piCount: pi.count,
+        codexCount: codex.count,
+        drift: "tool-call-shape",
+        driftDetails: "tool argument shape differs",
+      };
+    }
+    if (JSON.stringify(pi.resultShape) !== JSON.stringify(codex.resultShape)) {
+      return {
+        tool,
+        piCount: pi.count,
+        codexCount: codex.count,
+        drift: "tool-result-shape",
+        driftDetails: "tool result shape differs",
+      };
+    }
+    return {
+      tool,
+      piCount: pi.count,
+      codexCount: codex.count,
+      drift: "none",
+    };
+  });
+}
+
 function isHardFailureRuntimeError(errorClass: string | undefined) {
   return (
     errorClass === "missing-api-key" ||
@@ -852,6 +941,42 @@ async function loadRuntimeParityMockToolCalls(
   }
 }
 
+async function captureRuntimeParityPluginState(params: {
+  gateway: QaGatewayLike;
+  agentId: string;
+}): Promise<RuntimeParityPluginState | undefined> {
+  const packageJsonPath = path.join(
+    params.gateway.tempRoot,
+    "state",
+    "agents",
+    params.agentId,
+    "agent",
+    "plugins",
+    "codex",
+    "package.json",
+  );
+  try {
+    const raw = await fs.readFile(packageJsonPath, "utf8");
+    const parsed = JSON.parse(raw) as { version?: unknown };
+    const version = readNonEmptyString(parsed.version);
+    return {
+      codex: {
+        installed: true,
+        ...(version ? { version } : {}),
+      },
+    };
+  } catch (error) {
+    if (error && typeof error === "object" && (error as { code?: unknown }).code === "ENOENT") {
+      return {
+        codex: {
+          installed: false,
+        },
+      };
+    }
+    return undefined;
+  }
+}
+
 export async function captureRuntimeParityCell(
   params: RuntimeParityCaptureParams,
 ): Promise<RuntimeParityCell> {
@@ -862,6 +987,10 @@ export async function captureRuntimeParityCell(
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
   const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const pluginState = await captureRuntimeParityPluginState({
+    gateway: params.gateway,
+    agentId,
+  });
   return {
     runtime: params.runtime,
     transcriptBytes,
@@ -873,6 +1002,7 @@ export async function captureRuntimeParityCell(
       ? { runtimeErrorClass: classifyScenarioError(params.scenarioResult.details) }
       : {}),
     bootStateLines: extractBootStateLines(params.gateway.logs?.()),
+    ...(pluginState ? { pluginState } : {}),
   };
 }
 
@@ -895,5 +1025,9 @@ export async function runRuntimeParityScenario(params: {
     },
     drift: drift.drift,
     ...(drift.driftDetails ? { driftDetails: drift.driftDetails } : {}),
+    toolBreakdown: buildRuntimeParityToolBreakdown({
+      pi: pi.cell,
+      codex: codex.cell,
+    }),
   };
 }

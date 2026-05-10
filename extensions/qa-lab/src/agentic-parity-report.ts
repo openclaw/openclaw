@@ -7,6 +7,7 @@ import type {
   RuntimeParityCell,
   RuntimeParityDrift,
   RuntimeParityResult,
+  RuntimeParityToolBreakdown,
 } from "./runtime-parity.js";
 
 type QaParityReportStep = {
@@ -68,6 +69,7 @@ type QaRuntimeParityScenarioReport = {
   codexTokens: number;
   piToolCalls: number;
   codexToolCalls: number;
+  toolBreakdown: RuntimeParityToolBreakdown[];
 };
 
 export type QaRuntimeParityReport = {
@@ -632,6 +634,7 @@ export function buildQaRuntimeParityReport(params: {
         codexTokens: 0,
         piToolCalls: 0,
         codexToolCalls: 0,
+        toolBreakdown: [],
       } satisfies QaRuntimeParityScenarioReport;
     }
     driftCounts[parity.drift] += 1;
@@ -656,6 +659,7 @@ export function buildQaRuntimeParityReport(params: {
       codexTokens: codexCell.usage.totalTokens,
       piToolCalls: piCell.toolCalls.length,
       codexToolCalls: codexCell.toolCalls.length,
+      toolBreakdown: parity.toolBreakdown ?? [],
     } satisfies QaRuntimeParityScenarioReport;
   });
 
@@ -732,6 +736,15 @@ export function renderQaRuntimeParityMarkdownReport(report: QaRuntimeParityRepor
     );
     if (scenario.driftDetails) {
       lines.push(`- details: ${scenario.driftDetails}`);
+    }
+    if (scenario.toolBreakdown.length > 0) {
+      lines.push("", "| Tool | Pi calls | Codex calls | Drift | Details |");
+      lines.push("| --- | ---: | ---: | --- | --- |");
+      for (const tool of scenario.toolBreakdown) {
+        lines.push(
+          `| ${tool.tool} | ${tool.piCount} | ${tool.codexCount} | ${tool.drift} | ${tool.driftDetails ?? ""} |`,
+        );
+      }
     }
     lines.push("");
   }

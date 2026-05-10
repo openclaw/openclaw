@@ -76,9 +76,11 @@ import {
   runQaDockerUpCommand,
   runQaCharacterEvalCommand,
   runQaCoverageReportCommand,
+  runQaJsonlReplayCommand,
   runQaManualLaneCommand,
   runQaParityReportCommand,
   runQaSuiteCommand,
+  runQaToolCoverageReportCommand,
 } from "./cli.runtime.js";
 import { runQaTelegramCommand } from "./live-transports/telegram/cli.runtime.js";
 import { defaultQaModelForMode as defaultQaProviderModelForMode } from "./model-selection.js";
@@ -860,11 +862,115 @@ describe("qa cli runtime", () => {
     }
   });
 
+  it("writes a skipped mock token-efficiency report for runtime-axis summaries", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-token-efficiency-"));
+    const priorExitCode = process.exitCode;
+    process.exitCode = undefined;
+
+    try {
+      await fs.writeFile(
+        path.join(repoRoot, "runtime-summary.json"),
+        JSON.stringify({
+          scenarios: [
+            {
+              name: "Approval turn tool followthrough",
+              status: "pass",
+              steps: [],
+              runtimeParity: {
+                scenarioId: "approval-turn-tool-followthrough",
+                drift: "none",
+                cells: {
+                  pi: {
+                    runtime: "pi",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                  codex: {
+                    runtime: "codex",
+                    transcriptBytes: '{"role":"assistant"}\n',
+                    toolCalls: [],
+                    finalText: "done",
+                    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+                    wallClockMs: 10,
+                    bootStateLines: [],
+                  },
+                },
+              },
+            },
+          ],
+          counts: { total: 1, passed: 1, failed: 0 },
+          run: {
+            providerMode: "mock-openai",
+            primaryModel: "openai/gpt-5.5",
+            runtimePair: ["pi", "codex"],
+          },
+        }),
+        "utf8",
+      );
+
+      await runQaParityReportCommand({
+        repoRoot,
+        runtimeAxis: true,
+        summary: "runtime-summary.json",
+        tokenEfficiency: true,
+      });
+
+      expect(process.exitCode).toBeUndefined();
+      expect(stdoutWrite).toHaveBeenCalledWith(
+        expect.stringContaining("QA runtime token efficiency verdict: skipped"),
+      );
+    } finally {
+      process.exitCode = priorExitCode;
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
+  });
+
   it("prints a markdown coverage report from scenario metadata", async () => {
     await runQaCoverageReportCommand({ repoRoot: process.cwd() });
 
     expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("# QA Coverage Inventory"));
     expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("memory.recall"));
+  });
+
+  it("prints a runtime tool coverage report from scenario metadata", async () => {
+    await runQaToolCoverageReportCommand({ repoRoot: process.cwd(), runtimePair: "pi,codex" });
+
+    expect(stdoutWrite).toHaveBeenCalledWith(
+      expect.stringContaining("# OpenClaw Runtime Tool Coverage"),
+    );
+    expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("| bash |"));
+  });
+
+  it("writes a JSONL replay report from curated fixtures", async () => {
+    const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "qa-jsonl-replay-"));
+    try {
+      const transcriptDir = path.join(repoRoot, "fixtures");
+      await fs.mkdir(transcriptDir, { recursive: true });
+      await fs.writeFile(
+        path.join(transcriptDir, "one.jsonl"),
+        `${JSON.stringify({ message: { role: "user", content: "Replay this turn" } })}\n`,
+        "utf8",
+      );
+
+      await runQaJsonlReplayCommand({
+        repoRoot,
+        transcripts: "fixtures",
+        providerMode: "mock-openai",
+        runtimePair: "pi,codex",
+        outputDir: "out",
+      });
+
+      expect(stdoutWrite).toHaveBeenCalledWith(expect.stringContaining("QA JSONL replay report:"));
+      expect(
+        await fs.readFile(path.join(repoRoot, "out", "qa-jsonl-replay-report.md"), "utf8"),
+      ).toContain("| one.jsonl | 1 |  | none |");
+    } finally {
+      await fs.rm(repoRoot, { recursive: true, force: true });
+    }
   });
 
   it("resolves character eval paths and passes model refs through", async () => {

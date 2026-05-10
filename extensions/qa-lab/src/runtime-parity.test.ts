@@ -129,6 +129,14 @@ describe("runtime parity", () => {
     });
 
     expect(result.drift).toBe("tool-call-shape");
+    expect(result.toolBreakdown).toEqual([
+      expect.objectContaining({
+        tool: "read_file",
+        drift: "tool-call-shape",
+        piCount: 1,
+        codexCount: 1,
+      }),
+    ]);
   });
 
   it("classifies tool result shape drift", async () => {
@@ -309,5 +317,34 @@ describe("runtime parity", () => {
         errorClass: "tool-result-error",
       },
     ]);
+  });
+
+  it("captures codex plugin state from the QA agent directory", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot('{"message":{"role":"assistant"}}\n');
+    const pluginDir = path.join(tempRoot, "state", "agents", "qa", "agent", "plugins", "codex");
+    await fs.mkdir(pluginDir, { recursive: true });
+    await fs.writeFile(
+      path.join(pluginDir, "package.json"),
+      JSON.stringify({ version: "2026.5.10-beta.1" }),
+      "utf8",
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.pluginState).toEqual({
+      codex: {
+        installed: true,
+        version: "2026.5.10-beta.1",
+      },
+    });
   });
 });
