@@ -17,12 +17,19 @@
 # Env-driven config:
 #   OPENCLAW_PUBLIC_ORIGIN          gateway.controlUi.allowedOrigins
 #   OPENCLAW_DISABLE_DEVICE_AUTH    gateway.controlUi.dangerouslyDisableDeviceAuth
-#   OPENCLAW_OLLAMA_MODEL           registers Ollama as an OpenAI-
-#                                   compatible provider, sets it as
-#                                   the default agent model. Key is
-#                                   read from OPENAI_API_KEY at
-#                                   runtime via Openclaw's env-ref
-#                                   shape.
+#   OPENCLAW_OLLAMA_MODEL           comma-separated Ollama model ids.
+#                                   First entry becomes the default
+#                                   (agents.defaults.model.primary);
+#                                   every entry is registered in
+#                                   models.providers.ollama.models[]
+#                                   so the operator can swap between
+#                                   them in the Control UI. Auth key
+#                                   is read from OPENAI_API_KEY via
+#                                   Openclaw's env-ref shape.
+#                                   Single-model and multi-model
+#                                   shapes both accepted, e.g.:
+#                                     OPENCLAW_OLLAMA_MODEL=kimi-k2.6:cloud
+#                                     OPENCLAW_OLLAMA_MODEL=kimi-k2.6:cloud,gpt-oss:120b,qwen3-coder:480b
 #   OPENCLAW_COMPACTION_RESERVE     agents.defaults.compaction
 #                                   .reserveTokensFloor — bytes the
 #                                   agent must keep free for compaction
@@ -99,6 +106,11 @@ if ollama_model:
         max_tokens = int(ollama_max)
     except ValueError:
         max_tokens = 8000
+    # Comma-separated list. First entry becomes the default; every
+    # entry is registered as an available model so the operator can
+    # swap in the Control UI without redeploying. Whitespace and
+    # empty entries are ignored.
+    model_ids = [m.strip() for m in ollama_model.split(",") if m.strip()]
     models = config.setdefault("models", {})
     providers = models.setdefault("providers", {})
     providers["ollama"] = {
@@ -107,18 +119,20 @@ if ollama_model:
         "api": "openai-completions",
         "models": [
             {
-                "id": ollama_model,
-                "name": ollama_model,
+                "id": mid,
+                "name": mid,
                 "reasoning": False,
                 "input": ["text"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
                 "contextWindow": ctx_window,
                 "maxTokens": max_tokens,
             }
+            for mid in model_ids
         ],
     }
-    model_cfg = defaults.setdefault("model", {})
-    model_cfg["primary"] = f"ollama/{ollama_model}"
+    if model_ids:
+        model_cfg = defaults.setdefault("model", {})
+        model_cfg["primary"] = f"ollama/{model_ids[0]}"
 with open(config_path, "w") as f:
     json.dump(config, f, indent=2)
 _provider_models = (
