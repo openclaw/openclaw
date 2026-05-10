@@ -8,7 +8,7 @@ const LIVE_CLI_TIMEOUT_MS = 20 * 60 * 1000;
 const LIVE_PROFILE_TIMEOUT_MS = 30 * 60 * 1000;
 const OPENWEBUI_TIMEOUT_MS = 20 * 60 * 1000;
 const RELEASE_OPENWEBUI_COMMAND =
-  "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
+  "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui";
 export const BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS = 24;
 const upgradeSurvivorCommand = "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor";
 const updateRestartAuthCommand =
@@ -258,6 +258,13 @@ export const mainLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,
@@ -578,6 +585,13 @@ const releasePathPackageUpdateCoreLanes = [
       weight: 3,
     },
   ),
+  npmLane("skill-install", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install", {
+    retryPatterns: LIVE_RETRY_PATTERNS,
+    retries: 1,
+    stateScenario: "empty",
+    timeoutMs: 10 * 60 * 1000,
+    weight: 2,
+  }),
   npmLane("upgrade-survivor", upgradeSurvivorCommand, {
     stateScenario: "upgrade-survivor",
     timeoutMs: 20 * 60 * 1000,

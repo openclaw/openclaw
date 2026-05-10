@@ -1092,6 +1092,7 @@ export const OpenClawSchema = z
             nodeManager: z
               .union([z.literal("npm"), z.literal("pnpm"), z.literal("yarn"), z.literal("bun")])
               .optional(),
+            allowUploadedArchives: z.boolean().optional(),
           })
           .strict()
           .optional(),

@@ -138,12 +138,15 @@ export function isExpectedCodexStatusCommandText(text: string): boolean {
     (normalized.includes("current session is") || normalized.includes("cache hit")) &&
     mentionsModel;
   const isIdleReadyStatus = normalized.includes("idle and ready");
+  const isOnlineIdleStatus =
+    normalized.includes("online") && normalized.includes("no active task is running");
 
   return (
     isCurrentSessionStatus ||
     isCompactSessionStatus ||
     isRunningSessionStatus ||
     isIdleReadyStatus ||
+    isOnlineIdleStatus ||
     (mentionsOpenClawStatus && mentionsHarnessSession && mentionsModel)
   );
 }

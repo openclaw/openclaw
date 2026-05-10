@@ -108,20 +108,34 @@ describe("security audit channel read-only setup fallback", () => {
       loadPluginSecurityCollectors: false,
     });
 
-    expect(listReadOnlyChannelPluginsForConfigMock).toHaveBeenCalledWith(
-      cfg,
-      expect.objectContaining({
-        includePersistedAuthState: true,
-        includeSetupFallbackPlugins: true,
-      }),
-    );
-    expect(collectChannelSecurityFindingsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg,
-        sourceConfig: cfg,
-        plugins: [plugin],
-      }),
-    );
+    const readOnlyPluginCalls = listReadOnlyChannelPluginsForConfigMock.mock
+      .calls as unknown as Array<
+      [
+        OpenClawConfig,
+        {
+          includePersistedAuthState?: boolean;
+          includeSetupFallbackPlugins?: boolean;
+        },
+      ]
+    >;
+    const readOnlyPluginCall = readOnlyPluginCalls[0];
+    expect(readOnlyPluginCall?.[0]).toBe(cfg);
+    expect(readOnlyPluginCall?.[1].includePersistedAuthState).toBe(true);
+    expect(readOnlyPluginCall?.[1].includeSetupFallbackPlugins).toBe(true);
+
+    const collectCalls = collectChannelSecurityFindingsMock.mock.calls as unknown as Array<
+      [
+        {
+          cfg?: OpenClawConfig;
+          sourceConfig?: OpenClawConfig;
+          plugins?: ChannelPlugin[];
+        },
+      ]
+    >;
+    const collectParams = collectCalls[0]?.[0];
+    expect(collectParams?.cfg).toBe(cfg);
+    expect(collectParams?.sourceConfig).toBe(cfg);
+    expect(collectParams?.plugins).toStrictEqual([plugin]);
     expect(report.findings.map((finding) => finding.checkId)).toContain(
       "channels.telegram.setup_fallback_audited",
     );

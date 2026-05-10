@@ -268,6 +268,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
+        imageKind: "bare",
+        live: false,
+        name: "skill-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 600_000,
+        weight: 2,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
         imageKind: "bare",
         live: false,
@@ -331,7 +341,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       },
       {
         command:
-          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -435,6 +445,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
+      "skill-install",
       "upgrade-survivor",
       "published-upgrade-survivor",
       "update-restart-auth",
@@ -654,7 +665,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -701,6 +712,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "bundled-plugin-install-uninstall-0",
         "commitments-safety",
         "update-channel-switch",
+        "skill-install",
         "upgrade-survivor",
       ],
     });
@@ -726,6 +738,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
       { name: "commitments-safety", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },
+      { name: "skill-install", stateScenario: "empty" },
       { name: "upgrade-survivor", stateScenario: "upgrade-survivor" },
     ]);
   });

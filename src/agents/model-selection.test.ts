@@ -1862,11 +1862,6 @@ describe("model-selection", () => {
       const cfg = {} as OpenClawConfig;
 
       expect(resolveAnthropicOpusThinking(cfg)).toBe("adaptive");
-    });
-
-    it("falls back to medium when no provider thinking policy is active", () => {
-      const cfg = {} as OpenClawConfig;
-
       expect(
         resolveThinkingDefault({
           cfg,
@@ -1881,7 +1876,11 @@ describe("model-selection", () => {
             },
           ],
         }),
-      ).toBe("medium");
+      ).toBe("adaptive");
+    });
+
+    it("falls back to medium when no provider thinking policy is active", () => {
+      const cfg = {} as OpenClawConfig;
 
       expect(
         resolveThinkingDefault({

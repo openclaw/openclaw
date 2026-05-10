@@ -10,6 +10,7 @@ import {
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
+import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -238,7 +239,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider: activeProvider,
     effectiveHarness,
   });
-  const selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
+  let selectedModelAuth = Object.hasOwn(params, "modelAuthOverride")
     ? params.modelAuthOverride
     : resolveModelAuthLabel({
         provider: selectedStatusProvider,
@@ -260,6 +261,18 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
           includeExternalProfiles: false,
         })
       : selectedModelAuth;
+  const runtimeAliasModelEquivalent = areRuntimeModelRefsEquivalent(
+    modelRefs.selected.label,
+    modelRefs.active.label,
+  );
+  if (
+    runtimeAliasModelEquivalent &&
+    normalizeOptionalLowercaseString(selectedModelAuth) === "unknown" &&
+    activeModelAuth &&
+    normalizeOptionalLowercaseString(activeModelAuth) !== "unknown"
+  ) {
+    selectedModelAuth = activeModelAuth;
+  }
   const usageAuthLabel = modelRefs.activeDiffers ? activeModelAuth : selectedModelAuth;
   const currentUsageProvider =
     resolveUsageProviderId(activeStatusProvider) ?? resolveUsageProviderId(activeProvider);

@@ -452,6 +452,7 @@ Save to `~/.openclaw/openclaw.json` and you can DM the bot from that number.
     install: {
       preferBrew: true,
       nodeManager: "npm", // npm | pnpm | yarn | bun
+      allowUploadedArchives: false,
     },
     entries: {
       "image-lab": {
