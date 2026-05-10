@@ -161,6 +161,9 @@
             "type": "array",
             "items": { "type": "string" }
           },
+          "homeDir": {
+            "type": "string"
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -324,6 +327,11 @@
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.homeDir": {
+      "label": "Home Directory",
+      "help": "Real user HOME for the Codex app-server process. Set to the OS user home (e.g. /home/user) to allow local CLI auth (gh, git, etc.) while keeping CODEX_HOME isolated. Also readable from OPENCLAW_CODEX_APP_SERVER_HOME_DIR.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {

@@ -96,6 +96,7 @@ export type CodexAppServerStartOptions = {
   headers: Record<string, string>;
   env?: Record<string, string>;
   clearEnv?: string[];
+  homeDir?: string;
 };
 
 export type CodexAppServerRuntimeOptions = {
@@ -126,6 +127,7 @@ export type CodexPluginConfig = {
     authToken?: string;
     headers?: Record<string, string>;
     clearEnv?: string[];
+    homeDir?: string;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -145,6 +147,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
+  "homeDir",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
   "approvalPolicy",
@@ -332,6 +335,9 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
+  const homeDir =
+    readNonEmptyString(config.homeDir) ??
+    readNonEmptyString(env.OPENCLAW_CODEX_APP_SERVER_HOME_DIR);
   const authToken = readNonEmptyString(config.authToken);
   const url = readNonEmptyString(config.url);
   const explicitPolicyMode =
@@ -365,6 +371,7 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(authToken ? { authToken } : {}),
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
+      ...(homeDir ? { homeDir } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(

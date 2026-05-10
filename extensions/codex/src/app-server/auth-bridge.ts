@@ -200,9 +200,13 @@ async function withAgentCodexHomeEnvironment(
     : resolveCodexAppServerHomeDir(agentDir);
   const nativeHome = startOptions.env?.[HOME_ENV_VAR]?.trim()
     ? startOptions.env[HOME_ENV_VAR]
-    : path.join(codexHome, CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
+    : startOptions.homeDir?.trim()
+      ? startOptions.homeDir.trim()
+      : path.join(codexHome, CODEX_APP_SERVER_NATIVE_HOME_DIRNAME);
   await fs.mkdir(codexHome, { recursive: true });
-  await fs.mkdir(nativeHome, { recursive: true });
+  if (!startOptions.homeDir?.trim()) {
+    await fs.mkdir(nativeHome, { recursive: true });
+  }
   const nextStartOptions: CodexAppServerStartOptions = {
     ...startOptions,
     env: {

@@ -179,6 +179,21 @@ describe("bridgeCodexAppServerStartOptions", () => {
     }
   });
 
+  it("uses homeDir as HOME while keeping CODEX_HOME isolated", async () => {
+    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
+    const realHomeDir = os.homedir();
+    const startOptions = createStartOptions({ homeDir: realHomeDir });
+    try {
+      const codexHome = resolveCodexAppServerHomeDir(agentDir);
+      const result = await bridgeCodexAppServerStartOptions({ startOptions, agentDir });
+      expect(result.env?.CODEX_HOME).toBe(codexHome);
+      expect(result.env?.HOME).toBe(realHomeDir);
+      await expect(fs.access(codexHome)).resolves.toBeUndefined();
+    } finally {
+      await fs.rm(agentDir, { recursive: true, force: true });
+    }
+  });
+
   it("clears inherited API-key env vars when the default Codex profile is subscription auth", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
     const startOptions = createStartOptions({
