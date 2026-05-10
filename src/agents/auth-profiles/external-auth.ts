@@ -8,8 +8,12 @@ import {
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
-import { upsertAuthProfileWithLock } from "./upsert-with-lock.js";
 
+type PersistCredentialParams = {
+  profileId: string;
+  credential: OAuthCredential;
+  agentDir?: string;
+};
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
 type ExternalCliOverlayOptions = {
@@ -20,13 +24,30 @@ type ExternalCliOverlayOptions = {
 };
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
+let persistExternalCliCredentialOverride: ((params: PersistCredentialParams) => void) | undefined;
+
+function persistExternalCliCredential(params: PersistCredentialParams): void {
+  if (persistExternalCliCredentialOverride) {
+    persistExternalCliCredentialOverride(params);
+    return;
+  }
+  // Lazy require to break the static import cycle:
+  // store → external-auth → upsert-with-lock → store.
+  import("./upsert-with-lock.js")
+    .then(({ upsertAuthProfileWithLock }) => upsertAuthProfileWithLock(params))
+    .catch(() => undefined);
+}
 
 export const __testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
+    persistExternalCliCredentialOverride = undefined;
   },
   setResolveExternalAuthProfilesForTest(resolver: ResolveExternalAuthProfiles): void {
     resolveExternalAuthProfilesForRuntime = resolver;
+  },
+  setPersistExternalCliCredentialForTest(fn: (params: PersistCredentialParams) => void): void {
+    persistExternalCliCredentialOverride = fn;
   },
 };
 
@@ -80,11 +101,14 @@ function resolveExternalAuthProfileMap(params: {
       // Fire-and-forget: write the fresh external credential back to the local
       // auth-profiles store so subsequent calls find a usable local profile and
       // the bootstrap-fallback (and its DEBUG log) stops firing every poll.
-      upsertAuthProfileWithLock({
+      // Call through the module-level hook to break the static import cycle
+      // (store → external-auth → upsert-with-lock → store) while staying
+      // synchronously injectable for tests.
+      persistExternalCliCredential({
         profileId: profile.profileId,
         credential: profile.credential,
         agentDir: params.agentDir,
-      }).catch(() => undefined);
+      });
     }
   }
   for (const rawProfile of profiles) {

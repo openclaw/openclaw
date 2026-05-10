@@ -16,18 +16,12 @@ const readCodexCliCredentialsCachedMock = vi.hoisted(() =>
 const readClaudeCliCredentialsCachedMock = vi.hoisted(() =>
   vi.fn<(_options?: unknown) => OAuthCredential | null>(() => null),
 );
-const upsertAuthProfileWithLockMock = vi.hoisted(() =>
-  vi.fn<(_params: unknown) => Promise<unknown>>(() => Promise.resolve(null)),
-);
+const upsertAuthProfileWithLockMock = vi.fn<(_params: unknown) => void>();
 
 vi.mock("../cli-credentials.js", () => ({
   readClaudeCliCredentialsCached: readClaudeCliCredentialsCachedMock,
   readCodexCliCredentialsCached: readCodexCliCredentialsCachedMock,
   readMiniMaxCliCredentialsCached: () => null,
-}));
-
-vi.mock("./upsert-with-lock.js", () => ({
-  upsertAuthProfileWithLock: upsertAuthProfileWithLockMock,
 }));
 
 function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
@@ -70,8 +64,8 @@ describe("auth external oauth helpers", () => {
     readClaudeCliCredentialsCachedMock.mockReset();
     readClaudeCliCredentialsCachedMock.mockReturnValue(null);
     upsertAuthProfileWithLockMock.mockReset();
-    upsertAuthProfileWithLockMock.mockResolvedValue(null);
     __testing.setResolveExternalAuthProfilesForTest(resolveExternalAuthProfilesWithPluginsMock);
+    __testing.setPersistExternalCliCredentialForTest(upsertAuthProfileWithLockMock);
   });
 
   afterEach(() => {
@@ -298,9 +292,6 @@ describe("auth external oauth helpers", () => {
       }),
     );
 
-    // Allow the fire-and-forget promise to settle.
-    await Promise.resolve();
-
     expect(upsertAuthProfileWithLockMock).toHaveBeenCalledOnce();
     expect(upsertAuthProfileWithLockMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -331,8 +322,6 @@ describe("auth external oauth helpers", () => {
         },
       }),
     );
-
-    await Promise.resolve();
 
     expect(upsertAuthProfileWithLockMock).not.toHaveBeenCalled();
   });
