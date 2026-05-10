@@ -1401,6 +1401,9 @@ Add a repo check that fails new runtime writes to legacy state paths:
 - `.acp-stream.jsonl`
 - `acp/event-ledger.json`
 - `cache/*.json` runtime cache files
+- `agents/<agentId>/agent/auth.json`
+- `agents/<agentId>/agent/models.json`
+- `credentials/oauth.json`
 - `github-copilot.token.json`
 - Matrix `credentials*.json` and `recovery-key.json`
 - `cron/runs/*.jsonl`

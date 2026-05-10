@@ -41,6 +41,15 @@ const legacyStoreMarkers = [
   { label: "OpenRouter model cache JSON", pattern: /\bopenrouter-models\.json\b/u },
   { label: "auth profile JSON", pattern: /\bauth-profiles\.json\b/u },
   { label: "auth profile state JSON", pattern: /\bauth-state\.json\b/u },
+  {
+    label: "retired per-agent auth JSON",
+    pattern: /\bagents[/\\][A-Za-z0-9._-]+[/\\]agent[/\\]auth\.json\b/u,
+  },
+  {
+    label: "retired per-agent model catalog JSON",
+    pattern: /\bagents[/\\][A-Za-z0-9._-]+[/\\]agent[/\\]models\.json\b/u,
+  },
+  { label: "retired shared OAuth JSON", pattern: /\bcredentials[/\\]oauth\.json\b/u },
   { label: "exec approvals JSON", pattern: /\bexec-approvals\.json\b/u },
   { label: "workspace setup JSON", pattern: /\bworkspace-state\.json\b/u },
   {
