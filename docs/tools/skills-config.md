@@ -102,8 +102,10 @@ Rules:
   - `openclaw setup --node-manager` is narrower and currently accepts `npm`,
     `pnpm`, or `bun`. Set `skills.install.nodeManager: "yarn"` manually if you
     want Yarn-backed skill installs.
-- `install.allowUploadedArchives`: allow `operator.admin` Gateway clients to
-  install private zip archives staged through `skills.upload.*` (default: false).
+- `install.allowUploadedArchives`: allow trusted `operator.admin` Gateway
+  clients to install private zip archives staged through `skills.upload.*`
+  (default: false). This only enables the uploaded-archive path; normal ClawHub
+  installs do not require it.
 - `entries.<skillKey>`: per-skill overrides.
 - `agents.defaults.skills`: optional default skill allowlist inherited by agents
   that omit `agents.list[].skills`.

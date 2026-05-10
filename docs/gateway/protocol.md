@@ -572,7 +572,9 @@ terminal summary, and sanitized error text.
   ClawHub discovery metadata.
 - Operators may call `skills.upload.begin`, `skills.upload.chunk`, and
   `skills.upload.commit` (`operator.admin`) to stage a private skill archive
-  before installing it when `skills.install.allowUploadedArchives` is enabled.
+  before installing it. This is a separate admin upload path for trusted clients,
+  not the normal ClawHub skill install flow, and is disabled by default unless
+  `skills.install.allowUploadedArchives` is enabled.
   - `skills.upload.begin({ kind: "skill-archive", slug, sizeBytes, sha256?, force?, idempotencyKey? })`
     creates an upload bound to that slug and force value.
   - `skills.upload.chunk({ uploadId, offset, dataBase64 })` appends bytes at
@@ -588,7 +590,8 @@ terminal summary, and sanitized error text.
     installs a committed upload into the default agent workspace `skills/<slug>`
     directory. The slug and force value must match the original
     `skills.upload.begin` request. This mode is rejected unless
-    `skills.install.allowUploadedArchives` is enabled.
+    `skills.install.allowUploadedArchives` is enabled. The setting does not
+    affect ClawHub installs.
   - Gateway installer mode: `{ name, installId, dangerouslyForceUnsafeInstall?, timeoutMs? }`
     runs a declared `metadata.openclaw.install` action on the gateway host.
 - Operators may call `skills.update` (`operator.admin`) in two modes:
