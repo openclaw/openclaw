@@ -735,7 +735,7 @@ describe("grouped chat rendering", () => {
 
     expectElement(container, ".chat-bubble--tool-shell", HTMLElement);
     const summary = container.querySelector<HTMLElement>(".chat-tool-msg-summary");
-    expect(summary?.textContent).toContain("Tool call");
+    expect(summary?.textContent).toContain("sessions_spawn");
     expect(container.textContent).not.toContain('"thread": true');
 
     renderAssistantMessage(container, message, {

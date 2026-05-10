@@ -4,6 +4,10 @@ import {
   registerSessionBindingAdapter,
 } from "../infra/outbound/session-binding-service.js";
 import type { AgentInternalEvent } from "./internal-events.js";
+import type {
+  EmbeddedPiQueueMessageOptions,
+  EmbeddedPiQueueMessageOutcome,
+} from "./pi-embedded-runner/runs.js";
 import {
   __testing,
   deliverSubagentAnnouncement,
@@ -43,6 +47,32 @@ function createSendMessageMock() {
   })) as unknown as typeof runtimeSendMessage;
 }
 
+type QueueEmbeddedPiMessageWithOutcome = (
+  sessionId: string,
+  message: string,
+  options?: EmbeddedPiQueueMessageOptions,
+) => EmbeddedPiQueueMessageOutcome;
+
+function createQueueOutcomeMock(
+  queued: boolean,
+): ReturnType<typeof vi.fn<QueueEmbeddedPiMessageWithOutcome>> {
+  return vi.fn((sessionId: string) =>
+    queued
+      ? {
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+        }
+      : {
+          queued: false,
+          sessionId,
+          reason: "not_streaming",
+          gatewayHealth: "live",
+        },
+  );
+}
+
 const longChildCompletionOutput = [
   "34/34 tests pass, clean build. Now docker repro:",
   "Root cause: the requester's announce delivery accepted a prefix-only assistant payload as delivered.",
@@ -50,13 +80,42 @@ const longChildCompletionOutput = [
   "Verification: pnpm test src/agents/subagent-announce-delivery.test.ts passed with the regression enabled.",
 ].join("\n");
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function asMock(fn: unknown) {
+  return fn as ReturnType<typeof vi.fn>;
+}
+
+function mockCallArg(fn: unknown, callIndex = 0, argIndex = 0) {
+  const call = asMock(fn).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  return call[argIndex];
+}
+
+function expectGatewayAgentParams(
+  callGateway: typeof runtimeCallGateway,
+  expected: Record<string, unknown>,
+) {
+  const request = expectRecordFields(mockCallArg(callGateway), { method: "agent" });
+  return expectRecordFields(request.params, expected);
+}
+
 async function deliverSlackThreadAnnouncement(params: {
   callGateway: typeof runtimeCallGateway;
   isActive: boolean;
   sessionId: string;
   expectsCompletionMessage: boolean;
   directIdempotencyKey: string;
-  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+  queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
@@ -68,8 +127,8 @@ async function deliverSlackThreadAnnouncement(params: {
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => ({}) as never,
-    ...(params.queueEmbeddedPiMessage
-      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+    ...(params.queueEmbeddedPiMessageWithOutcome
+      ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
   });
 
@@ -134,7 +193,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   isActive?: boolean;
-  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+  queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
 }) {
   const origin = {
     channel: "telegram",
@@ -148,8 +207,8 @@ async function deliverTelegramDirectMessageCompletion(params: {
       isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
-    ...(params.queueEmbeddedPiMessage
-      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+    ...(params.queueEmbeddedPiMessageWithOutcome
+      ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
   });
 
@@ -182,7 +241,7 @@ async function deliverSlackChannelAnnouncement(params: {
     accountId?: string;
     threadId?: string | number;
   };
-  queueEmbeddedPiMessage?: (sessionId: string, message: string) => boolean;
+  queueEmbeddedPiMessageWithOutcome?: QueueEmbeddedPiMessageWithOutcome;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
   sourceTool?: string;
@@ -200,8 +259,8 @@ async function deliverSlackChannelAnnouncement(params: {
       isActive: params.isActive,
     }),
     getRuntimeConfig: () => ({}) as never,
-    ...(params.queueEmbeddedPiMessage
-      ? { queueEmbeddedPiMessage: params.queueEmbeddedPiMessage }
+    ...(params.queueEmbeddedPiMessageWithOutcome
+      ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
   });
 
@@ -394,12 +453,10 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       directIdempotencyKey: "announce-no-external-route",
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "queued",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "queued",
+    });
     await vi.waitFor(() => expect(callGateway).toHaveBeenCalledTimes(1));
     return callGateway;
   }
@@ -407,19 +464,14 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
   it("keeps queued announces with no external route session-only", async () => {
     const callGateway = await deliverQueuedAnnouncement({});
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          sessionKey: "agent:eng:paperclip:issue:123",
-          deliver: false,
-          channel: undefined,
-          accountId: undefined,
-          to: undefined,
-          threadId: undefined,
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      sessionKey: "agent:eng:paperclip:issue:123",
+      deliver: false,
+      channel: undefined,
+      accountId: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
   });
 
   it("keeps queued announces with channel-only origins session-only", async () => {
@@ -429,15 +481,11 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       },
     });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          deliver: false,
-          channel: undefined,
-          to: undefined,
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+    });
   });
 
   it("keeps queued announces with internal origins session-only", async () => {
@@ -450,17 +498,13 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       },
     });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          deliver: false,
-          channel: undefined,
-          accountId: undefined,
-          to: undefined,
-          threadId: undefined,
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: undefined,
+      accountId: undefined,
+      to: undefined,
+      threadId: undefined,
+    });
   });
 
   it("preserves queued external route fields when channel and target are present", async () => {
@@ -473,43 +517,41 @@ describe("deliverSubagentAnnouncement queued delivery", () => {
       },
     });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: "171.222",
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+    });
   });
 });
 
 describe("deliverSubagentAnnouncement completion delivery", () => {
   it("keeps completion announces session-internal while preserving route context for active requesters", async () => {
     const callGateway = createGatewayMock();
-    const queueEmbeddedPiMessage = vi.fn(() => true);
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(true);
     const result = await deliverSlackThreadAnnouncement({
       callGateway,
       sessionId: "requester-session-1",
       isActive: true,
       expectsCompletionMessage: true,
       directIdempotencyKey: "announce-1",
-      queueEmbeddedPiMessage,
+      queueEmbeddedPiMessageWithOutcome,
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "steered",
-      }),
-    );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith("requester-session-1", "child done", {
-      steeringMode: "all",
-      debounceMs: 500,
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
     });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
+      "requester-session-1",
+      "child done",
+      {
+        steeringMode: "all",
+        debounceMs: 500,
+      },
+    );
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -523,19 +565,14 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       directIdempotencyKey: "announce-1b",
     });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: "171.222",
-          bestEffortDeliver: true,
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
   });
 
   it("keeps announce-agent delivery primary for dormant completion events with child output", async () => {
@@ -568,26 +605,19 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: "171.222",
-          bestEffortDeliver: true,
-          internalEvents: expect.any(Array),
-        }),
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    const params = expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
+    expect(Array.isArray(params.internalEvents)).toBe(true);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -621,12 +651,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -660,12 +688,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -699,12 +725,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -750,13 +774,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -790,12 +812,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -829,12 +849,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -866,13 +884,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "UNAVAILABLE: gateway lost final output",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "UNAVAILABLE: gateway lost final output",
+    });
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -901,25 +917,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "UNAVAILABLE: requester wake failed",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "UNAVAILABLE: requester wake failed",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("queues when an active Telegram requester cannot be woken directly", async () => {
     const callGateway = createGatewayMock();
     const sendMessage = createSendMessageMock();
-    const queueEmbeddedPiMessage = vi.fn(() => false);
+    const queueEmbeddedPiMessageWithOutcome = createQueueOutcomeMock(false);
     const result = await deliverTelegramDirectMessageCompletion({
       callGateway,
       sendMessage,
       isActive: true,
-      queueEmbeddedPiMessage,
+      queueEmbeddedPiMessageWithOutcome,
       internalEvents: [
         {
           type: "task_completion",
@@ -936,27 +950,26 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "queued",
-        phases: [
-          {
-            phase: "direct-primary",
-            delivered: false,
-            path: "direct",
-            error: "active requester session could not be woken",
-          },
-          {
-            phase: "queue-fallback",
-            delivered: true,
-            path: "queued",
-            error: undefined,
-          },
-        ],
-      }),
-    );
-    expect(queueEmbeddedPiMessage).toHaveBeenCalledWith(
+    expectRecordFields(result, {
+      delivered: true,
+      path: "queued",
+      phases: [
+        {
+          phase: "direct-primary",
+          delivered: false,
+          path: "direct",
+          error:
+            "active requester session could not be woken: queue_message_failed reason=not_streaming sessionId=requester-session-telegram gatewayHealth=live",
+        },
+        {
+          phase: "queue-fallback",
+          delivered: true,
+          path: "queued",
+          error: undefined,
+        },
+      ],
+    });
+    expect(queueEmbeddedPiMessageWithOutcome).toHaveBeenCalledWith(
       "requester-session-telegram",
       "child done",
       {
@@ -998,13 +1011,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+    });
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1036,25 +1047,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "discord",
-          accountId: "acct-1",
-          to: "dm:U123",
-          threadId: undefined,
-        }),
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1087,12 +1091,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1131,24 +1133,17 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "discord",
-          accountId: "acct-1",
-          to: "dm:U123",
-          threadId: undefined,
-        }),
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "discord",
+      accountId: "acct-1",
+      to: "dm:U123",
+      threadId: undefined,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1189,25 +1184,18 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not deliver through the message tool",
-      }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: false,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: undefined,
-        }),
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not deliver through the message tool",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: false,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: undefined,
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1254,12 +1242,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
@@ -1295,12 +1281,10 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1335,13 +1319,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: false,
-        path: "direct",
-        error: "completion agent did not produce a visible reply",
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      error: "completion agent did not produce a visible reply",
+    });
     expect(callGateway).toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
@@ -1377,22 +1359,16 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       ],
     });
 
-    expect(result).toEqual(
-      expect.objectContaining({
-        delivered: true,
-        path: "direct",
-      }),
-    );
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-        }),
-      }),
-    );
+    expectRecordFields(result, {
+      delivered: true,
+      path: "direct",
+    });
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+    });
   });
 
   it("keeps direct external delivery for non-completion announces", async () => {
@@ -1405,18 +1381,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       directIdempotencyKey: "announce-2",
     });
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "agent",
-        params: expect.objectContaining({
-          deliver: true,
-          channel: "slack",
-          accountId: "acct-1",
-          to: "channel:C123",
-          threadId: "171.222",
-          bestEffortDeliver: true,
-        }),
-      }),
-    );
+    expectGatewayAgentParams(callGateway, {
+      deliver: true,
+      channel: "slack",
+      accountId: "acct-1",
+      to: "channel:C123",
+      threadId: "171.222",
+      bestEffortDeliver: true,
+    });
   });
 });

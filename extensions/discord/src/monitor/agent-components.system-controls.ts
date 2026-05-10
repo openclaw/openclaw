@@ -1,6 +1,6 @@
 import type { APIStringSelectComponent } from "discord-api-types/v10";
 import { ButtonStyle } from "discord-api-types/v10";
-import { logDebug, logError } from "openclaw/plugin-sdk/text-runtime";
+import { logDebug, logError } from "openclaw/plugin-sdk/logging-core";
 import {
   Button,
   StringSelectMenu,
@@ -104,6 +104,7 @@ export class AgentComponentButton extends Button {
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-button:${channelId}:${componentId}:${userId}`,
+      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent button" });
@@ -196,6 +197,7 @@ export class AgentSelectMenu extends StringSelectMenu {
     enqueueSystemEvent(eventText, {
       sessionKey: route.sessionKey,
       contextKey: `discord:agent-select:${channelId}:${componentId}:${userId}`,
+      trusted: false,
     });
 
     await ackComponentInteraction({ interaction, replyOpts, label: "agent select" });

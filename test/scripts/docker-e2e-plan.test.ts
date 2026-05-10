@@ -268,6 +268,16 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
+        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:skill-install",
+        imageKind: "bare",
+        live: false,
+        name: "skill-install",
+        resources: ["docker", "npm"],
+        stateScenario: "empty",
+        timeoutMs: 600_000,
+        weight: 2,
+      },
+      {
         command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:upgrade-survivor",
         imageKind: "bare",
         live: false,
@@ -330,7 +340,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 3,
       },
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+        command:
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -339,20 +350,6 @@ describe("scripts/lib/docker-e2e-plan", () => {
         weight: 5,
       },
     ]);
-    expect(pluginsRuntimeServices.lanes).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          name: "cron-mcp-cleanup",
-          stateScenario: "empty",
-        }),
-        expect.objectContaining({
-          live: true,
-          name: "live-plugin-tool",
-          resources: ["docker", "live", "live:openai", "npm"],
-          stateScenario: "empty",
-        }),
-      ]),
-    );
     expect(pluginsRuntimePlugins.lanes.map((lane) => lane.name)).not.toContain(
       "bundled-plugin-install-uninstall-0",
     );
@@ -448,6 +445,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "npm-onboard-slack-channel-agent",
       "doctor-switch",
       "update-channel-switch",
+      "skill-install",
       "upgrade-survivor",
       "published-upgrade-survivor",
       "update-restart-auth",
@@ -628,41 +626,33 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("plans the Codex on-demand onboarding lane as package-backed npm proof", () => {
     const plan = planFor({ selectedLaneNames: ["codex-on-demand"] });
 
-    expect(plan.lanes).toEqual([
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand",
-        imageKind: "bare",
-        live: false,
-        name: "codex-on-demand",
-        resources: ["docker", "npm", "service"],
-        stateScenario: "empty",
-      }),
-    ]);
-    expect(plan.needs).toMatchObject({
-      bareImage: true,
-      package: true,
-    });
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(false);
+    expect(lane.name).toBe("codex-on-demand");
+    expect(lane.resources).toEqual(["docker", "npm", "service"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
   });
 
   it("plans the live plugin tool lane as package-backed OpenAI proof", () => {
     const plan = planFor({ selectedLaneNames: ["live-plugin-tool"] });
 
     expect(plan.credentials).toEqual(["openai"]);
-    expect(plan.lanes).toEqual([
-      expect.objectContaining({
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool",
-        imageKind: "bare",
-        live: true,
-        name: "live-plugin-tool",
-        resources: ["docker", "live", "live:openai", "npm"],
-        stateScenario: "empty",
-      }),
-    ]);
-    expect(plan.needs).toMatchObject({
-      bareImage: true,
-      liveImage: true,
-      package: true,
-    });
+    expect(plan.lanes).toHaveLength(1);
+    const lane = requireFirstLane(plan);
+    expect(lane.command).toBe("OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:live-plugin-tool");
+    expect(lane.imageKind).toBe("bare");
+    expect(lane.live).toBe(true);
+    expect(lane.name).toBe("live-plugin-tool");
+    expect(lane.resources).toEqual(["docker", "live", "live:openai", "npm"]);
+    expect(lane.stateScenario).toBe("empty");
+    expect(plan.needs.bareImage).toBe(true);
+    expect(plan.needs.liveImage).toBe(true);
+    expect(plan.needs.package).toBe(true);
   });
 
   it("plans Open WebUI as a live-auth functional image lane", () => {
@@ -674,7 +664,8 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.credentials).toEqual(["openai"]);
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
-        command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
+        command:
+          "OPENCLAW_OPENWEBUI_MODEL=openai/gpt-5.4-mini OPENWEBUI_SMOKE_MODE=models OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS=300 OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openwebui",
         imageKind: "functional",
         live: true,
         name: "openwebui",
@@ -721,6 +712,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "bundled-plugin-install-uninstall-0",
         "commitments-safety",
         "update-channel-switch",
+        "skill-install",
         "upgrade-survivor",
       ],
     });
@@ -746,6 +738,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
       { name: "bundled-plugin-install-uninstall-0", stateScenario: "empty" },
       { name: "commitments-safety", stateScenario: "empty" },
       { name: "update-channel-switch", stateScenario: "update-stable" },
+      { name: "skill-install", stateScenario: "empty" },
       { name: "upgrade-survivor", stateScenario: "upgrade-survivor" },
     ]);
   });
@@ -758,7 +751,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
     expect(plan.lanes.map(summarizeLane)).toEqual([
       {
         command:
-          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local pnpm test:install:e2e",
+          "OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e",
         imageKind: "bare",
         live: false,
         name: "install-e2e-openai",

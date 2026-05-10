@@ -27,15 +27,17 @@ import {
   hasMessagingToolDeliveryEvidence,
   hasVisibleAgentPayload,
 } from "./pi-embedded-runner/delivery-evidence.js";
+import type { EmbeddedPiQueueMessageOptions } from "./pi-embedded-runner/run-state.js";
 import {
   callGateway,
   createBoundDeliveryRouter,
   getGlobalHookRunner,
   isEmbeddedPiRunActive,
   getRuntimeConfig,
+  formatEmbeddedPiQueueFailureSummary,
   isSteeringQueueMode,
   loadSessionStore,
-  queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageWithOutcome,
   resolvePiSteeringModeForQueueMode,
   resolveActiveEmbeddedRunSessionId,
   resolveAgentIdFromSessionKey,
@@ -65,7 +67,7 @@ type SubagentAnnounceDeliveryDeps = {
     sessionId?: string;
     isActive: boolean;
   };
-  queueEmbeddedPiMessage: typeof queueEmbeddedPiMessage;
+  queueEmbeddedPiMessageWithOutcome: typeof queueEmbeddedPiMessageWithOutcome;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -80,11 +82,27 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
       isActive: Boolean(sessionId && isEmbeddedPiRunActive(sessionId)),
     };
   },
-  queueEmbeddedPiMessage,
+  queueEmbeddedPiMessageWithOutcome,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
   defaultSubagentAnnounceDeliveryDeps;
+
+function resolveQueueEmbeddedPiMessageOutcome(
+  sessionId: string,
+  text: string,
+  options?: EmbeddedPiQueueMessageOptions,
+): ReturnType<typeof queueEmbeddedPiMessageWithOutcome> {
+  return subagentAnnounceDeliveryDeps.queueEmbeddedPiMessageWithOutcome(sessionId, text, options);
+}
+
+function formatQueueWakeFailureError(
+  fallback: string,
+  outcome: ReturnType<typeof queueEmbeddedPiMessageWithOutcome>,
+): string {
+  const summary = formatEmbeddedPiQueueFailureSummary(outcome);
+  return summary ? `${fallback}: ${summary}` : fallback;
+}
 
 function resolveBoundConversationOrigin(params: {
   bindingConversation: ConversationRef & { parentConversationId?: string };
@@ -488,15 +506,11 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const shouldSteer = isSteeringQueueMode(queueSettings.mode);
   if (shouldSteer) {
-    const steered = subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
-      sessionId,
-      params.steerMessage,
-      {
-        steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
-        ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
-      },
-    );
-    if (steered) {
+    const queueOutcome = resolveQueueEmbeddedPiMessageOutcome(sessionId, params.steerMessage, {
+      steeringMode: resolvePiSteeringModeForQueueMode(queueSettings.mode),
+      ...(queueSettings.debounceMs !== undefined ? { debounceMs: queueSettings.debounceMs } : {}),
+    });
+    if (queueOutcome.queued) {
       return "steered";
     }
   }
@@ -728,19 +742,17 @@ async function sendSubagentAnnounceDirectly(params: {
       sessionEntry: requesterEntry,
     });
     if (params.expectsCompletionMessage && requesterActivity.sessionId) {
-      const woke = requesterActivity.sessionId
-        ? subagentAnnounceDeliveryDeps.queueEmbeddedPiMessage(
-            requesterActivity.sessionId,
-            params.triggerMessage,
-            {
-              steeringMode: "all",
-              ...(requesterQueueSettings.debounceMs !== undefined
-                ? { debounceMs: requesterQueueSettings.debounceMs }
-                : {}),
-            },
-          )
-        : false;
-      if (woke) {
+      const wakeOutcome = resolveQueueEmbeddedPiMessageOutcome(
+        requesterActivity.sessionId,
+        params.triggerMessage,
+        {
+          steeringMode: "all",
+          ...(requesterQueueSettings.debounceMs !== undefined
+            ? { debounceMs: requesterQueueSettings.debounceMs }
+            : {}),
+        },
+      );
+      if (wakeOutcome.queued) {
         return {
           delivered: true,
           path: "steered",
@@ -753,7 +765,10 @@ async function sendSubagentAnnounceDirectly(params: {
         return {
           delivered: false,
           path: "direct",
-          error: "active requester session could not be woken",
+          error: formatQueueWakeFailureError(
+            "active requester session could not be woken",
+            wakeOutcome,
+          ),
         };
       }
     }

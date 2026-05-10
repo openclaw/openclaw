@@ -12,6 +12,7 @@ const OPENAI_FAMILY_GPT5_PROMPT_OVERLAY_PROVIDERS = new Set([
   "openai-codex",
 ]);
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY = `## Interaction Style
 
 Be warm, collaborative, and quietly supportive.
@@ -36,6 +37,7 @@ Avoid walls of text, long preambles, and repetitive restatement.
 Occasional emoji are welcome when they fit naturally, especially for warmth or brief celebration; keep them sparse.
 Keep replies concise by default; friendly does not mean verbose.`;
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_HEARTBEAT_PROMPT_OVERLAY = `### Heartbeats
 
 The purpose of heartbeats is to make you feel magical and proactive. Come to life and start proactively doing things that are important.
@@ -55,8 +57,10 @@ If the current state is materially unchanged and you do not have something genui
 If there is a clear standing goal or workstream and no stronger interruption, the wake should usually advance it in some concrete way. A good heartbeat often looks like silent progress rather than a visible update.
 Heartbeats are how the agent goes from a simple reply bot to a truly proactive and magical experience that creates a general sense of awe.`;
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_FRIENDLY_PROMPT_OVERLAY = `${GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY}\n\n${GPT5_HEARTBEAT_PROMPT_OVERLAY}`;
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export const GPT5_BEHAVIOR_CONTRACT = `<persona_latch>
 Keep the established persona and tone across turns unless higher-priority instructions override it.
 Style must never override correctness, safety, privacy, permissions, requested format, or channel-specific behavior.
@@ -94,8 +98,10 @@ For code or artifacts, prefer the smallest meaningful gate: test, typecheck, lin
 If no gate can run, state why.
 </completion_contract>`;
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export type Gpt5PromptOverlayMode = "friendly" | "off";
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export function normalizeGpt5PromptOverlayMode(value: unknown): Gpt5PromptOverlayMode | undefined {
   const normalized = normalizeOptionalLowercaseString(value);
   if (normalized === "off") {
@@ -107,6 +113,7 @@ export function normalizeGpt5PromptOverlayMode(value: unknown): Gpt5PromptOverla
   return undefined;
 }
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export function resolveGpt5PromptOverlayMode(
   config?: OpenClawConfig,
   legacyPluginConfig?: Record<string, unknown>,
@@ -125,11 +132,13 @@ export function resolveGpt5PromptOverlayMode(
   );
 }
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export function isGpt5ModelId(modelId?: string): boolean {
   const normalized = normalizeOptionalLowercaseString(modelId);
   return normalized ? GPT5_MODEL_ID_PATTERN.test(normalized) : false;
 }
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export function resolveGpt5SystemPromptContribution(params: {
   config?: OpenClawConfig;
   providerId?: string;
@@ -156,6 +165,7 @@ export function resolveGpt5SystemPromptContribution(params: {
   };
 }
 
+/** @deprecated OpenAI/Codex provider-owned prompt overlay helper; do not use from third-party plugins. */
 export function renderGpt5PromptOverlay(params: {
   config?: OpenClawConfig;
   providerId?: string;

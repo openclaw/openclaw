@@ -66,6 +66,22 @@ vi.mock("./gateway.js", () => ({
   readGatewayCallOptions: vi.fn(() => ({})),
 }));
 
+function requireRestartSentinelPayload(): RestartSentinelPayload {
+  const payload = writeRestartSentinelMock.mock.calls.at(-1)?.[0];
+  if (!payload) {
+    throw new Error("expected restart sentinel payload");
+  }
+  return payload;
+}
+
+function requireScheduledRestartArgs(): NonNullable<ScheduleGatewayRestartArgs> {
+  const args = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
+  if (!args) {
+    throw new Error("expected scheduled restart args");
+  }
+  return args;
+}
+
 describe("gateway tool restart continuation", () => {
   beforeEach(() => {
     isRestartEnabledMock.mockReset();
@@ -125,32 +141,26 @@ describe("gateway tool restart continuation", () => {
     const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
     await scheduledArgs?.emitHooks?.beforeEmit?.();
 
-    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "restart",
-        status: "ok",
-        sessionKey: "agent:main:main",
-        deliveryContext: {
-          channel: "slack",
-          to: "slack:C123",
-          accountId: "workspace-1",
-        },
-        threadId: "thread-42",
-        message: "Gateway restarting now",
-        continuation: {
-          kind: "agentTurn",
-          message: "Reply with exactly: Yay! I did it!",
-        },
-      }),
-    );
-    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
-      delayMs: 250,
-      reason: "continue after reboot",
-      emitHooks: expect.objectContaining({
-        beforeEmit: expect.any(Function),
-        afterEmitRejected: expect.any(Function),
-      }),
+    const payload = requireRestartSentinelPayload();
+    expect(payload.kind).toBe("restart");
+    expect(payload.status).toBe("ok");
+    expect(payload.sessionKey).toBe("agent:main:main");
+    expect(payload.deliveryContext).toEqual({
+      channel: "slack",
+      to: "slack:C123",
+      accountId: "workspace-1",
     });
+    expect(payload.threadId).toBe("thread-42");
+    expect(payload.message).toBe("Gateway restarting now");
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: "Reply with exactly: Yay! I did it!",
+    });
+    const restartArgs = requireScheduledRestartArgs();
+    expect(restartArgs.delayMs).toBe(250);
+    expect(restartArgs.reason).toBe("continue after reboot");
+    expect(typeof restartArgs.emitHooks?.beforeEmit).toBe("function");
+    expect(typeof restartArgs.emitHooks?.afterEmitRejected).toBe("function");
     expect(result?.details).toEqual({ scheduled: true, delayMs: 250 });
   });
 
@@ -169,14 +179,10 @@ describe("gateway tool restart continuation", () => {
     const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
     await scheduledArgs?.emitHooks?.beforeEmit?.();
 
-    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        continuation: {
-          kind: "agentTurn",
-          message: "Reply after restart",
-        },
-      }),
-    );
+    expect(requireRestartSentinelPayload().continuation).toEqual({
+      kind: "agentTurn",
+      message: "Reply after restart",
+    });
   });
 
   it("defaults session-scoped restarts to a success continuation", async () => {
@@ -196,15 +202,12 @@ describe("gateway tool restart continuation", () => {
     const scheduledArgs = scheduleGatewaySigusr1RestartMock.mock.calls.at(-1)?.[0];
     await scheduledArgs?.emitHooks?.beforeEmit?.();
 
-    expect(writeRestartSentinelMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        continuation: {
-          kind: "agentTurn",
-          message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
-        },
-      }),
-    );
+    const payload = requireRestartSentinelPayload();
+    expect(payload.sessionKey).toBe("agent:main:main");
+    expect(payload.continuation).toEqual({
+      kind: "agentTurn",
+      message: DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
+    });
   });
 
   it("removes the prepared sentinel when restart emission is rejected", async () => {

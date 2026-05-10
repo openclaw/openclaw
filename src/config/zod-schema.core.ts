@@ -194,6 +194,7 @@ const ModelCompatSchema = z
     supportsTools: z.boolean().optional(),
     supportsStrictMode: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
+    strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
     supportedReasoningEfforts: z.array(z.string().min(1)).optional(),
     reasoningEffortMap: z.record(z.string().min(1), z.string().min(1)).optional(),
