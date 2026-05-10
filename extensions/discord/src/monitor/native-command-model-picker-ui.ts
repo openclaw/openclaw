@@ -327,12 +327,17 @@ export async function replyWithDiscordModelPickerProviders(params: {
     allowedModelRefs: buildDiscordModelPickerAllowedModelRefs(data),
     limit: 5,
   });
+  const currentProvider = splitDiscordModelRef(currentModel ?? "")?.provider;
+  const initialProvider =
+    currentProvider && data.byProvider.has(currentProvider)
+      ? currentProvider
+      : (data.providers[0] ?? data.resolvedDefault.provider);
 
   const rendered = renderDiscordModelPickerModelsView({
     command: params.command,
     userId: params.userId,
     data,
-    provider: splitDiscordModelRef(currentModel ?? "")?.provider ?? data.resolvedDefault.provider,
+    provider: initialProvider,
     page: 1,
     providerPage: 1,
     currentModel,

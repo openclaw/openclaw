@@ -111,7 +111,7 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "../../agents/auth-profiles.js";
 import type { ModelAliasIndex } from "../../agents/model-selection.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import type { ModelDefinitionConfig, OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
@@ -197,6 +197,18 @@ function baseConfig(): OpenClawConfig {
     commands: { text: true },
     agents: { defaults: {} },
   } as unknown as OpenClawConfig;
+}
+
+function modelDefinition(id: string, name: string): ModelDefinitionConfig {
+  return {
+    id,
+    name,
+    reasoning: true,
+    input: ["text"],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 128_000,
+    maxTokens: 8192,
+  };
 }
 
 function createSessionEntry(overrides?: Partial<SessionEntry>): SessionEntry {
@@ -461,7 +473,7 @@ describe("/model chat UX", () => {
             cfg: {
               ...baseConfig(),
               plugins: { allow: ["workspace-model-list"] },
-            } as OpenClawConfig,
+            } as unknown as OpenClawConfig,
           });
 
           expect(reply?.text).toContain("- anthropic");
@@ -503,7 +515,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [
         { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.5" },
         { provider: "openai", id: "gpt-4.1-mini", name: "GPT-4.1 mini" },
@@ -515,6 +527,78 @@ describe("/model chat UX", () => {
     expect(reply?.text).not.toContain("claude-sonnet-4-1");
     expect(reply?.text).toContain("auth:");
     expect(reply?.text).not.toContain("missing (missing)");
+  });
+
+  it("hides missing-auth direct provider rows covered by OpenRouter nested model ids", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openrouter",
+      model: "google/gemini-3-flash-preview",
+      defaultProvider: "openrouter",
+      defaultModel: "google/gemini-3-flash-preview",
+      cfg: {
+        commands: { text: true },
+        models: {
+          providers: {
+            openrouter: {
+              baseUrl: "https://openrouter.example.test/api/v1",
+              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+        {
+          provider: "openrouter",
+          id: "google/gemini-3-flash-preview",
+          name: "Gemini via OpenRouter",
+        },
+      ],
+    });
+
+    expect(reply?.text).toContain("[openrouter]");
+    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
+    expect(reply?.text).not.toContain("\n[google]");
+    expect(reply?.text).not.toContain("\n  • google/gemini-3-flash-preview");
+  });
+
+  it("keeps explicitly configured direct provider rows next to OpenRouter nested ids", async () => {
+    const reply = await resolveModelInfoReply({
+      directives: parseInlineDirectives("/model status"),
+      provider: "openrouter",
+      model: "google/gemini-3-flash-preview",
+      defaultProvider: "openrouter",
+      defaultModel: "google/gemini-3-flash-preview",
+      cfg: {
+        commands: { text: true },
+        models: {
+          providers: {
+            google: {
+              baseUrl: "https://google.example.test/v1",
+              models: [modelDefinition("gemini-3-flash-preview", "Gemini 3 Flash")],
+            },
+            openrouter: {
+              baseUrl: "https://openrouter.example.test/api/v1",
+              models: [modelDefinition("google/gemini-3-flash-preview", "Gemini via OpenRouter")],
+            },
+          },
+        },
+      } as unknown as OpenClawConfig,
+      allowedModelCatalog: [
+        { provider: "google", id: "gemini-3-flash-preview", name: "Gemini 3 Flash" },
+        {
+          provider: "openrouter",
+          id: "google/gemini-3-flash-preview",
+          name: "Gemini via OpenRouter",
+        },
+      ],
+    });
+
+    expect(reply?.text).toContain("[google]");
+    expect(reply?.text).toContain("google/gemini-3-flash-preview");
+    expect(reply?.text).toContain("[openrouter]");
+    expect(reply?.text).toContain("openrouter/google/gemini-3-flash-preview");
   });
 
   it("reports Codex runtime auth for OpenAI status rows", async () => {
@@ -546,7 +630,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -589,7 +673,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -627,7 +711,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
       allowedModelCatalog: [{ provider: "openai", id: "gpt-5.5", name: "GPT-5.5" }],
     });
 
@@ -695,7 +779,7 @@ describe("/model chat UX", () => {
                   },
                 },
               },
-            } as OpenClawConfig,
+            } as unknown as OpenClawConfig,
             allowedModelCatalog: [
               { provider: "anthropic", id: "claude-opus-4-6", name: "Claude Opus 4.6" },
             ],
@@ -957,7 +1041,7 @@ describe("/model chat UX", () => {
             },
           },
         },
-      } as OpenClawConfig,
+      } as unknown as OpenClawConfig,
     });
 
     expect(persisted.provider).toBe("openai");

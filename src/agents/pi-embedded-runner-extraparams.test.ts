@@ -678,6 +678,33 @@ describe("applyExtraParamsToAgent", () => {
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
   });
 
+  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "opencode",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "opencode",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          { role: "user", content: "continue" },
+          { role: "assistant", content: "I used a tool" },
+          { role: "tool", content: "ok" },
+        ],
+      },
+    });
+
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    expect(payload.thinking).toEqual({ type: "enabled" });
+    expect(payload.reasoning_effort).toBe("high");
+    expect(messages[0]).not.toHaveProperty("reasoning_content");
+    expect(messages[1]).toHaveProperty("reasoning_content", "");
+    expect(messages[2]).not.toHaveProperty("reasoning_content");
+  });
+
   it("strips xai Responses reasoning payload fields", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "xai",

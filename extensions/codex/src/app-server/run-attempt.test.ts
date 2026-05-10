@@ -544,7 +544,7 @@ describe("runCodexAppServerAttempt", () => {
     await fs.rm(tempDir, { recursive: true, force: true });
   });
 
-  it("defaults Codex dynamic tools to the native-first profile", () => {
+  it("filters Codex-native dynamic tools from app-server tool exposure", () => {
     const tools = [
       "read",
       "write",
@@ -559,7 +559,7 @@ describe("runCodexAppServerAttempt", () => {
       "sessions_spawn",
     ].map((name) => ({ name }));
 
-    expect(__testing.applyCodexDynamicToolProfile(tools, {}).map((tool) => tool.name)).toEqual([
+    expect(__testing.filterCodexDynamicTools(tools, {}).map((tool) => tool.name)).toEqual([
       "web_search",
       "message",
       "heartbeat_respond",
@@ -567,17 +567,16 @@ describe("runCodexAppServerAttempt", () => {
     ]);
   });
 
-  it("allows Codex dynamic tool filtering to opt back into OpenClaw compatibility", () => {
+  it("applies additional Codex dynamic tool excludes without exposing Codex-native tools", () => {
     const tools = ["read", "exec", "message", "custom_tool"].map((name) => ({ name }));
 
     expect(
       __testing
-        .applyCodexDynamicToolProfile(tools, {
-          codexDynamicToolsProfile: "openclaw-compat",
+        .filterCodexDynamicTools(tools, {
           codexDynamicToolsExclude: ["custom_tool"],
         })
         .map((tool) => tool.name),
-    ).toEqual(["read", "exec", "message"]);
+    ).toEqual(["message"]);
   });
 
   it("starts Codex threads without duplicate OpenClaw workspace tools by default", async () => {
@@ -590,7 +589,7 @@ describe("runCodexAppServerAttempt", () => {
       }
       throw new Error(`unexpected method: ${method}`);
     });
-    const dynamicTools = __testing.applyCodexDynamicToolProfile(
+    const dynamicTools = __testing.filterCodexDynamicTools(
       [
         "read",
         "write",

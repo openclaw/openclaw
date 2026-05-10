@@ -604,8 +604,8 @@ terminal summary, and sanitized error text.
 
 `models.list` accepts an optional `view` parameter:
 
-- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog; otherwise the response is the full Gateway catalog.
-- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins. Otherwise the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
+- Omitted or `"default"`: current runtime behavior. If `agents.defaults.models` is configured, the response is the allowed catalog, including dynamically discovered models for `provider/*` entries. Otherwise the response is the full Gateway catalog.
+- `"configured"`: picker-sized behavior. If `agents.defaults.models` is configured, it still wins, including provider-scoped discovery for `provider/*` entries. Without an allowlist, the response uses explicit `models.providers.*.models` entries, falling back to the full catalog only when no configured model rows exist.
 - `"all"`: full Gateway catalog, bypassing `agents.defaults.models`. Use this for diagnostics and discovery UIs, not normal model pickers.
 
 ## Exec approvals

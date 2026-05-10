@@ -236,6 +236,112 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalog).toHaveBeenCalledOnce();
   });
 
+  it("uses the first visible provider wildcard model when the configured primary is filtered out", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-opus-4-5", name: "Claude Opus" },
+      { provider: "openai-codex", id: "gpt-5.5-codex", name: "GPT-5.5 Codex" },
+      { provider: "vllm", id: "qwen3-local", name: "Qwen3 Local" },
+    ]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "openai-codex/*": {},
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-5.5-codex");
+    expect(state.allowedModelKeys.has("anthropic/claude-opus-4-5")).toBe(false);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  it("does not reject wildcard-only policy before an explicit model directive is resolved", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: true,
+    });
+
+    expect(state.provider).toBe("anthropic");
+    expect(state.model).toBe("claude-opus-4-5");
+    expect(state.allowedModelKeys.has("vllm/*")).toBe(true);
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  it("keeps a stored dynamic provider wildcard model when the catalog has no rows yet", async () => {
+    vi.mocked(loadModelCatalog).mockClear();
+    vi.mocked(loadModelCatalog).mockResolvedValueOnce([]);
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-opus-4-5" },
+          models: {
+            "vllm/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionEntry: SessionEntry = {
+      sessionId: "s1",
+      updatedAt: 1,
+      providerOverride: "vllm",
+      modelOverride: "new-local-model",
+      modelOverrideSource: "user",
+    };
+    const sessionStore = { main: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-opus-4-5",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      hasModelDirective: false,
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+    });
+
+    expect(state.provider).toBe("vllm");
+    expect(state.model).toBe("new-local-model");
+    expect(sessionStore.main.modelOverride).toBe("new-local-model");
+    expect(loadModelCatalog).toHaveBeenCalledOnce();
+  });
+
   it("preserves OpenAI API-key session auth when model policy explicitly pins PI", async () => {
     authProfileStoreMock.store = {
       version: 1,
@@ -280,14 +386,14 @@ describe("createModelSelectionState catalog loading", () => {
 
 describe("resolveContextTokens", () => {
   it("prefers provider-qualified cache keys over bare model ids", () => {
-    MODEL_CONTEXT_TOKEN_CACHE.set("claude-opus-4-6", 200_000);
-    MODEL_CONTEXT_TOKEN_CACHE.set("anthropic/claude-opus-4-6", 1_000_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("gemini-3.1-pro-preview", 200_000);
+    MODEL_CONTEXT_TOKEN_CACHE.set("google-gemini-cli/gemini-3.1-pro-preview", 1_000_000);
 
     const result = resolveContextTokens({
       cfg: {} as OpenClawConfig,
       agentCfg: undefined,
-      provider: "anthropic",
-      model: "claude-opus-4-6",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
     });
 
     expect(result).toBe(1_000_000);
@@ -657,6 +763,45 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverrideRef).toBe("openai/gpt-4o-mini");
     expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
     expect(sessionStore[sessionKey]?.providerOverride).toBeUndefined();
+  });
+
+  it("keeps wildcard-provider overrides when configured catalog rows are unavailable", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "anthropic/claude-sonnet-4-6" },
+          models: {
+            "anthropic/claude-sonnet-4-6": {},
+            "openai-codex/*": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:telegram:direct:1";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai-codex",
+      modelOverride: "gpt-added-after-startup",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "anthropic",
+      defaultModel: "claude-sonnet-4-6",
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai-codex");
+    expect(state.model).toBe("gpt-added-after-startup");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai-codex");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
   });
 
   it("keeps allowed legacy combined session overrides after normalization", async () => {

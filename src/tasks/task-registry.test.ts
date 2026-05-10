@@ -263,6 +263,39 @@ async function flushAsyncWork(times = 4) {
   }
 }
 
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  expect(record).toBeDefined();
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
+}
+
+function requireTaskByRunId(runId: string): TaskRecord {
+  const task = findTaskByRunId(runId);
+  if (!task) {
+    throw new Error(`Expected task for run ${runId}`);
+  }
+  return task;
+}
+
+function requireTaskById(taskId: string): TaskRecord {
+  const task = getTaskById(taskId);
+  if (!task) {
+    throw new Error(`Expected task ${taskId}`);
+  }
+  return task;
+}
+
+function sentMessageCall(callIndex = 0): Record<string, unknown> {
+  const call = hoisted.sendMessageMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`Expected sendMessage call ${callIndex}`);
+  }
+  return call[0] as Record<string, unknown>;
+}
+
 function createInMemoryTaskRegistryStore() {
   const tasks = new Map<string, TaskRecord>();
   const deliveryStates = new Map<string, TaskDeliveryState>();
@@ -446,7 +479,7 @@ describe("task-registry", () => {
         },
       });
 
-      expect(findTaskByRunId("run-1")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-1"), {
         runtime: "acp",
         status: "succeeded",
         endedAt: 250,
@@ -495,7 +528,7 @@ describe("task-registry", () => {
         },
       });
 
-      expect(findTaskByRunId("run-cancel-then-end")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-cancel-then-end"), {
         status: "cancelled",
         endedAt: 200,
         lastEventAt: 200,
@@ -538,7 +571,7 @@ describe("task-registry", () => {
         terminalSummary: "completed",
       });
 
-      expect(findTaskByRunId("run-timeout-then-success")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-timeout-then-success"), {
         status: "timed_out",
         endedAt: 200,
       });
@@ -577,7 +610,7 @@ describe("task-registry", () => {
         terminalSummary: "completed",
       });
 
-      expect(findTaskByRunId("run-fail-then-success")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-fail-then-success"), {
         status: "failed",
         endedAt: 200,
         error: "delivery failed",
@@ -618,7 +651,7 @@ describe("task-registry", () => {
         error: "delivery failed",
       });
 
-      expect(findTaskByRunId("run-success-then-fail")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-success-then-fail"), {
         status: "failed",
         endedAt: 300,
         error: "delivery failed",
@@ -762,7 +795,7 @@ describe("task-registry", () => {
           flowId: flow.flowId,
         }),
       ).toThrow("Task ownerKey must match parent flow ownerKey.");
-      expect(getTaskById(task.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(task.taskId), {
         taskId: task.taskId,
         parentFlowId: undefined,
       });
@@ -795,7 +828,7 @@ describe("task-registry", () => {
         throw new Error("Expected createTaskRecord to throw.");
       } catch (error) {
         expect(isParentFlowLinkError(error)).toBe(true);
-        expect(error).toMatchObject({
+        expectRecordFields(error, {
           code: "cancel_requested",
           message: "Parent flow cancellation has already been requested.",
         });
@@ -867,24 +900,22 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(findTaskByRunId("run-delivery")).toMatchObject({
+        expectRecordFields(requireTaskByRunId("run-delivery"), {
           status: "succeeded",
           deliveryStatus: "delivered",
         }),
       );
-      await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "notifychat",
-            to: "notifychat:123",
-            threadId: "321",
-            content: expect.stringContaining("Background task done: ACP background task"),
-            mirror: expect.objectContaining({
-              sessionKey: "agent:main:main",
-            }),
-          }),
-        ),
-      );
+      await waitForAssertion(() => expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1));
+      const message = sentMessageCall();
+      expectRecordFields(message, {
+        channel: "notifychat",
+        to: "notifychat:123",
+        threadId: "321",
+      });
+      expect(String(message.content)).toContain("Background task done: ACP background task");
+      expectRecordFields(message.mirror, {
+        sessionKey: "agent:main:main",
+      });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
@@ -922,17 +953,17 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(findTaskByRunId("run-delivery-fail")).toMatchObject({
+        expectRecordFields(requireTaskByRunId("run-delivery-fail"), {
           status: "failed",
           deliveryStatus: "failed",
           error: "Permission denied by ACP runtime",
         }),
       );
-      await waitForAssertion(() =>
-        expect(peekSystemEvents("agent:main:main")).toEqual([
-          expect.stringContaining("Background task failed: ACP background task"),
-        ]),
-      );
+      await waitForAssertion(() => {
+        const events = peekSystemEvents("agent:main:main");
+        expect(events).toHaveLength(1);
+        expect(events[0]).toContain("Background task failed: ACP background task");
+      });
     });
   });
 
@@ -960,7 +991,7 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(findTaskByRunId("run-delivery-blocked")).toMatchObject({
+        expectRecordFields(requireTaskByRunId("run-delivery-blocked"), {
           status: "succeeded",
           deliveryStatus: "failed",
           terminalOutcome: "blocked",
@@ -1001,14 +1032,14 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(findTaskByRunId("run-session-queued")).toMatchObject({
+        expectRecordFields(requireTaskByRunId("run-session-queued"), {
           status: "succeeded",
           deliveryStatus: "session_queued",
         }),
       );
-      expect(peekSystemEvents("agent:main:main")).toEqual([
-        expect.stringContaining("Background task done: ACP background task"),
-      ]);
+      const events = peekSystemEvents("agent:main:main");
+      expect(events).toHaveLength(1);
+      expect(events[0]).toContain("Background task done: ACP background task");
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
     });
   });
@@ -1032,7 +1063,7 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(findTaskByRunId("run-session-blocked")).toMatchObject({
+        expectRecordFields(requireTaskByRunId("run-session-blocked"), {
           status: "succeeded",
           deliveryStatus: "session_queued",
         }),
@@ -1089,11 +1120,9 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            content: "Background task done: ACP background task (run run-deta).",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          content: "Background task done: ACP background task (run run-deta).",
+        }),
       );
     });
   });
@@ -1126,12 +1155,10 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            content:
-              "Background task blocked: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          content:
+            "Background task blocked: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
+        }),
       );
       expect(peekSystemEvents("agent:main:main")).toEqual([
         "Task needs follow-up: ACP background task (run run-bloc). Writable session or apply_patch authorization required.",
@@ -1168,12 +1195,10 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            content:
-              "Background task done: ACP background task (run run-succ). Created /tmp/file.txt and verified contents.",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          content:
+            "Background task done: ACP background task (run run-succ). Created /tmp/file.txt and verified contents.",
+        }),
       );
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       expect(hasPendingHeartbeatWake()).toBe(false);
@@ -1208,7 +1233,7 @@ describe("task-registry", () => {
       });
 
       expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared")).toBe(2);
-      expect(findTaskByRunId("run-shared")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-shared"), {
         runtime: "acp",
         task: "Spawn ACP child",
       });
@@ -1255,11 +1280,11 @@ describe("task-registry", () => {
         },
       });
 
-      expect(getTaskById(attackerTask.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(attackerTask.taskId), {
         status: "failed",
         error: "attacker controlled error",
       });
-      expect(getTaskById(victimTask.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(victimTask.taskId), {
         status: "running",
       });
       expect(getTaskById(victimTask.taskId)).not.toHaveProperty("error");
@@ -1313,7 +1338,7 @@ describe("task-registry", () => {
       expect(countMatching(listTaskRecords(), (task) => task.runId === "run-shared-delivery")).toBe(
         1,
       );
-      expect(findTaskByRunId("run-shared-delivery")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-shared-delivery"), {
         taskId: directTask.taskId,
         task: "Spawn ACP child",
         deliveryStatus: "delivered",
@@ -1361,12 +1386,12 @@ describe("task-registry", () => {
       await maybeDeliverTaskTerminalUpdate(attackerTask.taskId);
 
       await waitForAssertion(() =>
-        expect(getTaskById(victimTask.taskId)).toMatchObject({
+        expectRecordFields(requireTaskById(victimTask.taskId), {
           deliveryStatus: "session_queued",
         }),
       );
       await waitForAssertion(() =>
-        expect(getTaskById(attackerTask.taskId)).toMatchObject({
+        expectRecordFields(requireTaskById(attackerTask.taskId), {
           deliveryStatus: "session_queued",
         }),
       );
@@ -1411,7 +1436,7 @@ describe("task-registry", () => {
       });
 
       expect(spawnedTask.taskId).toBe(directTask.taskId);
-      expect(findTaskByRunId("run-collapse-preferred")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-collapse-preferred"), {
         taskId: directTask.taskId,
         label: "Quant patch",
         task: "Implement the feature and report back",
@@ -1455,7 +1480,7 @@ describe("task-registry", () => {
 
       expect(directTask.taskId).toBe(spawnedTask.taskId);
       expect(countMatching(listTaskRecords(), (task) => task.runId === "run-collapse")).toBe(1);
-      expect(findTaskByRunId("run-collapse")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-collapse"), {
         task: "Spawn ACP child",
       });
     });
@@ -1493,15 +1518,14 @@ describe("task-registry", () => {
       await Promise.all([first, second]);
 
       expect(hoisted.sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
-          mirror: expect.objectContaining({
-            idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
-          }),
-        }),
-      );
-      expect(findTaskByRunId("run-racing-delivery")).toMatchObject({
+      const message = sentMessageCall();
+      expectRecordFields(message, {
+        idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
+      });
+      expectRecordFields(message.mirror, {
+        idempotencyKey: `task-terminal:${task.taskId}:succeeded:blocked`,
+      });
+      expectRecordFields(requireTaskByRunId("run-racing-delivery"), {
         deliveryStatus: "delivered",
       });
     });
@@ -1528,7 +1552,7 @@ describe("task-registry", () => {
           persist: false,
         });
 
-        expect(resolveTaskForLookupToken(task.taskId)).toMatchObject({
+        expectRecordFields(resolveTaskForLookupToken(task.taskId), {
           taskId: task.taskId,
           runId: "run-restore",
           task: "Restore me",
@@ -1618,12 +1642,12 @@ describe("task-registry", () => {
       });
 
       const tasks = reconcileInspectableTasks();
-      expect(tasks[0]).toMatchObject({
+      expectRecordFields(tasks[0], {
         runId: "run-lost",
         status: "lost",
         error: "backing session missing",
       });
-      expect(getTaskById(task.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(task.taskId), {
         status: "running",
       });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
@@ -1657,18 +1681,17 @@ describe("task-registry", () => {
         cleanupStamped: 0,
         pruned: 0,
       });
-      expect(getTaskById(task.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(task.taskId), {
         status: "lost",
         error: "backing session missing",
       });
       expect(getTaskById(task.taskId)?.cleanupAfter).toBeGreaterThan(now);
-      expect(getInspectableTaskAuditSummary()).toMatchObject({
+      const summary = getInspectableTaskAuditSummary();
+      expectRecordFields(summary, {
         errors: 0,
         warnings: 1,
-        byCode: expect.objectContaining({
-          lost: 1,
-        }),
       });
+      expect(summary.byCode.lost).toBe(1);
     });
   });
 
@@ -1711,7 +1734,7 @@ describe("task-registry", () => {
         unbindSessionBindings,
       });
 
-      expect(await runTaskRegistryMaintenance()).toMatchObject({
+      expectRecordFields(await runTaskRegistryMaintenance(), {
         reconciled: 0,
         recovered: 0,
         pruned: 0,
@@ -2141,7 +2164,7 @@ describe("task-registry", () => {
       await vi.advanceTimersByTimeAsync(5_000);
       await flushAsyncWork();
 
-      expect(getTaskById(task.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(task.taskId), {
         status: "running",
       });
     });
@@ -2236,7 +2259,7 @@ describe("task-registry", () => {
       cleanupStamped: 0,
       pruned: 0,
     });
-    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+    expectRecordFields(currentTasks.get(snapshotTask.taskId), {
       status: "running",
       lastEventAt: now,
     });
@@ -2277,7 +2300,7 @@ describe("task-registry", () => {
       cleanupStamped: 0,
       pruned: 0,
     });
-    expect(currentTasks.get(snapshotTask.taskId)).toMatchObject({
+    expectRecordFields(currentTasks.get(snapshotTask.taskId), {
       status: "succeeded",
       cleanupAfter: now + 60_000,
     });
@@ -2302,7 +2325,7 @@ describe("task-registry", () => {
 
       nowSpy.mockRestore();
 
-      expect(task).toMatchObject({
+      expectRecordFields(task, {
         createdAt: 1_699_999_999_000,
         startedAt: 1_699_999_999_000,
         lastEventAt: 1_699_999_999_000,
@@ -2335,7 +2358,7 @@ describe("task-registry", () => {
       });
       nowSpy.mockRestore();
 
-      expect(getTaskById(task.taskId)).toMatchObject({
+      expectRecordFields(requireTaskById(task.taskId), {
         createdAt: 1_699_999_998_000,
         startedAt: 1_699_999_998_000,
         lastEventAt: 1_699_999_998_500,
@@ -2377,7 +2400,7 @@ describe("task-registry", () => {
         },
       });
 
-      expect(findTaskByRunId("run-restored-bad-timestamps")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-restored-bad-timestamps"), {
         createdAt: 100,
         startedAt: 100,
         lastEventAt: 150,
@@ -2446,7 +2469,7 @@ describe("task-registry", () => {
       reloadTaskRegistryFromStore();
 
       expect(findTaskByRunId("run-stale-memory")).toBeUndefined();
-      expect(findTaskByRunId("run-durable")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-durable"), {
         taskId: "task-durable",
         status: "cancelled",
       });
@@ -2545,14 +2568,12 @@ describe("task-registry", () => {
       });
 
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            content:
-              "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          content:
+            "Background task update: ACP background task. No output for 60s. It may be waiting for input.",
+        }),
       );
-      expect(findTaskByRunId("run-state-change")).toMatchObject({
+      expectRecordFields(requireTaskByRunId("run-state-change"), {
         notifyPolicy: "state_changes",
       });
       await maybeDeliverTaskStateChangeUpdate(task.taskId);
@@ -2621,13 +2642,11 @@ describe("task-registry", () => {
       });
       await flushAsyncWork();
 
-      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "guildchat",
-          to: "guildchat:123",
-          content: "Background task done: ACP background task (run run-quie).",
-        }),
-      );
+      expectRecordFields(sentMessageCall(), {
+        channel: "guildchat",
+        to: "guildchat:123",
+        content: "Background task done: ACP background task (run run-quie).",
+      });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
       vi.useRealTimers();
@@ -2673,14 +2692,12 @@ describe("task-registry", () => {
       });
       await flushAsyncWork();
 
-      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          channel: "guildchat",
-          to: "guildchat:123",
-          content:
-            "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
-        }),
-      );
+      expectRecordFields(sentMessageCall(), {
+        channel: "guildchat",
+        to: "guildchat:123",
+        content:
+          "Background task failed: ACP background task (run run-fail). Permission denied by ACP runtime",
+      });
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
     });
   });
@@ -2726,21 +2743,17 @@ describe("task-registry", () => {
 
       relay.notifyStarted();
       await flushAsyncWork();
-      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content: "Background task update: ACP background task. Started.",
-        }),
-      );
+      expectRecordFields(sentMessageCall(), {
+        content: "Background task update: ACP background task. Started.",
+      });
 
       hoisted.sendMessageMock.mockClear();
       vi.advanceTimersByTime(1_500);
       await flushAsyncWork();
-      expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          content:
-            "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
-        }),
-      );
+      expectRecordFields(sentMessageCall(), {
+        content:
+          "Background task update: ACP background task. No output for 1s. It may be waiting for input.",
+      });
 
       expect(peekSystemEvents("agent:main:main")).toStrictEqual([]);
       relay.dispose();
@@ -2773,30 +2786,27 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
-      expect(hoisted.cancelSessionMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: {},
-          sessionKey: "agent:codex:acp:child",
-          reason: "task-cancel",
-        }),
-      );
-      expect(result).toMatchObject({
+      const cancelArgs = hoisted.cancelSessionMock.mock.calls[0]?.[0];
+      expectRecordFields(cancelArgs, {
+        cfg: {},
+        sessionKey: "agent:codex:acp:child",
+        reason: "task-cancel",
+      });
+      expectRecordFields(result, {
         found: true,
         cancelled: true,
-        task: expect.objectContaining({
-          taskId: task.taskId,
-          status: "cancelled",
-          error: "Cancelled by operator.",
-        }),
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
       });
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "notifychat",
-            to: "notifychat:123",
-            content: "Background task cancelled: ACP background task (run run-canc).",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: "Background task cancelled: ACP background task (run run-canc).",
+        }),
       );
     });
   });
@@ -2829,29 +2839,26 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
-      expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          cfg: {},
-          sessionKey: "agent:worker:subagent:child",
-        }),
-      );
-      expect(result).toMatchObject({
+      const killArgs = hoisted.killSubagentRunAdminMock.mock.calls[0]?.[0];
+      expectRecordFields(killArgs, {
+        cfg: {},
+        sessionKey: "agent:worker:subagent:child",
+      });
+      expectRecordFields(result, {
         found: true,
         cancelled: true,
-        task: expect.objectContaining({
-          taskId: task.taskId,
-          status: "cancelled",
-          error: "Cancelled by operator.",
-        }),
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
       });
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "notifychat",
-            to: "notifychat:123",
-            content: "Background task cancelled: Subagent task (run run-canc).",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: "Background task cancelled: Subagent task (run run-canc).",
+        }),
       );
     });
   });
@@ -2884,23 +2891,21 @@ describe("task-registry", () => {
 
       expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
       expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
-      expect(result).toMatchObject({
+      expectRecordFields(result, {
         found: true,
         cancelled: true,
-        task: expect.objectContaining({
-          taskId: task.taskId,
-          status: "cancelled",
-          error: "Cancelled by operator.",
-        }),
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
+        error: "Cancelled by operator.",
       });
       await waitForAssertion(() =>
-        expect(hoisted.sendMessageMock).toHaveBeenCalledWith(
-          expect.objectContaining({
-            channel: "notifychat",
-            to: "notifychat:123",
-            content: "Background task cancelled: Investigate issue (run run-canc).",
-          }),
-        ),
+        expectRecordFields(sentMessageCall(), {
+          channel: "notifychat",
+          to: "notifychat:123",
+          content: "Background task cancelled: Investigate issue (run run-canc).",
+        }),
       );
     });
   });
@@ -2927,13 +2932,13 @@ describe("task-registry", () => {
         taskId: task.taskId,
       });
 
-      expect(result).toMatchObject({
+      expectRecordFields(result, {
         found: true,
         cancelled: true,
-        task: expect.objectContaining({
-          taskId: task.taskId,
-          status: "cancelled",
-        }),
+      });
+      expectRecordFields(result.task, {
+        taskId: task.taskId,
+        status: "cancelled",
       });
     });
   });

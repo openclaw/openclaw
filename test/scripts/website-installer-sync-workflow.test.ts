@@ -32,6 +32,11 @@ describe("website installer sync workflow", () => {
     expect(workflow).toContain("bash /tmp/install-cli.sh --prefix /tmp/openclaw");
     expect(workflow).toContain("macos-installer:");
     expect(workflow).toContain("runs-on: macos-latest");
+    expect(workflow).toContain("node-version: 24");
+    expect(workflow).toContain('OPENCLAW_NO_ONBOARD: "1"');
+    expect(workflow).toContain('OPENCLAW_NO_PROMPT: "1"');
+    expect(workflow).toContain("bash scripts/install.sh --no-onboard --no-prompt --version latest");
+    expect(workflow).toContain("openclaw --version");
     expect(workflow).toContain("windows-installer:");
     expect(workflow).toContain("runs-on: windows-latest");
     expect(workflow).toContain(".\\scripts\\install.ps1 -DryRun");

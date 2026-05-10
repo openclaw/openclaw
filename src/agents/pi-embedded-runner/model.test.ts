@@ -1146,6 +1146,30 @@ describe("resolveModel", () => {
     expect(result.model?.input).toEqual(["text"]);
   });
 
+  it("explains when an agent model entry is missing provider model registration", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "microsoft-foundry/Kimi-K2.6-1": {
+              contextWindow: 262144,
+              maxOutputTokens: 16384,
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = await resolveModelAsync("microsoft-foundry", "Kimi-K2.6-1", "/tmp/agent", cfg, {
+      runtimeHooks: createRuntimeHooks(),
+      skipPiDiscovery: true,
+    });
+
+    expect(result.error).toBe(
+      'Unknown model: microsoft-foundry/Kimi-K2.6-1. Found agents.defaults.models["microsoft-foundry/Kimi-K2.6-1"], but no matching models.providers["microsoft-foundry"].models[] entry. Add { "id": "Kimi-K2.6-1" } to models.providers["microsoft-foundry"].models[] to register this provider model.',
+    );
+  });
+
   it("repairs stale text-only Foundry fallback rows for GPT-family models", () => {
     const cfg = {
       models: {

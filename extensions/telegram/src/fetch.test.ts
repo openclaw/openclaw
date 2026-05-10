@@ -179,6 +179,10 @@ function buildFetchFallbackError(code: string) {
   });
 }
 
+function buildCodeLessFetchFallbackError() {
+  return new TypeError("fetch failed");
+}
+
 const STICKY_IPV4_FALLBACK_NETWORK = {
   network: {
     autoSelectFamily: true,
@@ -953,6 +957,63 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(4);
     expectPinnedFallbackIpDispatcher(3);
     expect(getDispatcherFromUndiciCall(4)).toBe(getDispatcherFromUndiciCall(3));
+  });
+
+  it("falls back on code-less fetch failed envelopes", async () => {
+    undiciFetch
+      .mockRejectedValueOnce(buildCodeLessFetchFallbackError())
+      .mockResolvedValueOnce({ ok: true } as Response);
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await resolved("https://api.telegram.org/botx/deleteWebhook");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(2);
+    expect(getDispatcherFromUndiciCall(1)).not.toBe(getDispatcherFromUndiciCall(2));
+  });
+
+  it("cools down a repeatedly failing sticky fallback and probes earlier attempts", async () => {
+    for (let i = 0; i < 7; i += 1) {
+      undiciFetch.mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+    }
+    undiciFetch
+      .mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"))
+      .mockRejectedValueOnce(buildFetchFallbackError("ENETUNREACH"));
+
+    const resolved = resolveTelegramFetchOrThrow(undefined, {
+      network: {
+        autoSelectFamily: true,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await expect(resolved("https://api.telegram.org/botx/deleteWebhook")).rejects.toThrow(
+      "fetch failed",
+    );
+    for (let i = 0; i < 4; i += 1) {
+      await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+        "fetch failed",
+      );
+    }
+    await expect(resolved("https://api.telegram.org/botx/getUpdates")).rejects.toThrow(
+      "temporarily unhealthy",
+    );
+
+    expect(undiciFetch).toHaveBeenCalledTimes(9);
+    expect(getDispatcherFromUndiciCall(7)).toBe(getDispatcherFromUndiciCall(3));
+    expect(getDispatcherFromUndiciCall(8)).toBe(getDispatcherFromUndiciCall(1));
+    expect(getDispatcherFromUndiciCall(9)).toBe(getDispatcherFromUndiciCall(2));
+    expect(loggerWarn).toHaveBeenCalledWith(
+      expect.stringContaining("telegram transport attempt marked temporarily unhealthy"),
+    );
+    expect(loggerDebug).toHaveBeenCalledWith(
+      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
+    );
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {
