@@ -247,6 +247,39 @@ describe("config cli", () => {
       });
     });
 
+    it("marks object set paths explicit so nested default-equal writes persist", async () => {
+      const resolved: OpenClawConfig = {
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+          },
+        },
+      };
+      const runtimeMerged = {
+        ...resolved,
+        channels: {
+          telegram: {
+            botToken: "tok-abc",
+            dmPolicy: "pairing",
+          },
+        },
+      } as OpenClawConfig;
+      setSnapshot(resolved, runtimeMerged);
+
+      await runConfigCommand([
+        "config",
+        "set",
+        "channels.telegram",
+        '{"botToken":"tok-abc","dmPolicy":"pairing"}',
+        "--strict-json",
+      ]);
+
+      expect(mockWriteConfigFile).toHaveBeenCalledTimes(1);
+      expect(mockWriteConfigFile.mock.calls[0]?.[1]).toMatchObject({
+        explicitSetPaths: [["channels", "telegram"]],
+      });
+    });
+
     it("does not inject runtime defaults into the written config", async () => {
       const resolved: OpenClawConfig = {
         gateway: { port: 18789 },

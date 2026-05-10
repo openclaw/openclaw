@@ -793,4 +793,37 @@ describe("config io write prepare", () => {
     expect(persisted.channels?.telegram?.groupPolicy).toBe("allowlist");
     expect(persisted.channels?.telegram?.botToken).toBe("tok-abc");
   });
+
+  it("persists default-valued children inside explicitly set objects", () => {
+    const runtimeConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+          dmPolicy: "pairing",
+          groupPolicy: "allowlist",
+        },
+      },
+    };
+    const sourceConfig = {
+      channels: {
+        telegram: {
+          botToken: "tok-abc",
+        },
+      },
+    };
+
+    const persisted = resolvePersistCandidateForWrite({
+      runtimeConfig,
+      sourceConfig,
+      nextConfig: sourceConfig,
+      explicitSetValueSource: runtimeConfig,
+      explicitSetPaths: [["channels", "telegram"]],
+    }) as { channels?: { telegram?: Record<string, unknown> } };
+
+    expect(persisted.channels?.telegram).toEqual({
+      botToken: "tok-abc",
+      dmPolicy: "pairing",
+      groupPolicy: "allowlist",
+    });
+  });
 });

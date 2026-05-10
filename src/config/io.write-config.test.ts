@@ -1400,7 +1400,7 @@ describe("config io write", () => {
         setRuntimeConfigSnapshot(runtimeConfig, sourceConfig);
 
         await writeConfigFile(runtimeConfig, {
-          explicitSetPaths: [["plugins", "entries", "demo", "config", "mode"]],
+          explicitSetPaths: [["plugins", "entries", "demo", "config"]],
         });
 
         const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as OpenClawConfig;

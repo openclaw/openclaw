@@ -343,6 +343,36 @@ function hasPathValue(value: unknown, path: readonly string[]): boolean {
   return tail.length === 0 || hasPathValue(value[head], tail);
 }
 
+function mergeMissingExplicitValues(
+  currentValue: unknown,
+  explicitValue: unknown,
+): {
+  changed: boolean;
+  value: unknown;
+} {
+  if (!isRecord(currentValue) || !isRecord(explicitValue)) {
+    return { changed: false, value: currentValue };
+  }
+  let changed = false;
+  const next: Record<string, unknown> = { ...currentValue };
+  for (const [key, childExplicitValue] of Object.entries(explicitValue)) {
+    if (isBlockedObjectKey(key)) {
+      continue;
+    }
+    if (!Object.prototype.hasOwnProperty.call(next, key)) {
+      next[key] = cloneUnknown(childExplicitValue);
+      changed = true;
+      continue;
+    }
+    const childMerged = mergeMissingExplicitValues(next[key], childExplicitValue);
+    if (childMerged.changed) {
+      next[key] = childMerged.value;
+      changed = true;
+    }
+  }
+  return { changed, value: changed ? next : currentValue };
+}
+
 export function injectExplicitlySetPaths(params: {
   valueSource: unknown;
   persistedCandidate: unknown;
@@ -358,7 +388,6 @@ export function injectExplicitlySetPaths(params: {
     if (
       path.length === 0 ||
       path.some(isBlockedObjectKey) ||
-      hasPathValue(next, path) ||
       (params.rootAuthoredConfig && isIncludeOwnedPath(params.rootAuthoredConfig, [...path]))
     ) {
       continue;
@@ -367,7 +396,14 @@ export function injectExplicitlySetPaths(params: {
     if (nextValue === undefined) {
       continue;
     }
-    next = setPathValueCreatingParents(next, [...path], nextValue);
+    if (!hasPathValue(next, path)) {
+      next = setPathValueCreatingParents(next, [...path], nextValue);
+      continue;
+    }
+    const merged = mergeMissingExplicitValues(getPathValue(next, [...path]), nextValue);
+    if (merged.changed) {
+      next = setPathValue(next, [...path], merged.value);
+    }
   }
   return next;
 }
