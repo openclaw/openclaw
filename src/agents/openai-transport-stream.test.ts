@@ -4440,24 +4440,20 @@ describe("openai transport stream", () => {
             role: "assistant",
             content: [
               {
-                type: "tool-call",
-                toolCallId: "call_abc",
-                toolName: "noop",
-                args: {},
+                type: "toolCall",
+                id: "call_abc",
+                name: "noop",
+                arguments: {},
               },
             ],
             timestamp: Date.now(),
           },
           {
-            role: "tool",
-            content: [
-              {
-                type: "tool-result",
-                toolCallId: "call_abc",
-                toolName: "noop",
-                result: "ok",
-              },
-            ],
+            role: "toolResult",
+            toolCallId: "call_abc",
+            toolName: "noop",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
             timestamp: Date.now(),
           },
         ],
