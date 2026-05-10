@@ -1235,6 +1235,18 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/policy:
+    devDependencies:
+      '@openclaw/oc-path':
+        specifier: workspace:*
+        version: link:../oc-path
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/qa-channel:
     dependencies:
       typebox:

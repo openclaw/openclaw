@@ -1,0 +1,284 @@
+import { promises as fs } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { runDoctorLintChecks } from "../../../../src/flows/doctor-lint-flow.js";
+import { runDoctorHealthRepairs } from "../../../../src/flows/doctor-repair-flow.js";
+import {
+  clearHealthChecksForTest,
+  listHealthChecks,
+} from "../../../../src/flows/health-check-registry.js";
+import type {
+  HealthCheckContext,
+  HealthRepairContext,
+} from "../../../../src/flows/health-checks.js";
+import { policyDocumentHash } from "../policy-state.js";
+import { registerPolicyDoctorChecks, resetPolicyDoctorChecksForTest } from "./register.js";
+
+let workspaceDir: string;
+
+function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawConfig {
+  return {
+    plugins: {
+      entries: {
+        policy: {
+          enabled: true,
+          config: { enabled: true, ...settings },
+        },
+      },
+    },
+  };
+}
+
+function ctx(configPath: string, cfg: OpenClawConfig = {}): HealthCheckContext {
+  return {
+    mode: "lint",
+    runtime: {
+      log() {},
+      error() {},
+      exit() {},
+    },
+    cfg,
+    cwd: workspaceDir,
+    configPath,
+  };
+}
+
+function repairCtx(configPath: string, cfg: OpenClawConfig = {}): HealthRepairContext {
+  return {
+    ...ctx(configPath, cfg),
+    mode: "fix",
+  };
+}
+
+describe("registerPolicyDoctorChecks", () => {
+  beforeEach(async () => {
+    workspaceDir = await fs.mkdtemp(join(tmpdir(), "policy-doctor-"));
+  });
+
+  afterEach(async () => {
+    await fs.rm(workspaceDir, { recursive: true, force: true });
+    clearHealthChecksForTest();
+    resetPolicyDoctorChecksForTest();
+  });
+
+  it("registers policy health checks once", () => {
+    registerPolicyDoctorChecks();
+    registerPolicyDoctorChecks();
+
+    expect(listHealthChecks().map((check) => check.id)).toEqual([
+      "policy/policy-jsonc-missing",
+      "policy/policy-hash-mismatch",
+      "policy/channels-denied-provider",
+    ]);
+  });
+
+  it("reports a missing policy file when the policy extension is enabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-jsonc-missing",
+        severity: "warning",
+        path: "policy.jsonc",
+      }),
+    ]);
+  });
+
+  it("does not report a missing policy file when policy is disabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy({ enabled: false })));
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports a policy hash mismatch when expectedHash is configured", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ channels: { settings: { checkChannels: true } } }),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ expectedHash: "sha256:not-the-policy" })),
+    );
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/policy-hash-mismatch",
+        severity: "error",
+        path: "policy.jsonc",
+      }),
+    ]);
+  });
+
+  it("accepts a policy file that matches the configured expectedHash", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const policy = { channels: { settings: { checkChannels: true } } };
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(join(workspaceDir, "policy.jsonc"), JSON.stringify(policy), "utf-8");
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(
+      ctx(configPath, cfgWithPolicy({ expectedHash: policyDocumentHash(policy) })),
+    );
+
+    expect(result.findings).toEqual([]);
+  });
+
+  it("reports configured channels denied by policy", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            settings: { checkChannels: true },
+            denyRules: [
+              {
+                id: "no-telegram",
+                when: { provider: "telegram" },
+                reason: "Telegram is not approved for this workspace.",
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        checkId: "policy/channels-denied-provider",
+        severity: "error",
+        path: "openclaw config",
+        ocPath: "oc://openclaw.config/channels/telegram",
+        target: "oc://openclaw.config/channels/telegram",
+        requirement: "oc://policy.jsonc/channels/denyRules/#0",
+        fixHint: "Telegram is not approved for this workspace.",
+      }),
+    ]);
+  });
+
+  it("repairs denied enabled channels by disabling them when workspace repairs are enabled", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: true }),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            settings: { checkChannels: true },
+            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorHealthRepairs(repairCtx(configPath, cfg), {
+      checks: listHealthChecks().filter((entry) => entry.id === "policy/channels-denied-provider"),
+    });
+
+    expect(result.changes).toEqual(["Disabled channels.telegram.enabled for policy conformance."]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.config.channels?.telegram).toEqual({ enabled: false });
+  });
+
+  it("does not repair denied channels without workspace repair opt-in", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy({ workspaceRepairs: false }),
+      channels: { telegram: { enabled: true } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            settings: { checkChannels: true },
+            denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    const result = await runDoctorHealthRepairs(repairCtx(configPath, cfg), {
+      checks: listHealthChecks().filter((entry) => entry.id === "policy/channels-denied-provider"),
+    });
+
+    expect(result.changes).toEqual([]);
+    expect(result.warnings).toEqual([
+      "Skipped channel config repair. Enable plugins.entries.policy.config.workspaceRepairs to let doctor --fix edit workspace files.",
+      "policy/channels-denied-provider repair skipped: workspace repairs are disabled",
+    ]);
+    expect(result.config.channels?.telegram).toEqual({ enabled: true });
+  });
+
+  it("does not report denied providers for disabled channels", async () => {
+    const configPath = join(workspaceDir, "openclaw.jsonc");
+    const cfg = {
+      ...cfgWithPolicy(),
+      channels: { telegram: { enabled: false } },
+    } as OpenClawConfig;
+    await fs.writeFile(configPath, "{}", "utf-8");
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify(
+        {
+          channels: {
+            settings: { checkChannels: true },
+            denyRules: [
+              {
+                id: "no-telegram",
+                when: { provider: "telegram" },
+                reason: "Telegram is not approved for this workspace.",
+              },
+            ],
+          },
+        },
+        null,
+        2,
+      ),
+      "utf-8",
+    );
+
+    registerPolicyDoctorChecks();
+    await expect(runDoctorLintChecks(ctx(configPath, cfg))).resolves.toMatchObject({
+      findings: [],
+    });
+  });
+});

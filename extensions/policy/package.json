@@ -1,0 +1,25 @@
+{
+  "name": "@openclaw/policy",
+  "version": "2026.5.8",
+  "private": true,
+  "description": "OpenClaw policy doctor checks for workspace conformance",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/oc-path": "workspace:*",
+    "@openclaw/plugin-sdk": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.8"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
