@@ -13,6 +13,7 @@ import {
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import { sanitizeHostExecEnvWithDiagnostics } from "../infra/host-env-security.js";
+import { markOpenClawAgentExecEnv } from "../infra/openclaw-exec-env.js";
 import {
   getShellPathFromLoginShell,
   resolveShellEnvFallbackTimeoutMs,
@@ -1443,7 +1444,7 @@ export function createExecTool(
         throw new Error(`Security Violation: ${suffix}.`);
       }
 
-      const env =
+      const env = markOpenClawAgentExecEnv(
         sandbox && host === "sandbox"
           ? buildSandboxEnv({
               defaultPath: DEFAULT_PATH,
@@ -1451,7 +1452,9 @@ export function createExecTool(
               sandboxEnv: sandbox.env,
               containerWorkdir: containerWorkdir ?? sandbox.containerWorkdir,
             })
-          : (hostEnvResult?.env ?? inheritedBaseEnv);
+          : (hostEnvResult?.env ?? inheritedBaseEnv),
+        agentId,
+      );
 
       if (!sandbox && host === "gateway" && !params.env?.PATH) {
         const shellPath = getShellPathFromLoginShell({
