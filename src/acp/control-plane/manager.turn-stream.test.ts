@@ -28,7 +28,7 @@ describe("consumeAcpTurnStream", () => {
   it("delivers all events when gate stays open", async () => {
     const received: AcpRuntimeEvent[] = [];
     const runtime = mockRuntime([
-      { type: "text_delta", text: "hello", stream: "reply" },
+      { type: "text_delta", text: "hello", stream: "output" },
       { type: "done" },
     ]);
     await consumeAcpTurnStream({
@@ -47,7 +47,7 @@ describe("consumeAcpTurnStream", () => {
     const outputReceived: AcpRuntimeEvent[] = [];
     const gate = { open: true };
     const runtime = mockRuntime([
-      { type: "text_delta", text: "before", stream: "reply" },
+      { type: "text_delta", text: "before", stream: "output" },
       { type: "done" },
     ]);
     // Close gate before stream starts
