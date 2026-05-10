@@ -1,7 +1,8 @@
 import { configureFsSafePython } from "@openclaw/fs-safe/config";
 export { root } from "@openclaw/fs-safe/root";
-export { isPathInside } from "@openclaw/fs-safe/path";
+export { isPathInside, isPathInsideWithRealpath } from "@openclaw/fs-safe/path";
 export {
+  assertNoSymlinkParents,
   readRegularFile,
   statRegularFile,
   type RegularFileStatResult,
