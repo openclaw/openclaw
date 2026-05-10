@@ -115,12 +115,12 @@ export function createEmbeddedPiSessionEventHandler(ctx: EmbeddedPiSubscribeCont
         return;
       case "compaction_start":
         scheduleEvent(evt, () => {
-          handleCompactionStart(ctx);
+          handleCompactionStart(ctx, evt);
         });
         return;
       case "compaction_end":
         scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, evt as never);
+          handleCompactionEnd(ctx, evt);
         });
         return;
       case "agent_end":

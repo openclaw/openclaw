@@ -41,6 +41,7 @@ function createTestContext(): {
     hookRunner: undefined,
     log: {
       debug: vi.fn(),
+      info: vi.fn(),
       warn,
     },
     state: {

@@ -10,6 +10,7 @@ import {
 } from "./pi-embedded-subscribe.compaction-test-helpers.js";
 import {
   handleCompactionEnd,
+  handleCompactionStart,
   reconcileSessionStoreCompactionCountAfterSuccess,
 } from "./pi-embedded-subscribe.handlers.compaction.js";
 import type { EmbeddedPiSubscribeContext } from "./pi-embedded-subscribe.handlers.types.js";
@@ -19,6 +20,7 @@ function createCompactionContext(params: {
   sessionKey: string;
   agentId?: string;
   initialCount: number;
+  info?: (message: string, meta?: Record<string, unknown>) => void;
 }): EmbeddedPiSubscribeContext {
   let compactionCount = params.initialCount;
   return {
@@ -37,6 +39,7 @@ function createCompactionContext(params: {
     } as never,
     log: {
       debug: vi.fn(),
+      info: params.info ?? vi.fn(),
       warn: vi.fn(),
     },
     ensureCompactionPromise: vi.fn(),
@@ -103,6 +106,168 @@ describe("reconcileSessionStoreCompactionCountAfterSuccess", () => {
   });
 });
 
+describe("compaction lifecycle logging", () => {
+  it("logs lifecycle events at info level for gateway watch visibility", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-log-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      compactionCount: 0,
+    });
+    const info = vi.fn();
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      info,
+    });
+
+    handleCompactionStart(ctx, {
+      type: "compaction_start",
+      reason: "threshold",
+    });
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "threshold",
+      result: { kept: 12 },
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run auto-compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "threshold",
+        runId: "run-test",
+        consoleMessage: "embedded run auto-compaction start: runId=run-test reason=threshold",
+      }),
+    );
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run auto-compaction complete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "threshold",
+        runId: "run-test",
+        completed: true,
+        compactionCount: 1,
+        consoleMessage:
+          "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      }),
+    );
+  });
+
+  it("logs manual compaction as incomplete when no result is produced", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-incomplete-log-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      compactionCount: 0,
+    });
+    const info = vi.fn();
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      info,
+    });
+
+    handleCompactionStart(ctx, {
+      type: "compaction_start",
+      reason: "manual",
+    });
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      reason: "manual",
+      result: undefined,
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run manual compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "manual",
+        runId: "run-test",
+        consoleMessage: "embedded run manual compaction start: runId=run-test reason=manual",
+      }),
+    );
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run manual compaction incomplete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "manual",
+        runId: "run-test",
+        completed: false,
+        aborted: false,
+        consoleMessage:
+          "embedded run manual compaction incomplete: runId=run-test reason=manual aborted=false willRetry=false",
+      }),
+    );
+  });
+
+  it("defaults legacy synthetic compaction events to threshold logs", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-legacy-log-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    await seedSessionStore({
+      storePath,
+      sessionKey,
+      compactionCount: 0,
+    });
+    const info = vi.fn();
+    const ctx = createCompactionContext({
+      storePath,
+      sessionKey,
+      initialCount: 0,
+      info,
+    });
+
+    handleCompactionStart(ctx, {
+      type: "compaction_start",
+    });
+    handleCompactionEnd(ctx, {
+      type: "compaction_end",
+      result: { kept: 12 },
+      willRetry: false,
+      aborted: false,
+    });
+
+    expect(info).toHaveBeenNthCalledWith(
+      1,
+      "embedded run auto-compaction start",
+      expect.objectContaining({
+        event: "embedded_run_compaction_start",
+        reason: "threshold",
+        runId: "run-test",
+        consoleMessage: "embedded run auto-compaction start: runId=run-test reason=threshold",
+      }),
+    );
+    expect(info).toHaveBeenNthCalledWith(
+      2,
+      "embedded run auto-compaction complete",
+      expect.objectContaining({
+        event: "embedded_run_compaction_end",
+        reason: "threshold",
+        runId: "run-test",
+        completed: true,
+        compactionCount: 1,
+        consoleMessage:
+          "embedded run auto-compaction complete: runId=run-test reason=threshold compactionCount=1 willRetry=false",
+      }),
+    );
+  });
+});
+
 describe("handleCompactionEnd", () => {
   it("reconciles the session store after a successful compaction end event", async () => {
     const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-compaction-handler-"));
@@ -122,10 +287,11 @@ describe("handleCompactionEnd", () => {
 
     handleCompactionEnd(ctx, {
       type: "compaction_end",
+      reason: "threshold",
       result: { kept: 12 },
       willRetry: false,
       aborted: false,
-    } as never);
+    });
 
     await waitForCompactionCount({
       storePath,
