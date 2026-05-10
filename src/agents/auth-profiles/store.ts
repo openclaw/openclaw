@@ -10,7 +10,11 @@ import {
   EXTERNAL_CLI_SYNC_TTL_MS,
   log,
 } from "./constants.js";
-import { overlayExternalAuthProfiles, shouldPersistExternalAuthProfile } from "./external-auth.js";
+import {
+  overlayExternalAuthProfiles,
+  shouldPersistExternalAuthProfile,
+  syncPersistedExternalCliAuthProfiles,
+} from "./external-auth.js";
 import type { ExternalCliAuthDiscovery } from "./external-cli-discovery.js";
 import { isSafeToAdoptMainStoreOAuthIdentity } from "./oauth-shared.js";
 import {
@@ -234,6 +238,31 @@ function resolveExternalCliOverlayOptions(
   };
 }
 
+function maybeSyncPersistedExternalCliAuthProfiles(params: {
+  store: AuthProfileStore;
+  agentDir?: string;
+  options?: LoadAuthProfileStoreOptions;
+}): AuthProfileStore {
+  if (
+    params.options?.readOnly === true ||
+    params.options?.syncExternalCli === false ||
+    process.env.OPENCLAW_AUTH_STORE_READONLY === "1"
+  ) {
+    return params.store;
+  }
+  const synced = syncPersistedExternalCliAuthProfiles(params.store, {
+    agentDir: params.agentDir,
+    ...resolveExternalCliOverlayOptions(params.options),
+  });
+  if (synced === params.store) {
+    return params.store;
+  }
+  saveAuthProfileStore(synced, params.agentDir, {
+    filterExternalAuthProfiles: false,
+  });
+  return synced;
+}
+
 function shouldKeepProfileInLocalStore(params: {
   store: AuthProfileStore;
   profileId: string;
@@ -373,15 +402,20 @@ function loadAuthProfileStoreForAgent(
   }
   const asStore = loadPersistedAuthProfileStore(agentDir);
   if (asStore) {
+    const store = maybeSyncPersistedExternalCliAuthProfiles({
+      store: asStore,
+      agentDir,
+      options,
+    });
     if (!readOnly) {
       writeCachedAuthProfileStore({
         authPath,
         authMtimeMs: readAuthStoreMtimeMs(authPath),
         stateMtimeMs: readAuthStoreMtimeMs(statePath),
-        store: asStore,
+        store,
       });
     }
-    return asStore;
+    return store;
   }
 
   const legacy = loadLegacyAuthProfileStore(agentDir);
@@ -417,15 +451,21 @@ function loadAuthProfileStoreForAgent(
     }
   }
 
+  const syncedStore = maybeSyncPersistedExternalCliAuthProfiles({
+    store,
+    agentDir,
+    options,
+  });
+
   if (!readOnly) {
     writeCachedAuthProfileStore({
       authPath,
       authMtimeMs: readAuthStoreMtimeMs(authPath),
       stateMtimeMs: readAuthStoreMtimeMs(statePath),
-      store,
+      store: syncedStore,
     });
   }
-  return store;
+  return syncedStore;
 }
 
 export function loadAuthProfileStoreForRuntime(

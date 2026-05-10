@@ -9,7 +9,11 @@ import {
 } from "./auth-profiles/store.js";
 import type { OAuthCredential } from "./auth-profiles/types.js";
 
-type RuntimeOnlyOverlay = { profileId: string; credential: OAuthCredential };
+type RuntimeOnlyOverlay = {
+  profileId: string;
+  credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
+};
 
 const mocks = vi.hoisted(() => ({
   resolveExternalCliAuthProfiles: vi.fn<
@@ -71,6 +75,25 @@ function writeAuthStore(agentDir: string, key: string) {
   return authPath;
 }
 
+function writeOAuthStore(agentDir: string, profileId: string, credential: OAuthCredential) {
+  const authPath = path.join(agentDir, "auth-profiles.json");
+  fs.writeFileSync(
+    authPath,
+    `${JSON.stringify(
+      {
+        version: AUTH_STORE_VERSION,
+        profiles: {
+          [profileId]: credential,
+        },
+      },
+      null,
+      2,
+    )}\n`,
+    "utf8",
+  );
+  return authPath;
+}
+
 describe("auth profile store cache", () => {
   beforeEach(() => {
     clearRuntimeAuthProfileStoreSnapshots();
@@ -93,6 +116,17 @@ describe("auth profile store cache", () => {
         refresh: `refresh-${access}`,
         expires: Date.now() + 60_000,
       },
+    };
+  }
+
+  function createPersistedOverlay(
+    profileId: string,
+    credential: OAuthCredential,
+  ): RuntimeOnlyOverlay {
+    return {
+      profileId,
+      credential,
+      persistence: "persisted",
     };
   }
 
@@ -170,6 +204,41 @@ describe("auth profile store cache", () => {
         "access-1",
       );
       expect(fs.existsSync(path.join(agentDir, "auth-profiles.json"))).toBe(false);
+    });
+  });
+
+  it("persists fresher external CLI oauth over a stale local managed profile", async () => {
+    await withAgentDirEnv("openclaw-auth-store-external-cli-persist-", (agentDir) => {
+      const profileId = "anthropic:claude-cli";
+      writeOAuthStore(agentDir, profileId, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      mocks.resolveExternalCliAuthProfiles
+        .mockReturnValueOnce([
+          createPersistedOverlay(profileId, {
+            type: "oauth",
+            provider: "claude-cli",
+            access: "fresh-cli-access",
+            refresh: "fresh-cli-refresh",
+            expires: Date.now() + 60_000,
+          }),
+        ])
+        .mockReturnValue([]);
+
+      const store = ensureAuthProfileStore(agentDir);
+      const persisted = JSON.parse(
+        fs.readFileSync(path.join(agentDir, "auth-profiles.json"), "utf8"),
+      ) as { profiles: Record<string, OAuthCredential> };
+
+      expect((store.profiles[profileId] as OAuthCredential | undefined)?.access).toBe(
+        "fresh-cli-access",
+      );
+      expect(persisted.profiles[profileId]?.access).toBe("fresh-cli-access");
+      expect(persisted.profiles[profileId]?.refresh).toBe("fresh-cli-refresh");
     });
   });
 });
