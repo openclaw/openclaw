@@ -364,6 +364,26 @@ describe("containerSendMessage", () => {
     expect(body.message).toBe("**Bold** \\* not italic");
   });
 
+  it("preserves literal backslashes in styled container messages", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({}),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Bold C:\\Temp\\file and /foo\\bar/",
+      textStyles: [{ start: 0, length: 4, style: "BOLD" }],
+    });
+
+    const callArgs = mockFetch.mock.calls[0];
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.message).toBe("**Bold** C:\\Temp\\file and /foo\\bar/");
+  });
+
   it("includes attachments as base64 data URIs", async () => {
     const fs = await import("node:fs/promises");
     const os = await import("node:os");
