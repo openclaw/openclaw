@@ -27,10 +27,10 @@ execution:
       family: apply-patch
       actualTool: apply_patch
       tracking: "#80320"
-      reason: Pi omits apply_patch from the effective runtime tool surface while Codex exposes it.
-    knownBroken:
+      reason: QA mock apply_patch fixture still uses synthetic failure-path inputs; provider remap fixed tool exposure, but failure injection remains harness-only.
+    knownHarnessGap:
       issue: "#80320"
-      reason: Pi omits apply_patch from the effective runtime tool surface while Codex exposes it.
+      reason: QA mock apply_patch fixture still uses synthetic failure-path inputs; provider remap fixed tool exposure, but failure injection remains harness-only.
     promptSnippet: "target=apply_patch"
     failurePromptSnippet: "failure target=apply_patch"
 ```

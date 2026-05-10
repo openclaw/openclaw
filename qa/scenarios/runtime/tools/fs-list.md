@@ -27,10 +27,10 @@ execution:
       family: fs.list
       actualTool: read
       tracking: "#80312"
-      reason: Current OpenClaw coding surface has no separate list tool, and this read-backed fixture currently hits the read failure-path args drift.
-    knownBroken:
+      reason: Current OpenClaw coding surface has no separate list tool; QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
+    knownHarnessGap:
       issue: "#80312"
-      reason: This read-backed fixture currently hits the read failure-path args drift.
+      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
     promptSnippet: "target=read"
     failurePromptSnippet: "failure target=read"
 ```

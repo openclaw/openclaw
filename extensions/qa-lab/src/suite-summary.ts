@@ -3,7 +3,7 @@ import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: unknown[];
   details?: string;
   runtimeParity?: RuntimeParityResult;

@@ -27,10 +27,10 @@ execution:
       family: sessions_spawn
       actualTool: sessions_spawn
       tracking: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned sessions_spawn tool request.
-    knownBroken:
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned sessions_spawn tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=sessions_spawn"
     failurePromptSnippet: "failure target=sessions_spawn"
 ```

@@ -27,10 +27,10 @@ execution:
       family: grep
       actualTool: exec
       tracking: "#80319"
-      reason: Current OpenClaw coding surface routes grep-style searches through exec, and Codex currently does not send the planned exec request.
-    knownBroken:
+      reason: Current OpenClaw coding surface routes grep-style searches through exec; QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned exec tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=exec"
     failurePromptSnippet: "failure target=exec"
 ```

@@ -218,6 +218,21 @@ describe("qa tool coverage report", () => {
         "web-fetch",
       ]),
     );
+    const applyPatchRow = report.rows.find((row) => row.tool === "apply-patch");
+    expect(applyPatchRow).toEqual(expect.objectContaining({ bucket: "required-default" }));
+    expect(applyPatchRow).toEqual(
+      expect.objectContaining({
+        tracking:
+          "#80320 QA mock apply_patch fixture still uses synthetic failure-path inputs; provider remap fixed tool exposure, but failure injection remains harness-only.",
+      }),
+    );
+    expect(report.rows.find((row) => row.tool === "message-tool")).toEqual(
+      expect.objectContaining({
+        bucket: "optional-plugin",
+        tracking:
+          "Direct message is not part of the coding-profile default surface; session messaging uses sessions_send.",
+      }),
+    );
     expect(report.rows.find((row) => row.tool === "tavily-search")).toEqual(
       expect.objectContaining({
         tracking:

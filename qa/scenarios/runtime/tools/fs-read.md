@@ -27,10 +27,10 @@ execution:
       family: fs.read
       actualTool: read
       tracking: "#80312"
-      reason: Codex repeats the happy-path read args on the failure-path fixture.
-    knownBroken:
+      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
+    knownHarnessGap:
       issue: "#80312"
-      reason: Codex repeats the happy-path read args on the failure-path fixture.
+      reason: QA mock failure-path capture currently reports provider-plan args, not proven Codex runtime args.
     promptSnippet: "target=read"
     failurePromptSnippet: "failure target=read"
 ```

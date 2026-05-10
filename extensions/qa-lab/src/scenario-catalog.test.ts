@@ -137,6 +137,8 @@ describe("qa scenario catalog", () => {
     expect(readQaScenarioById("approval-turn-tool-followthrough").runtimeParityTier).toBe(
       "standard",
     );
+    expect(readQaScenarioById("runtime-tool-apply-patch").runtimeParityTier).toBe("standard");
+    expect(readQaScenarioById("runtime-tool-message-tool").runtimeParityTier).toBe("optional");
     expect(readQaScenarioById("runtime-tool-tavily-search").runtimeParityTier).toBe("optional");
     expect(readQaScenarioById("runtime-soak-100-turn").runtimeParityTier).toBe("soak");
   });

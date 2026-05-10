@@ -210,7 +210,7 @@ describe("runtime parity", () => {
     expect(result.drift).toBe("tool-result-shape");
   });
 
-  it("prefers provider-side mock request snapshots for tool call rows", async () => {
+  it("captures provider-side mock request snapshots separately from runtime tool calls", async () => {
     const tempRoot = await createRuntimeParityGatewayTempRoot('{"message":{"role":"assistant"}}\n');
     vi.stubGlobal(
       "fetch",
@@ -244,7 +244,8 @@ describe("runtime parity", () => {
       mockBaseUrl: "http://127.0.0.1:9999",
     });
 
-    expect(cell.toolCalls).toEqual([
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toEqual([
       {
         tool: "read",
         argsHash: stableHashForTest({ path: "QA_KICKOFF_TASK.md" }),
@@ -256,7 +257,7 @@ describe("runtime parity", () => {
     ]);
   });
 
-  it("captures chained provider-side tool plans and error outputs in request order", async () => {
+  it("keeps chained provider-side tool plans diagnostic instead of classifier-authoritative", async () => {
     const tempRoot = await createRuntimeParityGatewayTempRoot('{"message":{"role":"assistant"}}\n');
     vi.stubGlobal(
       "fetch",
@@ -298,7 +299,8 @@ describe("runtime parity", () => {
       mockBaseUrl: "http://127.0.0.1:9999",
     });
 
-    expect(cell.toolCalls).toEqual([
+    expect(cell.toolCalls).toEqual([]);
+    expect(cell.providerPlanToolCalls).toEqual([
       {
         tool: "read",
         argsHash: stableHashForTest({ path: "audit-fixture/README.md" }),

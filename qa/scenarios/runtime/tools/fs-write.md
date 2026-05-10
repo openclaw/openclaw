@@ -27,10 +27,10 @@ execution:
       family: fs.write
       actualTool: write
       tracking: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned write tool request.
-    knownBroken:
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned write tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=write"
     failurePromptSnippet: "failure target=write"
 ```

@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import type { RuntimeParityResult } from "./runtime-parity.js";
+import { readQaScenarioById } from "./scenario-catalog.js";
 import { qaSuiteProgressTesting, runQaSuite } from "./suite.js";
 
 describe("qa suite", () => {
@@ -116,7 +118,7 @@ describe("qa suite", () => {
     });
   });
 
-  it("remaps mock-openai model refs onto the app-server OpenAI provider for codex cells only", () => {
+  it("remaps mock-openai model refs onto the OpenAI provider for both forced runtime cells", () => {
     expect(
       qaSuiteProgressTesting.remapModelRefForForcedRuntime({
         modelRef: "mock-openai/gpt-5.5",
@@ -130,6 +132,57 @@ describe("qa suite", () => {
         providerMode: "mock-openai",
         forcedRuntime: "pi",
       }),
-    ).toBe("mock-openai/gpt-5.5");
+    ).toBe("openai/gpt-5.5");
+  });
+
+  it("treats tracked harness-gap drift as report-only unless a runtime cell failed", () => {
+    const scenario = readQaScenarioById("runtime-tool-fs-read");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "tool-call-shape",
+      driftDetails: "Pi called read but Codex did not expose the mock fixture tool",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("QA mock failure-path capture");
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result: {
+          ...result,
+          cells: {
+            ...result.cells,
+            codex: {
+              ...result.cells.codex,
+              runtimeErrorClass: "runtime-crash",
+            },
+          },
+        },
+      }),
+    ).toBeUndefined();
   });
 });

@@ -12,6 +12,7 @@ type QaRuntimeToolFixtureConfig = {
   ensureImageGeneration?: unknown;
   expectedAvailable?: unknown;
   knownBroken?: unknown;
+  knownHarnessGap?: unknown;
 };
 
 type QaRuntimeToolFixtureRequest = {
@@ -51,6 +52,10 @@ function readBoolean(value: unknown, fallback: boolean) {
 }
 
 function isKnownBroken(value: unknown) {
+  return Boolean(value && typeof value === "object");
+}
+
+function isKnownHarnessGap(value: unknown) {
   return Boolean(value && typeof value === "object");
 }
 
@@ -100,6 +105,24 @@ function formatKnownBrokenDetails(
     .join("\n");
 }
 
+function formatExpectedUnavailableDetails(toolName: string, tools: Set<string>) {
+  return [
+    `expected-unavailable ${toolName}: this fixture is report-only for the current profile`,
+    `available tools: ${[...tools].toSorted().join(", ")}`,
+  ].join("\n");
+}
+
+function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFixtureConfig) {
+  const knownHarnessGap = isKnownHarnessGap(config.knownHarnessGap)
+    ? (config.knownHarnessGap as Record<string, unknown>)
+    : {};
+  const issue = readString(knownHarnessGap.issue);
+  const reason = readString(knownHarnessGap.reason, "known QA harness gap");
+  return [`known-harness-gap ${toolName}: ${reason}`, issue ? `tracking: ${issue}` : undefined]
+    .filter(Boolean)
+    .join("\n");
+}
+
 export async function runRuntimeToolFixture(
   env: QaSuiteRuntimeEnv,
   config: QaRuntimeToolFixtureConfig,
@@ -122,8 +145,14 @@ export async function runRuntimeToolFixture(
   const tools = await deps.readEffectiveTools(env, sessionKey);
   const expectedAvailable = readBoolean(config.expectedAvailable, true);
   if (!tools.has(toolName)) {
-    if (!expectedAvailable || isKnownBroken(config.knownBroken)) {
+    if (!expectedAvailable) {
+      return formatExpectedUnavailableDetails(toolName, tools);
+    }
+    if (isKnownBroken(config.knownBroken)) {
       return formatKnownBrokenDetails(toolName, tools, config);
+    }
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
     }
     throw new Error(
       `${toolName} not present in effective tools. Available tools: ${[...tools].toSorted().join(", ")}`,
@@ -173,6 +202,9 @@ export async function runRuntimeToolFixture(
     toolName,
   });
   if (!happyRequest) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
     throw new Error(`expected mock happy-path request for ${toolName}`);
   }
   const failureRequest = findPlannedRequest({
@@ -182,6 +214,9 @@ export async function runRuntimeToolFixture(
     toolName,
   });
   if (!failureRequest) {
+    if (isKnownHarnessGap(config.knownHarnessGap)) {
+      return formatKnownHarnessGapDetails(toolName, config);
+    }
     throw new Error(`expected mock failure-path request for ${toolName}`);
   }
 

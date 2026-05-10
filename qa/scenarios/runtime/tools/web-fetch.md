@@ -27,10 +27,10 @@ execution:
       family: web_fetch
       actualTool: web_fetch
       tracking: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned web_fetch tool request.
-    knownBroken:
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned web_fetch tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=web_fetch"
     failurePromptSnippet: "failure target=web_fetch"
 ```

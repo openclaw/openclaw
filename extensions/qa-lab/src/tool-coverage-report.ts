@@ -119,11 +119,16 @@ function readScenarioTracking(scenario: QaSeedScenarioWithSource): string | unde
   const config = scenario.execution.config;
   const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
   const knownBroken = isRecord(config?.knownBroken) ? config.knownBroken : undefined;
+  const knownHarnessGap = isRecord(config?.knownHarnessGap) ? config.knownHarnessGap : undefined;
   const issue =
     readString(toolCoverage?.tracking) ??
     readString(toolCoverage?.issue) ??
+    readString(knownHarnessGap?.issue) ??
     readString(knownBroken?.issue);
-  const reason = readString(toolCoverage?.reason) ?? readString(knownBroken?.reason);
+  const reason =
+    readString(toolCoverage?.reason) ??
+    readString(knownHarnessGap?.reason) ??
+    readString(knownBroken?.reason);
   if (issue && reason) {
     return `${issue} ${reason}`;
   }

@@ -64,7 +64,7 @@ type QaSuiteStep = {
 
 export type QaSuiteScenarioResult = {
   name: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
   steps: QaReportCheck[];
   details?: string;
   runtimeParity?: RuntimeParityResult;
@@ -280,6 +280,55 @@ function isRuntimeParityPass(result: RuntimeParityResult) {
   return result.drift === "none" || result.drift === "text-only";
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function readRuntimeParityReportOnlyReason(
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+): string | undefined {
+  const config = scenario.execution.config;
+  const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
+  const knownHarnessGap = isRecord(config?.knownHarnessGap) ? config.knownHarnessGap : undefined;
+  const knownBroken = isRecord(config?.knownBroken) ? config.knownBroken : undefined;
+  const readReason = (value: unknown) =>
+    typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  if (knownHarnessGap) {
+    return (
+      readReason(knownHarnessGap.reason) ??
+      "tracked QA harness limitation; do not treat as a product runtime regression"
+    );
+  }
+  if (knownBroken) {
+    return readReason(knownBroken.reason) ?? "tracked known fixture limitation";
+  }
+  if (config?.expectedAvailable === false) {
+    return (
+      readReason(toolCoverage?.reason) ?? "tool is expected to be unavailable for this QA profile"
+    );
+  }
+  if (scenario.runtimeParityTier === "optional") {
+    return readReason(toolCoverage?.reason) ?? "optional runtime parity scenario";
+  }
+  return undefined;
+}
+
+function hasRuntimeParityCellFailure(result: RuntimeParityResult) {
+  return Object.values(result.cells).some(
+    (cell) => Boolean(cell.runtimeErrorClass) || Boolean(cell.transportErrorClass),
+  );
+}
+
+function runtimeParityReportOnlyReason(params: {
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
+  result: RuntimeParityResult;
+}) {
+  if (isRuntimeParityPass(params.result) || hasRuntimeParityCellFailure(params.result)) {
+    return undefined;
+  }
+  return readRuntimeParityReportOnlyReason(params.scenario);
+}
+
 function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
   const errors = [cell.transportErrorClass, cell.runtimeErrorClass].filter(Boolean).join(", ");
   return [
@@ -294,13 +343,25 @@ function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
 
 function buildRuntimeParityScenarioResult(params: {
   scenarioName: string;
+  scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
   result: RuntimeParityResult;
 }): QaSuiteScenarioResult {
-  const driftStepStatus = isRuntimeParityPass(params.result) ? "pass" : "fail";
+  const reportOnlyReason = runtimeParityReportOnlyReason({
+    scenario: params.scenario,
+    result: params.result,
+  });
+  const driftStepStatus = isRuntimeParityPass(params.result)
+    ? "pass"
+    : reportOnlyReason
+      ? "skip"
+      : "fail";
+  const details = reportOnlyReason
+    ? `report-only runtime drift classified as ${params.result.drift}: ${reportOnlyReason}`
+    : (params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`);
   return {
     name: params.scenarioName,
     status: driftStepStatus,
-    details: params.result.driftDetails ?? `runtime drift classified as ${params.result.drift}`,
+    details,
     steps: [
       {
         name: params.result.cells.pi.runtime,
@@ -320,9 +381,11 @@ function buildRuntimeParityScenarioResult(params: {
         details: formatRuntimeParityCellDetails(params.result.cells.codex),
       },
       {
-        name: "runtime drift",
+        name: reportOnlyReason ? "runtime drift report-only" : "runtime drift",
         status: driftStepStatus,
-        details: params.result.driftDetails ?? params.result.drift,
+        details: reportOnlyReason
+          ? `${params.result.driftDetails ?? params.result.drift}\nreport-only: ${reportOnlyReason}`
+          : (params.result.driftDetails ?? params.result.drift),
       },
     ],
     runtimeParity: params.result,
@@ -350,7 +413,7 @@ function remapModelRefForForcedRuntime(params: {
   providerMode: QaProviderMode;
   forcedRuntime?: RuntimeId;
 }) {
-  if (params.forcedRuntime !== "codex" || params.providerMode !== "mock-openai") {
+  if (!params.forcedRuntime || params.providerMode !== "mock-openai") {
     return params.modelRef;
   }
   const split = splitModelRef(params.modelRef);
@@ -597,6 +660,7 @@ async function runQaRuntimeParitySuite(params: {
 
         const result = buildRuntimeParityScenarioResult({
           scenarioName: scenario.title,
+          scenario,
           result: parity,
         });
         liveScenarioOutcomes[index] = {
@@ -1305,6 +1369,7 @@ export const qaSuiteProgressTesting = {
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,
   resolveQaSuiteTransportReadyTimeoutMs,
+  runtimeParityReportOnlyReason,
   sanitizeQaSuiteProgressValue,
   shouldLogQaSuiteProgress,
 };

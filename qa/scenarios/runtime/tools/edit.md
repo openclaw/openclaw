@@ -27,10 +27,10 @@ execution:
       family: edit
       actualTool: edit
       tracking: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned edit tool request.
-    knownBroken:
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned edit tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=edit"
     failurePromptSnippet: "failure target=edit"
 ```

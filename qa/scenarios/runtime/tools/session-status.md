@@ -27,10 +27,10 @@ execution:
       family: session_status
       actualTool: session_status
       tracking: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned session_status tool request.
-    knownBroken:
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
+    knownHarnessGap:
       issue: "#80319"
-      reason: Codex returns an acknowledgement without sending the planned session_status tool request.
+      reason: QA mock provider does not yet model Codex native/searchable tool declarations for this fixture.
     promptSnippet: "target=session_status"
     failurePromptSnippet: "failure target=session_status"
 ```

@@ -60,6 +60,7 @@ export type RuntimeParityCell = {
   runtime: RuntimeId;
   transcriptBytes: string;
   toolCalls: RuntimeParityToolCall[];
+  providerPlanToolCalls?: RuntimeParityToolCall[];
   finalText: string;
   usage: RuntimeParityUsage;
   wallClockMs: number;
@@ -87,7 +88,7 @@ export type RuntimeParityResult = {
 };
 
 export type RuntimeParityScenarioExecution = {
-  scenarioStatus: "pass" | "fail";
+  scenarioStatus: "pass" | "fail" | "skip";
   scenarioDetails?: string;
   cell: RuntimeParityCell;
 };
@@ -99,7 +100,7 @@ type QaGatewayLike = {
 
 type QaSuiteScenarioLike = {
   details?: string;
-  status: "pass" | "fail";
+  status: "pass" | "fail" | "skip";
 };
 
 type RuntimeParityCaptureParams = {
@@ -785,8 +786,8 @@ function isHardFailureRuntimeError(errorClass: string | undefined) {
 function classifyRuntimeParityCells(params: {
   pi: RuntimeParityCell;
   codex: RuntimeParityCell;
-  piScenarioStatus: "pass" | "fail";
-  codexScenarioStatus: "pass" | "fail";
+  piScenarioStatus: "pass" | "fail" | "skip";
+  codexScenarioStatus: "pass" | "fail" | "skip";
 }): Pick<RuntimeParityResult, "drift" | "driftDetails"> {
   if (
     isHardFailureRuntimeError(params.pi.runtimeErrorClass) ||
@@ -1032,7 +1033,7 @@ export async function captureRuntimeParityCell(
     agentId,
   });
   const transcriptRecords = buildTranscriptRecords(transcriptBytes);
-  const mockToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
+  const providerPlanToolCalls = await loadRuntimeParityMockToolCalls(params.mockBaseUrl);
   const systemPromptReport = await loadRuntimeParitySystemPromptReport({
     gateway: params.gateway,
     agentId,
@@ -1044,7 +1045,8 @@ export async function captureRuntimeParityCell(
   return {
     runtime: params.runtime,
     transcriptBytes,
-    toolCalls: mockToolCalls ?? resolveToolCallOrder(transcriptRecords),
+    toolCalls: resolveToolCallOrder(transcriptRecords),
+    ...(providerPlanToolCalls ? { providerPlanToolCalls } : {}),
     finalText: extractFinalAssistantText(transcriptRecords),
     usage: aggregateUsage(transcriptRecords),
     wallClockMs: params.wallClockMs,
