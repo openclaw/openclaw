@@ -175,14 +175,9 @@ async function authorizeSlackInboundMessage(params: {
   const { isDirectMessage, channelName, resolvedChannelType, isBotMessage, allowBots } =
     conversation;
 
-  if (isBotMessage) {
-    if (message.user && ctx.botUserId && message.user === ctx.botUserId) {
-      return null;
-    }
-    if (!allowBots) {
-      logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
-      return null;
-    }
+  if (isBotMessage && !allowBots) {
+    logVerbose(`slack: drop bot message ${message.bot_id ?? "unknown"} (allowBots=false)`);
+    return null;
   }
 
   if (isDirectMessage && !message.user) {
