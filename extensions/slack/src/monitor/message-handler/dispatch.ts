@@ -1541,8 +1541,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
             await startProgressDecision();
           });
         },
-        suppressDefaultToolProgressMessages:
-          progressPlanStreamingEnabled || previewToolProgressEnabled ? true : undefined,
+        suppressDefaultToolProgressMessages: previewToolProgressEnabled ? true : undefined,
         onPartialReply: useStreaming
           ? undefined
           : !previewStreamingEnabled || progressPlanStreamingEnabled

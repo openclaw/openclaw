@@ -501,9 +501,9 @@ describe("dispatchPreparedSlackMessage progress plan routing", () => {
     expect(startSlackPlanMessageMock).not.toHaveBeenCalled();
   });
 
-  it("suppresses default plaintext tool progress when native progress-plan streaming is active", async () => {
+  it("keeps default status progress messages available while native progress-plan streaming is active", async () => {
     dispatchInboundMessageImpl = async (params) => {
-      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      expect(params.replyOptions?.suppressDefaultToolProgressMessages).toBeUndefined();
       await params.replyOptions?.onAssistantMessageStart?.();
       await params.dispatcher.deliver({ text: "final answer" }, { kind: "final" });
       return {
