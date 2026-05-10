@@ -7,6 +7,19 @@ export type ModelOverrideSelection = {
   isDefault?: boolean;
 };
 
+function clearFallbackOrigin(entry: SessionEntry): boolean {
+  let updated = false;
+  if (entry.modelOverrideFallbackOriginProvider !== undefined) {
+    delete entry.modelOverrideFallbackOriginProvider;
+    updated = true;
+  }
+  if (entry.modelOverrideFallbackOriginModel !== undefined) {
+    delete entry.modelOverrideFallbackOriginModel;
+    updated = true;
+  }
+  return updated;
+}
+
 export function applyModelOverrideToSessionEntry(params: {
   entry: SessionEntry;
   selection: ModelOverrideSelection;
@@ -36,6 +49,7 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelOverrideSource;
       updated = true;
     }
+    updated = clearFallbackOrigin(entry) || updated;
   } else {
     if (entry.providerOverride !== selection.provider) {
       entry.providerOverride = selection.provider;
@@ -51,6 +65,7 @@ export function applyModelOverrideToSessionEntry(params: {
       entry.modelOverrideSource = selectionSource;
       updated = true;
     }
+    updated = clearFallbackOrigin(entry) || updated;
   }
 
   // Model overrides supersede previously recorded runtime model identity.

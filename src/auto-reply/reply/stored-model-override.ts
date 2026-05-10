@@ -1,4 +1,8 @@
-import { resolvePersistedOverrideModelRef } from "../../agents/model-selection.js";
+import {
+  modelKey,
+  normalizeModelRef,
+  resolvePersistedOverrideModelRef,
+} from "../../agents/model-selection.js";
 import { resolveSessionParentSessionKey } from "../../channels/plugins/session-conversation.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
@@ -56,4 +60,69 @@ export function resolveStoredModelOverride(params: {
     return null;
   }
   return { ...parentOverride, source: "parent" };
+}
+
+function resolveModelRefKey(params: {
+  defaultProvider: string;
+  overrideProvider?: string;
+  overrideModel?: string;
+}): string | null {
+  const ref = resolvePersistedOverrideModelRef(params);
+  if (!ref) {
+    return null;
+  }
+  const normalized = normalizeModelRef(ref.provider, ref.model);
+  return modelKey(normalized.provider, normalized.model);
+}
+
+export function isStaleHeartbeatAutoFallbackOverride(params: {
+  isHeartbeat?: boolean;
+  hasResolvedHeartbeatModelOverride?: boolean;
+  sessionEntry?: SessionEntry;
+  storedOverride?: StoredModelOverride | null;
+  defaultProvider: string;
+  defaultModel: string;
+}): boolean {
+  if (params.isHeartbeat !== true || params.hasResolvedHeartbeatModelOverride === true) {
+    return false;
+  }
+  if (params.storedOverride?.source !== "session") {
+    return false;
+  }
+  if (params.sessionEntry?.modelOverrideSource !== "auto") {
+    return false;
+  }
+
+  const defaultKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.defaultProvider,
+    overrideModel: params.defaultModel,
+  });
+  if (!defaultKey) {
+    return false;
+  }
+
+  const originKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.sessionEntry.modelOverrideFallbackOriginProvider,
+    overrideModel: params.sessionEntry.modelOverrideFallbackOriginModel,
+  });
+  if (originKey) {
+    return originKey !== defaultKey;
+  }
+
+  const noticeSelectedKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideModel: normalizeOptionalString(params.sessionEntry.fallbackNoticeSelectedModel),
+  });
+  if (noticeSelectedKey) {
+    return noticeSelectedKey !== defaultKey;
+  }
+
+  const storedOverrideKey = resolveModelRefKey({
+    defaultProvider: params.defaultProvider,
+    overrideProvider: params.storedOverride.provider,
+    overrideModel: params.storedOverride.model,
+  });
+  return storedOverrideKey !== null && storedOverrideKey !== defaultKey;
 }

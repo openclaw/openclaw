@@ -3652,6 +3652,8 @@ describe("runAgentTurnWithFallback", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
       modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
     });
