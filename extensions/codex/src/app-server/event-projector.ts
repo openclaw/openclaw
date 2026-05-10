@@ -816,29 +816,24 @@ export class CodexAppServerEventProjector {
       typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
     const durationMs =
       itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
-    if (params.status === "blocked") {
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.blocked",
-        ...base,
-        reason: "codex_native_tool_blocked",
-        deniedReason: "codex_native_tool_blocked",
-      });
-      return;
-    }
-    if (params.status === "failed") {
-      emitTrustedDiagnosticEvent({
-        type: "tool.execution.error",
-        ...base,
-        durationMs,
-        errorCategory: "codex_native_tool_error",
-      });
-      return;
-    }
-    emitTrustedDiagnosticEvent({
-      type: "tool.execution.completed",
-      ...base,
-      durationMs,
-    });
+    const terminalEvent =
+      params.status === "blocked"
+        ? {
+            type: "tool.execution.blocked" as const,
+            reason: "codex_native_tool_blocked",
+            deniedReason: "codex_native_tool_blocked",
+          }
+        : params.status === "failed"
+          ? {
+              type: "tool.execution.error" as const,
+              durationMs,
+              errorCategory: "codex_native_tool_error",
+            }
+          : {
+              type: "tool.execution.completed" as const,
+              durationMs,
+            };
+    emitTrustedDiagnosticEvent({ ...base, ...terminalEvent });
   }
 
   private emitToolResultSummary(item: CodexThreadItem | undefined): void {
