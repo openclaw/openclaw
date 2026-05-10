@@ -41,6 +41,7 @@ type UsageSummaryOptions = {
   env?: NodeJS.ProcessEnv;
   fetch?: typeof fetch;
   skipPluginAuthWithoutCredentialSource?: boolean;
+  allowOAuthRefresh?: boolean;
 };
 
 type ProviderAuthResolutionResult =
@@ -102,6 +103,7 @@ export async function loadProviderUsageSummary(
     config,
     env,
     skipPluginAuthWithoutCredentialSource: opts.skipPluginAuthWithoutCredentialSource,
+    allowOAuthRefresh: opts.allowOAuthRefresh,
   });
   const authResult = await withTimeout<ProviderAuthResolutionResult>(
     authPromise.then((auths) => ({ auths, timedOut: false })),
