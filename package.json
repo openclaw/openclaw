@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.5.8",
+  "version": "2026.5.10-beta.1",
   "description": "Multi-channel AI gateway with extensible messaging integrations",
   "keywords": [],
   "homepage": "https://github.com/openclaw/openclaw#readme",
@@ -83,7 +83,6 @@
     "scripts/lib/official-external-plugin-catalog.json",
     "scripts/lib/official-external-provider-catalog.json",
     "scripts/lib/package-dist-imports.mjs",
-    "scripts/lib/bundled-runtime-deps-install.mjs",
     "scripts/postinstall-bundled-plugins.mjs",
     "scripts/windows-cmd-helpers.mjs"
   ],
@@ -214,6 +213,10 @@
     "./plugin-sdk/config-runtime": {
       "types": "./dist/plugin-sdk/config-runtime.d.ts",
       "default": "./dist/plugin-sdk/config-runtime.js"
+    },
+    "./plugin-sdk/config-contracts": {
+      "types": "./dist/plugin-sdk/config-contracts.d.ts",
+      "default": "./dist/plugin-sdk/config-contracts.js"
     },
     "./plugin-sdk/config-types": {
       "types": "./dist/plugin-sdk/config-types.d.ts",
@@ -619,6 +622,10 @@
       "types": "./dist/plugin-sdk/agent-config-primitives.d.ts",
       "default": "./dist/plugin-sdk/agent-config-primitives.js"
     },
+    "./plugin-sdk/access-groups": {
+      "types": "./dist/plugin-sdk/access-groups.d.ts",
+      "default": "./dist/plugin-sdk/access-groups.js"
+    },
     "./plugin-sdk/allow-from": {
       "types": "./dist/plugin-sdk/allow-from.d.ts",
       "default": "./dist/plugin-sdk/allow-from.js"
@@ -802,6 +809,14 @@
     "./plugin-sdk/channel-lifecycle": {
       "types": "./dist/plugin-sdk/channel-lifecycle.d.ts",
       "default": "./dist/plugin-sdk/channel-lifecycle.js"
+    },
+    "./plugin-sdk/channel-ingress": {
+      "types": "./dist/plugin-sdk/channel-ingress.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress.js"
+    },
+    "./plugin-sdk/channel-ingress-runtime": {
+      "types": "./dist/plugin-sdk/channel-ingress-runtime.d.ts",
+      "default": "./dist/plugin-sdk/channel-ingress-runtime.js"
     },
     "./plugin-sdk/channel-message": {
       "types": "./dist/plugin-sdk/channel-message.d.ts",
@@ -1251,6 +1266,10 @@
       "types": "./dist/plugin-sdk/text-autolink-runtime.d.ts",
       "default": "./dist/plugin-sdk/text-autolink-runtime.js"
     },
+    "./plugin-sdk/text-utility-runtime": {
+      "types": "./dist/plugin-sdk/text-utility-runtime.d.ts",
+      "default": "./dist/plugin-sdk/text-utility-runtime.js"
+    },
     "./plugin-sdk/tool-payload": {
       "types": "./dist/plugin-sdk/tool-payload.d.ts",
       "default": "./dist/plugin-sdk/tool-payload.js"
@@ -1356,6 +1375,7 @@
     "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
     "crabbox:stop": "node scripts/crabbox-wrapper.mjs stop",
     "crabbox:warmup": "node scripts/crabbox-wrapper.mjs warmup",
+    "discord:opus:install": "node scripts/install-discord-native-opus.mjs",
     "deadcode:ci": "pnpm deadcode:report:ci:knip && pnpm deadcode:report:ci:ts-unused",
     "deadcode:dependencies": "pnpm --config.minimum-release-age=0 dlx knip@6.8.0 --config config/knip.config.ts --production --no-progress --reporter compact --dependencies --no-config-hints",
     "deadcode:knip": "pnpm dlx knip --config config/knip.config.ts --production --no-progress --reporter compact --files --dependencies",
@@ -1419,6 +1439,7 @@
     "lint:docker-e2e": "node scripts/check-docker-e2e-boundaries.mjs",
     "lint:docs": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc",
     "lint:docs:fix": "pnpm dlx --config.resolution-mode=highest markdownlint-cli2 --config config/markdownlint-cli2.jsonc --fix",
+    "lint:extensions:no-deprecated-channel-access": "node --import tsx scripts/check-no-deprecated-channel-access.ts",
     "lint:extensions": "node scripts/run-oxlint.mjs --tsconfig config/tsconfig/oxlint.extensions.json extensions",
     "lint:extensions:bundled": "node scripts/run-bundled-extension-oxlint.mjs",
     "lint:extensions:channels": "node scripts/run-extension-channel-oxlint.mjs",
@@ -1457,6 +1478,8 @@
     "plugin-sdk:api:check": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --check",
     "plugin-sdk:api:gen": "node --max-old-space-size=8192 --import tsx scripts/generate-plugin-sdk-api-baseline.ts --write",
     "plugin-sdk:check-exports": "node scripts/sync-plugin-sdk-exports.mjs --check",
+    "plugin-sdk:surface": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs",
+    "plugin-sdk:surface:check": "node --max-old-space-size=8192 scripts/plugin-sdk-surface-report.mjs --check",
     "plugin-sdk:sync-exports": "node scripts/sync-plugin-sdk-exports.mjs",
     "plugin-sdk:usage": "node --import tsx scripts/analyze-plugin-sdk-usage.ts",
     "plugins:boundary-report": "node --import tsx scripts/plugin-boundary-report.ts",
@@ -1493,6 +1516,7 @@
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
+    "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
@@ -1643,6 +1667,7 @@
     "test:sectriage": "OPENCLAW_GATEWAY_PROJECT_SHARDS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts && node scripts/run-vitest.mjs run --config test/vitest/vitest.unit.config.ts --exclude src/daemon/launchd.integration.test.ts --exclude src/process/exec.test.ts",
     "test:serial": "OPENCLAW_TEST_PROJECTS_SERIAL=1 OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/test-projects.mjs",
     "test:stability:gateway": "OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.gateway.config.ts src/gateway/gateway-stability.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.logging.config.ts src/logging/diagnostic-stability-bundle.test.ts && OPENCLAW_VITEST_MAX_WORKERS=1 node scripts/run-vitest.mjs run --config test/vitest/vitest.infra.config.ts src/infra/fatal-error-hooks.test.ts",
+    "test:cli-response:contract": "node scripts/build-all.mjs cliStartup && node scripts/test-cli-startup-bench-budget.mjs --preset response --runs 1 --warmup 0 --timeout-ms 10000 --skip-baseline",
     "test:startup:bench": "node --import tsx scripts/bench-cli-startup.ts",
     "test:startup:bench:check": "node scripts/test-cli-startup-bench-budget.mjs",
     "test:startup:bench:save": "node --import tsx scripts/bench-cli-startup.ts --preset all --runs 5 --warmup 1 --output .artifacts/cli-startup-bench-all.json",
@@ -1688,15 +1713,15 @@
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "0.21.0",
-    "@anthropic-ai/sdk": "0.95.0",
+    "@anthropic-ai/sdk": "0.95.1",
     "@anthropic-ai/vertex-sdk": "^0.16.0",
-    "@aws-sdk/client-bedrock": "3.1044.0",
-    "@aws-sdk/client-bedrock-runtime": "3.1044.0",
+    "@aws-sdk/client-bedrock": "3.1045.0",
+    "@aws-sdk/client-bedrock-runtime": "3.1045.0",
     "@aws-sdk/credential-provider-node": "3.972.39",
     "@aws/bedrock-token-generator": "^1.1.0",
     "@clack/core": "^1.3.0",
     "@clack/prompts": "^1.3.0",
-    "@google/genai": "^1.52.0",
+    "@google/genai": "^2.0.1",
     "@grammyjs/runner": "^2.0.3",
     "@grammyjs/transformer-throttler": "^1.2.1",
     "@homebridge/ciao": "^1.3.8",
@@ -1709,7 +1734,7 @@
     "@mozilla/readability": "^0.6.0",
     "@openclaw/fs-safe": "github:openclaw/fs-safe#c7ccb99d3058f2acf2ad2758ad2470c7e113a53c",
     "@slack/bolt": "^4.7.2",
-    "@slack/types": "^2.21.0",
+    "@slack/types": "^2.21.1",
     "@slack/web-api": "^7.15.2",
     "ajv": "^8.20.0",
     "chalk": "^5.6.2",
@@ -1726,18 +1751,18 @@
     "jiti": "^2.7.0",
     "json5": "^2.2.3",
     "jszip": "^3.10.1",
-    "kysely": "0.28.17",
+    "kysely": "0.29.0",
     "linkedom": "^0.18.12",
     "markdown-it": "14.1.1",
     "minimatch": "10.2.5",
     "node-edge-tts": "^1.2.10",
-    "openai": "^6.36.0",
+    "openai": "^6.37.0",
     "openshell": "0.1.0",
     "pdfjs-dist": "^5.7.284",
     "playwright-core": "1.59.1",
     "proxy-agent": "^8.0.1",
     "qrcode": "1.5.4",
-    "tar": "7.5.14",
+    "tar": "7.5.15",
     "tokenjuice": "0.7.0",
     "tree-sitter-bash": "^0.25.1",
     "tslog": "^4.10.2",
@@ -1751,7 +1776,7 @@
   },
   "devDependencies": {
     "@a2ui/lit": "0.9.3",
-    "@copilotkit/aimock": "1.19.0",
+    "@copilotkit/aimock": "1.19.5",
     "@grammyjs/types": "^3.26.0",
     "@lit-labs/signals": "^0.2.0",
     "@lit/context": "^1.1.6",
@@ -1760,16 +1785,16 @@
     "@types/markdown-it": "^14.1.2",
     "@types/node": "25.6.2",
     "@types/ws": "^8.18.1",
-    "@typescript/native-preview": "7.0.0-dev.20260509.2",
+    "@typescript/native-preview": "7.0.0-dev.20260510.1",
     "@vitest/coverage-v8": "^4.1.5",
-    "jscpd": "4.0.9",
+    "jscpd": "4.1.0",
     "jsdom": "^29.1.1",
     "lit": "^3.3.2",
     "oxfmt": "0.48.0",
     "oxlint": "^1.63.0",
     "oxlint-tsgolint": "^0.22.1",
     "signal-utils": "0.21.1",
-    "tsdown": "0.21.10",
+    "tsdown": "0.22.0",
     "tsx": "^4.21.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.5"
@@ -1792,10 +1817,10 @@
   "packageManager": "pnpm@10.33.2+sha512.a90faf6feeab71ad6c6e57f94e0fe1a12f5dcc22cd754db40ae9593eb6a3e0b6b12e3540218bb37ae083404b1f2ce6db2a4121e979829b4aff94b99f49da1cf8",
   "pnpm": {
     "overrides": {
-      "@anthropic-ai/sdk": "0.95.0",
-      "hono": "4.12.14",
+      "@anthropic-ai/sdk": "0.95.1",
+      "hono": "4.12.18",
       "@hono/node-server": "1.19.14",
-      "@aws-sdk/client-bedrock-runtime": "3.1044.0",
+      "@aws-sdk/client-bedrock-runtime": "3.1045.0",
       "axios": "1.16.0",
       "fast-uri": "3.1.2",
       "follow-redirects": "1.16.0",
@@ -1812,7 +1837,7 @@
       "qs": "6.14.2",
       "node-domexception": "npm:@nolyfill/domexception@1.0.28",
       "typebox": "1.1.38",
-      "tar": "7.5.14",
+      "tar": "7.5.15",
       "tough-cookie": "4.1.3",
       "yauzl": "3.2.1",
       "protobufjs": "7.5.5",
@@ -1820,13 +1845,12 @@
     },
     "onlyBuiltDependencies": [
       "@openclaw/fs-safe",
-      "@discordjs/opus",
       "@google/genai",
       "@lydell/node-pty",
       "@matrix-org/matrix-sdk-crypto-nodejs",
       "@tloncorp/api",
       "@tloncorp/tlon-skill",
-      "@whiskeysockets/baileys",
+      "baileys",
       "@whiskeysockets/libsignal-node",
       "authenticate-pam",
       "esbuild",
@@ -1835,6 +1859,7 @@
       "sharp"
     ],
     "ignoredBuiltDependencies": [
+      "@discordjs/opus",
       "koffi",
       "tree-sitter-bash"
     ],
@@ -1851,8 +1876,8 @@
       }
     },
     "patchedDependencies": {
-      "@whiskeysockets/baileys@7.0.0-rc.9": "patches/@whiskeysockets__baileys@7.0.0-rc.9.patch",
-      "@agentclientprotocol/claude-agent-acp@0.32.0": "patches/@agentclientprotocol__claude-agent-acp@0.32.0.patch"
+      "baileys@7.0.0-rc10": "patches/baileys@7.0.0-rc10.patch",
+      "@agentclientprotocol/claude-agent-acp@0.33.1": "patches/@agentclientprotocol__claude-agent-acp@0.33.1.patch"
     }
   }
 }

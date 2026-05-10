@@ -334,6 +334,52 @@ describe("buildProbeTargets reason codes", () => {
     });
   });
 
+  it("prefers live Anthropic Haiku 4.5 catalog entries over stale Claude 3 probes", async () => {
+    mockStore = {
+      version: 1,
+      profiles: {},
+      order: {},
+    };
+    loadModelCatalogMock.mockResolvedValueOnce([
+      { provider: "anthropic", id: "claude-3-haiku-20240307", name: "Claude Haiku 3" },
+      {
+        provider: "anthropic",
+        id: "claude-haiku-4-5-20251001",
+        name: "Claude Haiku 4.5",
+      },
+      { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ]);
+
+    const plan = await buildProbeTargets({
+      cfg: {
+        models: {
+          providers: {
+            anthropic: {
+              baseUrl: "https://api.anthropic.com/v1",
+              api: "anthropic-messages",
+              apiKey: "sk-ant-test",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      providers: ["anthropic"],
+      modelCandidates: [],
+      options: {
+        timeoutMs: 5_000,
+        concurrency: 1,
+        maxTokens: 16,
+      },
+    });
+
+    expect(plan.results).toStrictEqual([]);
+    expect(plan.targets).toHaveLength(1);
+    expect(plan.targets[0]?.model).toStrictEqual({
+      provider: "anthropic",
+      model: "claude-haiku-4-5-20251001",
+    });
+  });
+
   it("uses workspace-scoped auth evidence when building env probe targets", async () => {
     mockStore = {
       version: 1,

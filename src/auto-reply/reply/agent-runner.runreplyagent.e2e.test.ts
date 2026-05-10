@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -384,6 +384,64 @@ describe("runReplyAgent pending final delivery capture", () => {
     expect(stored.pendingFinalDelivery).toBe(true);
     expect(stored.pendingFinalDeliveryText).toBe("visible final");
   });
+
+  it("keeps heartbeat replies with real content in pending final delivery", async () => {
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "Sent daily summary to channel." }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe("Sent daily summary to channel.");
+  });
+
+  it("persists heartbeat reply remainder as pending delivery when remainder exceeds ackMaxChars", async () => {
+    // When a heartbeat response contains HEARTBEAT_OK followed by substantive content,
+    // the remainder after stripping the token must be persisted for durable delivery.
+    // The default ackMaxChars is 300 — any remainder longer than that is treated as real content.
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+    };
+    const sessionStore = { main: sessionEntry };
+    const storePath = await createSessionStoreFile(sessionEntry);
+    const longRemainder = "Sent daily digest to channel. ".repeat(12).trimEnd(); // ~360 chars, > 300
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: `HEARTBEAT_OK ${longRemainder}` }],
+      meta: {},
+    });
+
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: true },
+      sessionEntry,
+      sessionStore,
+      sessionKey: "main",
+      storePath,
+    });
+
+    await run();
+
+    const stored = await readStoredMainSession(storePath);
+    expect(stored.pendingFinalDelivery).toBe(true);
+    expect(stored.pendingFinalDeliveryText).toBe(longRemainder);
+  });
 });
 
 describe("runReplyAgent typing (heartbeat)", () => {
@@ -419,6 +477,40 @@ describe("runReplyAgent typing (heartbeat)", () => {
     expect(onPartialReply).toHaveBeenCalled();
     expect(typing.startTypingOnText).not.toHaveBeenCalled();
     expect(typing.startTypingLoop).not.toHaveBeenCalled();
+  });
+
+  it("does not persist heartbeat ack text as pending final delivery", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "openclaw-heartbeat-pending-"));
+    const storePath = join(dir, "sessions.json");
+    await writeFile(
+      storePath,
+      JSON.stringify({
+        main: { sessionId: "session", updatedAt: 1 },
+      }),
+      "utf-8",
+    );
+    try {
+      state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+        payloads: [{ text: "HEARTBEAT_OK" }],
+        meta: {},
+      });
+
+      const { run } = createMinimalRun({
+        opts: { isHeartbeat: true },
+        sessionCtx: { Provider: "heartbeat" },
+        sessionKey: "main",
+        storePath,
+      });
+      await run();
+
+      const store = JSON.parse(await readFile(storePath, "utf-8")) as {
+        main?: { pendingFinalDelivery?: boolean; pendingFinalDeliveryText?: string };
+      };
+      expect(store.main?.pendingFinalDelivery).toBeUndefined();
+      expect(store.main?.pendingFinalDeliveryText).toBeUndefined();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 
   it("suppresses NO_REPLY partials but allows normal No-prefix partials", async () => {
@@ -764,8 +856,16 @@ describe("runReplyAgent typing (heartbeat)", () => {
         payloads: [{ text: "final" }],
         meta: {},
       });
-      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(
-        async ({ run }: { run: (provider: string, model: string) => Promise<unknown> }) => ({
+      vi.spyOn(modelFallbackModule, "runWithModelFallback").mockImplementationOnce(async (args) => {
+        const { run, onFallbackStep } = args;
+        await onFallbackStep?.({
+          fallbackStepType: "fallback_step",
+          fallbackStepFromModel: "fireworks/fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+          fallbackStepToModel: "deepinfra/moonshotai/Kimi-K2.5",
+          fallbackStepFromFailureReason: "rate_limit",
+          fallbackStepFinalOutcome: "succeeded",
+        });
+        return {
           result: await run("deepinfra", "moonshotai/Kimi-K2.5"),
           provider: "deepinfra",
           model: "moonshotai/Kimi-K2.5",
@@ -777,8 +877,8 @@ describe("runReplyAgent typing (heartbeat)", () => {
               reason: "rate_limit",
             },
           ],
-        }),
-      );
+        };
+      });
 
       const { run } = createMinimalRun({
         resolvedVerboseLevel: testCase.verbose,
@@ -809,6 +909,7 @@ describe("runReplyAgent typing (heartbeat)", () => {
         phases.filter((phase) => phase === "fallback"),
         testCase.name,
       ).toHaveLength(1);
+      expect(phases, testCase.name).toContain("fallback_step");
     }
   });
 

@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import { normalizeConfiguredProviderCatalogModelId } from "./model-ref-shared.js";
 import {
   normalizeProviderSpecificConfig,
   resolveProviderConfigApiKeyResolver,
@@ -55,7 +55,9 @@ function normalizeProviderModelsForConfig(
   const seenById = new Map<string, number>();
   for (const model of provider.models) {
     const rawId = getProviderModelId(model);
-    const normalizedId = rawId ? normalizeStaticProviderModelId(providerKey, rawId) : rawId;
+    const normalizedId = rawId
+      ? normalizeConfiguredProviderCatalogModelId(providerKey, rawId)
+      : rawId;
     const normalizedModel =
       normalizedId && normalizedId !== rawId ? { ...model, id: normalizedId } : model;
     if (normalizedModel !== model) {
@@ -80,6 +82,26 @@ function normalizeProviderModelsForConfig(
   return mutated
     ? { provider: { ...provider, models: nextModels }, mutated }
     : { provider, mutated };
+}
+
+export function normalizeProviderCatalogModelsForConfig(
+  providers: ModelsConfig["providers"],
+): ModelsConfig["providers"] {
+  if (!providers) {
+    return providers;
+  }
+
+  let mutated = false;
+  const next: Record<string, ProviderConfig> = {};
+  for (const [providerKey, provider] of Object.entries(providers)) {
+    const normalized = normalizeProviderModelsForConfig(providerKey, provider);
+    if (normalized.mutated) {
+      mutated = true;
+    }
+    next[providerKey] = normalized.provider;
+  }
+
+  return mutated ? next : providers;
 }
 
 export function normalizeProviders(params: {

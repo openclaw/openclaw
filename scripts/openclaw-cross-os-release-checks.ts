@@ -559,7 +559,7 @@ async function prepareCandidate(params) {
 
   const buildEnv = {
     ...process.env,
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
   };
 
   logPhase("prepare", "pnpm-install");
@@ -1448,7 +1448,7 @@ function buildInstallerEnv(lane, providerMeta, providerSecretValue) {
     OPENCLAW_NO_ONBOARD: "1",
     OPENCLAW_NO_PROMPT: "1",
     CI: "1",
-    NODE_OPTIONS: "--max-old-space-size=6144",
+    NODE_OPTIONS: "--max-old-space-size=8192",
     [providerMeta.secretEnv]: providerSecretValue,
   };
 }

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { formatCliCommand } from "../cli/command-format.js";
+import { formatLookupMiss } from "../cli/error-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   loadSessionStore,
@@ -58,7 +59,12 @@ const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
 const info = theme.info;
 
 function formatTaskLookupMiss(lookup: string): string {
-  return `Task not found: ${lookup}. Run ${formatCliCommand("openclaw tasks list")} to see recent task ids.`;
+  return formatLookupMiss({
+    noun: "Task",
+    value: lookup,
+    listCommand: "openclaw tasks list",
+    valueLabel: "task id",
+  });
 }
 
 async function loadTaskCancelConfig() {

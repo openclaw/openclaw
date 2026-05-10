@@ -185,7 +185,8 @@ describe("buildEmbeddedSystemPrompt", () => {
 
     expect(prompt).toContain("Active background exec sessions in this scope:");
     expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
-    expect(prompt).toContain("process tool with a sessionId");
+    expect(prompt).toContain("Use process log before interactive input");
+    expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
   });
 });

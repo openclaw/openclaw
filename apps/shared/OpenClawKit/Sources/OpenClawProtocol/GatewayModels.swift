@@ -2983,6 +2983,10 @@ public struct TalkClientCreateParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
+    public let vadthreshold: Double?
+    public let silencedurationms: Int?
+    public let prefixpaddingms: Int?
+    public let reasoningeffort: String?
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
@@ -2992,6 +2996,10 @@ public struct TalkClientCreateParams: Codable, Sendable {
         provider: String?,
         model: String?,
         voice: String?,
+        vadthreshold: Double?,
+        silencedurationms: Int?,
+        prefixpaddingms: Int?,
+        reasoningeffort: String?,
         mode: AnyCodable?,
         transport: AnyCodable?,
         brain: AnyCodable?)
@@ -3000,6 +3008,10 @@ public struct TalkClientCreateParams: Codable, Sendable {
         self.provider = provider
         self.model = model
         self.voice = voice
+        self.vadthreshold = vadthreshold
+        self.silencedurationms = silencedurationms
+        self.prefixpaddingms = prefixpaddingms
+        self.reasoningeffort = reasoningeffort
         self.mode = mode
         self.transport = transport
         self.brain = brain
@@ -3010,6 +3022,10 @@ public struct TalkClientCreateParams: Codable, Sendable {
         case provider
         case model
         case voice
+        case vadthreshold = "vadThreshold"
+        case silencedurationms = "silenceDurationMs"
+        case prefixpaddingms = "prefixPaddingMs"
+        case reasoningeffort = "reasoningEffort"
         case mode
         case transport
         case brain
@@ -3163,6 +3179,10 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     public let provider: String?
     public let model: String?
     public let voice: String?
+    public let vadthreshold: Double?
+    public let silencedurationms: Int?
+    public let prefixpaddingms: Int?
+    public let reasoningeffort: String?
     public let mode: AnyCodable?
     public let transport: AnyCodable?
     public let brain: AnyCodable?
@@ -3173,6 +3193,10 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         provider: String?,
         model: String?,
         voice: String?,
+        vadthreshold: Double?,
+        silencedurationms: Int?,
+        prefixpaddingms: Int?,
+        reasoningeffort: String?,
         mode: AnyCodable?,
         transport: AnyCodable?,
         brain: AnyCodable?,
@@ -3182,6 +3206,10 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         self.provider = provider
         self.model = model
         self.voice = voice
+        self.vadthreshold = vadthreshold
+        self.silencedurationms = silencedurationms
+        self.prefixpaddingms = prefixpaddingms
+        self.reasoningeffort = reasoningeffort
         self.mode = mode
         self.transport = transport
         self.brain = brain
@@ -3193,6 +3221,10 @@ public struct TalkSessionCreateParams: Codable, Sendable {
         case provider
         case model
         case voice
+        case vadthreshold = "vadThreshold"
+        case silencedurationms = "silenceDurationMs"
+        case prefixpaddingms = "prefixPaddingMs"
+        case reasoningeffort = "reasoningEffort"
         case mode
         case transport
         case brain

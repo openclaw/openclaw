@@ -6,6 +6,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitFailoverEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { isCommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { sanitizeForLog } from "../terminal/ansi.js";
@@ -223,6 +224,9 @@ async function runFallbackCandidate<T>(params: {
       result,
     };
   } catch (err) {
+    if (isCommandLaneTaskTimeoutError(err)) {
+      throw err;
+    }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
     // so they become FailoverErrors and continue the fallback loop instead of aborting.
     const normalizedFailover = coerceToFailoverError(err, {
@@ -588,9 +592,15 @@ function resolveFallbackCandidates(params: {
     defaultProvider,
     aliasIndex,
   });
+  const resolvedBareModelAlias =
+    resolvedModelAlias?.alias &&
+    (resolvedModelAlias.ref.provider === normalizedPrimary.provider ||
+      normalizedPrimary.provider === defaultProvider)
+      ? resolvedModelAlias.ref
+      : null;
   const resolvedPrimary =
-    (resolvedModelAlias?.alias ? resolvedModelAlias.ref : null) ??
     (resolvedProviderModelAlias?.alias ? resolvedProviderModelAlias.ref : null) ??
+    resolvedBareModelAlias ??
     normalizedPrimary;
   const effectivePrimary = normalizeModelRef(resolvedPrimary.provider, resolvedPrimary.model);
 

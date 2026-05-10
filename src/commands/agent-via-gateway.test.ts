@@ -172,6 +172,11 @@ describe("agentCliCommand", () => {
       const request = requireFirstCallArg(callGateway, "gateway") as {
         params?: Record<string, unknown>;
       };
+      expect(request).toMatchObject({
+        clientName: "cli",
+        mode: "cli",
+      });
+      expect(request).not.toHaveProperty("scopes");
       expect(request.params).not.toHaveProperty("cleanupBundleMcpOnRunEnd");
       expect(agentCommand).not.toHaveBeenCalled();
       expect(runtime.log).toHaveBeenCalledWith("hello");
@@ -222,6 +227,11 @@ describe("agentCliCommand", () => {
 
       expect(callGateway).toHaveBeenCalledTimes(1);
       const request = requireRecord(requireFirstCallArg(callGateway, "gateway"), "gateway request");
+      expect(request).toMatchObject({
+        clientName: "gateway-client",
+        mode: "backend",
+        scopes: ["operator.admin"],
+      });
       const params = requireRecord(request.params, "gateway request params");
       expect(params.model).toBe("ollama/qwen3.5:9b");
     });
@@ -245,6 +255,39 @@ describe("agentCliCommand", () => {
       await agentCliCommand({ message: "hi", to: "+1555", json: true }, jsonRuntime);
 
       expect(jsonRuntime.writeJson).toHaveBeenCalledWith(response, 2);
+      expect(jsonRuntime.log).not.toHaveBeenCalled();
+    });
+  });
+
+  it("promotes gateway deliveryStatus to the top-level JSON response", async () => {
+    await withTempStore(async () => {
+      const deliveryStatus = {
+        requested: true,
+        attempted: true,
+        status: "sent",
+        succeeded: true,
+        resultCount: 1,
+      };
+      const response = {
+        runId: "idem-1",
+        status: "ok",
+        result: {
+          payloads: [{ text: "hello" }],
+          meta: { stub: true },
+          deliveryStatus,
+        },
+      };
+      callGateway.mockResolvedValue(response);
+
+      await agentCliCommand({ message: "hi", to: "+1555", json: true, deliver: true }, jsonRuntime);
+
+      expect(jsonRuntime.writeJson).toHaveBeenCalledWith(
+        {
+          ...response,
+          deliveryStatus,
+        },
+        2,
+      );
       expect(jsonRuntime.log).not.toHaveBeenCalled();
     });
   });

@@ -316,7 +316,7 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, active: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain("--active must be a positive integer");
+    expect(errors[0]).toContain("--active must be a positive number of minutes");
 
     fs.rmSync(store);
   });
@@ -334,7 +334,7 @@ describe("sessionsCommand", () => {
     const { runtime, errors } = makeRuntime();
 
     await expect(sessionsCommand({ store, limit: "0" }, runtime)).rejects.toThrow("exit 1");
-    expect(errors[0]).toContain('--limit must be a positive integer or "all"');
+    expect(errors[0]).toContain('--limit must be a positive integer or "all", for example');
 
     fs.rmSync(store);
   });

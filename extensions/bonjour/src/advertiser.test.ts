@@ -42,6 +42,10 @@ function expectDnsLabelWithinLimit(value: string) {
   expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
 }
 
+function warnMessages(): string[] {
+  return logger.warn.mock.calls.map(([message]) => String(message));
+}
+
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
   delete process.env.VITEST;
@@ -469,7 +473,7 @@ describe("gateway bonjour advertiser", () => {
     expect(logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("suppressing ciao cancellation"),
     );
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
 
@@ -497,7 +501,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
+    expect(warnMessages().some((message) => message.includes("advertise failed"))).toBe(true);
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
@@ -526,7 +530,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
+    expect(warnMessages().some((message) => message.includes("advertise threw"))).toBe(true);
 
     await started.stop();
   });
@@ -660,7 +664,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);

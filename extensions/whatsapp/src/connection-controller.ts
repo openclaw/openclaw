@@ -1,4 +1,4 @@
-import { DisconnectReason, type WASocket } from "@whiskeysockets/baileys";
+import { DisconnectReason, type WASocket } from "baileys";
 import { info } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {

@@ -81,12 +81,10 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
-    expect(browser.newPage).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        deviceScaleFactor: 2,
-      }),
-    );
+    const firstPageParams = (
+      browser.newPage.mock.calls as Array<[{ deviceScaleFactor?: number }?]>
+    )[0]?.[0];
+    expect(firstPageParams?.deviceScaleFactor).toBe(2);
     expect(pages).toHaveLength(2);
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
@@ -626,7 +624,7 @@ function createMockBrowser(
   options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
 ) {
   const browser = {
-    newPage: vi.fn(async () => {
+    newPage: vi.fn(async (_options?: unknown) => {
       const page = createMockPage(options);
       pages.push(page);
       return page;

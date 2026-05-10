@@ -9,6 +9,7 @@ import {
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { CommandLaneTaskTimeoutError } from "../process/command-queue.js";
 import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError } from "./failover-error.js";
@@ -485,6 +486,26 @@ describe("runWithModelFallback", () => {
         model: "mimo-v2-pro-mit",
         expected: ["openai", "xiaomi/mimo-v2-pro-mit"],
       },
+      {
+        name: "keeps explicit provider when a different provider owns the bare alias",
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openrouter/deepseek/deepseek-v4-pro",
+                fallbacks: [],
+              },
+              models: {
+                "openrouter/deepseek/deepseek-v4-pro": { alias: "deepseek-v4-pro" },
+                "opencode-go/deepseek-v4-pro": { alias: "OpenCode Go DeepSeek V4 Pro" },
+              },
+            },
+          },
+        }),
+        provider: "opencode-go",
+        model: "deepseek-v4-pro",
+        expected: ["opencode-go", "deepseek-v4-pro"],
+      },
     ] satisfies Array<{
       name: string;
       cfg: OpenClawConfig;
@@ -522,6 +543,22 @@ describe("runWithModelFallback", () => {
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0].error).toBe("bad request");
     expect(result.attempts[0].reason).toBe("unknown");
+  });
+
+  it("does not treat command-lane watchdog timeouts as model fallback failures", async () => {
+    const cfg = makeCfg();
+    const timeoutError = new CommandLaneTaskTimeoutError("cron-nested", 330_000);
+    const run = vi.fn().mockRejectedValue(timeoutError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-4.1-mini",
+        run,
+      }),
+    ).rejects.toBe(timeoutError);
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it("keeps raw provider schema errors in fallback summaries", async () => {
@@ -1104,6 +1141,43 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("billing");
+  });
+
+  it("falls back on OpenRouter API-key budget limit errors", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/xiaomi/mimo-v2-pro",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
+          { status: 403 },
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openrouter",
+      model: "xiaomi/mimo-v2-pro",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openrouter", "xiaomi/mimo-v2-pro"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.reason).toBe("billing");
   });
