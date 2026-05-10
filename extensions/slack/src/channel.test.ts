@@ -139,7 +139,16 @@ describe("slackPlugin actions", () => {
 
     expect(discovery?.actions).toContain("send");
     expect(discovery?.capabilities).toContain("presentation");
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actions: ["download-file"],
+          properties: expect.objectContaining({
+            fileId: expect.any(Object),
+          }),
+        }),
+      ]),
+    );
   });
 
   it("honors the selected Slack account during message tool discovery", () => {
@@ -257,7 +266,7 @@ describe("slackPlugin actions", () => {
     });
   });
 
-  it("does not expose Slack-native message tool schema", () => {
+  it("exposes Slack-native message id and file id schema hints", () => {
     const discovery = slackPlugin.actions?.describeMessageTool({
       cfg: {
         channels: {
@@ -268,7 +277,23 @@ describe("slackPlugin actions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toBeUndefined();
+    expect(discovery?.schema).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          actions: ["download-file"],
+          properties: expect.objectContaining({
+            fileId: expect.any(Object),
+          }),
+        }),
+        expect.objectContaining({
+          actions: ["react", "reactions", "edit", "delete", "pin", "unpin"],
+          properties: expect.objectContaining({
+            messageId: expect.any(Object),
+            message_id: expect.any(Object),
+          }),
+        }),
+      ]),
+    );
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {

@@ -355,4 +355,54 @@ describe("handleSlackMessageAction", () => {
     );
     expectForwardedCfg(invoke, cfg);
   });
+
+  it("explains that download-file requires fileId, not messageId", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            messageId: "1777423717.666499",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/Did you mean to pass fileId/i);
+  });
+
+  it("explains that download-file requires fileId for message_id aliases", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {
+            channelId: "C1",
+            message_id: "1777423717.666499",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/Did you mean to pass fileId/i);
+  });
+
+  it("keeps the generic fileId requirement when no message id was supplied", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "download-file",
+          cfg: {},
+          params: {
+            channelId: "C1",
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/fileId/i);
+  });
 });
