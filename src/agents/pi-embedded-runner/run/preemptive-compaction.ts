@@ -117,7 +117,7 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     if (baselineTokens > promptBudgetBeforeReserve) {
       route = "irreducible_overflow";
     } else if (toolResultReducibleChars <= 0) {
-      route = "irreducible_overflow";
+      route = "compact_only";
     } else if (toolResultReducibleChars >= truncateOnlyThresholdChars) {
       route = "truncate_tool_results_only";
     } else {
