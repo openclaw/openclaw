@@ -16,23 +16,33 @@ This checklist produces the first versioned release directory under `~/polytropo
   - `openclaw gateway status`
   - `openclaw doctor --non-interactive`
 
-## 1) Create the release directory
+## 1) Build (produce dist/)
 
-Create a versioned release by copying the currently installed OpenClaw dist (baseline).
+Build is the act of producing `<repo>/dist/` from a specific core tag.
 
-1) Locate installed OpenClaw dist (current host baseline):
+Canonical build sequence (deterministic):
 
-   - `OPENCLAW_DIST=/home/ec2-user/.npm-global/lib/node_modules/openclaw/dist`
+```bash
+pnpm install
+pnpm ui:build
+pnpm build
+```
 
-2) Create versioned release directory:
+Output: `<repo>/dist/`.
+
+## 2) Release (create the release directory)
+
+Release is the act of copying the built `dist/` into a versioned runnable directory:
+
+1) Create versioned release directory:
 
    - `mkdir -p ~/polytropos/releases/<tag>`
 
-3) Copy dist byte-for-byte:
+2) Copy dist byte-for-byte:
 
-   - `cp -a "$OPENCLAW_DIST"/. ~/polytropos/releases/<tag>/`
+   - `cp -a <repo>/dist/. ~/polytropos/releases/<tag>/`
 
-4) Sanity check:
+3) Sanity check:
 
    - `test -f ~/polytropos/releases/<tag>/index.js`
 

@@ -32,12 +32,25 @@ Examples:
 - `2026.4.1-poly.0`
 - `2026.4.1-poly.1`
 
-### 4) Run the standard release procedure
+### 4) Build (produce dist/)
+
+Build is the act of producing a `dist/` directory from the core repo at a specific ref/tag.
+
+Canonical build sequence (deterministic):
+
+- `pnpm install`
+- `pnpm ui:build`
+- `pnpm build`
+
+Output: `<repo>/dist/`.
+
+### 5) Release (create/switch runnable release directory)
+
+Release is the act of taking a built `dist/` and creating a runnable versioned directory under `~/polytropos/releases/<forkTag>/` (and optionally switching `current`).
 
 Follow `docs/polytropos/CORE-RELEASES.md` to:
 
-- build `dist/`
-- copy `dist/` into `~/polytropos/releases/<forkTag>/`
+- copy `<repo>/dist/` into `~/polytropos/releases/<forkTag>/`
 - update `previous` then `current`
 - restart gateway
 - verify
