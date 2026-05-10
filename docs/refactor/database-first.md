@@ -460,10 +460,12 @@ sessionId}` and session key context.
   `{agentId, sessionId}` identity before worker launch and again before the
   attempt touches transcript state. A stale `/tmp/*.jsonl` input cannot select a
   runtime write target.
-- Cache trace, Anthropic payload, and diagnostics timeline records now write to
-  SQLite diagnostic KV rows only. The old `diagnostics.cacheTrace.filePath`,
-  `OPENCLAW_CACHE_TRACE_FILE`, `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
-  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed.
+- Cache trace, Anthropic payload, diagnostics timeline records, and Gateway
+  stability bundles now write to SQLite diagnostic KV rows only. The old
+  `diagnostics.cacheTrace.filePath`, `OPENCLAW_CACHE_TRACE_FILE`,
+  `OPENCLAW_ANTHROPIC_PAYLOAD_LOG_FILE`, and
+  `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH` JSONL override paths are removed, and
+  normal stability capture no longer writes `logs/stability/*.json` files.
 - Cron persistence now reconciles SQLite `cron_jobs` rows instead of
   deleting/reinserting the whole job table on each save. Plugin target
   writebacks update matching cron rows directly and keep runtime cron state in
@@ -638,8 +640,9 @@ sessionId}` and session key context.
   files. External CLI backends still receive file paths, but those paths are
   per-run temp materializations with cleanup.
 - Cache-trace diagnostics, Anthropic payload diagnostics, raw model stream
-  diagnostics, and diagnostics timeline events now write SQLite diagnostic rows
-  instead of `logs/*.jsonl` files.
+  diagnostics, diagnostics timeline events, and Gateway stability bundles now
+  write SQLite diagnostic rows instead of `logs/*.jsonl` or
+  `logs/stability/*.json` files.
   Runtime path override flags and env vars have been removed; export/debug
   commands can materialize files explicitly from database rows.
 - The macOS companion no longer has a rolling `diagnostics.jsonl` writer. App
@@ -1043,7 +1046,8 @@ Keep shared coordination state in `state/openclaw.sqlite`:
 - Debug proxy capture sessions, events, and payload blobs. Done for the default
   capture path: explicit `OPENCLAW_DEBUG_PROXY_DB_PATH` remains a one-off
   diagnostics escape hatch, but normal captures live in the shared state DB and
-  use the same WAL/busy-timeout settings.
+  open through the shared state DB bootstrap, schema, WAL, and busy-timeout
+  settings.
 
 This phase also deletes duplicate sidecar openers, permission helpers, WAL
 setup, filesystem pruning, and compatibility writers from those subsystems.

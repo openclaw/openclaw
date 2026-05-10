@@ -1,9 +1,12 @@
 import fs from "node:fs";
-import path from "node:path";
 import process from "node:process";
-import { resolveStateDir } from "../config/paths.js";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
-import { replaceFileAtomicSync } from "../infra/replace-file.js";
+import {
+  deleteOpenClawStateKvJson,
+  listOpenClawStateKvJson,
+  writeOpenClawStateKvJson,
+  type OpenClawStateJsonValue,
+} from "../state/openclaw-state-kv.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
@@ -17,8 +20,8 @@ export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
-const BUNDLE_PREFIX = "openclaw-stability-";
-const BUNDLE_SUFFIX = ".json";
+const STABILITY_BUNDLE_KV_SCOPE = "diagnostics.stability";
+const STABILITY_BUNDLE_KV_KEY_PREFIX = "bundle:";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
 
@@ -65,7 +68,7 @@ export type DiagnosticStabilityBundleLocationOptions = {
   stateDir?: string;
 };
 
-export type DiagnosticStabilityBundleFile = {
+export type DiagnosticStabilityBundleEntry = {
   path: string;
   mtimeMs: number;
 };
@@ -93,6 +96,28 @@ function normalizeReason(reason: string): string {
 
 function formatBundleTimestamp(now: Date): string {
   return now.toISOString().replace(/[:.]/g, "-");
+}
+
+function stateDbOptionsForLocation(options: DiagnosticStabilityBundleLocationOptions): {
+  env?: NodeJS.ProcessEnv;
+} {
+  if (options.stateDir) {
+    return {
+      env: {
+        ...(options.env ?? process.env),
+        OPENCLAW_STATE_DIR: options.stateDir,
+      },
+    };
+  }
+  return options.env ? { env: options.env } : {};
+}
+
+function buildBundleKey(now: Date, reason: string): string {
+  return `${STABILITY_BUNDLE_KV_KEY_PREFIX}${formatBundleTimestamp(now)}:${process.pid}:${normalizeReason(reason)}`;
+}
+
+function bundleSqlitePath(key: string): string {
+  return `sqlite:${STABILITY_BUNDLE_KV_SCOPE}/${key}`;
 }
 
 function readErrorCode(error: unknown): string | undefined {
@@ -146,36 +171,6 @@ function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error
     ...(code ? { code } : {}),
     ...(message ? { message } : {}),
   };
-}
-
-export function resolveDiagnosticStabilityBundleDir(
-  options: DiagnosticStabilityBundleLocationOptions = {},
-): string {
-  return path.join(
-    options.stateDir ?? resolveStateDir(options.env ?? process.env),
-    "logs",
-    "stability",
-  );
-}
-
-function buildBundlePath(dir: string, now: Date, reason: string): string {
-  return path.join(
-    dir,
-    `${BUNDLE_PREFIX}${formatBundleTimestamp(now)}-${process.pid}-${normalizeReason(reason)}${BUNDLE_SUFFIX}`,
-  );
-}
-
-function isBundleFile(name: string): boolean {
-  return name.startsWith(BUNDLE_PREFIX) && name.endsWith(BUNDLE_SUFFIX);
-}
-
-function isMissingFileError(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "code" in error &&
-    (error as { code?: unknown }).code === "ENOENT"
-  );
 }
 
 function readObject(value: unknown, label: string): Record<string, unknown> {
@@ -512,28 +507,19 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
   };
 }
 
-export function listDiagnosticStabilityBundleFilesSync(
+export function listDiagnosticStabilityBundlesSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
-): DiagnosticStabilityBundleFile[] {
-  const dir = resolveDiagnosticStabilityBundleDir(options);
-  try {
-    return fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isBundleFile(entry.name))
-      .map((entry) => {
-        const file = path.join(dir, entry.name);
-        return {
-          path: file,
-          mtimeMs: fs.statSync(file).mtimeMs,
-        };
-      })
-      .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
-  } catch (error) {
-    if (isMissingFileError(error)) {
-      return [];
-    }
-    throw error;
-  }
+): DiagnosticStabilityBundleEntry[] {
+  return listOpenClawStateKvJson<DiagnosticStabilityBundle>(
+    STABILITY_BUNDLE_KV_SCOPE,
+    stateDbOptionsForLocation(options),
+  )
+    .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
+    .map((entry) => ({
+      path: bundleSqlitePath(entry.key),
+      mtimeMs: entry.updatedAt,
+    }))
+    .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
 }
 
 export function readDiagnosticStabilityBundleFileSync(
@@ -563,45 +549,47 @@ export function readLatestDiagnosticStabilityBundleSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): ReadDiagnosticStabilityBundleResult {
   try {
-    const latest = listDiagnosticStabilityBundleFilesSync(options)[0];
+    const latest = listOpenClawStateKvJson<DiagnosticStabilityBundle>(
+      STABILITY_BUNDLE_KV_SCOPE,
+      stateDbOptionsForLocation(options),
+    )
+      .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
+      .toSorted((a, b) => b.updatedAt - a.updatedAt || b.key.localeCompare(a.key))[0];
     if (!latest) {
       return {
         status: "missing",
-        dir: resolveDiagnosticStabilityBundleDir(options),
+        dir: `sqlite:${STABILITY_BUNDLE_KV_SCOPE}`,
       };
     }
-    return readDiagnosticStabilityBundleFileSync(latest.path);
+    return {
+      status: "found",
+      path: bundleSqlitePath(latest.key),
+      mtimeMs: latest.updatedAt,
+      bundle: parseDiagnosticStabilityBundle(latest.value),
+    };
   } catch (error) {
     return { status: "failed", error };
   }
 }
 
-function pruneOldBundles(dir: string, retention: number): void {
+function pruneOldBundles(
+  options: DiagnosticStabilityBundleLocationOptions,
+  retention: number,
+): void {
   if (!Number.isFinite(retention) || retention < 1) {
     return;
   }
   try {
-    const entries = fs
-      .readdirSync(dir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && isBundleFile(entry.name))
-      .map((entry) => {
-        const file = path.join(dir, entry.name);
-        let mtimeMs = 0;
-        try {
-          mtimeMs = fs.statSync(file).mtimeMs;
-        } catch {
-          // Missing files are ignored below.
-        }
-        return { file, mtimeMs };
-      })
-      .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.file.localeCompare(a.file));
+    const dbOptions = stateDbOptionsForLocation(options);
+    const entries = listOpenClawStateKvJson<DiagnosticStabilityBundle>(
+      STABILITY_BUNDLE_KV_SCOPE,
+      dbOptions,
+    )
+      .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
+      .toSorted((a, b) => b.updatedAt - a.updatedAt || b.key.localeCompare(a.key));
 
     for (const entry of entries.slice(retention)) {
-      try {
-        fs.unlinkSync(entry.file);
-      } catch {
-        // Retention cleanup must not block failure handling.
-      }
+      deleteOpenClawStateKvJson(STABILITY_BUNDLE_KV_SCOPE, entry.key, dbOptions);
     }
   } catch {
     // Retention cleanup must not block failure handling.
@@ -640,17 +628,18 @@ export function writeDiagnosticStabilityBundleSync(
       snapshot,
     };
 
-    const dir = resolveDiagnosticStabilityBundleDir(options);
-    const file = buildBundlePath(dir, now, reason);
-    replaceFileAtomicSync({
-      filePath: file,
-      content: `${JSON.stringify(bundle, null, 2)}\n`,
-      dirMode: 0o700,
-      mode: 0o600,
-      tempPrefix: ".openclaw-stability",
-    });
-    pruneOldBundles(dir, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
-    return { status: "written", path: file, bundle };
+    const key = buildBundleKey(now, reason);
+    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
+      STABILITY_BUNDLE_KV_SCOPE,
+      key,
+      bundle as unknown as OpenClawStateJsonValue,
+      {
+        ...stateDbOptionsForLocation(options),
+        now: () => now.getTime(),
+      },
+    );
+    pruneOldBundles(options, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
+    return { status: "written", path: bundleSqlitePath(key), bundle };
   } catch (error) {
     return { status: "failed", error };
   }

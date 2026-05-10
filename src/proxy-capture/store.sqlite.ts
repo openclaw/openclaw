@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable } from "kysely";
 import {
+  clearNodeSqliteKyselyCacheForDatabase,
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
@@ -10,7 +11,11 @@ import {
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
-import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { decodeCaptureBlobText, encodeCaptureBlob } from "./blob-store.js";
 import type { DB as ProxyCaptureKyselyDatabase } from "./db.generated.js";
 import { PROXY_CAPTURE_SCHEMA_SQL } from "./schema.generated.js";
@@ -32,10 +37,19 @@ function ensureParentDir(filePath: string) {
 
 type OpenedDatabase = {
   db: DatabaseSync;
-  walMaintenance: SqliteWalMaintenance;
+  walMaintenance?: SqliteWalMaintenance;
+  ownsDatabase: boolean;
 };
 
+function isDefaultOpenClawStateDatabasePath(dbPath: string): boolean {
+  return path.resolve(dbPath) === path.resolve(resolveOpenClawStateSqlitePath());
+}
+
 function openDatabase(dbPath: string): OpenedDatabase {
+  if (isDefaultOpenClawStateDatabasePath(dbPath)) {
+    return { db: openOpenClawStateDatabase().db, ownsDatabase: false };
+  }
+
   ensureParentDir(dbPath);
   const { DatabaseSync } = requireNodeSqlite();
   const db = new DatabaseSync(dbPath);
@@ -47,7 +61,7 @@ function openDatabase(dbPath: string): OpenedDatabase {
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA foreign_keys = ON;");
   db.exec(PROXY_CAPTURE_SCHEMA_SQL);
-  return { db, walMaintenance };
+  return { db, walMaintenance, ownsDatabase: true };
 }
 
 function serializeJson(value: unknown): string | null {
@@ -113,7 +127,8 @@ function assertNeverCaptureQueryPreset(preset: never): never {
 
 export class DebugProxyCaptureStore {
   readonly db: DatabaseSync;
-  private readonly walMaintenance: SqliteWalMaintenance;
+  private readonly walMaintenance?: SqliteWalMaintenance;
+  private readonly ownsDatabase: boolean;
   private closed = false;
 
   constructor(
@@ -123,14 +138,18 @@ export class DebugProxyCaptureStore {
     const opened = openDatabase(dbPath);
     this.db = opened.db;
     this.walMaintenance = opened.walMaintenance;
+    this.ownsDatabase = opened.ownsDatabase;
   }
 
   close(): void {
     if (this.closed) {
       return;
     }
-    this.walMaintenance.close();
-    this.db.close();
+    if (this.ownsDatabase) {
+      this.walMaintenance?.close();
+      clearNodeSqliteKyselyCacheForDatabase(this.db);
+      this.db.close();
+    }
     this.closed = true;
   }
 

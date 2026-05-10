@@ -3,10 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
 } from "../state/sqlite-schema-shape.test-support.js";
+import { resolveDebugProxySettings } from "./env.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -20,6 +22,7 @@ const cleanupDirs: string[] = [];
 
 afterEach(() => {
   closeDebugProxyCaptureStore();
+  closeOpenClawStateDatabaseForTest();
   while (cleanupDirs.length > 0) {
     const dir = cleanupDirs.pop();
     if (dir) {
@@ -91,6 +94,38 @@ describe("DebugProxyCaptureStore", () => {
     expect(collectSqliteSchemaShape(store.db)).toEqual(
       createSqliteSchemaShapeFromSql(new URL("./schema.sql", import.meta.url)),
     );
+  });
+
+  it("uses the shared OpenClaw state schema for default capture storage", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "openclaw-proxy-capture-shared-"));
+    cleanupDirs.push(root);
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const settings = resolveDebugProxySettings(process.env);
+      const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+
+      store.upsertSession({
+        id: "shared-state-session",
+        startedAt: Date.now(),
+        mode: "proxy-run",
+        sourceScope: "openclaw",
+        sourceProcess: "openclaw",
+        dbPath: settings.dbPath,
+        blobDir: settings.blobDir,
+      });
+
+      const schema = collectSqliteSchemaShape(store.db);
+      expect(schema.capture_sessions).toBeDefined();
+      expect(schema.kv).toBeDefined();
+      expect(store.listSessions(1)[0]?.id).toBe("shared-state-session");
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+    }
   });
 
   it("uses the shared SQLite durability pragmas", () => {

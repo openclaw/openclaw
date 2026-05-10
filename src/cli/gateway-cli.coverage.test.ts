@@ -5,6 +5,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
+import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -188,11 +189,6 @@ describe("gateway-cli coverage", () => {
     callGateway.mockClear();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-gateway-cli-bundle-"));
     try {
-      const bundleDir = path.join(tempDir, "logs", "stability");
-      const bundlePath = path.join(
-        bundleDir,
-        "openclaw-stability-2026-04-22T12-00-00-000Z-123-test.json",
-      );
       const bundle = {
         version: 1,
         generatedAt: "2026-04-22T12:00:00.000Z",
@@ -235,8 +231,15 @@ describe("gateway-cli coverage", () => {
           },
         },
       };
-      fs.mkdirSync(bundleDir, { recursive: true });
-      fs.writeFileSync(bundlePath, `${JSON.stringify(bundle, null, 2)}\n`, "utf8");
+      writeOpenClawStateKvJson(
+        "diagnostics.stability",
+        "bundle:2026-04-22T12-00-00-000Z:123:test",
+        bundle,
+        {
+          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+          now: () => Date.parse("2026-04-22T12:00:00.000Z"),
+        },
+      );
 
       await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);
