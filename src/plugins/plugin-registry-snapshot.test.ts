@@ -309,12 +309,22 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     );
   });
 
-  it("treats persisted registry as stale when a diagnostic source path no longer exists", () => {
+  it("treats persisted registry as stale when a plugin diagnostic source path no longer exists", () => {
     const tempRoot = makeTempDir();
     const stateDir = path.join(tempRoot, "state");
-    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const env = {
+      ...createHermeticEnv(tempRoot),
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_STATE_DIR: stateDir,
+    };
     const config = {};
     const ghostDir = path.join(tempRoot, "extensions", "lossless-claw");
+    const npmPluginDir = writeManagedNpmPlugin({
+      stateDir,
+      packageName: "@martian-engineering/lossless-claw",
+      pluginId: "lossless-claw",
+      version: "0.9.4",
+    });
     const staleIndex: InstalledPluginIndex = {
       ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
       diagnostics: [
@@ -335,8 +345,42 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
     expect(result.snapshot.diagnostics).not.toContainEqual(
       expect.objectContaining({ source: ghostDir }),
     );
+    expect(result.snapshot.plugins).toContainEqual(
+      expect.objectContaining({
+        pluginId: "lossless-claw",
+        origin: "global",
+        source: fs.realpathSync(path.join(npmPluginDir, "dist", "index.js")),
+      }),
+    );
     expect(result.diagnostics).toContainEqual(
       expect.objectContaining({ code: "persisted-registry-stale-source" }),
     );
+  });
+
+  it("keeps persisted registry when a non-plugin diagnostic source path still does not exist", () => {
+    const tempRoot = makeTempDir();
+    const stateDir = path.join(tempRoot, "state");
+    const env = { ...createHermeticEnv(tempRoot), OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" };
+    const config = {};
+    const missingConfiguredPath = path.join(tempRoot, "missing-configured-plugin");
+    const index: InstalledPluginIndex = {
+      ...loadInstalledPluginIndex({ config, env, stateDir, installRecords: {} }),
+      diagnostics: [
+        {
+          level: "error",
+          message: `plugin path not found: ${missingConfiguredPath}`,
+          source: missingConfiguredPath,
+        },
+      ],
+    };
+    writePersistedInstalledPluginIndexSync(index, { stateDir });
+
+    const result = loadPluginRegistrySnapshotWithMetadata({ config, env, stateDir });
+
+    expect(result.source).toBe("persisted");
+    expect(result.snapshot.diagnostics).toContainEqual(
+      expect.objectContaining({ source: missingConfiguredPath }),
+    );
+    expect(result.diagnostics).toStrictEqual([]);
   });
 });

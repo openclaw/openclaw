@@ -134,7 +134,13 @@ function resolveRecordPackageJsonPath(plugin: InstalledPluginIndexRecord): strin
 function hasStalePersistedPluginDiagnostics(index: InstalledPluginIndex): boolean {
   return index.diagnostics.some((diag) => {
     const source = diag.source;
-    return typeof source === "string" && path.isAbsolute(source) && !fs.existsSync(source);
+    return (
+      typeof diag.pluginId === "string" &&
+      diag.pluginId.trim().length > 0 &&
+      typeof source === "string" &&
+      path.isAbsolute(source) &&
+      !fs.existsSync(source)
+    );
   });
 }
 
