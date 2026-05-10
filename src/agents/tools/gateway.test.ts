@@ -154,12 +154,23 @@ describe("gateway tool defaults", () => {
     );
   });
 
-  it("uses admin scope only for admin methods", async () => {
+  it("uses write scope for cron creation so reminders do not require admin scope upgrades", async () => {
     callGatewayMock.mockResolvedValueOnce({ ok: true });
     await callGatewayTool("cron.add", {}, { id: "job-1" });
     expect(callGatewayMock).toHaveBeenCalledWith(
       expect.objectContaining({
         method: "cron.add",
+        scopes: ["operator.write"],
+      }),
+    );
+  });
+
+  it("uses admin scope only for admin methods", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    await callGatewayTool("config.patch", {}, { path: "gateway.enabled", value: true });
+    expect(callGatewayMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        method: "config.patch",
         scopes: ["operator.admin"],
       }),
     );

@@ -35,6 +35,10 @@ describe("method scope resolution", () => {
     ["diagnostics.stability", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
+    ["cron.add", ["operator.write"]],
+    ["cron.update", ["operator.write"]],
+    ["cron.remove", ["operator.write"]],
+    ["cron.run", ["operator.write"]],
     ["config.patch", ["operator.admin"]],
     ["wizard.start", ["operator.admin"]],
     ["update.run", ["operator.admin"]],
@@ -87,6 +91,19 @@ describe("operator scope authorization", () => {
       missingScope: "operator.write",
     });
   });
+
+  it.each(["cron.add", "cron.update", "cron.remove", "cron.run"])(
+    "allows %s with operator.write without admin scope upgrade",
+    (method) => {
+      expect(authorizeOperatorScopesForMethod(method, ["operator.write"])).toEqual({
+        allowed: true,
+      });
+      expect(authorizeOperatorScopesForMethod(method, ["operator.read"])).toEqual({
+        allowed: false,
+        missingScope: "operator.write",
+      });
+    },
+  );
 
   it("requires pairing scope for node pairing approvals", () => {
     expect(authorizeOperatorScopesForMethod("node.pair.approve", ["operator.pairing"])).toEqual({
