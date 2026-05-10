@@ -23,19 +23,18 @@ export function applyNonInteractiveGatewayConfig(params: {
 } | null {
   const { opts, runtime } = params;
 
-  const hasGatewayPort = opts.gatewayPort !== undefined;
+  const gatewayPort = opts.gatewayPort;
+  const hasGatewayPort = gatewayPort !== undefined;
   if (
     hasGatewayPort &&
-    (!Number.isFinite(opts.gatewayPort) ||
-      (opts.gatewayPort ?? 0) <= 0 ||
-      opts.gatewayPort > 65_535)
+    (!Number.isFinite(gatewayPort) || gatewayPort <= 0 || gatewayPort > 65_535)
   ) {
     runtime.error(formatInvalidPortOption("--gateway-port"));
     runtime.exit(1);
     return null;
   }
 
-  const port = hasGatewayPort ? (opts.gatewayPort as number) : params.defaultPort;
+  const port = gatewayPort ?? params.defaultPort;
   let bind = opts.gatewayBind ?? "loopback";
   const authModeRaw = opts.gatewayAuth ?? "token";
   if (authModeRaw !== "token" && authModeRaw !== "password") {
