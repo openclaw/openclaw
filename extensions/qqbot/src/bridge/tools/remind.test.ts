@@ -88,7 +88,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("supports injected cron scheduler dependencies for engine-level tests", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
+    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
         senderIsOwner: true,
@@ -118,7 +118,7 @@ describe("bridge/tools/remind", () => {
   });
 
   it("does not schedule when sender ownership is missing", async () => {
-    const callCron = vi.fn(async () => ({ id: "job-1" }));
+    const callCron = vi.fn(async (_params: unknown) => ({ id: "job-1" }));
     const tool = createRemindTool(
       {
         deliveryContext: { to: "qqbot:c2c:user-openid", accountId: "bot2" },

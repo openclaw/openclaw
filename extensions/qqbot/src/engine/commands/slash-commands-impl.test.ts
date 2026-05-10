@@ -5,8 +5,6 @@ import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-te
 import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
 import { SlashCommandRegistry, type SlashCommandContext } from "./slash-commands.js";
 
-type FrameworkCommand = ReturnType<typeof getFrameworkCommands>[number];
-
 function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
     type: "c2c",
@@ -66,8 +64,8 @@ describe("QQBot framework slash commands", () => {
     expect(commands.map((command) => command.name)).toEqual(["private-admin", "shared-admin"]);
     const privateAdmin = commands.find((command) => command.name === "private-admin");
     const sharedAdmin = commands.find((command) => command.name === "shared-admin");
-    expect((privateAdmin as FrameworkCommand | undefined)?.c2cOnly).toBe(true);
-    expect((sharedAdmin as FrameworkCommand | undefined)?.c2cOnly).toBeUndefined();
+    expect(privateAdmin?.c2cOnly).toBe(true);
+    expect(sharedAdmin?.c2cOnly).toBeUndefined();
   });
 
   it("routes bot-streaming through the auth-gated framework registry", () => {
