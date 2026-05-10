@@ -271,6 +271,89 @@ describe("applySkillsPromptLimits (via buildWorkspaceSkillsPrompt)", () => {
     expect(prompt).toContain("skill-49");
   });
 
+  it("retries compact mode for a remote note before dropping skills", () => {
+    const remoteNote =
+      "Remote macOS node connected: local-only skills stay visible when their compact catalog still fits.";
+    const skills = Array.from({ length: 8 }, (_, i) => makeSkill(`remote-${i}`, "A".repeat(180)));
+    const entries = skills.map((skill) => makeEntry(skill));
+    const compactNote =
+      "⚠️ Skills catalog using compact format (descriptions omitted). Run `openclaw skills check` to audit.";
+    const fullLen = formatSkillsForPrompt(skills).length;
+    const compactLen = formatSkillsCompact(skills).length;
+    const compactPromptLen = remoteNote.length + compactNote.length + compactLen + 2;
+    const maxSkillsPromptChars = Math.max(fullLen, compactPromptLen) + 5;
+
+    expect(fullLen).toBeLessThanOrEqual(maxSkillsPromptChars);
+    expect(remoteNote.length + fullLen + 1).toBeGreaterThan(maxSkillsPromptChars);
+    expect(compactPromptLen).toBeLessThanOrEqual(maxSkillsPromptChars);
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      eligibility: {
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => true,
+          hasAnyBin: () => true,
+          note: remoteNote,
+        },
+      },
+      config: {
+        skills: {
+          limits: {
+            maxSkillsPromptChars,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxSkillsPromptChars);
+    expect(prompt).toContain(remoteNote);
+    expect(prompt).toContain("compact format (descriptions omitted)");
+    expect(prompt).not.toContain("included");
+    expect(prompt).not.toContain("<description>");
+    for (const skill of skills) {
+      expect(prompt).toContain(skill.name);
+    }
+  });
+
+  it("omits an oversized remote note before dropping skills that fit without it", () => {
+    const remoteNote = `Remote node status: ${"very-long-node-label ".repeat(60)}`;
+    const skills = Array.from({ length: 2 }, (_, i) =>
+      makeSkill(`remote-fit-${i}`, "A".repeat(180)),
+    );
+    const entries = skills.map((skill) => makeEntry(skill));
+    const compactNote =
+      "⚠️ Skills catalog using compact format (descriptions omitted). Run `openclaw skills check` to audit.";
+    const maxSkillsPromptChars = formatSkillsCompact(skills).length + compactNote.length + 160;
+
+    expect(remoteNote.length).toBeGreaterThan(maxSkillsPromptChars);
+
+    const prompt = buildWorkspaceSkillsPrompt("/fake", {
+      entries,
+      eligibility: {
+        remote: {
+          platforms: ["darwin"],
+          hasBin: () => true,
+          hasAnyBin: () => true,
+          note: remoteNote,
+        },
+      },
+      config: {
+        skills: {
+          limits: {
+            maxSkillsPromptChars,
+          },
+        },
+      } satisfies OpenClawConfig,
+    });
+
+    expect(prompt.length).toBeLessThanOrEqual(maxSkillsPromptChars);
+    expect(prompt).not.toContain(remoteNote);
+    expect(prompt).toContain("compact format (descriptions omitted)");
+    expect(prompt).toContain("remote-fit-0");
+    expect(prompt).toContain("remote-fit-1");
+  });
+
   it("count truncation + compact: shows included X of Y with compact note", () => {
     // 30 skills but maxCount=10, and full format of 10 exceeds budget
     const skills = Array.from({ length: 30 }, (_, i) => makeSkill(`skill-${i}`, "A".repeat(200)));

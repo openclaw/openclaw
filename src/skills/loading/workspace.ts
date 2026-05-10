@@ -28,7 +28,11 @@ import type {
 } from "../types.js";
 import { resolveBundledSkillsDir } from "./bundled-dir.js";
 import { resolveBundledAllowlist, shouldIncludeSkill } from "./config.js";
-import { resolveOpenClawMetadata, resolveSkillInvocationPolicy, resolveSkillKey } from "./frontmatter.js";
+import {
+  resolveOpenClawMetadata,
+  resolveSkillInvocationPolicy,
+  resolveSkillKey,
+} from "./frontmatter.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 import { resolvePluginSkillDirs } from "./plugin-skills.js";
 import { serializeByKey } from "./serialize.js";
@@ -77,10 +81,11 @@ function compactSkillPaths<T extends Skill>(skills: T[]): T[] {
   if (homes.length === 0) {
     return skills;
   }
-  return skills.map((s) => ({
-    ...s,
-    filePath: compactHomePath(s.filePath, homes),
-  }));
+  return skills.map((s) =>
+    Object.assign({}, s, {
+      filePath: compactHomePath(s.filePath, homes),
+    }),
+  );
 }
 
 function compactHomePath(filePath: string, homes: readonly string[]): string {
@@ -1476,6 +1481,55 @@ function limitPromptToIncludedCount(
   };
 }
 
+function withCompactPromptFormat(limit: SkillsPromptLimitResult): SkillsPromptLimitResult {
+  return { ...limit, compact: true };
+}
+
+function renderSkillsPromptWithinBudget(params: {
+  initialLimit: SkillsPromptLimitResult;
+  promptSkills: PromptSkill[];
+  total: number;
+  maxPromptChars: number;
+  remoteNote?: string;
+}): string {
+  if (params.maxPromptChars <= 0) {
+    return "";
+  }
+
+  const renderWithRemoteNote = (remoteNote?: string): string => {
+    let limit = params.initialLimit;
+    let prompt = renderLimitedSkillsPrompt({
+      limit,
+      total: params.total,
+      maxPromptChars: params.maxPromptChars,
+      remoteNote,
+    });
+    while (prompt.length > params.maxPromptChars && limit.skillsForPrompt.length > 0) {
+      limit = limit.compact
+        ? limitPromptToIncludedCount(
+            params.promptSkills,
+            limit.skillsForPrompt.length - 1,
+            limit.compact,
+          )
+        : withCompactPromptFormat(limit);
+      prompt = renderLimitedSkillsPrompt({
+        limit,
+        total: params.total,
+        maxPromptChars: params.maxPromptChars,
+        remoteNote,
+      });
+    }
+    return prompt;
+  };
+
+  const prompt = renderWithRemoteNote(params.remoteNote);
+  if (prompt.length <= params.maxPromptChars || !params.remoteNote) {
+    return prompt;
+  }
+
+  return renderWithRemoteNote();
+}
+
 export function buildWorkspaceSkillSnapshot(
   workspaceDir: string,
   opts?: WorkspaceSkillBuildOptions & { snapshotVersion?: number },
@@ -1556,36 +1610,25 @@ function resolveWorkspaceSkillPromptState(
   // tier decision is based on the exact strings that end up in the prompt.
   // resolvedSkills keeps canonical paths for snapshot / runtime consumers.
   const promptSkills = compactSkillPaths(
-    promptEntries.map((entry) => ({
-      ...entry.skill,
-      skillKey: resolveSkillKey(entry.skill, entry),
-    })),
+    promptEntries.map((entry) =>
+      Object.assign({}, entry.skill, {
+        skillKey: resolveSkillKey(entry.skill, entry),
+      }),
+    ),
   ).toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const limits = resolveSkillsLimits(opts?.config, opts?.agentId);
-  let limit = applySkillsPromptLimits({
+  const limit = applySkillsPromptLimits({
     skills: promptSkills,
     config: opts?.config,
     agentId: opts?.agentId,
   });
-  let prompt = renderLimitedSkillsPrompt({
-    limit,
+  const prompt = renderSkillsPromptWithinBudget({
+    initialLimit: limit,
+    promptSkills,
     total: resolvedSkills.length,
     maxPromptChars: limits.maxSkillsPromptChars,
     remoteNote,
   });
-  while (prompt.length > limits.maxSkillsPromptChars && limit.skillsForPrompt.length > 0) {
-    limit = limitPromptToIncludedCount(
-      promptSkills,
-      limit.skillsForPrompt.length - 1,
-      limit.compact,
-    );
-    prompt = renderLimitedSkillsPrompt({
-      limit,
-      total: resolvedSkills.length,
-      maxPromptChars: limits.maxSkillsPromptChars,
-      remoteNote,
-    });
-  }
   return { eligible, prompt, resolvedSkills };
 }
 
