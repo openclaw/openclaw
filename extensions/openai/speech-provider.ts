@@ -317,7 +317,8 @@ export function buildOpenAISpeechProvider(): SpeechProviderPlugin {
         audioBuffer,
         outputFormat: responseFormat,
         fileExtension: responseFormatToFileExtension(responseFormat),
-        voiceCompatible: req.target === "voice-note" && responseFormat === "opus",
+        voiceCompatible:
+          req.target === "voice-note" && (responseFormat === "opus" || responseFormat === "mp3"),
       };
     },
     synthesizeTelephony: async (req) => {
