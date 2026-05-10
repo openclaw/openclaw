@@ -80,7 +80,7 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 ## Where to put things
 
 - Long-lived fork docs: `docs/polytropos/` (with this overview kept at repo root)
-- Work-in-progress plans: `docs/planning/polytropos/`
+- Work-in-progress plans: `docs/polytropos/planning/polytropos/`
 - Plugins: **do not** land in this repo; they live in `polytropos-plugins`
 
 ---
@@ -89,7 +89,7 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 
 See:
 
-- `docs/planning/polytropos/ROADMAP.md`
-- `docs/planning/polytropos/PLUGIN-CONTRACT.md`
+- `docs/polytropos/planning/polytropos/ROADMAP.md`
+- `docs/polytropos/planning/polytropos/PLUGIN-CONTRACT.md`
 
 M0/M2 are complete (plugin pipeline + migration workflow). Next major milestone is **M1: fork skeleton** (core seams + minimal namespace / structure for Polytropos-specific behavior).
