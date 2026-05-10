@@ -812,9 +812,10 @@ export class CodexAppServerEventProjector {
 
     const startedAt = this.diagnosticToolStartedAtByItem.get(params.item.id);
     this.diagnosticToolStartedAtByItem.delete(params.item.id);
+    const itemDurationMs =
+      typeof params.item.durationMs === "number" ? params.item.durationMs : undefined;
     const durationMs =
-      readNumber(params.item, "durationMs") ??
-      (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
+      itemDurationMs ?? (startedAt === undefined ? 0 : Math.max(0, Date.now() - startedAt));
     if (params.status === "blocked") {
       emitTrustedDiagnosticEvent({
         type: "tool.execution.blocked",
