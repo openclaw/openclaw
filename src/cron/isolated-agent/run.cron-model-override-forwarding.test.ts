@@ -150,6 +150,43 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     expect(embeddedCall?.model).toBe("gemini-2.0-flash");
   });
 
+  it("forwards isolated cron execution phase updates from embedded runs", async () => {
+    runWithModelFallbackMock.mockImplementation(async ({ provider, model, run }) => {
+      const result = await run(provider, model);
+      return { result, provider, model, attempts: [] };
+    });
+    runEmbeddedPiAgentMock.mockImplementation(async ({ onExecutionPhase }) => {
+      onExecutionPhase?.({
+        phase: "model_call_started",
+        provider: "google",
+        model: "gemini-2.0-flash",
+        firstModelCallStarted: true,
+      });
+      return {
+        payloads: [{ text: "summary done" }],
+        meta: { agentMeta: { usage: { input: 10, output: 20 } } },
+      };
+    });
+    const phases: unknown[] = [];
+
+    const result = await runCronIsolatedAgentTurn(
+      makeParams({
+        onExecutionPhase: (info: unknown) => phases.push(info),
+      }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(phases).toContainEqual(
+      expect.objectContaining({
+        jobId: "model-fwd-job",
+        phase: "model_call_started",
+        provider: "google",
+        model: "gemini-2.0-flash",
+        firstModelCallStarted: true,
+      }),
+    );
+  });
+
   it("validates cron thinking with catalog reasoning metadata", async () => {
     resolveAllowedModelRefMock.mockImplementation(() => ({
       ref: { provider: "ollama", model: "qwen3:0.6b" },

@@ -2174,6 +2174,14 @@ export async function runEmbeddedAttempt(
           transport: effectiveAgentTransport,
           trace: runTrace,
           nextCallId: () => `${params.runId}:model:${(diagnosticModelCallSeq += 1)}`,
+          onStarted: () => {
+            params.onExecutionPhase?.({
+              phase: "model_call_started",
+              provider: params.provider,
+              model: params.modelId,
+              firstModelCallStarted: true,
+            });
+          },
         },
       );
 
@@ -3076,6 +3084,11 @@ export async function runEmbeddedAttempt(
             contextTokenBudget,
             reserveTokens,
             trace: freezeDiagnosticTraceContext(createChildDiagnosticTraceContext(runTrace)),
+          });
+          params.onExecutionPhase?.({
+            phase: "context_assembled",
+            provider: params.provider,
+            model: params.modelId,
           });
 
           // Diagnostic: log context sizes before prompt to help debug early overflow errors.
