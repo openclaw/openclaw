@@ -928,6 +928,85 @@ describe("CodexAppServerEventProjector", () => {
     expect(toolResultContentItem.content).toBe("ok");
   });
 
+  it("orders declined native tool diagnostics after their start event", async () => {
+    const projector = await createProjector();
+    const diagnosticEvents: DiagnosticEventPayload[] = [];
+    const unsubscribe = onInternalDiagnosticEvent((event) => diagnosticEvents.push(event));
+
+    try {
+      await projector.handleNotification(
+        forCurrentTurn("item/started", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "inProgress",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: null,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "commandExecution",
+            id: "cmd-declined",
+            command: "pnpm test extensions/codex",
+            cwd: "/workspace",
+            processId: null,
+            source: "agent",
+            status: "declined",
+            commandActions: [],
+            aggregatedOutput: null,
+            exitCode: null,
+            durationMs: 1,
+          },
+        }),
+      );
+      await flushDiagnosticEvents();
+    } finally {
+      unsubscribe();
+    }
+
+    const toolDiagnosticEvents = diagnosticEvents.filter(
+      (
+        event,
+      ): event is Extract<
+        DiagnosticEventPayload,
+        {
+          type:
+            | "tool.execution.started"
+            | "tool.execution.completed"
+            | "tool.execution.error"
+            | "tool.execution.blocked";
+        }
+      > => event.type.startsWith("tool.execution."),
+    );
+    expect(
+      toolDiagnosticEvents.map((event) => ({
+        type: event.type,
+        toolName: event.toolName,
+        toolCallId: event.toolCallId,
+      })),
+    ).toEqual([
+      {
+        type: "tool.execution.started",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+      {
+        type: "tool.execution.blocked",
+        toolName: "bash",
+        toolCallId: "cmd-declined",
+      },
+    ]);
+  });
+
   it("records dynamic OpenClaw tool calls in mirrored transcript snapshots", async () => {
     const projector = await createProjector();
 
