@@ -132,6 +132,10 @@
       "types": "./dist/plugin-sdk/runtime.d.ts",
       "default": "./dist/plugin-sdk/runtime.js"
     },
+    "./plugin-sdk/health": {
+      "types": "./dist/plugin-sdk/health.d.ts",
+      "default": "./dist/plugin-sdk/health.js"
+    },
     "./plugin-sdk/runtime-doctor": {
       "types": "./dist/plugin-sdk/runtime-doctor.d.ts",
       "default": "./dist/plugin-sdk/runtime-doctor.js"

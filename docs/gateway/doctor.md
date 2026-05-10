@@ -34,6 +34,17 @@ openclaw doctor
     Apply recommended repairs without prompting (repairs + restarts where safe).
 
   </Tab>
+  <Tab title="--lint">
+    ```bash
+    openclaw doctor --lint
+    openclaw doctor --lint --json
+    ```
+
+    Run structured health checks for CI or preflight automation. This mode is
+    read-only: it does not prompt, repair, migrate config, restart services, or
+    touch state.
+
+  </Tab>
   <Tab title="--repair --force">
     ```bash
     openclaw doctor --repair --force
@@ -65,6 +76,50 @@ If you want to review changes before writing, open the config file first:
 ```bash
 cat ~/.openclaw/openclaw.json
 ```
+
+## Read-only lint mode
+
+`openclaw doctor --lint` is the automation-friendly sibling of
+`openclaw doctor --fix`. Both use doctor health checks, but their posture is
+different:
+
+| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
+| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
+| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
+| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+
+Modernized health checks may provide an optional `repair()` implementation.
+`doctor --fix` applies those repairs when they exist and continues to use the
+existing doctor repair flow for checks that have not migrated yet.
+
+Examples:
+
+```bash
+openclaw doctor --lint
+openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --json
+openclaw doctor --lint --only core/doctor/gateway-config --json
+```
+
+JSON output includes:
+
+- `ok`: whether any visible finding met the selected severity threshold
+- `checksRun`: number of health checks executed
+- `checksSkipped`: checks skipped by `--only` or `--skip`
+- `findings`: structured diagnostics with `checkId`, `severity`, `message`, and
+  optional `path`, `line`, `column`, `ocPath`, and `fixHint`
+
+Exit codes:
+
+- `0`: no findings at or above the selected threshold
+- `1`: one or more findings met the selected threshold
+- `2`: command/runtime failure before lint findings could be emitted
+
+Use `--severity-min info|warning|error` to control both what is printed and what
+causes a non-zero lint exit. Use `--only <id>` for narrow preflight gates and
+`--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
+lint run active.
 
 ## What it does (summary)
 
