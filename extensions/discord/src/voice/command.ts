@@ -337,7 +337,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
         });
         return;
       }
-      const modeOption = interaction.options.getString("mode", false);
+      const modeOption = interaction.options.getString("mode");
       if (modeOption) {
         const validModes = ["agent-proxy", "stt-tts", "bidi"];
         if (!validModes.includes(modeOption.toLowerCase())) {
