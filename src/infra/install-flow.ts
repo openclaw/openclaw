@@ -55,7 +55,7 @@ export async function withExtractedArchiveRoot<TResult extends { ok: boolean }>(
     let rootDir = "";
     try {
       rootDir = await resolvePackedRootDir(extractDir, {
-        rootMarkers: params.rootMarkers,
+        rootMarkers: params.rootMarkers ? [...params.rootMarkers] : undefined,
       });
     } catch (err) {
       return { ok: false, error: String(err) };
