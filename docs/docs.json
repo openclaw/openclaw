@@ -1165,6 +1165,17 @@
                 ]
               },
               {
+                "group": "Agent coordination",
+                "pages": [
+                  "tools/agent-send",
+                  "tools/steer",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/acp-agents-setup",
+                  "tools/multi-agent-sandbox-tools"
+                ]
+              },
+              {
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
@@ -1179,7 +1190,7 @@
             ]
           },
           {
-            "tab": "Tools & Plugins",
+            "tab": "Tools, Skills & Plugins",
             "groups": [
               {
                 "group": "Overview",
@@ -1250,17 +1261,6 @@
                 ]
               },
               {
-                "group": "Automation and tasks",
-                "pages": [
-                  "automation/index",
-                  "automation/cron-jobs",
-                  "automation/tasks",
-                  "automation/taskflow",
-                  "automation/standing-orders",
-                  "automation/hooks"
-                ]
-              },
-              {
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
@@ -1315,16 +1315,32 @@
                     ]
                   }
                 ]
+              }
+            ]
+          },
+          {
+            "tab": "Automation",
+            "groups": [
+              {
+                "group": "Overview",
+                "pages": ["automation/index"]
               },
               {
-                "group": "Agent coordination",
+                "group": "Scheduled and background work",
                 "pages": [
-                  "tools/agent-send",
-                  "tools/steer",
-                  "tools/subagents",
-                  "tools/acp-agents",
-                  "tools/acp-agents-setup",
-                  "tools/multi-agent-sandbox-tools"
+                  "automation/cron-jobs",
+                  "automation/tasks",
+                  "automation/taskflow",
+                  "gateway/heartbeat",
+                  "concepts/commitments"
+                ]
+              },
+              {
+                "group": "Authority and events",
+                "pages": [
+                  "automation/standing-orders",
+                  "automation/hooks",
+                  "plugins/hooks"
                 ]
               }
             ]
