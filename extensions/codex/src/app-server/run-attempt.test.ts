@@ -324,7 +324,9 @@ function createThreadLifecycleAppServerOptions(): Parameters<
       headers: {},
     },
     requestTimeoutMs: 60_000,
+    dynamicToolTimeoutMs: 30_000,
     turnCompletionIdleTimeoutMs: 60_000,
+    turnTerminalIdleTimeoutMs: 1_800_000,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: "workspace-write",
@@ -733,6 +735,23 @@ describe("runCodexAppServerAttempt", () => {
     ).toBe(timeoutMs);
   });
 
+  it("uses the app-server dynamic tool fallback when calls and tool config omit a timeout", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-default",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "hello" },
+        },
+        appServer: { dynamicToolTimeoutMs: 45_000 },
+        config: undefined,
+      }),
+    ).toBe(45_000);
+  });
+
   it("uses configured image generation timeouts for Codex dynamic tool calls", () => {
     expect(
       __testing.resolveDynamicToolCallTimeoutMs({
@@ -749,6 +768,56 @@ describe("runCodexAppServerAttempt", () => {
             defaults: {
               imageGenerationModel: {
                 primary: "openai/gpt-image-1",
+                timeoutMs: 180_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(180_000);
+  });
+
+  it("uses configured video and music generation timeouts for Codex dynamic tool calls", () => {
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-video-default",
+          namespace: null,
+          tool: "video_generate",
+          arguments: { prompt: "waves" },
+        },
+        appServer: { dynamicToolTimeoutMs: 30_000 },
+        config: {
+          agents: {
+            defaults: {
+              videoGenerationModel: {
+                primary: "openai/sora-2",
+                timeoutMs: 240_000,
+              },
+            },
+          },
+        },
+      }),
+    ).toBe(240_000);
+
+    expect(
+      __testing.resolveDynamicToolCallTimeoutMs({
+        call: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-music-default",
+          namespace: null,
+          tool: "music_generate",
+          arguments: { prompt: "soft synth loop" },
+        },
+        appServer: { dynamicToolTimeoutMs: 30_000 },
+        config: {
+          agents: {
+            defaults: {
+              musicGenerationModel: {
+                primary: "google/lyria-3-pro-preview",
                 timeoutMs: 180_000,
               },
             },
@@ -796,6 +865,24 @@ describe("runCodexAppServerAttempt", () => {
         config: undefined,
       }),
     ).toBe(__testing.CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS);
+  });
+
+  it("uses the largest configured media timeout as the client request watchdog fallback", () => {
+    expect(
+      __testing.resolveCodexDynamicToolClientFallbackTimeoutMs({
+        appServer: { dynamicToolTimeoutMs: 30_000 },
+        config: {
+          agents: {
+            defaults: {
+              imageModel: { primary: "openrouter/vision", timeoutMs: 120_000 },
+              imageGenerationModel: { primary: "openai/gpt-image-2", timeoutMs: 90_000 },
+              videoGenerationModel: { primary: "openai/sora-2", timeoutMs: 240_000 },
+              musicGenerationModel: { primary: "google/lyria", timeoutMs: 180_000 },
+            },
+          },
+        },
+      }),
+    ).toBe(240_000);
   });
 
   it("caps dynamic tool timeouts at the bridge maximum", () => {
@@ -1346,7 +1433,9 @@ describe("runCodexAppServerAttempt", () => {
     );
     params.timeoutMs = 60_000;
 
-    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 5 });
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: { appServer: { turnTerminalIdleTimeoutMs: 5 } },
+    });
     await harness.waitForMethod("turn/start");
 
     const result = await run;
@@ -4330,7 +4419,9 @@ describe("runCodexAppServerAttempt", () => {
         headers: { Authorization: "Bearer first" },
       },
       requestTimeoutMs: 60_000,
+      dynamicToolTimeoutMs: 30_000,
       turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 1_800_000,
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
@@ -4345,7 +4436,9 @@ describe("runCodexAppServerAttempt", () => {
         headers: { Authorization: "Bearer second" },
       },
       requestTimeoutMs: 60_000,
+      dynamicToolTimeoutMs: 30_000,
       turnCompletionIdleTimeoutMs: 5,
+      turnTerminalIdleTimeoutMs: 1_800_000,
       approvalPolicy: "never",
       approvalsReviewer: "user",
       sandbox: "workspace-write",
@@ -4368,7 +4461,9 @@ describe("runCodexAppServerAttempt", () => {
         headers: {},
       },
       requestTimeoutMs: 60_000,
+      dynamicToolTimeoutMs: 30_000,
       turnCompletionIdleTimeoutMs: 60_000,
+      turnTerminalIdleTimeoutMs: 1_800_000,
       approvalPolicy: "on-request" as const,
       approvalsReviewer: "guardian_subagent" as const,
       sandbox: "danger-full-access" as const,
@@ -4463,7 +4558,9 @@ describe("runCodexAppServerAttempt", () => {
           headers: {},
         },
         requestTimeoutMs: 60_000,
+        dynamicToolTimeoutMs: 30_000,
         turnCompletionIdleTimeoutMs: 60_000,
+        turnTerminalIdleTimeoutMs: 1_800_000,
         approvalPolicy: "never",
         approvalsReviewer: "user",
         sandbox: "workspace-write",

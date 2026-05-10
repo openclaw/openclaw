@@ -31,12 +31,16 @@ describe("Codex app-server config", () => {
           sandbox: "danger-full-access",
           approvalsReviewer: "guardian_subagent",
           serviceTier: "flex",
+          dynamicToolTimeoutMs: 45_000,
           turnCompletionIdleTimeoutMs: 120_000,
+          turnTerminalIdleTimeoutMs: 240_000,
         },
       },
       env: {
         OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY: "never",
         OPENCLAW_CODEX_APP_SERVER_SANDBOX: "read-only",
+        OPENCLAW_CODEX_DYNAMIC_TOOL_TIMEOUT_MS: "1",
+        OPENCLAW_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS: "1",
       },
     });
 
@@ -46,7 +50,9 @@ describe("Codex app-server config", () => {
         sandbox: "danger-full-access",
         approvalsReviewer: "guardian_subagent",
         serviceTier: "flex",
+        dynamicToolTimeoutMs: 45_000,
         turnCompletionIdleTimeoutMs: 120_000,
+        turnTerminalIdleTimeoutMs: 240_000,
         start: expect.objectContaining({
           transport: "websocket",
           url: "ws://127.0.0.1:39175",
@@ -84,6 +90,22 @@ describe("Codex app-server config", () => {
     expect(runtime.start).toEqual(
       expect.objectContaining({
         clearEnv: ["OPENAI_API_KEY"],
+      }),
+    );
+  });
+
+  it("uses environment fallbacks for app-server reliability watchdogs", () => {
+    const runtime = resolveRuntimeForTest({
+      env: {
+        OPENCLAW_CODEX_DYNAMIC_TOOL_TIMEOUT_MS: "45000",
+        OPENCLAW_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS: "240000",
+      },
+    });
+
+    expect(runtime).toEqual(
+      expect.objectContaining({
+        dynamicToolTimeoutMs: 45_000,
+        turnTerminalIdleTimeoutMs: 240_000,
       }),
     );
   });
@@ -759,6 +781,21 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]
 
     expect(codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-a" })).not.toEqual(
       codexAppServerStartOptionsKey(startOptions, { agentDir: "/tmp/agent-b" }),
+    );
+  });
+
+  it("derives distinct shared-client keys for distinct dynamic tool request budgets", () => {
+    const startOptions = {
+      transport: "stdio" as const,
+      command: "codex",
+      args: ["app-server"],
+      headers: {},
+    };
+
+    expect(
+      codexAppServerStartOptionsKey(startOptions, { dynamicToolServerRequestTimeoutMs: 30_000 }),
+    ).not.toEqual(
+      codexAppServerStartOptionsKey(startOptions, { dynamicToolServerRequestTimeoutMs: 60_000 }),
     );
   });
 

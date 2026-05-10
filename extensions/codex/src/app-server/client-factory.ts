@@ -1,5 +1,5 @@
 import type { resolveCodexAppServerAuthProfileIdForAgent } from "./auth-bridge.js";
-import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerClient, CodexAppServerClientOptions } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 
 type AuthProfileOrderConfig = Parameters<
@@ -11,6 +11,7 @@ export type CodexAppServerClientFactory = (
   authProfileId?: string,
   agentDir?: string,
   config?: AuthProfileOrderConfig,
+  clientOptions?: CodexAppServerClientOptions,
 ) => Promise<CodexAppServerClient>;
 
 export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
@@ -18,9 +19,10 @@ export const defaultCodexAppServerClientFactory: CodexAppServerClientFactory = (
   authProfileId,
   agentDir,
   config,
+  clientOptions,
 ) =>
   import("./shared-client.js").then(({ getSharedCodexAppServerClient }) =>
-    getSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config }),
+    getSharedCodexAppServerClient({ startOptions, authProfileId, agentDir, config, clientOptions }),
   );
 
 export function createCodexAppServerClientFactoryTestHooks(

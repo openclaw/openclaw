@@ -648,7 +648,9 @@ Supported `appServer` fields:
 | `headers`                     | `{}`                                                   | Extra WebSocket headers.                                                                                                                                                                                                             |
 | `clearEnv`                    | `[]`                                                   | Extra environment variable names removed from the spawned stdio app-server process after OpenClaw builds its inherited environment. `CODEX_HOME` and `HOME` are reserved for OpenClaw's per-agent Codex isolation on local launches. |
 | `requestTimeoutMs`            | `60000`                                                | Timeout for app-server control-plane calls.                                                                                                                                                                                          |
+| `dynamicToolTimeoutMs`        | `30000`                                                | Fallback budget for Codex `item/tool/call` requests when the tool call and tool-family config do not provide a timeout. Explicit tool `timeoutMs` values and configured media tool timeouts are honored first, capped at 600000 ms.  |
 | `turnCompletionIdleTimeoutMs` | `60000`                                                | Quiet window after a turn-scoped Codex app-server request while OpenClaw waits for `turn/completed`. Raise this for slow post-tool or status-only synthesis phases.                                                                  |
+| `turnTerminalIdleTimeoutMs`   | `1800000`                                              | Hard stuck-turn watchdog after `turn/start`. Meaningful current-turn activity refreshes this timer; it remains the backstop when the short completion-idle watchdog is disarmed.                                                     |
 | `mode`                        | `"yolo"` unless local Codex requirements disallow YOLO | Preset for YOLO or guardian-reviewed execution. Local stdio requirements that omit `danger-full-access`, `never` approval, or the `user` reviewer make the implicit default guardian.                                                |
 | `approvalPolicy`              | `"never"` or an allowed guardian approval policy       | Native Codex approval policy sent to thread start/resume/turn. Guardian defaults prefer `"on-request"` when allowed.                                                                                                                 |
 | `sandbox`                     | `"danger-full-access"` or an allowed guardian sandbox  | Native Codex sandbox mode sent to thread start/resume. Guardian defaults prefer `"workspace-write"` when allowed, otherwise `"read-only"`.                                                                                           |
@@ -656,15 +658,21 @@ Supported `appServer` fields:
 | `serviceTier`                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, `null` clears the override, and legacy `"fast"` is accepted as `"priority"`.                                      |
 
 OpenClaw-owned dynamic tool calls are bounded independently from
-`appServer.requestTimeoutMs`: Codex `item/tool/call` requests use a 30 second
-OpenClaw watchdog by default. A positive per-call `timeoutMs` argument extends
-or shortens that specific tool budget. The `image_generate` tool also uses
-`agents.defaults.imageGenerationModel.timeoutMs` when the tool call does not
-provide its own timeout, and the media-understanding `image` tool uses
-`tools.media.image.timeoutSeconds` or its 60 second media default. Dynamic tool
-budgets are capped at 600000 ms. On timeout, OpenClaw aborts the tool signal
-where supported and returns a failed dynamic-tool response to Codex so the turn
-can continue instead of leaving the session in `processing`.
+`appServer.requestTimeoutMs`. Timeout resolution uses the first matching value:
+
+1. The tool call's positive `timeoutMs` argument.
+2. Tool-family config such as `agents.defaults.imageGenerationModel.timeoutMs`,
+   `agents.defaults.videoGenerationModel.timeoutMs`,
+   `agents.defaults.musicGenerationModel.timeoutMs`, or the media-understanding
+   image timeout from `tools.media.image.timeoutSeconds`.
+3. `appServer.dynamicToolTimeoutMs`, defaulting to 30000 ms.
+
+The dynamic-tool client watchdog uses the same family-aware budget so Codex does
+not receive a generic bridge timeout before OpenClaw's per-tool watchdog can
+return a structured failed tool response. Dynamic tool budgets are capped at
+600000 ms. On timeout, OpenClaw aborts the tool signal where supported and
+returns a failed dynamic-tool response to Codex so the turn can continue instead
+of leaving the session in `processing`.
 
 After OpenClaw responds to a Codex turn-scoped app-server request, the harness
 also expects Codex to finish the native turn with `turn/completed`. If the
@@ -685,6 +693,8 @@ Environment overrides remain available for local testing:
 - `OPENCLAW_CODEX_APP_SERVER_MODE=yolo|guardian`
 - `OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY`
 - `OPENCLAW_CODEX_APP_SERVER_SANDBOX`
+- `OPENCLAW_CODEX_DYNAMIC_TOOL_TIMEOUT_MS`
+- `OPENCLAW_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS`
 
 `OPENCLAW_CODEX_APP_SERVER_BIN` bypasses the managed binary when
 `appServer.command` is unset.

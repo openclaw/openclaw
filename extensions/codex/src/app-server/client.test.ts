@@ -443,6 +443,73 @@ describe("CodexAppServerClient", () => {
     );
   });
 
+  it("uses the configured dynamic tool server request watchdog fallback", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+    const harness = createClientHarness({ dynamicToolServerRequestTimeoutMs: 5 });
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "item/tool/call") {
+        return new Promise<never>(() => undefined);
+      }
+      return undefined;
+    });
+
+    harness.send({ id: "srv-timeout", method: "item/tool/call", params: { tool: "message" } });
+    await vi.advanceTimersByTimeAsync(5);
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-timeout",
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: "OpenClaw dynamic tool call timed out after 5ms before sending a response to Codex.",
+          },
+        ],
+      },
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "codex app-server server request timed out",
+      expect.objectContaining({ timeoutMs: 5 }),
+    );
+  });
+
+  it("honors per-call dynamic tool request timeouts before the fallback watchdog", async () => {
+    vi.useFakeTimers();
+    const harness = createClientHarness({ dynamicToolServerRequestTimeoutMs: 1_000 });
+    clients.push(harness.client);
+    harness.client.addRequestHandler((request) => {
+      if (request.method === "item/tool/call") {
+        return new Promise<never>(() => undefined);
+      }
+      return undefined;
+    });
+
+    harness.send({
+      id: "srv-timeout",
+      method: "item/tool/call",
+      params: { tool: "message", arguments: { timeoutMs: 7 } },
+    });
+    await vi.advanceTimersByTimeAsync(7);
+    await vi.waitFor(() => expect(harness.writes.length).toBe(1));
+
+    expect(JSON.parse(harness.writes[0] ?? "{}")).toEqual({
+      id: "srv-timeout",
+      result: {
+        success: false,
+        contentItems: [
+          {
+            type: "inputText",
+            text: "OpenClaw dynamic tool call timed out after 7ms before sending a response to Codex.",
+          },
+        ],
+      },
+    });
+  });
+
   it("fails closed for unhandled native app-server approvals", async () => {
     const harness = createClientHarness();
     clients.push(harness.client);

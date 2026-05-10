@@ -2,7 +2,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import type { Api, Model } from "@mariozechner/pi-ai";
 import { vi } from "vitest";
-import { CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient, type CodexAppServerClientOptions } from "./client.js";
 
 export function createCodexTestModel(provider = "openai-codex", input = ["text"]): Model<Api> {
   return {
@@ -18,7 +18,7 @@ export function createCodexTestModel(provider = "openai-codex", input = ["text"]
   } as Model<Api>;
 }
 
-export function createClientHarness() {
+export function createClientHarness(options?: CodexAppServerClientOptions) {
   const stdout = new PassThrough();
   const writes: string[] = [];
   const stdin = new Writable({
@@ -36,7 +36,7 @@ export function createClientHarness() {
       process.killed = true;
     }),
   });
-  const client = CodexAppServerClient.fromTransportForTests(process);
+  const client = CodexAppServerClient.fromTransportForTests(process, options);
   return {
     client,
     process,

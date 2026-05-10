@@ -102,7 +102,9 @@ export type CodexAppServerStartOptions = {
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
   requestTimeoutMs: number;
+  dynamicToolTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
+  turnTerminalIdleTimeoutMs: number;
   approvalPolicy: CodexAppServerEffectiveApprovalPolicy;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
@@ -129,7 +131,9 @@ export type CodexPluginConfig = {
     headers?: Record<string, string>;
     clearEnv?: string[];
     requestTimeoutMs?: number;
+    dynamicToolTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
+    turnTerminalIdleTimeoutMs?: number;
     approvalPolicy?: CodexAppServerApprovalPolicy;
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
@@ -148,7 +152,9 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "headers",
   "clearEnv",
   "requestTimeoutMs",
+  "dynamicToolTimeoutMs",
   "turnCompletionIdleTimeoutMs",
+  "turnTerminalIdleTimeoutMs",
   "approvalPolicy",
   "sandbox",
   "approvalsReviewer",
@@ -183,6 +189,9 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+export const DEFAULT_CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+export const MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 600_000;
+export const DEFAULT_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
@@ -257,7 +266,9 @@ const codexPluginConfigSchema = z
         headers: z.record(z.string(), z.string()).optional(),
         clearEnv: z.array(z.string()).optional(),
         requestTimeoutMs: z.number().positive().optional(),
+        dynamicToolTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
+        turnTerminalIdleTimeoutMs: z.number().positive().optional(),
         approvalPolicy: codexAppServerApprovalPolicySchema.optional(),
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
@@ -371,9 +382,21 @@ export function resolveCodexAppServerRuntimeOptions(
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
+    dynamicToolTimeoutMs: clampPositiveNumber(
+      normalizePositiveNumber(
+        config.dynamicToolTimeoutMs ?? readNumberEnv(env.OPENCLAW_CODEX_DYNAMIC_TOOL_TIMEOUT_MS),
+        DEFAULT_CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+      ),
+      MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    ),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
       config.turnCompletionIdleTimeoutMs,
       60_000,
+    ),
+    turnTerminalIdleTimeoutMs: normalizePositiveNumber(
+      config.turnTerminalIdleTimeoutMs ??
+        readNumberEnv(env.OPENCLAW_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS),
+      DEFAULT_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
     ),
     approvalPolicy:
       resolveApprovalPolicy(config.approvalPolicy) ??
@@ -453,7 +476,11 @@ export function resolveCodexComputerUseConfig(
 
 export function codexAppServerStartOptionsKey(
   options: CodexAppServerStartOptions,
-  params: { authProfileId?: string; agentDir?: string } = {},
+  params: {
+    authProfileId?: string;
+    agentDir?: string;
+    dynamicToolServerRequestTimeoutMs?: number;
+  } = {},
 ): string {
   return JSON.stringify({
     transport: options.transport,
@@ -471,6 +498,7 @@ export function codexAppServerStartOptionsKey(
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),
     authProfileId: params.authProfileId ?? null,
     agentDir: params.agentDir ?? null,
+    dynamicToolServerRequestTimeoutMs: params.dynamicToolServerRequestTimeoutMs ?? null,
   });
 }
 
@@ -902,6 +930,10 @@ export function isCodexFastServiceTier(value: unknown): boolean {
 
 function normalizePositiveNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function clampPositiveNumber(value: number, max: number): number {
+  return Math.min(max, Math.max(1, Math.floor(value)));
 }
 
 function normalizeHeaders(value: unknown): Record<string, string> {

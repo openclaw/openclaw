@@ -4,7 +4,7 @@ import {
   bridgeCodexAppServerStartOptions,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
-import { CodexAppServerClient } from "./client.js";
+import { CodexAppServerClient, type CodexAppServerClientOptions } from "./client.js";
 import {
   codexAppServerStartOptionsKey,
   resolveCodexAppServerRuntimeOptions,
@@ -35,6 +35,7 @@ export async function getSharedCodexAppServerClient(options?: {
   authProfileId?: string;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  clientOptions?: CodexAppServerClientOptions;
 }): Promise<CodexAppServerClient> {
   const state = getSharedCodexAppServerClientState();
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
@@ -55,6 +56,7 @@ export async function getSharedCodexAppServerClient(options?: {
   const key = codexAppServerStartOptionsKey(startOptions, {
     authProfileId,
     agentDir,
+    dynamicToolServerRequestTimeoutMs: options?.clientOptions?.dynamicToolServerRequestTimeoutMs,
   });
   if (state.key && state.key !== key) {
     clearSharedCodexAppServerClient();
@@ -63,7 +65,7 @@ export async function getSharedCodexAppServerClient(options?: {
   const sharedPromise =
     state.promise ??
     (state.promise = (async () => {
-      const client = CodexAppServerClient.start(startOptions);
+      const client = startCodexAppServerClient(startOptions, options?.clientOptions);
       state.client = client;
       client.addCloseHandler(clearSharedClientIfCurrent);
       try {
@@ -103,6 +105,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
   authProfileId?: string;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
+  clientOptions?: CodexAppServerClientOptions;
 }): Promise<CodexAppServerClient> {
   const agentDir = options?.agentDir ?? resolveDefaultAgentDir(options?.config ?? {});
   const authProfileId = resolveCodexAppServerAuthProfileIdForAgent({
@@ -119,7 +122,7 @@ export async function createIsolatedCodexAppServerClient(options?: {
     authProfileId,
     config: options?.config,
   });
-  const client = CodexAppServerClient.start(startOptions);
+  const client = startCodexAppServerClient(startOptions, options?.clientOptions);
   const initialize = client.initialize();
   try {
     await withTimeout(initialize, options?.timeoutMs ?? 0, "codex app-server initialize timed out");
@@ -191,4 +194,13 @@ function clearSharedClientIfCurrent(client: CodexAppServerClient): void {
   state.client = undefined;
   state.promise = undefined;
   state.key = undefined;
+}
+
+function startCodexAppServerClient(
+  startOptions: CodexAppServerStartOptions,
+  clientOptions: CodexAppServerClientOptions | undefined,
+): CodexAppServerClient {
+  return clientOptions
+    ? CodexAppServerClient.start(startOptions, clientOptions)
+    : CodexAppServerClient.start(startOptions);
 }

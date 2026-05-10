@@ -171,10 +171,20 @@
             "minimum": 1,
             "default": 60000
           },
+          "dynamicToolTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 30000
+          },
           "turnCompletionIdleTimeoutMs": {
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnTerminalIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 1800000
           },
           "approvalPolicy": {
             "type": "string",
@@ -341,9 +351,19 @@
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
       "advanced": true
     },
+    "appServer.dynamicToolTimeoutMs": {
+      "label": "Dynamic Tool Timeout",
+      "help": "Fallback timeout for Codex dynamic tool calls when the call and tool-family config do not provide one.",
+      "advanced": true
+    },
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnTerminalIdleTimeoutMs": {
+      "label": "Turn Terminal Idle Timeout",
+      "help": "Maximum quiet time after turn/start before OpenClaw interrupts a stuck Codex turn while waiting for turn/completed.",
       "advanced": true
     },
     "appServer.approvalPolicy": {

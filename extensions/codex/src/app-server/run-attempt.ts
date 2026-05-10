@@ -65,6 +65,9 @@ import {
 } from "./client.js";
 import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  DEFAULT_CODEX_DYNAMIC_TOOL_TIMEOUT_MS as CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  DEFAULT_CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS as CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
+  MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS as CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
   readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   resolveCodexAppServerRuntimeOptions,
@@ -132,13 +135,10 @@ import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
 import { filterToolsForVisionInputs } from "./vision-tools.js";
 
-const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
-const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
-const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
 const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
@@ -727,6 +727,12 @@ export async function runCodexAppServerAttempt(
             startupAuthProfileId,
             agentDir,
             params.config,
+            {
+              dynamicToolServerRequestTimeoutMs: resolveCodexDynamicToolClientFallbackTimeoutMs({
+                appServer,
+                config: params.config,
+              }),
+            },
           );
           attemptedClient = startupClient;
           startupClientForCleanup = startupClient;
@@ -858,7 +864,7 @@ export async function runCodexAppServerAttempt(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
-    options.turnTerminalIdleTimeoutMs,
+    options.turnTerminalIdleTimeoutMs ?? appServer.turnTerminalIdleTimeoutMs,
   );
   let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
   let turnCompletionIdleWatchArmed = false;
@@ -1195,6 +1201,7 @@ export async function runCodexAppServerAttempt(
       });
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
         call,
+        appServer,
         config: params.config,
       });
       const response = await handleDynamicToolCallWithTimeout({
@@ -1644,12 +1651,29 @@ function failedDynamicToolResponse(message: string): CodexDynamicToolCallRespons
 
 function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
+  appServer?: Pick<CodexAppServerRuntimeOptions, "dynamicToolTimeoutMs">;
   config: EmbeddedRunAttemptParams["config"];
 }): number {
   return clampDynamicToolTimeoutMs(
     readDynamicToolCallTimeoutMs(params.call.arguments) ??
       readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
+      params.appServer?.dynamicToolTimeoutMs ??
       CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  );
+}
+
+function resolveCodexDynamicToolClientFallbackTimeoutMs(params: {
+  appServer: Pick<CodexAppServerRuntimeOptions, "dynamicToolTimeoutMs">;
+  config?: EmbeddedRunAttemptParams["config"];
+}): number {
+  return clampDynamicToolTimeoutMs(
+    Math.max(
+      params.appServer.dynamicToolTimeoutMs,
+      readConfiguredDynamicToolTimeoutMs("image", params.config) ?? 0,
+      readConfiguredDynamicToolTimeoutMs("image_generate", params.config) ?? 0,
+      readConfiguredDynamicToolTimeoutMs("video_generate", params.config) ?? 0,
+      readConfiguredDynamicToolTimeoutMs("music_generate", params.config) ?? 0,
+    ),
   );
 }
 
@@ -1664,27 +1688,38 @@ function readConfiguredDynamicToolTimeoutMs(
   toolName: string,
   config: EmbeddedRunAttemptParams["config"],
 ): number | undefined {
-  if (toolName === "image_generate") {
-    const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
-    if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
+  const defaults = config?.agents?.defaults as Record<string, unknown> | undefined;
+  switch (normalizeCodexDynamicToolName(toolName)) {
+    case "image":
+      return (
+        readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
+        readAgentModelTimeoutMs(defaults?.imageModel) ??
+        CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
+      );
+    case "image_generate":
+      return readAgentModelTimeoutMs(defaults?.imageGenerationModel);
+    case "video_generate":
+      return readAgentModelTimeoutMs(defaults?.videoGenerationModel);
+    case "music_generate":
+      return readAgentModelTimeoutMs(defaults?.musicGenerationModel);
+    default:
       return undefined;
-    }
-    return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
   }
-
-  if (toolName === "image") {
-    return (
-      readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
-      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
-    );
-  }
-
-  return undefined;
 }
 
 function readTimeoutSecondsAsMs(value: unknown): number | undefined {
   const seconds = readPositiveFiniteTimeoutMs(value);
   return seconds === undefined ? undefined : seconds * 1000;
+}
+
+function readAgentModelTimeoutMs(value: unknown): number | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const model = value as { timeoutMs?: unknown; timeoutSeconds?: unknown };
+  return (
+    readPositiveFiniteTimeoutMs(model.timeoutMs) ?? readTimeoutSecondsAsMs(model.timeoutSeconds)
+  );
 }
 
 function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
@@ -2374,6 +2409,7 @@ export const __testing = {
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,
   handleDynamicToolCallWithTimeout,
+  resolveCodexDynamicToolClientFallbackTimeoutMs,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
   resolveOpenClawCodingToolsSessionKeys,

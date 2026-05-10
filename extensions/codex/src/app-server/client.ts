@@ -1,6 +1,10 @@
 import { createInterface, type Interface as ReadlineInterface } from "node:readline";
 import { embeddedAgentLog, OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { resolveCodexAppServerRuntimeOptions, type CodexAppServerStartOptions } from "./config.js";
+import {
+  MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+  resolveCodexAppServerRuntimeOptions,
+  type CodexAppServerStartOptions,
+} from "./config.js";
 import {
   type CodexAppServerRequestMethod,
   type CodexAppServerRequestParams,
@@ -27,8 +31,12 @@ export { MIN_CODEX_APP_SERVER_VERSION } from "./version.js";
 const CODEX_APP_SERVER_PARSE_LOG_MAX = 500;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX = 1_000_000;
 const CODEX_APP_SERVER_PARSE_BUFFER_MAX_LINES = 1_000;
-const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = 600_000;
+const CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS = MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS;
 const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
+
+export type CodexAppServerClientOptions = {
+  dynamicToolServerRequestTimeoutMs?: number;
+};
 
 type PendingRequest = {
   method: string;
@@ -74,6 +82,7 @@ export class CodexAppServerClient {
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
+  private readonly dynamicToolServerRequestTimeoutMs: number;
   private nextId = 1;
   private initialized = false;
   private closed = false;
@@ -87,8 +96,12 @@ export class CodexAppServerClient {
       }
     | undefined;
 
-  private constructor(child: CodexAppServerTransport) {
+  private constructor(child: CodexAppServerTransport, options?: CodexAppServerClientOptions) {
     this.child = child;
+    this.dynamicToolServerRequestTimeoutMs = normalizePositiveTimeoutMs(
+      options?.dynamicToolServerRequestTimeoutMs,
+      CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+    );
     this.lines = createInterface({ input: child.stdout });
     this.lines.on("line", (line) => this.handleLine(line));
     child.stderr.on("data", (chunk: Buffer | string) => {
@@ -114,7 +127,10 @@ export class CodexAppServerClient {
     );
   }
 
-  static start(options?: Partial<CodexAppServerStartOptions>): CodexAppServerClient {
+  static start(
+    options?: Partial<CodexAppServerStartOptions>,
+    clientOptions?: CodexAppServerClientOptions,
+  ): CodexAppServerClient {
     const defaults = resolveCodexAppServerRuntimeOptions().start;
     const startOptions = {
       ...defaults,
@@ -125,13 +141,16 @@ export class CodexAppServerClient {
       throw new Error("Managed Codex app-server start options must be resolved before spawn.");
     }
     if (startOptions.transport === "websocket") {
-      return new CodexAppServerClient(createWebSocketTransport(startOptions));
+      return new CodexAppServerClient(createWebSocketTransport(startOptions), clientOptions);
     }
-    return new CodexAppServerClient(createStdioTransport(startOptions));
+    return new CodexAppServerClient(createStdioTransport(startOptions), clientOptions);
   }
 
-  static fromTransportForTests(child: CodexAppServerTransport): CodexAppServerClient {
-    return new CodexAppServerClient(child);
+  static fromTransportForTests(
+    child: CodexAppServerTransport,
+    options?: CodexAppServerClientOptions,
+  ): CodexAppServerClient {
+    return new CodexAppServerClient(child, options);
   }
 
   async initialize(): Promise<void> {
@@ -393,7 +412,11 @@ export class CodexAppServerClient {
   private async runServerRequestHandlers(
     request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
   ): Promise<JsonValue | undefined> {
-    const timeoutResponse = timeoutServerRequestResponse(request);
+    const timeoutMs = resolveServerRequestTimeoutMs(
+      request,
+      this.dynamicToolServerRequestTimeoutMs,
+    );
+    const timeoutResponse = timeoutServerRequestResponse(request, timeoutMs);
     if (!timeoutResponse) {
       return await this.runServerRequestHandlersWithoutTimeout(request);
     }
@@ -407,10 +430,10 @@ export class CodexAppServerClient {
             embeddedAgentLog.warn("codex app-server server request timed out", {
               id: request.id,
               method: request.method,
-              timeoutMs: CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+              timeoutMs,
             });
-            resolve(timeoutResponse);
-          }, CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS);
+            resolve(timeoutServerRequestResponse(request, timeoutMs) ?? timeoutResponse);
+          }, timeoutMs);
           timeout.unref?.();
         }),
       ]);
@@ -512,8 +535,30 @@ function defaultServerRequestResponse(
   return {};
 }
 
+function resolveServerRequestTimeoutMs(
+  request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  fallbackMs: number,
+): number {
+  return normalizePositiveTimeoutMs(readDynamicToolRequestTimeoutMs(request.params), fallbackMs);
+}
+
+function readDynamicToolRequestTimeoutMs(params: JsonValue | undefined): number | undefined {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return undefined;
+  }
+  const args = (params as { arguments?: JsonValue }).arguments;
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    return undefined;
+  }
+  const timeoutMs = (args as { timeoutMs?: unknown }).timeoutMs;
+  return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
+    ? timeoutMs
+    : undefined;
+}
+
 function timeoutServerRequestResponse(
   request: Required<Pick<RpcRequest, "id" | "method">> & { params?: JsonValue },
+  timeoutMs = CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
 ): JsonValue | undefined {
   if (request.method !== "item/tool/call") {
     return undefined;
@@ -522,11 +567,27 @@ function timeoutServerRequestResponse(
     contentItems: [
       {
         type: "inputText",
-        text: `OpenClaw dynamic tool call timed out after ${CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS}ms before sending a response to Codex.`,
+        text: `OpenClaw dynamic tool call timed out after ${timeoutMs}ms before sending a response to Codex.`,
       },
     ],
     success: false,
   };
+}
+
+function normalizePositiveTimeoutMs(value: number | undefined, fallback: number): number {
+  const normalizedFallback = Math.min(
+    MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
+    Math.max(
+      1,
+      Math.floor(
+        Number.isFinite(fallback) ? fallback : CODEX_DYNAMIC_TOOL_SERVER_REQUEST_TIMEOUT_MS,
+      ),
+    ),
+  );
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return normalizedFallback;
+  }
+  return Math.min(MAX_CODEX_DYNAMIC_TOOL_TIMEOUT_MS, Math.max(1, Math.floor(value)));
 }
 
 function assertSupportedCodexAppServerVersion(response: CodexInitializeResponse): void {
