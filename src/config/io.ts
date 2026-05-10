@@ -2201,7 +2201,11 @@ export function createConfigIO(
           mode: 0o600,
           flag: "wx",
         })
-        .catch(() => {});
+        .catch((writeErr: unknown) => {
+          deps.logger.warn(
+            `Failed to save rejected config payload to ${rejectedPath}: ${formatErrorMessage(writeErr)}`,
+          );
+        });
       const message = `Config write rejected: ${configPath} (${blockingReasons.join(", ")}). Rejected payload saved to ${rejectedPath}.`;
       const err = Object.assign(new Error(message), {
         code: "CONFIG_WRITE_REJECTED",
