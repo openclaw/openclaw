@@ -100,10 +100,10 @@ function expectPreparedModelResult(
   }
 }
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
-  return call?.[0] as T;
+  return call?.[0];
 }
 
 describe("prepareSimpleCompletionModel", () => {
@@ -402,7 +402,7 @@ describe("prepareSimpleCompletionModel", () => {
       agentDir: "/tmp/openclaw-agent",
     });
 
-    const runtimeAuthInput = callArg<{
+    const runtimeAuthInput = callArg(hoisted.prepareProviderRuntimeAuthMock) as {
       provider?: string;
       workspaceDir?: string;
       context?: {
@@ -411,7 +411,7 @@ describe("prepareSimpleCompletionModel", () => {
         modelId?: string;
         profileId?: string;
       };
-    }>(hoisted.prepareProviderRuntimeAuthMock);
+    };
     expect(runtimeAuthInput.provider).toBe("amazon-bedrock-mantle");
     expect(runtimeAuthInput.workspaceDir).toBe("/tmp/openclaw-agent");
     expect(runtimeAuthInput.context?.apiKey).toBe("__amazon_bedrock_mantle_iam__");
