@@ -8,7 +8,6 @@ import {
 import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { CURRENT_SESSION_VERSION } from "./session-transcript-format.js";
 import type {
-  FileEntry,
   SessionContext,
   SessionEntry,
   SessionHeader,
@@ -17,6 +16,7 @@ import type {
   SessionManager,
   SessionTranscriptScope,
   SessionTreeNode,
+  TranscriptEntry,
 } from "./session-transcript-types.js";
 import { TranscriptState } from "./transcript-state.js";
 
@@ -68,12 +68,14 @@ function formatTranscriptParentReference(
 }
 
 function createTranscriptStateFromEvents(events: unknown[]): TranscriptState {
-  const fileEntries = events.filter((event): event is FileEntry =>
+  const transcriptEntries = events.filter((event): event is TranscriptEntry =>
     Boolean(event && typeof event === "object"),
   );
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session");
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(
+    (entry): entry is SessionEntry => entry.type !== "session",
+  );
   return new TranscriptState({ header, entries });
 }
 

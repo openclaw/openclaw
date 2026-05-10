@@ -20,7 +20,6 @@ export type {
   CompactionEntry,
   CustomEntry,
   CustomMessageEntry,
-  FileEntry,
   LabelEntry,
   ModelChangeEntry,
   SessionContext,
@@ -34,6 +33,7 @@ export type {
   SessionTranscriptScope,
   SessionTreeNode,
   ThinkingLevelChangeEntry,
+  TranscriptEntry,
 } from "./session-transcript-types.js";
 
 export type SessionManager = SessionManagerType;

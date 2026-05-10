@@ -169,11 +169,13 @@ async function readSessionDataFromTranscript(params: {
     );
   }
   const raw = exportSqliteSessionTranscriptJsonl(params);
-  const fileEntries = parseSessionEntries(raw);
-  migrateSessionEntries(fileEntries);
+  const transcriptEntries = parseSessionEntries(raw);
+  migrateSessionEntries(transcriptEntries);
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is PiSessionEntry => entry.type !== "session");
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(
+    (entry): entry is PiSessionEntry => entry.type !== "session",
+  );
   const lastEntry = entries.at(-1);
   const leafId = typeof lastEntry?.id === "string" ? lastEntry.id : null;
   return { header, entries, leafId };

@@ -84,11 +84,13 @@ export async function hardenManualCompactionBoundary(params: {
     throw new Error("SQLite transcript scope requires a session id.");
   }
   const events = loadSqliteSessionTranscriptEvents(scope).map((entry) => entry.event);
-  const fileEntries = events.filter((event): event is SessionEntry | SessionHeader =>
+  const transcriptEntries = events.filter((event): event is SessionEntry | SessionHeader =>
     Boolean(event && typeof event === "object"),
   );
-  const header = fileEntries.find((entry) => entry?.type === "session") ?? null;
-  const entries = fileEntries.filter((entry): entry is SessionEntry => entry?.type !== "session");
+  const header = transcriptEntries.find((entry) => entry?.type === "session") ?? null;
+  const entries = transcriptEntries.filter(
+    (entry): entry is SessionEntry => entry?.type !== "session",
+  );
   const state = new TranscriptState({ header, entries });
   if (!header) {
     return {

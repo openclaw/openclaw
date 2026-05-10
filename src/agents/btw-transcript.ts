@@ -3,8 +3,8 @@ import { diagnosticLogger as diag } from "../logging/diagnostic.js";
 import {
   buildSessionContext,
   migrateSessionEntries,
-  type FileEntry,
   type SessionEntry as PiSessionEntry,
+  type TranscriptEntry,
 } from "./transcript/session-transcript-contract.js";
 
 function readSessionEntryId(entry: PiSessionEntry): string | undefined {
@@ -87,7 +87,7 @@ export async function readBtwTranscriptMessages(params: {
       sessionId: params.sessionId,
     })
       .map((entry) => entry.event)
-      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+      .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
     migrateSessionEntries(entries);
     const sessionEntries = entries.filter(
       (entry): entry is PiSessionEntry => entry.type !== "session",

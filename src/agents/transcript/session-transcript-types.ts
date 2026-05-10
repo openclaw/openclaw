@@ -86,7 +86,7 @@ export type SessionEntry =
   | LabelEntry
   | SessionInfoEntry;
 
-export type FileEntry = SessionHeader | SessionEntry;
+export type TranscriptEntry = SessionHeader | SessionEntry;
 
 export type SessionTreeNode = {
   entry: SessionEntry;

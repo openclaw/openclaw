@@ -1,4 +1,4 @@
-import type { FileEntry, SessionEntry } from "openclaw/plugin-sdk/agent-harness-runtime";
+import type { SessionEntry, TranscriptEntry } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   buildSessionContext,
   loadSqliteSessionTranscriptEvents,
@@ -22,7 +22,7 @@ export async function readCodexMirroredSessionHistoryMessages(
     }
     const entries = loadSqliteSessionTranscriptEvents({ agentId, sessionId })
       .map((entry) => entry.event)
-      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+      .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
     if (entries.length === 0) {
       return [];
     }

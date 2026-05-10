@@ -11,11 +11,11 @@ import {
   migrateSessionEntries,
 } from "./session-transcript-format.js";
 import type {
-  FileEntry,
   SessionContext,
   SessionEntry,
   SessionHeader,
   SessionTreeNode,
+  TranscriptEntry,
 } from "./session-transcript-types.js";
 
 type BranchSummaryEntry = Extract<SessionEntry, { type: "branch_summary" }>;
@@ -33,7 +33,7 @@ type TranscriptStateScope = {
   sessionId: string;
 };
 
-function isSessionEntry(entry: FileEntry): entry is SessionEntry {
+function isSessionEntry(entry: TranscriptEntry): entry is SessionEntry {
   return entry.type !== "session";
 }
 
@@ -51,14 +51,14 @@ function generateEntryId(byId: { has(id: string): boolean }): string {
   return randomUUID();
 }
 
-function transcriptStateFromEntries(fileEntries: FileEntry[]): TranscriptState {
+function transcriptStateFromEntries(transcriptEntries: TranscriptEntry[]): TranscriptState {
   const headerBeforeMigration =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
   const migrated = sessionHeaderVersion(headerBeforeMigration) < CURRENT_SESSION_VERSION;
-  migrateSessionEntries(fileEntries);
+  migrateSessionEntries(transcriptEntries);
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(isSessionEntry);
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(isSessionEntry);
   return new TranscriptState({ header, entries, migrated });
 }
 
@@ -68,7 +68,7 @@ function transcriptStateFromSqliteScope(scope: TranscriptStateScope): Transcript
     return undefined;
   }
   return transcriptStateFromEntries(
-    events.filter((event): event is FileEntry => Boolean(event && typeof event === "object")),
+    events.filter((event): event is TranscriptEntry => Boolean(event && typeof event === "object")),
   );
 }
 

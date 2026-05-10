@@ -10,7 +10,7 @@ import {
 } from "../harness/hook-history.js";
 import {
   migrateSessionEntries,
-  type FileEntry,
+  type TranscriptEntry,
 } from "../transcript/session-transcript-contract.js";
 
 export const MAX_CLI_SESSION_HISTORY_BYTES = 5 * 1024 * 1024;
@@ -146,7 +146,7 @@ async function loadCliSessionEntries(params: {
     }
     const entries = loadSqliteSessionTranscriptEvents(scope)
       .map((entry) => entry.event)
-      .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
+      .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
     if (JSON.stringify(entries).length > MAX_CLI_SESSION_HISTORY_BYTES) {
       return [];
     }

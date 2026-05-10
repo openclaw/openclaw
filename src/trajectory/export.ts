@@ -3,9 +3,9 @@ import type { AgentMessage } from "../agents/agent-core-contract.js";
 import { exportSqliteToolArtifacts } from "../agents/filesystem/tool-artifact-store.sqlite.js";
 import { sanitizeDiagnosticPayload } from "../agents/payload-redaction.js";
 import type {
-  FileEntry,
   SessionEntry,
   SessionHeader,
+  TranscriptEntry,
 } from "../agents/transcript/session-transcript-contract.js";
 import { resolveStateDir } from "../config/paths.js";
 import {
@@ -59,7 +59,7 @@ type TrajectoryExportRedaction = SupportRedactionContext & {
 const MAX_TRAJECTORY_RUNTIME_EVENTS = 200_000;
 const MAX_TRAJECTORY_TOTAL_EVENTS = 250_000;
 
-function migrateLegacySessionEntries(entries: FileEntry[]): void {
+function migrateLegacySessionEntries(entries: TranscriptEntry[]): void {
   const header = entries.find((entry): entry is SessionHeader => entry.type === "session");
   const version = header?.version ?? 1;
   if (version < 2) {
@@ -114,18 +114,18 @@ function readSessionBranch(params: { agentId?: string; sessionId: string; sessio
     agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
     sessionId: params.sessionId,
   };
-  const fileEntries = loadSqliteSessionTranscriptEvents(scope)
+  const transcriptEntries = loadSqliteSessionTranscriptEvents(scope)
     .map((entry) => entry.event)
-    .filter((entry): entry is FileEntry => Boolean(entry && typeof entry === "object"));
-  if (fileEntries.length === 0) {
+    .filter((entry): entry is TranscriptEntry => Boolean(entry && typeof entry === "object"));
+  if (transcriptEntries.length === 0) {
     throw new Error(
       `Transcript is not in SQLite for agent ${scope.agentId} session ${params.sessionId}. Run "openclaw doctor --fix" to import legacy JSONL transcripts.`,
     );
   }
-  migrateLegacySessionEntries(fileEntries);
+  migrateLegacySessionEntries(transcriptEntries);
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(
     (entry): entry is SessionEntry =>
       entry.type !== "session" &&
       typeof (entry as { id?: unknown }).id === "string" &&

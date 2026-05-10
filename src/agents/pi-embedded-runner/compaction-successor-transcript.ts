@@ -118,14 +118,16 @@ function loadTranscriptStateFromSqlite(params: {
   if (events.length === 0) {
     return null;
   }
-  const fileEntries = events.filter((event): event is SessionHeader | SessionEntry =>
+  const transcriptEntries = events.filter((event): event is SessionHeader | SessionEntry =>
     Boolean(event && typeof event === "object"),
   );
-  migrateSessionEntries(fileEntries);
-  const header = fileEntries.find((entry): entry is SessionHeader => entry.type === "session");
+  migrateSessionEntries(transcriptEntries);
+  const header = transcriptEntries.find(
+    (entry): entry is SessionHeader => entry.type === "session",
+  );
   return new TranscriptState({
     header: header ?? null,
-    entries: fileEntries.filter((entry): entry is SessionEntry => entry.type !== "session"),
+    entries: transcriptEntries.filter((entry): entry is SessionEntry => entry.type !== "session"),
   });
 }
 

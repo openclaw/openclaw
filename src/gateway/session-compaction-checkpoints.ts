@@ -3,8 +3,8 @@ import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
   SessionManager,
-  type FileEntry as PiTranscriptEntry,
   type SessionHeader,
+  type TranscriptEntry as PiTranscriptEntry,
 } from "../agents/transcript/session-transcript-contract.js";
 import { patchSessionEntry } from "../config/sessions.js";
 import type {

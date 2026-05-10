@@ -2,9 +2,9 @@ import crypto from "node:crypto";
 import {
   CURRENT_SESSION_VERSION,
   migrateSessionEntries,
-  type FileEntry,
   type SessionEntry as PiSessionEntry,
   type SessionHeader,
+  type TranscriptEntry,
 } from "../../agents/transcript/session-transcript-contract.js";
 import { derivePromptTokens } from "../../agents/usage.js";
 import {
@@ -112,7 +112,7 @@ export async function resolveParentForkTokenCountRuntime(params: {
   return maxPositiveTokenCount(cachedTokens, byteEstimateTokens);
 }
 
-function isSessionEntry(entry: FileEntry): entry is PiSessionEntry {
+function isSessionEntry(entry: TranscriptEntry): entry is PiSessionEntry {
   return (
     entry.type !== "session" &&
     typeof (entry as { id?: unknown }).id === "string" &&
@@ -177,17 +177,17 @@ async function readForkSourceTranscript(params: {
   agentId: string;
   sessionId: string;
 }): Promise<ForkSourceTranscript | null> {
-  const fileEntries = loadSqliteSessionTranscriptEvents({
+  const transcriptEntries = loadSqliteSessionTranscriptEvents({
     agentId: params.agentId,
     sessionId: params.sessionId,
-  }).map((entry) => entry.event as FileEntry);
-  if (fileEntries.length === 0) {
+  }).map((entry) => entry.event as TranscriptEntry);
+  if (transcriptEntries.length === 0) {
     return null;
   }
-  migrateSessionEntries(fileEntries);
+  migrateSessionEntries(transcriptEntries);
   const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const entries = fileEntries.filter(isSessionEntry);
+    transcriptEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
+  const entries = transcriptEntries.filter(isSessionEntry);
   const byId = buildEntryIndex(entries);
   const leafId = entries.at(-1)?.id ?? null;
   const branchEntries = readBranch({ byId, leafId });
