@@ -33,8 +33,7 @@ function requireFinding(
 describe("security audit exec surface findings", () => {
   // Redirect the OpenClaw home (OPENCLAW_HOME wins over HOME/USERPROFILE in
   // `resolveRawHomeDir`) to a per-test tempdir so `saveExecApprovals` never
-  // touches the real `~/.openclaw/exec-approvals.json` on the host running
-  // the suite.
+  // touches the real user state database on the host running the suite.
   let previousOpenClawHome: string | undefined;
   let previousHome: string | undefined;
   let previousUserProfile: string | undefined;
