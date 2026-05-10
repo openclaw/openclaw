@@ -970,6 +970,7 @@ export function buildAgentSystemPrompt(params: {
       "",
       "## Tooling",
       "Available tools are policy-filtered. Names are case-sensitive; call exactly as listed.",
+      "If a requested action requires an unlisted tool, say the current agent tool policy does not allow that tool; do not claim the channel or provider lacks the capability.",
       toolLines.length > 0
         ? toolLines.join("\n")
         : [

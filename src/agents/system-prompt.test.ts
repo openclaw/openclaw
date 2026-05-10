@@ -352,6 +352,9 @@ describe("buildAgentSystemPrompt", () => {
     });
 
     expect(prompt).toContain("Available tools are policy-filtered.");
+    expect(prompt).toContain(
+      "If a requested action requires an unlisted tool, say the current agent tool policy does not allow that tool",
+    );
     expect(prompt).toContain("sessions_list");
     expect(prompt).toContain("sessions_history");
     expect(prompt).toContain("sessions_send");

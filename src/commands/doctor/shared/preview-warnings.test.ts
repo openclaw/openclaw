@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  collectChannelBoundMessageToolPolicyWarnings,
   collectDoctorPreviewWarnings,
   collectVisibleReplyToolPolicyWarnings,
 } from "./preview-warnings.js";
@@ -504,5 +505,72 @@ describe("doctor preview warnings", () => {
         },
       }),
     ).toStrictEqual([]);
+  });
+
+  it("warns when a channel route targets an agent without the message tool", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      agents: {
+        list: [
+          {
+            id: "commander",
+            tools: {
+              allow: ["read", "write"],
+            },
+          },
+          {
+            id: "support",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "commander",
+          match: {
+            channel: "discord",
+          },
+        },
+        {
+          agentId: "support",
+          match: {
+            channel: "telegram",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "commander" is routed from channel "discord"'),
+    ]);
+    expect(warnings[0]).toContain("message tool is unavailable");
+    expect(warnings[0]).toContain("sendAttachment");
+    expect(warnings[0]).toContain("group:messaging");
+    expect(warnings.join("\n")).not.toContain("support");
+  });
+
+  it("warns for the default agent when configured channels have no explicit routes", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        defaults: {
+          groupPolicy: "allowlist",
+        },
+        discord: {},
+        slack: {
+          enabled: false,
+        },
+        telegram: {},
+      },
+      tools: {
+        allow: ["read"],
+      },
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "main" is routed from channel "discord" and "telegram"'),
+    ]);
+    expect(warnings.join("\n")).not.toContain("slack");
+    expect(warnings.join("\n")).not.toContain("defaults");
   });
 });

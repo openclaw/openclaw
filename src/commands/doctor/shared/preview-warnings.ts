@@ -1,11 +1,17 @@
+import { resolveAgentConfig, resolveDefaultAgentId } from "../../../agents/agent-scope-config.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
+import { listRouteBindings } from "../../../config/bindings.js";
+import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { normalizeAgentId } from "../../../routing/session-key.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
+
+const CHANNELS_CONFIG_META_KEYS = new Set(["defaults", "modelByChannel"]);
 
 const channelDoctorModuleLoader = createLazyImportLoader<ChannelDoctorModule>(
   () => import("./channel-doctor.js"),
@@ -25,6 +31,21 @@ function listAgentRecords(cfg: OpenClawConfig): Record<string, unknown>[] {
 
 function hasChannels(cfg: OpenClawConfig): boolean {
   return hasRecord(cfg.channels);
+}
+
+function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
+  if (!hasRecord(cfg.channels)) {
+    return [];
+  }
+  return Object.entries(cfg.channels)
+    .filter(([id, value]) => {
+      if (CHANNELS_CONFIG_META_KEYS.has(id)) {
+        return false;
+      }
+      return !(hasRecord(value) && value.enabled === false);
+    })
+    .map(([id]) => id)
+    .toSorted();
 }
 
 function hasPlugins(cfg: OpenClawConfig): boolean {
@@ -191,6 +212,70 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
   return warnings;
 }
 
+function formatChannelList(channels: string[]): string {
+  if (channels.length <= 2) {
+    return channels.map((channel) => `"${channel}"`).join(" and ");
+  }
+  return `${channels
+    .slice(0, 2)
+    .map((channel) => `"${channel}"`)
+    .join(", ")}, and ${channels.length - 2} more`;
+}
+
+function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
+  agentId: string;
+  channels: string[];
+}> {
+  const byAgent = new Map<string, Set<string>>();
+  const add = (agentId: string, channel: string) => {
+    const normalizedAgentId = normalizeAgentId(agentId);
+    const trimmedChannel = channel.trim();
+    if (!normalizedAgentId || !trimmedChannel) {
+      return;
+    }
+    let channels = byAgent.get(normalizedAgentId);
+    if (!channels) {
+      channels = new Set<string>();
+      byAgent.set(normalizedAgentId, channels);
+    }
+    channels.add(trimmedChannel);
+  };
+
+  const routeBindings: AgentRouteBinding[] = listRouteBindings(cfg);
+  for (const binding of routeBindings) {
+    add(binding.agentId, binding.match.channel);
+  }
+
+  if (routeBindings.length === 0) {
+    const defaultAgentId = resolveDefaultAgentId(cfg);
+    for (const channel of listConfiguredChannelIds(cfg)) {
+      add(defaultAgentId, channel);
+    }
+  }
+
+  return Array.from(byAgent.entries())
+    .map(([agentId, channels]) => ({
+      agentId,
+      channels: Array.from(channels).toSorted(),
+    }))
+    .filter((target) => target.channels.length > 0)
+    .toSorted((a, b) => a.agentId.localeCompare(b.agentId));
+}
+
+export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  return collectBoundChannelTargets(cfg).flatMap((target) => {
+    const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    if (resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools })) {
+      return [];
+    }
+    return [
+      `- Agent "${target.agentId}" is routed from channel ${formatChannelList(
+        target.channels,
+      )}, but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.`,
+    ];
+  });
+}
+
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -202,6 +287,7 @@ export async function collectDoctorPreviewWarnings(params: {
   const hasPluginConfig = hasPlugins(params.cfg);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)
