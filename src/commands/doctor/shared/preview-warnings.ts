@@ -6,7 +6,11 @@ import { listRouteBindings } from "../../../config/bindings.js";
 import type { AgentRouteBinding } from "../../../config/types.agents.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import {
+  DEFAULT_ACCOUNT_ID,
+  normalizeAccountId,
+  normalizeAgentId,
+} from "../../../routing/session-key.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -45,6 +49,21 @@ function listConfiguredChannelIds(cfg: OpenClawConfig): string[] {
       return !(hasRecord(value) && value.enabled === false);
     })
     .map(([id]) => id)
+    .toSorted();
+}
+
+function listConfiguredChannelAccountIds(cfg: OpenClawConfig, channelId: string): string[] {
+  if (!hasRecord(cfg.channels)) {
+    return [];
+  }
+  const channel = cfg.channels[channelId];
+  if (!hasRecord(channel) || !hasRecord(channel.accounts)) {
+    return [];
+  }
+  return Object.entries(channel.accounts)
+    .filter(([, value]) => !(hasRecord(value) && value.enabled === false))
+    .map(([accountId]) => normalizeAccountId(accountId))
+    .filter(Boolean)
     .toSorted();
 }
 
@@ -222,11 +241,26 @@ function formatChannelList(channels: string[]): string {
     .join(", ")}, and ${channels.length - 2} more`;
 }
 
-function isUnscopedChannelRouteBinding(binding: AgentRouteBinding): boolean {
+function isUnscopedRouteBinding(binding: AgentRouteBinding): boolean {
   const match = binding.match;
-  const accountId = match.accountId?.trim();
   const hasRoles = Array.isArray(match.roles) && match.roles.length > 0;
-  return accountId === "*" && !match.peer && !match.guildId && !match.teamId && !hasRoles;
+  return !match.peer && !match.guildId && !match.teamId && !hasRoles;
+}
+
+function isUnscopedChannelRouteBinding(binding: AgentRouteBinding): boolean {
+  const accountId = binding.match.accountId?.trim();
+  return accountId === "*" && isUnscopedRouteBinding(binding);
+}
+
+function resolveUnscopedBindingAccountId(binding: AgentRouteBinding): string | undefined {
+  if (!isUnscopedRouteBinding(binding)) {
+    return undefined;
+  }
+  const accountId = binding.match.accountId?.trim();
+  if (accountId === "*") {
+    return "*";
+  }
+  return normalizeAccountId(accountId || DEFAULT_ACCOUNT_ID);
 }
 
 function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
@@ -250,17 +284,40 @@ function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
 
   const routeBindings: AgentRouteBinding[] = listRouteBindings(cfg);
   const fullyCoveredChannels = new Set<string>();
+  const coveredAccountsByChannel = new Map<string, Set<string>>();
   for (const binding of routeBindings) {
     const channel = binding.match.channel.trim();
     add(binding.agentId, channel);
-    if (channel && isUnscopedChannelRouteBinding(binding)) {
+    if (!channel) {
+      continue;
+    }
+    if (isUnscopedChannelRouteBinding(binding)) {
       fullyCoveredChannels.add(channel);
+      continue;
+    }
+    const coveredAccountId = resolveUnscopedBindingAccountId(binding);
+    if (coveredAccountId && coveredAccountId !== "*") {
+      let coveredAccounts = coveredAccountsByChannel.get(channel);
+      if (!coveredAccounts) {
+        coveredAccounts = new Set<string>();
+        coveredAccountsByChannel.set(channel, coveredAccounts);
+      }
+      coveredAccounts.add(coveredAccountId);
     }
   }
 
   const defaultAgentId = resolveDefaultAgentId(cfg);
   for (const channel of listConfiguredChannelIds(cfg)) {
-    if (!fullyCoveredChannels.has(channel)) {
+    if (fullyCoveredChannels.has(channel)) {
+      continue;
+    }
+    const configuredAccountIds = listConfiguredChannelAccountIds(cfg, channel);
+    if (configuredAccountIds.length === 0) {
+      add(defaultAgentId, channel);
+      continue;
+    }
+    const coveredAccounts = coveredAccountsByChannel.get(channel);
+    if (configuredAccountIds.some((accountId) => !coveredAccounts?.has(accountId))) {
       add(defaultAgentId, channel);
     }
   }

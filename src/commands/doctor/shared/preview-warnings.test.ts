@@ -687,4 +687,102 @@ describe("doctor preview warnings", () => {
 
     expect(warnings).toStrictEqual([]);
   });
+
+  it("skips the default-agent warning when configured accounts are fully covered", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        discord: {
+          accounts: {
+            personal: {},
+            work: {},
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "personal-agent",
+            tools: {
+              profile: "messaging",
+            },
+          },
+          {
+            id: "work-agent",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "personal-agent",
+          match: {
+            channel: "discord",
+            accountId: "personal",
+          },
+        },
+        {
+          agentId: "work-agent",
+          match: {
+            channel: "discord",
+            accountId: "work",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toStrictEqual([]);
+  });
+
+  it("warns for the default agent when configured account routes are incomplete", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        discord: {
+          accounts: {
+            personal: {},
+            work: {},
+          },
+        },
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "personal-agent",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "personal-agent",
+          match: {
+            channel: "discord",
+            accountId: "personal",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "main" is routed from channel "discord"'),
+    ]);
+    expect(warnings.join("\n")).not.toContain("personal-agent");
+  });
 });
