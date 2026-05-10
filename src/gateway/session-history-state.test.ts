@@ -329,4 +329,23 @@ describe("SessionHistorySseState", () => {
     ).toBeNull();
     expect(state.snapshot().messages).toHaveLength(1);
   });
+
+  test("surfaces idempotencyKey from the inline message in the __openclaw envelope", () => {
+    const state = SessionHistorySseState.fromRawSnapshot({
+      target: { sessionId: "sess-idempotency" },
+      rawMessages: [],
+    });
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "hi from client" }],
+        idempotencyKey: "client-key-42",
+      },
+      messageId: "msg-42",
+    });
+    expect(appended).not.toBeNull();
+    const sent = appended?.message as { __openclaw?: { idempotencyKey?: unknown; id?: unknown } };
+    expect(sent.__openclaw?.idempotencyKey).toBe("client-key-42");
+    expect(sent.__openclaw?.id).toBe("msg-42");
+  });
 });

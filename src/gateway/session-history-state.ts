@@ -229,9 +229,16 @@ export class SessionHistorySseState {
       return null;
     }
     this.rawTranscriptSeq += 1;
+    const idempotencyKey =
+      update.message && typeof update.message === "object" && !Array.isArray(update.message)
+        ? (update.message as Record<string, unknown>).idempotencyKey
+        : undefined;
     const nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       seq: this.rawTranscriptSeq,
+      ...(typeof idempotencyKey === "string" && idempotencyKey.length > 0
+        ? { idempotencyKey }
+        : {}),
     });
     const [sanitizedMessage] = toSessionHistoryMessages(
       projectChatDisplayMessages([nextMessage], { maxChars: this.maxChars }),

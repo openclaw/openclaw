@@ -612,6 +612,47 @@ describe("readSessionMessages", () => {
     ]);
   });
 
+  test("surfaces idempotencyKey in the __openclaw envelope when persisted on the message", () => {
+    const sessionId = "test-session-idempotency-key";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      {
+        message: {
+          role: "user",
+          content: "hello",
+          idempotencyKey: "client-key-abc",
+        },
+      },
+      {
+        message: {
+          role: "assistant",
+          content: "hi",
+          idempotencyKey: "server-key-xyz",
+        },
+      },
+      { message: { role: "user", content: "no key here" } },
+    ]);
+
+    const out = readSessionMessages(sessionId, storePath) as Array<{
+      role: string;
+      __openclaw?: { idempotencyKey?: unknown; seq?: unknown };
+    }>;
+    expect(out).toHaveLength(3);
+    expect(out[0]?.__openclaw?.idempotencyKey).toBe("client-key-abc");
+    expect(out[1]?.__openclaw?.idempotencyKey).toBe("server-key-xyz");
+    expect(out[2]?.__openclaw?.idempotencyKey).toBeUndefined();
+    // The original top-level field is preserved for back-compat readers.
+    expect((out[0] as { idempotencyKey?: unknown }).idempotencyKey).toBe("client-key-abc");
+
+    const recent = readRecentSessionMessages(sessionId, storePath, undefined, {
+      maxMessages: 2,
+      maxBytes: 4096,
+    }) as Array<{ __openclaw?: { idempotencyKey?: unknown } }>;
+    expect(recent).toHaveLength(2);
+    expect(recent[0]?.__openclaw?.idempotencyKey).toBe("server-key-xyz");
+    expect(recent[1]?.__openclaw?.idempotencyKey).toBeUndefined();
+  });
+
   test("bounds recent-message reads for large append-only transcripts", () => {
     const sessionId = "test-session-recent-large";
     const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);

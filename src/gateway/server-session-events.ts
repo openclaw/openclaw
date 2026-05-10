@@ -126,9 +126,16 @@ async function handleTranscriptUpdateBroadcast(
     sessionRow: loadGatewaySessionRow(sessionKey, { transcriptUsageMaxBytes: 64 * 1024 }),
     includeSession: true,
   });
+  const rawIdempotencyKey =
+    update.message && typeof update.message === "object" && !Array.isArray(update.message)
+      ? (update.message as Record<string, unknown>).idempotencyKey
+      : undefined;
   const rawMessage = attachOpenClawTranscriptMeta(update.message, {
     ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
     ...(typeof messageSeq === "number" ? { seq: messageSeq } : {}),
+    ...(typeof rawIdempotencyKey === "string" && rawIdempotencyKey.length > 0
+      ? { idempotencyKey: rawIdempotencyKey }
+      : {}),
   });
   const message = projectChatDisplayMessage(rawMessage);
   if (message) {

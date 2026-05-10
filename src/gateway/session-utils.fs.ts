@@ -711,15 +711,25 @@ export function readRecentSessionTranscriptLines(params: {
   return { lines, totalLines };
 }
 
+function extractIdempotencyKey(message: unknown): string | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const value = (message as Record<string, unknown>).idempotencyKey;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
 function parsedSessionEntryToMessage(parsed: unknown, seq: number): unknown {
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
     return null;
   }
   const entry = parsed as Record<string, unknown>;
   if (entry.message) {
+    const idempotencyKey = extractIdempotencyKey(entry.message);
     return attachOpenClawTranscriptMeta(entry.message, {
       ...(typeof entry.id === "string" ? { id: entry.id } : {}),
       seq,
+      ...(idempotencyKey ? { idempotencyKey } : {}),
     });
   }
 
