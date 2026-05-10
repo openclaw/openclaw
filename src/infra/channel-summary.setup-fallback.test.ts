@@ -22,7 +22,9 @@ describe("buildChannelSummary plugin resolution", () => {
 
     const calls = listReadOnlyChannelPluginsForConfig.mock.calls;
     expect(calls.length).toBeGreaterThan(0);
-    const options = calls[0]?.[1] as { includeSetupFallbackPlugins?: boolean } | undefined;
+    const options = (calls[0] as unknown as unknown[])?.[1] as
+      | { includeSetupFallbackPlugins?: boolean }
+      | undefined;
     expect(options?.includeSetupFallbackPlugins).toBe(true);
   });
 });
