@@ -2,6 +2,7 @@ import { vi, type Mock } from "vitest";
 import { resolveFastModeState as resolveFastModeStateImpl } from "../../agents/fast-mode.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import { resolveAgentModelFallbackValues } from "../../config/model-input.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 
 type CronSessionEntry = {
@@ -48,6 +49,7 @@ export const isCliProviderMock = createMock();
 export const resolveAllowedModelRefMock = createMock();
 export const resolveConfiguredModelRefMock = createMock();
 export const resolveHooksGmailModelMock = createMock();
+export const resolveSubagentConfiguredModelSelectionMock = createMock();
 export const resolveThinkingDefaultMock = createMock();
 export const runWithModelFallbackMock = createMock();
 export const runEmbeddedPiAgentMock = createMock();
@@ -158,6 +160,7 @@ vi.mock("./run-model-selection.runtime.js", () => ({
   resolveAllowedModelRef: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
+  resolveSubagentConfiguredModelSelection: resolveSubagentConfiguredModelSelectionMock,
 }));
 
 vi.mock("./run-execution.runtime.js", () => ({
@@ -317,6 +320,21 @@ function resetRunConfigMocks(): void {
   resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
   resolveAllowedModelRefMock.mockReturnValue({ ref: { provider: "openai", model: "gpt-5.4" } });
   resolveHooksGmailModelMock.mockReturnValue(null);
+  resolveSubagentConfiguredModelSelectionMock.mockImplementation(
+    ({ cfg, agentId }: { cfg: OpenClawConfig; agentId: string }) => {
+      const mockedAgentConfig = resolveAgentConfigMock(cfg, agentId) as
+        | {
+            model?: unknown;
+            subagents?: { model?: unknown };
+          }
+        | undefined;
+      return (
+        normalizeModelSelectionForTest(mockedAgentConfig?.subagents?.model) ??
+        normalizeModelSelectionForTest(cfg.agents?.defaults?.subagents?.model) ??
+        normalizeModelSelectionForTest(mockedAgentConfig?.model)
+      );
+    },
+  );
   resolveThinkingDefaultMock.mockReturnValue("off");
   getModelRefStatusMock.mockReturnValue({ allowed: false });
   resolveCronStyleNowMock.mockReturnValue({
