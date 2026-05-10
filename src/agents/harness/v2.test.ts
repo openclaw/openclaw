@@ -83,10 +83,10 @@ function captureDiagnosticEvents(): {
   return { events, unsubscribe };
 }
 
-function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
-  return call[0] as T;
+  return call[0];
 }
 
 describe("AgentHarness V2 compatibility adapter", () => {
@@ -287,11 +287,11 @@ describe("AgentHarness V2 compatibility adapter", () => {
     await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
       "codex app-server send failed",
     );
-    const cleanupInput = mockCallArg<{
+    const cleanupInput = mockCallArg(cleanup) as {
       error?: unknown;
       prepared?: { lifecycleState?: string };
       session?: { lifecycleState?: string };
-    }>(cleanup);
+    };
     expect(cleanupInput.error).toBe(sendError);
     expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");
     expect(cleanupInput.session?.lifecycleState).toBe("started");
@@ -322,11 +322,11 @@ describe("AgentHarness V2 compatibility adapter", () => {
     await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
       "codex app-server start failed",
     );
-    const cleanupInput = mockCallArg<{
+    const cleanupInput = mockCallArg(cleanup) as {
       error?: unknown;
       prepared?: { lifecycleState?: string };
       session?: unknown;
-    }>(cleanup);
+    };
     expect(cleanupInput.error).toBe(startError);
     expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");
     expect(cleanupInput.session).toBeUndefined();
@@ -358,12 +358,12 @@ describe("AgentHarness V2 compatibility adapter", () => {
     await expect(runAgentHarnessV2LifecycleAttempt(harness, params)).rejects.toThrow(
       "outcome classification failed",
     );
-    const cleanupInput = mockCallArg<{
+    const cleanupInput = mockCallArg(cleanup) as {
       error?: unknown;
       result?: unknown;
       prepared?: { lifecycleState?: string };
       session?: { lifecycleState?: string };
-    }>(cleanup);
+    };
     expect(cleanupInput.error).toBe(outcomeError);
     expect(cleanupInput.result).toBe(rawResult);
     expect(cleanupInput.prepared?.lifecycleState).toBe("prepared");

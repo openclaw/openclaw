@@ -153,10 +153,10 @@ function resultDetails(result: { details?: unknown }): Record<string, unknown> {
   return result.details as Record<string, unknown>;
 }
 
-function firstMockCallArg<T>(mock: { mock: { calls: unknown[][] } }): T {
+function firstMockCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   const firstCall = mock.mock.calls[0];
   expect(firstCall).toBeDefined();
-  return firstCall[0] as T;
+  return firstCall[0];
 }
 
 function resetVideoGenerateMocks() {
@@ -570,21 +570,22 @@ describe("createVideoGenerateTool", () => {
     }
     await scheduledWork();
     expect(saveSpy).not.toHaveBeenCalled();
-    const progress = firstMockCallArg<{ runId: string; progressSummary: string }>(
-      taskExecutorMocks.recordTaskRunProgressByRunId,
-    );
+    const progress = firstMockCallArg(taskExecutorMocks.recordTaskRunProgressByRunId) as {
+      runId: string;
+      progressSummary: string;
+    };
     expect(progress.runId).toMatch(/^tool:video_generate:/);
     expect(progress.progressSummary).toBe("Generating video");
-    const completion = firstMockCallArg<{ runId: string }>(
-      taskExecutorMocks.completeTaskRunByRunId,
-    );
+    const completion = firstMockCallArg(taskExecutorMocks.completeTaskRunByRunId) as {
+      runId: string;
+    };
     expect(completion.runId).toMatch(/^tool:video_generate:/);
-    const wake = firstMockCallArg<{
+    const wake = firstMockCallArg(wakeSpy) as {
       handle: { taskId?: string };
       status: string;
       mediaUrls: string[];
       result: string;
-    }>(wakeSpy);
+    };
     expect(wake.handle.taskId).toBe("task-123");
     expect(wake.status).toBe("ok");
     expect(wake.mediaUrls).toEqual(["https://example.com/generated-lobster.mp4"]);
@@ -959,9 +960,10 @@ describe("createVideoGenerateTool", () => {
       providerOptions: { seed: 42, draft: true },
     });
 
-    const input = firstMockCallArg<{ autoProviderFallback?: boolean; providerOptions?: unknown }>(
-      generateSpy,
-    );
+    const input = firstMockCallArg(generateSpy) as {
+      autoProviderFallback?: boolean;
+      providerOptions?: unknown;
+    };
     expect(input.autoProviderFallback).toBe(false);
     expect(input.providerOptions).toEqual({ seed: 42, draft: true });
   });
@@ -1083,7 +1085,9 @@ describe("createVideoGenerateTool", () => {
       aspectRatio: "adaptive",
     });
 
-    expect(firstMockCallArg<{ aspectRatio?: string }>(generateSpy).aspectRatio).toBe("adaptive");
+    expect((firstMockCallArg(generateSpy) as { aspectRatio?: string }).aspectRatio).toBe(
+      "adaptive",
+    );
   });
 
   it("accepts provider-specific aspectRatio and resolution values and forwards them to the runtime", async () => {
@@ -1097,7 +1101,7 @@ describe("createVideoGenerateTool", () => {
       resolution: "draft-large",
     });
 
-    const input = firstMockCallArg<{ aspectRatio?: string; resolution?: string }>(generateSpy);
+    const input = firstMockCallArg(generateSpy) as { aspectRatio?: string; resolution?: string };
     expect(input.aspectRatio).toBe("17:9");
     expect(input.resolution).toBe("draft-large");
   });

@@ -215,7 +215,12 @@ function setupRuntimeMediaMocks(params: { loadFileName: string; loadBytes: strin
   return { loadOutboundMediaFromUrl, fetchRemoteMedia };
 }
 
-function requireMockArg<T>(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): T {
+function requireMockArg<T>(
+  mock: ReturnType<typeof vi.fn>,
+  callIndex = 0,
+  argIndex = 0,
+  _type?: (value: T) => T,
+): T {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call ${callIndex}`);
@@ -223,7 +228,11 @@ function requireMockArg<T>(mock: ReturnType<typeof vi.fn>, callIndex = 0, argInd
   return call[argIndex] as T;
 }
 
-function requireMockArgs<T extends unknown[]>(mock: ReturnType<typeof vi.fn>, callIndex = 0): T {
+function requireMockArgs<T extends unknown[]>(
+  mock: ReturnType<typeof vi.fn>,
+  callIndex = 0,
+  _type?: (value: T) => T,
+): T {
   const call = mock.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call ${callIndex}`);

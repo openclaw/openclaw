@@ -141,7 +141,7 @@ function expectSaveMediaBufferCall(mock: unknown, contentType: string, maxBytes:
 }
 
 function expectVerboseLogContains(expected: string): void {
-  const messages = vi.mocked(logVerbose).mock.calls.map((call) => String(call[0] ?? ""));
+  const messages = vi.mocked(logVerbose).mock.calls.map((call) => call[0]);
   expect(messages.some((message) => message.includes(expected))).toBe(true);
 }
 
