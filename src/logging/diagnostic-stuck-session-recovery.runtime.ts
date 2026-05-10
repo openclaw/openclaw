@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { resolveEmbeddedSessionLane } from "../agents/pi-embedded-runner/lanes.js";
 import {
   abortAndDrainEmbeddedPiRun,
@@ -6,7 +8,16 @@ import {
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunHandleSessionId,
 } from "../agents/pi-embedded-runner/runs.js";
+import { resolveStateDir } from "../config/paths.js";
+import {
+  type SessionEntry,
+  loadSessionStore,
+  updateSessionStore,
+  resolveDefaultSessionStorePath,
+} from "../config/sessions.js";
+import { callGateway } from "../gateway/call.js";
 import { getCommandLaneSnapshot, resetCommandLane } from "../process/command-queue.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import { diagnosticLogger as diag } from "./diagnostic-runtime.js";
 import {
   formatStoppedCronSessionDiagnosticFields,
@@ -20,6 +31,7 @@ import {
 import { isDiagnosticSessionStateCurrent } from "./diagnostic-session-state.js";
 
 const STUCK_SESSION_ABORT_SETTLE_MS = 15_000;
+const STALE_REPLY_TURN_MS = 2 * 60 * 1000;
 const recoveriesInFlight = new Set<string>();
 
 export type StuckSessionRecoveryParams = StuckSessionRecoveryRequest;
@@ -51,6 +63,116 @@ function formatRecoveryContext(
     fields.push(`laneQueued=${extra.queuedCount}`);
   }
   return fields.join(" ");
+}
+
+function resolveSessionStorePathsForRecovery(sessionKey?: string): string[] {
+  const stateDir = resolveStateDir();
+  const paths = new Set<string>();
+  const agentId = sessionKey?.startsWith("agent:") ? sessionKey.split(":")[1]?.trim() : undefined;
+  if (agentId) {
+    paths.add(resolveDefaultSessionStorePath(agentId));
+  }
+  const agentsDir = path.join(stateDir, "agents");
+  try {
+    for (const entry of fs.readdirSync(agentsDir, { withFileTypes: true })) {
+      if (entry.isDirectory()) {
+        paths.add(path.join(agentsDir, entry.name, "sessions.json"));
+      }
+    }
+  } catch {
+    // Best-effort only; explicit path recovery is still handled below.
+  }
+  return [...paths];
+}
+
+function findReplyTurnSessionEntry(params: {
+  sessionKey?: string;
+}): { storePath: string; entry: SessionEntry } | undefined {
+  const sessionKey = params.sessionKey?.trim();
+  if (!sessionKey) {
+    return undefined;
+  }
+  for (const storePath of resolveSessionStorePathsForRecovery(sessionKey)) {
+    try {
+      const store = loadSessionStore(storePath);
+      const entry = store[sessionKey];
+      if (entry) {
+        return { storePath, entry };
+      }
+    } catch {
+      // Continue scanning other agent stores.
+    }
+  }
+  return undefined;
+}
+
+function shouldCloseStaleReplyTurn(entry: SessionEntry, now = Date.now()): boolean {
+  if (entry.replyTurnState !== "running") {
+    return false;
+  }
+  const updatedAt = entry.replyTurnUpdatedAt ?? entry.replyTurnStartedAt ?? entry.updatedAt;
+  return typeof updatedAt === "number" && now - updatedAt >= STALE_REPLY_TURN_MS;
+}
+
+async function sendRecoveryFallback(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+}): Promise<boolean> {
+  const deliveryContext = params.entry.deliveryContext;
+  const origin = params.entry.origin;
+  const channel =
+    deliveryContext?.channel ?? params.entry.channel ?? origin?.surface ?? origin?.provider;
+  const to = deliveryContext?.to ?? params.entry.lastTo ?? origin?.to;
+  if (!channel || !to) {
+    return false;
+  }
+  try {
+    await enqueueCommandInLane("message", () =>
+      callGateway({
+        method: "message.action",
+        params: {
+          action: "send",
+          channel,
+          target: to,
+          accountId: deliveryContext?.accountId ?? params.entry.lastAccountId ?? origin?.accountId,
+          threadId: deliveryContext?.threadId ?? params.entry.lastThreadId ?? origin?.threadId,
+          message: "That run was interrupted before it could finish. Please send it again.",
+        },
+      }),
+    );
+    return true;
+  } catch (err) {
+    diag.warn(
+      `stale reply turn recovery fallback failed: sessionKey=${params.sessionKey} err=${String(err)}`,
+    );
+    return false;
+  }
+}
+
+async function closeStaleReplyTurnIfNeeded(params: { sessionKey?: string }): Promise<boolean> {
+  const found = findReplyTurnSessionEntry({ sessionKey: params.sessionKey });
+  if (!found || !params.sessionKey || !shouldCloseStaleReplyTurn(found.entry)) {
+    return false;
+  }
+  const sent = await sendRecoveryFallback({ sessionKey: params.sessionKey, entry: found.entry });
+  await updateSessionStore(found.storePath, async (store) => {
+    const entry = store[params.sessionKey!];
+    if (!entry || entry.replyTurnState !== "running") {
+      return store;
+    }
+    store[params.sessionKey!] = {
+      ...entry,
+      replyTurnState: "failed",
+      replyTurnUpdatedAt: Date.now(),
+      replyTurnLastError: sent ? "recovered_after_restart" : "recovery_fallback_delivery_failed",
+      updatedAt: Date.now(),
+    };
+    return store;
+  });
+  diag.warn(
+    `stale reply turn recovery closed: sessionKey=${params.sessionKey} fallbackSent=${sent}`,
+  );
+  return true;
 }
 
 export async function recoverStuckDiagnosticSession(
@@ -158,6 +280,23 @@ export async function recoverStuckDiagnosticSession(
         diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
         return outcome;
       }
+    }
+
+    const closedStaleReplyTurn = await closeStaleReplyTurnIfNeeded({
+      sessionKey: params.sessionKey,
+    });
+    if (closedStaleReplyTurn) {
+      const outcome: StuckSessionRecoveryOutcome = {
+        status: "released",
+        action: "release_lane",
+        reason: "stale_reply_turn_closed",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        released: 0,
+        lane: sessionLane ?? undefined,
+      };
+      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+      return outcome;
     }
 
     if (!activeSessionId && sessionLane) {
