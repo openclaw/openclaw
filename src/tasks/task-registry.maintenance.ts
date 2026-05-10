@@ -444,13 +444,48 @@ function hasCliRunIdentity(task: TaskRecord): boolean {
   return [task.sourceId, task.runId].some((candidate) => Boolean(candidate?.trim()));
 }
 
+/**
+ * Check durable cron store to determine if a job is genuinely in-flight.
+ * After a gateway restart the in-memory activeJobIds set is empty, but the
+ * on-disk store still records `runningAtMs` for jobs that were executing at
+ * shutdown time. If the stored `runningAtMs` matches the task's execution
+ * start timestamp, the job is (or was) legitimately in-flight and should not
+ * be marked lost by this sweep. The grace period handles the case where the
+ * job actually died during restart — after 5 minutes with no progress event
+ * it will be re-evaluated and marked lost on a subsequent sweep.
+ */
+function isCronJobInFlightFromStore(task: TaskRecord): boolean {
+  const execution = parseCronExecutionId(task);
+  if (!execution) {
+    return false;
+  }
+  let store: CronStoreFile | null;
+  try {
+    store = taskRegistryMaintenanceRuntime.loadCronStoreSync(
+      taskRegistryMaintenanceRuntime.resolveCronStorePath(),
+    );
+  } catch {
+    return false;
+  }
+  if (!store) {
+    return false;
+  }
+  const job = store.jobs.find((entry) => entry.id === execution.jobId);
+  return Boolean(job?.state.runningAtMs && job.state.runningAtMs === execution.startedAt);
+}
+
 function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupContext): boolean {
   if (task.runtime === "cron") {
     if (!taskRegistryMaintenanceRuntime.isCronRuntimeAuthoritative()) {
       return true;
     }
     const jobId = task.sourceId?.trim();
-    return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
+    if (jobId && taskRegistryMaintenanceRuntime.isCronJobActive(jobId)) {
+      return true;
+    }
+    // After a gateway restart the in-memory active-jobs set is empty.
+    // Fall back to durable store to avoid false-positive lost findings.
+    return isCronJobInFlightFromStore(task);
   }
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {

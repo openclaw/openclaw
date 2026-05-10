@@ -600,4 +600,72 @@ describe("task-registry maintenance issue #60299", () => {
     }
     expect(hookNow).toBeGreaterThanOrEqual(beforeMaintenance);
   });
+
+  it("keeps cron tasks live when in-memory active set is empty but durable store shows runningAtMs", async () => {
+    const startedAt = Date.now() - 6 * 60_000;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+    // No activeCronJobIds — simulates post-restart state where in-memory set is empty.
+    // Durable store shows the job still running (runningAtMs matches task startedAt).
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+      cronRuntimeAuthoritative: true,
+      cronStore: {
+        version: 1,
+        jobs: [
+          {
+            id: "my-job",
+            label: "Test job",
+            schedule: "*/5 * * * *",
+            payload: { kind: "agentTurn" },
+            state: {
+              runningAtMs: startedAt,
+            },
+          } as any,
+        ],
+      },
+    });
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 0, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("marks cron tasks lost when durable store runningAtMs does not match task start", async () => {
+    const startedAt = Date.now() - 6 * 60_000;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+      cronRuntimeAuthoritative: true,
+      cronStore: {
+        version: 1,
+        jobs: [
+          {
+            id: "my-job",
+            label: "Test job",
+            schedule: "*/5 * * * *",
+            payload: { kind: "agentTurn" },
+            state: {
+              runningAtMs: startedAt - 300_000, // Different start — stale record
+            },
+          } as any,
+        ],
+      },
+    });
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
 });
