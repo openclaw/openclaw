@@ -42,6 +42,7 @@ import type { ChatQueueItem } from "./ui-types.ts";
 export { isCronSessionKey, parseSessionKey, resolveSessionDisplayName, resolveSessionOptionGroups };
 
 type SessionDefaultsSnapshot = {
+  defaultAgentId?: string;
   mainSessionKey?: string;
   mainKey?: string;
 };
@@ -241,19 +242,57 @@ function getPinnedSessionSlotCount(
   return Math.max(opts?.min ?? MIN_PINNED_SESSION_SLOTS, base);
 }
 
-function resolvePinnedSessionPreferenceKey(state: Pick<AppViewState, "hello">): string {
+function resolveSessionDefaults(state: Pick<AppViewState, "hello">): SessionDefaultsSnapshot {
   const snapshot = state.hello?.snapshot as
     | { sessionDefaults?: SessionDefaultsSnapshot }
     | undefined;
-  const mainSessionKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainSessionKey);
+  return snapshot?.sessionDefaults ?? {};
+}
+
+function resolvePinnedSessionPreferenceKey(state: Pick<AppViewState, "hello">): string {
+  const defaults = resolveSessionDefaults(state);
+  const mainSessionKey = normalizeOptionalString(defaults.mainSessionKey);
   if (mainSessionKey) {
     return mainSessionKey;
   }
-  const mainKey = normalizeOptionalString(snapshot?.sessionDefaults?.mainKey);
+  const mainKey = normalizeOptionalString(defaults.mainKey);
   if (mainKey) {
     return mainKey;
   }
   return "main";
+}
+
+function canonicalizePinnedSessionKey(
+  state: Pick<AppViewState, "hello">,
+  sessionKey: string,
+): string {
+  const key = normalizeOptionalString(sessionKey) ?? "";
+  if (!key) {
+    return key;
+  }
+  const defaults = resolveSessionDefaults(state);
+  const mainSessionKey = normalizeOptionalString(defaults.mainSessionKey);
+  if (!mainSessionKey) {
+    return key;
+  }
+  const mainKey = normalizeOptionalString(defaults.mainKey) ?? "main";
+  const defaultAgentId = normalizeAgentId(defaults.defaultAgentId ?? "main");
+  if (
+    key === "main" ||
+    key === mainKey ||
+    key === `agent:${defaultAgentId}:main` ||
+    key === `agent:${defaultAgentId}:${mainKey}`
+  ) {
+    return mainSessionKey;
+  }
+  return key;
+}
+
+function canonicalizePinnedSessionKeys(
+  state: Pick<AppViewState, "hello">,
+  keys: string[],
+): string[] {
+  return normalizePinnedSessionKeys(keys.map((key) => canonicalizePinnedSessionKey(state, key)));
 }
 
 function persistPinnedSessionPreferences(
@@ -268,7 +307,10 @@ function persistPinnedSessionPreferences(
   void state.client
     .request("sessions.patch", {
       key: resolvePinnedSessionPreferenceKey(state),
-      controlUiPinnedSessionKeys: normalizePinnedSessionKeys(settings.pinnedSessionKeys),
+      controlUiPinnedSessionKeys: canonicalizePinnedSessionKeys(
+        state,
+        normalizePinnedSessionKeys(settings.pinnedSessionKeys),
+      ),
       controlUiPinnedSessionSlotCount: normalizePinnedSessionSlotCount(
         settings.pinnedSessionSlotCount,
       ),
@@ -283,7 +325,7 @@ function persistPinnedSessionPreferences(
 function updatePinnedSessionKeys(state: AppViewState, nextKeys: string[]) {
   const nextSettings = {
     ...state.settings,
-    pinnedSessionKeys: normalizePinnedSessionKeys(nextKeys),
+    pinnedSessionKeys: canonicalizePinnedSessionKeys(state, nextKeys),
   };
   state.applySettings(nextSettings);
   persistPinnedSessionPreferences(state, nextSettings);
@@ -310,7 +352,7 @@ export function removePinnedChatSlot(state: AppViewState) {
 }
 
 export function pinChatSession(state: AppViewState, sessionKey: string) {
-  const trimmedKey = normalizeOptionalString(sessionKey);
+  const trimmedKey = canonicalizePinnedSessionKey(state, sessionKey);
   if (!trimmedKey) {
     return;
   }
@@ -322,7 +364,7 @@ export function pinChatSession(state: AppViewState, sessionKey: string) {
 }
 
 export function unpinChatSession(state: AppViewState, sessionKey: string) {
-  const trimmedKey = normalizeOptionalString(sessionKey);
+  const trimmedKey = canonicalizePinnedSessionKey(state, sessionKey);
   if (!trimmedKey) {
     return;
   }
@@ -366,7 +408,10 @@ export async function createBlankPinnedParallelSession(state: AppViewState) {
     if (!nextKey) {
       return null;
     }
-    const nextPinnedKeys = normalizePinnedSessionKeys([...getPinnedSessionKeys(state), nextKey]);
+    const nextPinnedKeys = canonicalizePinnedSessionKeys(state, [
+      ...getPinnedSessionKeys(state),
+      nextKey,
+    ]);
     const nextSettings = {
       ...state.settings,
       pinnedSessionKeys: nextPinnedKeys,
@@ -428,9 +473,9 @@ async function commitPinnedSessionRename(state: AppViewState, key: string) {
 }
 
 export function reorderPinnedChatSession(state: AppViewState, fromKey: string, toKey: string) {
-  const keys = getPinnedSessionKeys(state);
-  const fromIndex = keys.indexOf(fromKey);
-  const toIndex = keys.indexOf(toKey);
+  const keys = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state));
+  const fromIndex = keys.indexOf(canonicalizePinnedSessionKey(state, fromKey));
+  const toIndex = keys.indexOf(canonicalizePinnedSessionKey(state, toKey));
   if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
     return;
   }
@@ -473,7 +518,8 @@ export function resolvePinnedChatEntries(state: AppViewState): PinnedChatEntry[]
     byKey.set(row.key, row);
   }
 
-  const entries = getPinnedSessionKeys(state).map((key) => {
+  const activeKey = canonicalizePinnedSessionKey(state, state.sessionKey);
+  const entries = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state)).map((key) => {
     const row = byKey.get(key);
     const scopeLabel = normalizeOptionalString(parseAgentSessionKey(key)?.rest) ?? key;
     const label = row ? resolveSessionDisplayName(key, row) : scopeLabel;
@@ -483,7 +529,7 @@ export function resolvePinnedChatEntries(state: AppViewState): PinnedChatEntry[]
       label,
       editLabel,
       scopeLabel,
-      active: key === state.sessionKey,
+      active: key === activeKey,
       missing: !row,
       status: row?.status ?? null,
     };
@@ -546,8 +592,8 @@ export function renderSidebarPinnedChats(state: AppViewState) {
   }
 
   const entries = resolvePinnedChatEntries(state);
-  const pinnedKeys = getPinnedSessionKeys(state);
-  const currentPinned = pinnedKeys.includes(state.sessionKey);
+  const pinnedKeys = canonicalizePinnedSessionKeys(state, getPinnedSessionKeys(state));
+  const currentPinned = pinnedKeys.includes(canonicalizePinnedSessionKey(state, state.sessionKey));
   const canPinCurrent =
     Boolean(normalizeOptionalString(state.sessionKey)) &&
     !currentPinned &&

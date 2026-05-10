@@ -938,6 +938,43 @@ describe("pinned chats", () => {
     expect(entry.editLabel).toBe("Worker display");
   });
 
+  it("matches pinned main aliases against the canonical main session row", () => {
+    const state = {
+      sessionKey: "main",
+      hello: {
+        snapshot: {
+          sessionDefaults: {
+            mainSessionKey: "agent:main:main",
+            mainKey: "main",
+            defaultAgentId: "main",
+          },
+        },
+      },
+      settings: {
+        pinnedSessionKeys: ["main"],
+      },
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 1,
+        defaults: {
+          modelProvider: "openai",
+          model: "gpt-5",
+          contextTokens: null,
+        },
+        sessions: [row({ key: "agent:main:main", label: "Home base", status: "running" })],
+      },
+    } as unknown as AppViewState;
+
+    const [entry] = resolvePinnedChatEntries(state);
+
+    expect(entry.key).toBe("agent:main:main");
+    expect(entry.missing).toBe(false);
+    expect(entry.active).toBe(true);
+    expect(entry.status).toBe("running");
+    expect(entry.editLabel).toBe("Home base");
+  });
+
   it("pins and unpins sessions without duplicates", () => {
     const settings = { ...createSettings(), pinnedSessionKeys: ["main"] };
     const state = {
