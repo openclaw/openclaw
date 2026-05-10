@@ -304,12 +304,17 @@ export async function streamContainerEvents(params: {
   return new Promise((resolve, reject) => {
     let ws: WebSocket;
     let resolved = false;
+    let abortHandler: (() => void) | undefined;
 
     const cleanup = () => {
       if (resolved) {
         return;
       }
       resolved = true;
+      if (abortHandler) {
+        params.abortSignal?.removeEventListener("abort", abortHandler);
+        abortHandler = undefined;
+      }
     };
 
     try {
@@ -358,16 +363,15 @@ export async function streamContainerEvents(params: {
       log("[signal-ws] pong received");
     });
 
-    params.abortSignal?.addEventListener(
-      "abort",
-      () => {
+    if (params.abortSignal) {
+      abortHandler = () => {
         log("[signal-ws] aborted, closing connection");
         cleanup();
         ws.close();
         resolve();
-      },
-      { once: true },
-    );
+      };
+      params.abortSignal.addEventListener("abort", abortHandler, { once: true });
+    }
   });
 }
 

@@ -731,6 +731,23 @@ describe("streamContainerEvents", () => {
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("+14259798283"));
     expect(log).not.toHaveBeenCalledWith(expect.stringContaining("%2B14259798283"));
   });
+
+  it("removes the abort listener when the stream closes", async () => {
+    const abortController = new AbortController();
+    const addEventListener = vi.spyOn(abortController.signal, "addEventListener");
+    const removeEventListener = vi.spyOn(abortController.signal, "removeEventListener");
+
+    await streamContainerEvents({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      abortSignal: abortController.signal,
+      onEvent: vi.fn(),
+    });
+
+    const abortHandler = addEventListener.mock.calls.find((call) => call[0] === "abort")?.[1];
+    expect(abortHandler).toBeTypeOf("function");
+    expect(removeEventListener).toHaveBeenCalledWith("abort", abortHandler);
+  });
 });
 
 describe("containerSendReaction", () => {
