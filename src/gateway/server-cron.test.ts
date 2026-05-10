@@ -655,6 +655,178 @@ describe("buildGatewayCronService", () => {
     }
   });
 
+  it("routes relative cron wake session keys to the configured default agent", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: {
+        store: path.join(os.tmpdir(), `server-cron-relative-default-${Date.now()}`, "cron.json"),
+      },
+      agents: {
+        list: [
+          { id: "primary", default: true, model: "test/primary" },
+          { id: "main", model: "test/main" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              enqueueSystemEvent?: (text: string, opts?: { sessionKey?: string }) => void;
+              requestHeartbeat?: (opts?: {
+                sessionKey?: string | null;
+                source?: string;
+                intent?: string;
+                reason?: string;
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.enqueueSystemEvent?.("hello", {
+        sessionKey: "discord:channel:ops",
+      });
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "event",
+        reason: "cron:test",
+        sessionKey: "discord:channel:ops",
+      });
+
+      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
+      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+        "agent:primary:discord:channel:ops",
+      );
+      expect(wakeCall?.[0]).toMatchObject({
+        agentId: "primary",
+        sessionKey: "agent:primary:discord:channel:ops",
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("falls back to the configured default agent while preserving unknown agent-prefixed wake suffixes", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: {
+        store: path.join(os.tmpdir(), `server-cron-unknown-agent-${Date.now()}`, "cron.json"),
+      },
+      agents: {
+        list: [
+          { id: "primary", default: true, model: "test/primary" },
+          { id: "ops", model: "test/ops" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const cronDeps = (
+        state.cron as unknown as {
+          state?: {
+            deps?: {
+              enqueueSystemEvent?: (text: string, opts?: { sessionKey?: string }) => void;
+              requestHeartbeat?: (opts?: {
+                sessionKey?: string | null;
+                source?: string;
+                intent?: string;
+                reason?: string;
+              }) => void;
+            };
+          };
+        }
+      ).state?.deps;
+
+      cronDeps?.enqueueSystemEvent?.("hello", {
+        sessionKey: "agent:ghost:discord:channel:ops",
+      });
+      cronDeps?.requestHeartbeat?.({
+        source: "cron",
+        intent: "event",
+        reason: "cron:test",
+        sessionKey: "agent:ghost:discord:channel:ops",
+      });
+
+      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
+      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
+        "agent:primary:discord:channel:ops",
+      );
+      expect(wakeCall?.[0]).toMatchObject({
+        agentId: "primary",
+        sessionKey: "agent:primary:discord:channel:ops",
+      });
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("threads cron wake sessionKey through the CronService adapter", () => {
+    const cfg = {
+      session: { mainKey: "main" },
+      cron: {
+        store: path.join(os.tmpdir(), `server-cron-wake-service-${Date.now()}`, "cron.json"),
+      },
+      agents: {
+        list: [
+          { id: "primary", default: true, model: "test/primary" },
+          { id: "ops", model: "test/ops" },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const sessionKey = "agent:ops:cron:nightly:run:abc-123";
+      expect(
+        state.cron.wake({
+          mode: "now",
+          text: "hello",
+          sessionKey,
+        }),
+      ).toEqual({ ok: true });
+
+      const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
+      const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
+      expect(enqueueCall?.[0]).toBe("hello");
+      expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
+        /^agent:ops:/,
+      );
+      expect(wakeCall?.[0]).toMatchObject({
+        source: "manual",
+        intent: "immediate",
+        reason: "wake",
+        agentId: "ops",
+      });
+      expect((wakeCall?.[0] as { sessionKey?: string } | undefined)?.sessionKey).toMatch(
+        /^agent:ops:/,
+      );
+    } finally {
+      state.cron.stop();
+    }
+  });
+
   it("preserves trust downgrades when cron enqueues system events", () => {
     const cfg = createCronConfig("server-cron-untrusted");
     loadConfigMock.mockReturnValue(cfg);

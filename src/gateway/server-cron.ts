@@ -215,6 +215,9 @@ export function buildGatewayCronService(params: {
       requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
         ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey))
         : undefined;
+    const parsedSessionKey = requestedSessionKey
+      ? parseAgentSessionKey(requestedSessionKey)
+      : undefined;
     const requestedOrDerived = requestedAgentId ?? parsedSessionKeyAgentId;
     if (!requestedOrDerived && !requestedSessionKey) {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
@@ -225,12 +228,21 @@ export function buildGatewayCronService(params: {
     // heartbeat fanout/broadcast behavior by leaving agentId/sessionKey unset.
     const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(requestedOrDerived);
     const agentId = resolvedAgentId || undefined;
+    // If an agent-prefixed session key names an unconfigured agent, fall back
+    // to the configured default agent but keep the requested session suffix.
+    const sessionKeyForResolution =
+      !requestedAgentId &&
+      parsedSessionKey &&
+      agentId &&
+      normalizeAgentId(parsedSessionKey.agentId) !== normalizeAgentId(agentId)
+        ? parsedSessionKey.rest
+        : requestedSessionKey;
     const sessionKey =
-      requestedSessionKey && agentId
+      sessionKeyForResolution && agentId
         ? resolveCronSessionKey({
             runtimeConfig,
             agentId,
-            requestedSessionKey,
+            requestedSessionKey: sessionKeyForResolution,
           })
         : undefined;
     return { runtimeConfig, agentId, sessionKey };
@@ -305,10 +317,19 @@ export function buildGatewayCronService(params: {
           ? resolveAgentIdFromSessionKey(opts.sessionKey)
           : undefined);
       const { agentId, cfg: runtimeConfig } = resolveCronAgent(derivedAgentId);
+      const parsedSessionKey = opts?.sessionKey ? parseAgentSessionKey(opts.sessionKey) : undefined;
+      // Mirror wake target resolution for unknown agent-prefixed keys:
+      // default agent, same requested session suffix.
+      const requestedSessionKey =
+        !opts?.agentId &&
+        parsedSessionKey &&
+        normalizeAgentId(parsedSessionKey.agentId) !== normalizeAgentId(agentId)
+          ? parsedSessionKey.rest
+          : opts?.sessionKey;
       const sessionKey = resolveCronSessionKey({
         runtimeConfig,
         agentId,
-        requestedSessionKey: opts?.sessionKey,
+        requestedSessionKey,
       });
       enqueueSystemEvent(text, {
         sessionKey,

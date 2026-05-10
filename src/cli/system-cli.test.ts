@@ -77,6 +77,7 @@ describe("system-cli", () => {
       "agent:main:telegram:dm:42",
     ]);
 
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "wake",
       expect.any(Object),
@@ -88,6 +89,7 @@ describe("system-cli", () => {
   it("omits sessionKey from payload when --session-key not provided", async () => {
     await runCli(["system", "event", "--text", "ping"]);
 
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const [, , params] = callGatewayFromCli.mock.calls[0];
     expect(params).not.toHaveProperty("sessionKey");
   });
@@ -95,6 +97,7 @@ describe("system-cli", () => {
   it("treats empty --session-key as omitted", async () => {
     await runCli(["system", "event", "--text", "ping", "--session-key", "  "]);
 
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(1);
     const [, , params] = callGatewayFromCli.mock.calls[0];
     expect(params).not.toHaveProperty("sessionKey");
   });

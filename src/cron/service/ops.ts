@@ -33,7 +33,7 @@ import type {
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
-import type { CronServiceState } from "./state.js";
+import type { CronServiceState, CronWakeMode } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
   applyJobResult,
@@ -857,7 +857,7 @@ export async function enqueueRun(state: CronServiceState, id: string, mode?: "du
 
 export function wakeNow(
   state: CronServiceState,
-  opts: { mode: "now" | "next-heartbeat"; text: string; sessionKey?: string },
+  opts: { mode: CronWakeMode; text: string; sessionKey?: string },
 ) {
   return wake(state, opts);
 }
