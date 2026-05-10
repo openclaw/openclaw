@@ -876,24 +876,29 @@ export async function runPreparedReply(
         })
       : [provider];
   // When an image model override is active, skip auth profile resolution to
-  // avoid clearing the stored session auth profile (which belongs to the
-  // original provider). The image override is temporary for this turn only.
-  let authProfileId =
-    useFastReplyRuntime || hasAppliedImageModelOverride
-      ? preparedSessionState.sessionEntry?.authProfileOverride
-      : await traceRunPhase("reply.resolve_auth_profile", () =>
-          resolveSessionAuthProfileOverride({
-            cfg,
-            provider,
-            acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
-            agentDir,
-            sessionEntry: preparedSessionState.sessionEntry,
-            sessionStore,
-            sessionKey,
-            storePath,
-            isNewSession,
-          }),
-        );
+  // avoid (a) clearing the stored session auth profile and (b) forwarding
+  // the original provider's auth profile to a different provider's run.
+  // The image override is temporary for this turn only.
+  let authProfileId: string | undefined;
+  if (hasAppliedImageModelOverride) {
+    authProfileId = undefined;
+  } else if (useFastReplyRuntime) {
+    authProfileId = preparedSessionState.sessionEntry?.authProfileOverride;
+  } else {
+    authProfileId = await traceRunPhase("reply.resolve_auth_profile", () =>
+      resolveSessionAuthProfileOverride({
+        cfg,
+        provider,
+        acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+        agentDir,
+        sessionEntry: preparedSessionState.sessionEntry,
+        sessionStore,
+        sessionKey,
+        storePath,
+        isNewSession,
+      }),
+    );
+  }
   const { runReplyAgent } = await traceRunPhase("reply.load_agent_runner_runtime", () =>
     loadAgentRunnerRuntime(),
   );
@@ -942,20 +947,23 @@ export async function runPreparedReply(
         piRuntime?.waitForEmbeddedPiRunEnd(activeRunSessionId) ?? Promise.resolve(undefined),
       refreshPreparedState: async () => {
         preparedSessionState = resolvePreparedSessionState();
-        authProfileId =
-          useFastReplyRuntime || hasAppliedImageModelOverride
-            ? preparedSessionState.sessionEntry?.authProfileOverride
-            : await resolveSessionAuthProfileOverride({
-                cfg,
-                provider,
-                acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
-                agentDir,
-                sessionEntry: preparedSessionState.sessionEntry,
-                sessionStore,
-                sessionKey,
-                storePath,
-                isNewSession,
-              });
+        if (hasAppliedImageModelOverride) {
+          authProfileId = undefined;
+        } else if (useFastReplyRuntime) {
+          authProfileId = preparedSessionState.sessionEntry?.authProfileOverride;
+        } else {
+          authProfileId = await resolveSessionAuthProfileOverride({
+            cfg,
+            provider,
+            acceptedProviderIds: resolveAcceptedAuthProfileProviders(),
+            agentDir,
+            sessionEntry: preparedSessionState.sessionEntry,
+            sessionStore,
+            sessionKey,
+            storePath,
+            isNewSession,
+          });
+        }
         preparedSessionState = resolvePreparedSessionState();
         ({ prefixedCommandBody, queuedBody, transcriptCommandBody, currentTurnContext } =
           await traceRunPhase("reply.build_prompt_bodies", () => rebuildPromptBodies()));
