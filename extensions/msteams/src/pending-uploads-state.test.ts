@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { prepareFileConsentActivityFs } from "./file-consent-helpers.js";
+import { prepareFileConsentActivityPersistent } from "./file-consent-helpers.js";
 import {
   getPendingUploadState,
   removePendingUploadState,
@@ -186,7 +186,7 @@ describe("msteams pending uploads (sqlite-backed)", () => {
   });
 });
 
-describe("prepareFileConsentActivityFs end-to-end", () => {
+describe("prepareFileConsentActivityPersistent end-to-end", () => {
   beforeEach(() => {
     resetPluginBlobStoreForTests();
     setMSTeamsRuntime(msteamsRuntimeStub);
@@ -197,15 +197,15 @@ describe("prepareFileConsentActivityFs end-to-end", () => {
     await cleanupTempDirs();
   });
 
-  it("writes the pending upload to the fs store with the same id as the card", async () => {
+  it("writes the pending upload to SQLite with the same id as the card", async () => {
     const stateDir = await makeTempStateDir();
     const env = makeEnv(stateDir);
-    // Redirect state dir via env so the helper's FS writes land under our tmp
+    // Redirect state dir via env so the helper's SQLite writes land under our tmp
     const originalEnv = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_STATE_DIR = stateDir;
 
     try {
-      const result = await prepareFileConsentActivityFs({
+      const result = await prepareFileConsentActivityPersistent({
         media: {
           buffer: Buffer.from("cli file"),
           filename: "cli.bin",

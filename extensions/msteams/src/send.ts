@@ -11,7 +11,10 @@ import {
   formatMSTeamsSendErrorHint,
   formatUnknownError,
 } from "./errors.js";
-import { prepareFileConsentActivityFs, requiresFileConsent } from "./file-consent-helpers.js";
+import {
+  prepareFileConsentActivityPersistent,
+  requiresFileConsent,
+} from "./file-consent-helpers.js";
 import { buildTeamsFileInfoCard } from "./graph-chat.js";
 import {
   getDriveItemProperties,
@@ -200,10 +203,10 @@ export async function sendMessageMSTeams(
       })
     ) {
       // Proactive CLI sends run in a different process from the gateway's
-      // monitor that receives the fileConsent/invoke callback. Use the FS-
-      // backed helper so the invoke handler can find the pending upload when
-      // the user clicks "Allow".
-      const { activity, uploadId } = await prepareFileConsentActivityFs({
+      // monitor that receives the fileConsent/invoke callback. Use the
+      // SQLite-backed helper so the invoke handler can find the pending upload
+      // when the user clicks "Allow".
+      const { activity, uploadId } = await prepareFileConsentActivityPersistent({
         media: { buffer: media.buffer, filename: fileName, contentType: media.contentType },
         conversationId,
         description: messageText || undefined,
@@ -220,8 +223,8 @@ export async function sendMessageMSTeams(
       });
 
       // Store the activity ID so the accept handler can replace the consent
-      // card in-place. Mirror it into the FS store too because the invoke
-      // callback may be delivered to a different process than the CLI send.
+      // card in-place. Mirror it into SQLite too because the invoke callback
+      // may be delivered to a different process than the CLI send.
       setPendingUploadActivityId(uploadId, messageId);
       await setPendingUploadActivityIdState(uploadId, messageId);
 

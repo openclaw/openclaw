@@ -32,7 +32,7 @@ async function handleMSTeamsFileConsentInvoke(
       ? consentResponse.context.uploadId
       : undefined;
   // Prefer the in-memory store (same-process reply path); fall back to the
-  // FS-backed store so CLI `message send --media` flows work even when the
+  // SQLite-backed store so CLI `message send --media` flows work even when the
   // invoke callback is delivered to a different process.
   const inMemoryFile = getPendingUpload(uploadId);
   const fsFile = inMemoryFile ? undefined : await getPendingUploadState(uploadId);

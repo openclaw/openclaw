@@ -354,8 +354,8 @@ describe("msteams file consent invoke FS fallback", () => {
     }
   });
 
-  it("reads pending upload from FS store when in-memory store is empty (cross-process CLI path)", async () => {
-    // Simulate the CLI process writing to the FS store before exiting; the
+  it("reads pending upload from SQLite when in-memory store is empty (cross-process CLI path)", async () => {
+    // Simulate the CLI process writing to SQLite before exiting; the
     // in-memory store in this (monitor) process is empty.
     const uploadId = "cli-upload-id-123";
     const conversationId = "19:victim@thread.v2";

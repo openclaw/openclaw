@@ -55,7 +55,7 @@ function metadataToUpload(metadata: PendingUploadMetadata, buffer: Buffer): Pend
 /**
  * Persist a pending upload record so another process can read it back.
  * Pass in the pre-generated id (same as the one placed in the consent card
- * context) so the in-memory and FS stores share the same key.
+ * context) so the in-memory and SQLite stores share the same key.
  */
 export async function storePendingUploadState(
   upload: {
