@@ -29,6 +29,10 @@ function agentDatabasePath(agentId = "main") {
   return path.join(stateDir(), "agents", agentId, "agent", "openclaw-agent.sqlite");
 }
 
+function stateDatabasePath() {
+  return path.join(stateDir(), "state", "openclaw.sqlite");
+}
+
 function withSqliteDatabase(dbPath, callback) {
   if (!fs.existsSync(dbPath)) {
     throw new Error(`missing SQLite database: ${dbPath}`);
@@ -74,10 +78,18 @@ function writeJson(file, value) {
 }
 
 function installRecords() {
-  const indexPath = path.join(stateDir(), "plugins", "installs.json");
-  const index = fs.existsSync(indexPath) ? readJson(indexPath) : {};
-  const cfg = fs.existsSync(configPath()) ? readJson(configPath()) : {};
-  return index.installRecords || index.records || cfg.plugins?.installs || {};
+  return withSqliteDatabase(stateDatabasePath(), (db) => {
+    const row = db
+      .prepare(
+        "SELECT value_json FROM kv WHERE scope = 'installed_plugin_index' AND key = 'current'",
+      )
+      .get();
+    if (!row?.value_json) {
+      return {};
+    }
+    const index = JSON.parse(String(row.value_json));
+    return index.installRecords ?? {};
+  });
 }
 
 function pluginInstallPath() {
