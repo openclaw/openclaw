@@ -91,7 +91,7 @@ jobs:
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
             node:24-bookworm-slim \
-            bash -lc 'bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
+            bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   macos-installer:
     runs-on: macos-latest
