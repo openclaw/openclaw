@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Auto-reply/queue: prioritize foreground user/manual turns ahead of lower-priority cron, heartbeat, memory, and deferred maintenance work within the same command lane, while preserving FIFO ordering within each priority and promoting old background entries to avoid starvation. Fixes #79589. Thanks @SebTardif.
 - QA/Mantis: add Telegram live PR evidence automation with Convex-leased credentials, Crabbox transcript capture, motion GIF previews, and inline PR comments.
 - QA/Mantis: add a Telegram desktop scenario builder that leases Crabbox, installs native Telegram Desktop, configures an OpenClaw Telegram gateway with leased bot credentials, and records VNC screenshot/video artifacts.
 - Discord/voice: add realtime voice diagnostics for speaker turns, playback resets, barge-in detection, and audio cutoff analysis.

@@ -1,5 +1,6 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { CommandPriority } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 
 const diagnosticMocks = vi.hoisted(() => ({
@@ -23,6 +24,7 @@ type CommandQueueModule = typeof import("./command-queue.js");
 let clearCommandLane: CommandQueueModule["clearCommandLane"];
 let CommandLaneClearedError: CommandQueueModule["CommandLaneClearedError"];
 let CommandLaneTaskTimeoutError: CommandQueueModule["CommandLaneTaskTimeoutError"];
+let COMMAND_QUEUE_STARVATION_PROMOTION_MS: CommandQueueModule["COMMAND_QUEUE_STARVATION_PROMOTION_MS"];
 let enqueueCommand: CommandQueueModule["enqueueCommand"];
 let enqueueCommandInLane: CommandQueueModule["enqueueCommandInLane"];
 let GatewayDrainingError: CommandQueueModule["GatewayDrainingError"];
@@ -68,6 +70,7 @@ describe("command queue", () => {
       clearCommandLane,
       CommandLaneClearedError,
       CommandLaneTaskTimeoutError,
+      COMMAND_QUEUE_STARVATION_PROMOTION_MS,
       enqueueCommand,
       enqueueCommandInLane,
       GatewayDrainingError,
@@ -131,6 +134,205 @@ describe("command queue", () => {
     expect(calls).toEqual([1, 2, 3]);
     expect(maxActive).toBe(1);
     expect(getQueueSize()).toBe(0);
+  });
+
+  it("runs higher-priority queued tasks before lower-priority work", async () => {
+    const lane = `priority-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 0);
+    const calls: string[] = [];
+
+    const low = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push("low");
+        return "low";
+      },
+      { priority: CommandPriority.Low },
+    );
+    const high = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push("high");
+        return "high";
+      },
+      { priority: CommandPriority.High },
+    );
+    const normal = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push("normal");
+        return "normal";
+      },
+      { priority: CommandPriority.Normal },
+    );
+
+    setCommandLaneConcurrency(lane, 1);
+
+    await expect(Promise.all([low, high, normal])).resolves.toEqual(["low", "high", "normal"]);
+    expect(calls).toEqual(["high", "normal", "low"]);
+  });
+
+  it("preserves FIFO order within the same priority", async () => {
+    const lane = `priority-fifo-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 0);
+    const calls: number[] = [];
+
+    const first = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push(1);
+        return 1;
+      },
+      { priority: CommandPriority.High },
+    );
+    const second = enqueueCommandInLane(
+      lane,
+      async () => {
+        calls.push(2);
+        return 2;
+      },
+      { priority: CommandPriority.High },
+    );
+
+    setCommandLaneConcurrency(lane, 1);
+
+    await expect(Promise.all([first, second])).resolves.toEqual([1, 2]);
+    expect(calls).toEqual([1, 2]);
+  });
+
+  it("promotes old lower-priority work to avoid starvation", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const lane = `priority-starvation-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setCommandLaneConcurrency(lane, 0);
+      const calls: string[] = [];
+
+      const low = enqueueCommandInLane(
+        lane,
+        async () => {
+          calls.push("low");
+          return "low";
+        },
+        { priority: CommandPriority.Low },
+      );
+
+      vi.setSystemTime(COMMAND_QUEUE_STARVATION_PROMOTION_MS);
+
+      const high = enqueueCommandInLane(
+        lane,
+        async () => {
+          calls.push("high");
+          return "high";
+        },
+        { priority: CommandPriority.High },
+      );
+
+      setCommandLaneConcurrency(lane, 1);
+      await vi.runAllTimersAsync();
+
+      await expect(Promise.all([low, high])).resolves.toEqual(["low", "high"]);
+      expect(calls).toEqual(["low", "high"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("normalizes legacy and malformed priorities when selecting queued work", async () => {
+    const key = Symbol.for("openclaw.commandQueueState");
+    const globalStore = globalThis as Record<PropertyKey, unknown>;
+    const original = globalStore[key];
+    const lane = `priority-legacy-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    const calls: string[] = [];
+
+    try {
+      let resolveLegacy!: (value: string) => void;
+      let rejectLegacy!: (reason?: unknown) => void;
+      const legacy = new Promise<string>((resolve, reject) => {
+        resolveLegacy = resolve;
+        rejectLegacy = reject;
+      });
+      let resolveMalformed!: (value: string) => void;
+      let rejectMalformed!: (reason?: unknown) => void;
+      const malformed = new Promise<string>((resolve, reject) => {
+        resolveMalformed = resolve;
+        rejectMalformed = reject;
+      });
+      let resolveHigh!: (value: string) => void;
+      let rejectHigh!: (reason?: unknown) => void;
+      const high = new Promise<string>((resolve, reject) => {
+        resolveHigh = resolve;
+        rejectHigh = reject;
+      });
+
+      globalStore[key] = {
+        gatewayDraining: false,
+        lanes: new Map([
+          [
+            lane,
+            {
+              lane,
+              queue: [
+                {
+                  task: async () => {
+                    calls.push("legacy");
+                    return "legacy";
+                  },
+                  resolve: resolveLegacy,
+                  reject: rejectLegacy,
+                  enqueuedAt: Date.now(),
+                  warnAfterMs: 2_000,
+                },
+                {
+                  task: async () => {
+                    calls.push("malformed");
+                    return "malformed";
+                  },
+                  resolve: resolveMalformed,
+                  reject: rejectMalformed,
+                  enqueuedAt: Date.now(),
+                  priority: Number.NaN,
+                  warnAfterMs: 2_000,
+                },
+                {
+                  task: async () => {
+                    calls.push("high");
+                    return "high";
+                  },
+                  resolve: resolveHigh,
+                  reject: rejectHigh,
+                  enqueuedAt: Date.now(),
+                  priority: CommandPriority.High,
+                  warnAfterMs: 2_000,
+                },
+              ],
+              activeTaskIds: new Set(),
+              maxConcurrent: 0,
+              draining: false,
+              generation: 0,
+            },
+          ],
+        ]),
+        activeTaskWaiters: new Set(),
+        nextTaskId: 1,
+      };
+
+      setCommandLaneConcurrency(lane, 1);
+
+      await expect(Promise.all([legacy, malformed, high])).resolves.toEqual([
+        "legacy",
+        "malformed",
+        "high",
+      ]);
+      expect(calls).toEqual(["high", "legacy", "malformed"]);
+    } finally {
+      if (original !== undefined) {
+        globalStore[key] = original;
+      } else {
+        delete globalStore[key];
+      }
+      resetCommandQueueStateForTest();
+    }
   });
 
   it("logs enqueue depth after push", async () => {

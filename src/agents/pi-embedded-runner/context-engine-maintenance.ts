@@ -9,6 +9,7 @@ import type {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { enqueueCommandInLane, getQueueSize } from "../../process/command-queue.js";
+import { CommandPriority } from "../../process/command-queue.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -315,6 +316,7 @@ export function buildContextEngineMaintenanceRuntimeContext(params: {
         return await enqueueCommandInLane(
           resolveSessionLane(rewriteSessionKey),
           async () => await rewriteTranscriptEntriesInFile(),
+          { priority: CommandPriority.Low },
         );
       }
       return await rewriteTranscriptEntriesInFile();
@@ -569,18 +571,21 @@ function scheduleDeferredTurnMaintenance(params: DeferredTurnMaintenanceSchedule
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
   let runPromise: Promise<void>;
   try {
-    runPromise = enqueueCommandInLane(resolveDeferredTurnMaintenanceLane(sessionKey), async () =>
-      runDeferredTurnMaintenanceWorker({
-        contextEngine: params.contextEngine,
-        sessionId: params.sessionId,
-        sessionKey,
-        sessionFile: params.sessionFile,
-        sessionManager: params.sessionManager,
-        runtimeContext: params.runtimeContext,
-        agentId: params.agentId,
-        config: params.config,
-        runId: task.runId!,
-      }),
+    runPromise = enqueueCommandInLane(
+      resolveDeferredTurnMaintenanceLane(sessionKey),
+      async () =>
+        runDeferredTurnMaintenanceWorker({
+          contextEngine: params.contextEngine,
+          sessionId: params.sessionId,
+          sessionKey,
+          sessionFile: params.sessionFile,
+          sessionManager: params.sessionManager,
+          runtimeContext: params.runtimeContext,
+          agentId: params.agentId,
+          config: params.config,
+          runId: task.runId!,
+        }),
+      { priority: CommandPriority.Low },
     );
   } catch (err) {
     schedulerAbort.dispose();

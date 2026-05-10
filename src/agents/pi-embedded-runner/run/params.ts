@@ -9,7 +9,10 @@ import type { ReplyOperation } from "../../../auto-reply/reply/reply-run-registr
 import type { ReasoningLevel, ThinkLevel, VerboseLevel } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PromptImageOrderEntry } from "../../../media/prompt-image-order.js";
-import type { CommandQueueEnqueueFn } from "../../../process/command-queue.types.js";
+import type {
+  CommandPriority,
+  CommandQueueEnqueueFn,
+} from "../../../process/command-queue.types.js";
 import type { InputProvenance } from "../../../sessions/input-provenance.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../../bash-tools.exec-types.js";
 import type { AgentStreamParams, ClientToolDefinition } from "../../command/shared-types.js";
@@ -184,6 +187,7 @@ export type RunEmbeddedPiAgentParams = {
     sessionKey?: string;
   }) => void | Promise<void>;
   lane?: string;
+  queuePriority?: CommandPriority;
   enqueue?: CommandQueueEnqueueFn;
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;

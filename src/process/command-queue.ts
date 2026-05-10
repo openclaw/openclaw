@@ -4,7 +4,7 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
+import { CommandPriority, type CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
  * Dedicated error type thrown when a queued command is rejected because
@@ -46,11 +46,14 @@ export class GatewayDrainingError extends Error {
 // low-risk parallelism (e.g. cron jobs) without interleaving stdin / logs for
 // the main auto-reply workflow.
 
+export const COMMAND_QUEUE_STARVATION_PROMOTION_MS = 30_000;
+
 type QueueEntry = {
   task: () => Promise<unknown>;
   resolve: (value: unknown) => void;
   reject: (reason?: unknown) => void;
   enqueuedAt: number;
+  priority?: CommandPriority;
   warnAfterMs: number;
   taskTimeoutMs?: number;
   onWait?: (waitMs: number, queuedAhead: number) => void;
@@ -115,6 +118,40 @@ function normalizeLane(lane: string): string {
 
 function getLaneDepth(state: LaneState): number {
   return state.queue.length + state.activeTaskIds.size;
+}
+
+function normalizeCommandPriority(value: unknown): CommandPriority {
+  if (value === CommandPriority.Low) {
+    return CommandPriority.Low;
+  }
+  if (value === CommandPriority.High) {
+    return CommandPriority.High;
+  }
+  return CommandPriority.Normal;
+}
+
+function resolveEffectiveCommandPriority(entry: QueueEntry, now: number): CommandPriority {
+  const priority = normalizeCommandPriority(entry.priority);
+  if (
+    priority < CommandPriority.High &&
+    now - entry.enqueuedAt >= COMMAND_QUEUE_STARVATION_PROMOTION_MS
+  ) {
+    return CommandPriority.High;
+  }
+  return priority;
+}
+
+function pickNextQueueEntryIndex(queue: QueueEntry[], now: number): number {
+  let bestIndex = 0;
+  let bestPriority = CommandPriority.Low - 1;
+  for (let index = 0; index < queue.length; index += 1) {
+    const priority = resolveEffectiveCommandPriority(queue[index], now);
+    if (priority > bestPriority) {
+      bestPriority = priority;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
 }
 
 function createCommandLaneSnapshot(state: LaneState): CommandLaneSnapshot {
@@ -243,16 +280,18 @@ function drainLane(lane: string) {
   const pump = () => {
     try {
       while (state.activeTaskIds.size < state.maxConcurrent && state.queue.length > 0) {
-        const entry = state.queue.shift() as QueueEntry;
-        const waitedMs = Date.now() - entry.enqueuedAt;
+        const now = Date.now();
+        const entryIndex = pickNextQueueEntryIndex(state.queue, now);
+        const [entry] = state.queue.splice(entryIndex, 1) as [QueueEntry];
+        const waitedMs = now - entry.enqueuedAt;
         if (waitedMs >= entry.warnAfterMs) {
           try {
-            entry.onWait?.(waitedMs, state.queue.length);
+            entry.onWait?.(waitedMs, entryIndex);
           } catch (err) {
             diag.error(`lane onWait callback failed: lane=${lane} error="${String(err)}"`);
           }
           diag.warn(
-            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${state.queue.length}`,
+            `lane wait exceeded: lane=${lane} waitedMs=${waitedMs} queueAhead=${entryIndex}`,
           );
         }
         logLaneDequeue(lane, waitedMs, state.queue.length);
@@ -337,6 +376,7 @@ export function enqueueCommandInLane<T>(
       resolve: (value) => resolve(value as T),
       reject,
       enqueuedAt: Date.now(),
+      priority: normalizeCommandPriority(opts?.priority),
       warnAfterMs,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       onWait: opts?.onWait,

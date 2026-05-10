@@ -16,7 +16,10 @@ import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-con
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
-import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import {
+  CommandPriority,
+  type CommandQueueEnqueueOptions,
+} from "../../process/command-queue.types.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { sanitizeForLog } from "../../terminal/ansi.js";
 import { resolveUserPath } from "../../utils.js";
@@ -216,6 +219,23 @@ function withEmbeddedRunLaneTimeout(
   return { ...opts, taskTimeoutMs: laneTaskTimeoutMs };
 }
 
+function resolveEmbeddedRunQueuePriority(params: RunEmbeddedPiAgentParams): CommandPriority {
+  if (params.queuePriority !== undefined) {
+    return params.queuePriority;
+  }
+  switch (params.trigger) {
+    case "user":
+    case "manual":
+      return CommandPriority.High;
+    case "cron":
+    case "heartbeat":
+    case "memory":
+      return CommandPriority.Low;
+    default:
+      return CommandPriority.Normal;
+  }
+}
+
 function normalizeEmbeddedRunAttemptResult(
   attempt: EmbeddedRunAttemptForRunner,
 ): EmbeddedRunAttemptForRunner {
@@ -375,14 +395,21 @@ export async function runEmbeddedPiAgent(
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const laneTaskTimeoutMs = resolveEmbeddedRunLaneTimeoutMs(params.timeoutMs);
+  const queuePriority = resolveEmbeddedRunQueuePriority(params);
+  const withQueuePriority = (opts?: CommandQueueEnqueueOptions): CommandQueueEnqueueOptions => ({
+    ...opts,
+    priority: opts?.priority ?? queuePriority,
+  });
   const withLaneTimeout = (opts?: CommandQueueEnqueueOptions) =>
-    withEmbeddedRunLaneTimeout(opts, laneTaskTimeoutMs);
+    withEmbeddedRunLaneTimeout(withQueuePriority(opts), laneTaskTimeoutMs);
   const enqueueGlobal = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
     params.enqueue
       ? params.enqueue(task, withLaneTimeout(opts))
       : enqueueCommandInLane(globalLane, task, withLaneTimeout(opts));
   const enqueueSession = <T>(task: () => Promise<T>, opts?: CommandQueueEnqueueOptions) =>
-    params.enqueue ? params.enqueue(task, opts) : enqueueCommandInLane(sessionLane, task, opts);
+    params.enqueue
+      ? params.enqueue(task, withQueuePriority(opts))
+      : enqueueCommandInLane(sessionLane, task, withQueuePriority(opts));
   const channelHint = params.messageChannel ?? params.messageProvider;
   const resolvedToolResultFormat =
     params.toolResultFormat ??

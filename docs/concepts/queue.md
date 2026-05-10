@@ -15,9 +15,10 @@ We serialize inbound auto-reply runs (all channels) through a tiny in-process qu
 
 ## How it works
 
-- A lane-aware FIFO queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; main defaults to 4, subagent to 8).
+- A lane-aware queue drains each lane with a configurable concurrency cap (default 1 for unconfigured lanes; main defaults to 4, subagent to 8). Entries with the same priority remain FIFO; user/manual turns can jump ahead of lower-priority background work in the same lane.
 - `runEmbeddedPiAgent` enqueues by **session key** (lane `session:<key>`) to guarantee only one active run per session.
 - Each session run is then queued into a **global lane** (`main` by default) so overall parallelism is capped by `agents.defaults.maxConcurrent`.
+- Priority is local to a lane. It does not interrupt an active run; it only chooses the next queued entry when a lane has capacity. A starvation guard promotes old low/normal-priority entries after a wait threshold.
 - When verbose logging is enabled, queued runs emit a short notice if they waited more than ~2s before starting.
 - Typing indicators still fire immediately on enqueue (when supported by the channel) so user experience is unchanged while we wait our turn.
 
