@@ -744,4 +744,97 @@ describe("describeImageWithModel", () => {
     expect(authRequest?.profileId).toBe("google:default");
     expect(setRuntimeApiKeyMock).toHaveBeenCalledWith("google", "oauth-test");
   });
+
+  it("places image prompt in user content for github-copilot provider", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "github-copilot",
+        id: "gemini-3.1-pro-preview",
+        input: ["text", "image"],
+        api: "openai-responses",
+        baseUrl: "https://api.githubcopilot.com",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "github-copilot",
+      model: "gemini-3.1-pro-preview",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).toHaveBeenCalledOnce();
+    const [, context] = completeMock.mock.calls[0] as [
+      unknown,
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+    ];
+    // Copilot models must NOT use a separate system prompt
+    expect(context.systemPrompt).toBeUndefined();
+    // The user message must contain both text and image content
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).toContain("text");
+    expect(contentTypes).toContain("image");
+  });
+
+  it("does not place image prompt in user content for non-copilot providers", async () => {
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        provider: "openai",
+        id: "gpt-4o",
+        input: ["text", "image"],
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    completeMock.mockResolvedValue({
+      role: "assistant",
+      api: "openai-responses",
+      provider: "openai",
+      model: "gpt-4o",
+      stopReason: "stop",
+      timestamp: Date.now(),
+      content: [{ type: "text", text: "A solid red square." }],
+    });
+
+    await describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-4o",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 1000,
+    });
+
+    expect(completeMock).toHaveBeenCalledOnce();
+    const [, context] = completeMock.mock.calls[0] as [
+      unknown,
+      { systemPrompt?: string; messages?: Array<{ role: string; content: unknown[] }> },
+    ];
+    // Non-Copilot providers keep prompt in system message, images in user message
+    expect(context.systemPrompt).toBe("Describe the image.");
+    const userMessage = context.messages?.find((m) => m.role === "user");
+    expect(userMessage).toBeDefined();
+    const contentTypes = userMessage!.content.map((block) => (block as { type: string }).type);
+    expect(contentTypes).not.toContain("text");
+    expect(contentTypes).toContain("image");
+  });
 });
