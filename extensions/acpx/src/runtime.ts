@@ -390,6 +390,22 @@ function isCodexAcpCommand(command: string | undefined): boolean {
   return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
 }
 
+function isGeminiAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  const commandName = basename(parts[0] ?? "");
+  return /^gemini(?:\.exe)?$/i.test(commandName) && parts.some((part) => part === "--acp");
+}
+
+function shouldIgnoreTimeoutConfigOption(command: string | undefined): boolean {
+  return isCodexAcpCommand(command) || isGeminiAcpCommand(command);
+}
+
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
@@ -889,10 +905,12 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
-    if (isCodexAcpCommand(command)) {
-      if (key === "timeout" || key === "timeout_seconds") {
+    if (key === "timeout" || key === "timeout_seconds") {
+      if (shouldIgnoreTimeoutConfigOption(command)) {
         return;
       }
+    }
+    if (isCodexAcpCommand(command)) {
       if (
         key === "model" ||
         key === "thinking" ||
