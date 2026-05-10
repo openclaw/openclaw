@@ -19,6 +19,7 @@ import type {
   SkillEntry,
   SkillInstallSpec,
   SkillInvocationPolicy,
+  SkillSetupHook,
 } from "./types.js";
 
 export function parseFrontmatter(content: string): ParsedSkillFrontmatter {
@@ -109,6 +110,40 @@ function normalizeSafeDownloadUrl(raw: unknown): string | undefined {
   }
 }
 
+const SAFE_SETUP_SCRIPT_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_./-]*$/;
+
+function normalizeSafeSetupScript(raw: unknown): string | undefined {
+  if (typeof raw !== "string") {
+    return undefined;
+  }
+  const script = raw.trim();
+  if (
+    !script ||
+    script.startsWith("/") ||
+    script.startsWith("-") ||
+    script.includes("\\") ||
+    script.includes("..") ||
+    !SAFE_SETUP_SCRIPT_PATTERN.test(script)
+  ) {
+    return undefined;
+  }
+  return script;
+}
+
+function parseSetupHook(raw: unknown): SkillSetupHook | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return undefined;
+  }
+  const obj = raw as Record<string, unknown>;
+  const script = normalizeSafeSetupScript(obj.script);
+  if (!script) {
+    return undefined;
+  }
+  const timeoutMs =
+    typeof obj.timeoutMs === "number" && obj.timeoutMs > 0 ? Math.floor(obj.timeoutMs) : undefined;
+  return { script, ...(timeoutMs !== undefined ? { timeoutMs } : {}) };
+}
+
 function parseInstallSpec(input: unknown): SkillInstallSpec | undefined {
   const parsed = parseOpenClawManifestInstallBase(input, ["brew", "node", "go", "uv", "download"]);
   if (!parsed) {
@@ -194,6 +229,7 @@ export function resolveOpenClawMetadata(
   const requires = resolveOpenClawManifestRequires(metadataObj);
   const install = resolveOpenClawManifestInstall(metadataObj, parseInstallSpec);
   const osRaw = resolveOpenClawManifestOs(metadataObj);
+  const setup = parseSetupHook(metadataObj.setup);
   return {
     always: typeof metadataObj.always === "boolean" ? metadataObj.always : undefined,
     emoji: readStringValue(metadataObj.emoji),
@@ -203,6 +239,7 @@ export function resolveOpenClawMetadata(
     os: osRaw.length > 0 ? osRaw : undefined,
     requires: requires,
     install: install.length > 0 ? install : undefined,
+    ...(setup ? { setup } : {}),
   };
 }
 
