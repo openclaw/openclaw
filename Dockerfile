@@ -264,31 +264,21 @@ RUN ln -sf /app/openclaw.mjs /usr/local/bin/openclaw \
 
 # Pre-create the default state dir so first-run Docker named volumes mounted
 # here inherit node ownership instead of root-owned state.
+# Pre-create the default state dir so first-run Docker named volumes mounted
+# here inherit node ownership instead of root-owned state.
 RUN install -d -m 0700 -o node -g node /home/node/.openclaw && \
     stat -c '%U:%G %a' /home/node/.openclaw | grep -qx 'node:node 700'
+
+# Copy start script as root BEFORE switching to node user
+COPY start.sh /usr/local/bin/start.sh
+RUN chmod +x /usr/local/bin/start.sh
 
 ENV NODE_ENV=production
 
 # Security hardening: Run as non-root user
-# The node:24-bookworm image includes a 'node' user (uid 1000)
-# This reduces the attack surface by preventing container escape via root privileges
 USER node
 
-# Start gateway server with default config.
-# Binds to loopback (127.0.0.1) by default for security.
-#
-# IMPORTANT: With Docker bridge networking (-p 18789:18789), loopback bind
-# makes the gateway unreachable from the host. Either:
-#   - Use --network host, OR
-#   - Override --bind to "lan" (0.0.0.0) and set auth credentials
-#
-# Built-in probe endpoints for container health checks:
-#   - GET /healthz (liveness) and GET /readyz (readiness)
-#   - aliases: /health and /ready
-# For external access from host/ingress, override bind to "lan" and set auth.
 HEALTHCHECK --interval=3m --timeout=10s --start-period=15s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 ENTRYPOINT ["tini", "-s", "--"]
-COPY start.sh /home/node/start.sh
-RUN chmod +x /home/node/start.sh
-CMD ["/home/node/start.sh"]
+CMD ["/usr/local/bin/start.sh"]
