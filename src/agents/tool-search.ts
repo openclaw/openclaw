@@ -1,6 +1,10 @@
 import { spawn } from "node:child_process";
 import os from "node:os";
-import type { AgentToolResult, AgentToolUpdateCallback } from "@mariozechner/pi-agent-core";
+import type {
+  AgentMessage,
+  AgentToolResult,
+  AgentToolUpdateCallback,
+} from "@mariozechner/pi-agent-core";
 import type { ToolDefinition } from "@mariozechner/pi-coding-agent";
 import { Type } from "typebox";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -37,10 +41,21 @@ export type ToolSearchCatalogToolExecutor = (params: {
   tool: CatalogTool;
   toolName: string;
   toolCallId: string;
+  parentToolCallId?: string;
   input: unknown;
   signal?: AbortSignal;
   onUpdate?: AgentToolUpdateCallback<unknown>;
 }) => Promise<AgentToolResult<unknown>>;
+
+export type ToolSearchTargetTranscriptProjection = {
+  parentToolCallId?: string;
+  toolCallId: string;
+  toolName: string;
+  input: unknown;
+  result?: unknown;
+  isError?: boolean;
+  timestamp?: number;
+};
 
 export type ToolSearchConfig = {
   enabled: boolean;
@@ -518,6 +533,149 @@ function dropToolSearchControlTools(tools: AnyAgentTool[]): AnyAgentTool[] {
   return tools.filter((tool) => !TOOL_SEARCH_CONTROL_TOOL_NAMES.has(tool.name));
 }
 
+function readMessageToolResultId(message: AgentMessage): string | undefined {
+  const record = message as unknown as Record<string, unknown>;
+  const role = typeof record.role === "string" ? record.role : "";
+  const canUseDirectId = role === "toolResult" || role === "tool";
+  const direct = record.toolCallId ?? record.toolUseId ?? record.tool_use_id;
+  if (canUseDirectId && typeof direct === "string" && direct.trim()) {
+    return direct;
+  }
+  const content = record.content;
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  for (const block of content) {
+    if (!isRecord(block)) {
+      continue;
+    }
+    if (block.type !== "toolResult") {
+      continue;
+    }
+    const nested = block.toolCallId ?? block.toolUseId ?? block.tool_use_id ?? block.id;
+    if (typeof nested === "string" && nested.trim()) {
+      return nested;
+    }
+  }
+  return undefined;
+}
+
+function textFromToolSearchProjectionResult(result: unknown, isError: boolean): string {
+  if (isRecord(result)) {
+    const details = isRecord(result.details) ? result.details : undefined;
+    const detailError = details?.error;
+    if (typeof detailError === "string" && detailError.trim()) {
+      return detailError;
+    }
+    const content = result.content;
+    if (Array.isArray(content)) {
+      const text = content
+        .map((item) => (isRecord(item) && typeof item.text === "string" ? item.text : ""))
+        .filter(Boolean)
+        .join("\n");
+      if (text.trim()) {
+        return text;
+      }
+    }
+  }
+  const safe = toJsonSafe(result);
+  if (typeof safe === "string") {
+    return safe;
+  }
+  const encoded = JSON.stringify(safe);
+  if (typeof encoded === "string") {
+    return encoded;
+  }
+  return isError ? "Tool Search target tool failed." : "Tool Search target tool completed.";
+}
+
+function buildToolSearchTargetTranscriptMessages(
+  projection: ToolSearchTargetTranscriptProjection,
+): AgentMessage[] {
+  const input = toJsonSafe(projection.input);
+  const timestamp = projection.timestamp ?? Date.now();
+  const resultRecord = isRecord(projection.result) ? projection.result : undefined;
+  const resultContent =
+    Array.isArray(resultRecord?.content) && resultRecord.content.length > 0
+      ? toJsonSafe(resultRecord.content)
+      : [
+          {
+            type: "text",
+            text: textFromToolSearchProjectionResult(
+              projection.result,
+              projection.isError === true,
+            ),
+          },
+        ];
+  return [
+    {
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: projection.toolCallId,
+          name: projection.toolName,
+          arguments: input,
+          input,
+        },
+      ],
+      stopReason: "toolUse",
+      timestamp,
+    } as unknown as AgentMessage,
+    {
+      role: "toolResult",
+      toolCallId: projection.toolCallId,
+      toolName: projection.toolName,
+      isError: projection.isError === true,
+      content: resultContent,
+      timestamp,
+    } as unknown as AgentMessage,
+  ];
+}
+
+export function projectToolSearchTargetTranscriptMessages(
+  messages: AgentMessage[],
+  projections: readonly ToolSearchTargetTranscriptProjection[],
+): AgentMessage[] {
+  if (projections.length === 0) {
+    return messages;
+  }
+  const byParent = new Map<string, ToolSearchTargetTranscriptProjection[]>();
+  const unmatched: ToolSearchTargetTranscriptProjection[] = [];
+  for (const projection of projections) {
+    const parent = projection.parentToolCallId?.trim();
+    if (!parent) {
+      unmatched.push(projection);
+      continue;
+    }
+    const group = byParent.get(parent) ?? [];
+    group.push(projection);
+    byParent.set(parent, group);
+  }
+  const inserted = new Set<ToolSearchTargetTranscriptProjection>();
+  const projected: AgentMessage[] = [];
+  for (const message of messages) {
+    projected.push(message);
+    const toolResultId = readMessageToolResultId(message);
+    const group = toolResultId ? byParent.get(toolResultId) : undefined;
+    if (!group) {
+      continue;
+    }
+    for (const projection of group) {
+      projected.push(...buildToolSearchTargetTranscriptMessages(projection));
+      inserted.add(projection);
+    }
+  }
+  for (const projection of [...unmatched, ...projections]) {
+    if (inserted.has(projection)) {
+      continue;
+    }
+    projected.push(...buildToolSearchTargetTranscriptMessages(projection));
+    inserted.add(projection);
+  }
+  return projected;
+}
+
 export function createToolSearchCatalogRef(): ToolSearchCatalogRef {
   return {};
 }
@@ -888,6 +1046,7 @@ class ToolSearchRuntime {
       tool: entry.tool,
       toolName: entry.name,
       toolCallId,
+      parentToolCallId: options?.parentToolCallId,
       input: input ?? {},
       signal: options?.signal ?? this.ctx.abortSignal,
       onUpdate: options?.onUpdate,
