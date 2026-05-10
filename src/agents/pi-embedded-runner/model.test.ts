@@ -2410,4 +2410,52 @@ describe("resolveModel", () => {
       baseUrl: "https://api.x.ai/v1",
     });
   });
+
+  it("hints at missing models.providers block when model is in agents.defaults.models only (#80089)", () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          models: {
+            "microsoft-foundry/Kimi-K2.6-1": {
+              contextWindow: 262144,
+              maxOutputTokens: 16384,
+            },
+          },
+        },
+      },
+      models: {
+        providers: {},
+      },
+    } as never;
+
+    const result = resolveModel("microsoft-foundry", "Kimi-K2.6-1", "/tmp/agent", cfg, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: {
+        applyProviderResolvedModelCompatWithPlugins: () => undefined,
+        buildProviderUnknownModelHintWithPlugin: () => undefined,
+        prepareProviderDynamicModel: async () => {},
+        runProviderDynamicModel: () => undefined,
+        applyProviderResolvedTransportWithPlugin: () => undefined,
+        normalizeProviderResolvedModelWithPlugin: () => undefined,
+        normalizeProviderTransportWithPlugin: () => undefined,
+      },
+    });
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toContain("Unknown model: microsoft-foundry/Kimi-K2.6-1");
+    expect(result.error).toContain("agents.defaults.models");
+    expect(result.error).toContain('models.providers["microsoft-foundry"].models[]');
+  });
+
+  it("does not hint at providers block when model is not in agents.defaults.models", () => {
+    const result = resolveModel("mistral", "mistral-medium-3-5", "/tmp/agent", undefined, {
+      authStorage: { mocked: true } as never,
+      modelRegistry: discoverModels({ mocked: true } as never, "/tmp/agent"),
+      runtimeHooks: createRuntimeHooks(),
+    });
+
+    expect(result.model).toBeUndefined();
+    expect(result.error).toBe("Unknown model: mistral/mistral-medium-3-5");
+  });
 });

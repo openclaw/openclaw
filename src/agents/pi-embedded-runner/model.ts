@@ -1223,6 +1223,11 @@ function buildUnknownModelError(params: {
     return suppressed;
   }
   const base = `Unknown model: ${params.provider}/${params.modelId}`;
+  const configHints = buildUnknownModelConfigHints({
+    provider: params.provider,
+    modelId: params.modelId,
+    cfg: params.cfg,
+  });
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const hint = runtimeHooks.buildProviderUnknownModelHintWithPlugin({
     provider: params.provider,
@@ -1238,5 +1243,31 @@ function buildUnknownModelError(params: {
       modelId: params.modelId,
     },
   });
-  return hint ? `${base}. ${hint}` : base;
+  const parts = [base, ...configHints];
+  if (hint) {
+    parts.push(hint);
+  }
+  return parts.join(". ");
+}
+
+function buildUnknownModelConfigHints(params: {
+  provider: string;
+  modelId: string;
+  cfg?: OpenClawConfig;
+}): string[] {
+  const hints: string[] = [];
+  const key = `${params.provider}/${params.modelId}`;
+  const defaultsModels = params.cfg?.agents?.defaults?.models;
+  const inDefaultsModels = defaultsModels && key in defaultsModels;
+  const providerConfig = params.cfg?.models?.providers?.[params.provider];
+  const providerModels =
+    providerConfig && typeof providerConfig === "object" ? providerConfig.models : undefined;
+  const hasProviderModels = Array.isArray(providerModels) && providerModels.length > 0;
+  if (inDefaultsModels && !hasProviderModels) {
+    hints.push(
+      `Found in agents.defaults.models but not in models.providers["${params.provider}"].models[]. ` +
+        "Both blocks are required to register a model with a provider plugin",
+    );
+  }
+  return hints;
 }
