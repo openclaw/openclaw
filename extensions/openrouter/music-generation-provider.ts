@@ -9,6 +9,7 @@ import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runt
 import {
   assertOkOrThrowHttpError,
   createProviderOperationDeadline,
+  fetchWithTimeoutGuarded,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -99,19 +100,29 @@ async function streamOpenRouterMusic(params: {
   headers: Headers;
   body: Record<string, unknown>;
   timeoutMs: number;
+  allowPrivateNetwork: boolean;
 }): Promise<{ audioBuffer: Buffer; transcriptPieces: string[] }> {
   const url = `${params.baseUrl}/chat/completions`;
 
-  const response = await fetch(url, {
-    method: "POST",
-    headers: params.headers,
-    body: JSON.stringify(params.body),
-    signal: AbortSignal.timeout(params.timeoutMs),
-  });
+  const { response, release } = await fetchWithTimeoutGuarded(
+    url,
+    {
+      method: "POST",
+      headers: params.headers,
+      body: JSON.stringify(params.body),
+    },
+    params.timeoutMs,
+    fetch,
+    {
+      ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      auditContext: "openrouter-music",
+    },
+  );
 
   await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
 
   if (!response.body) {
+    release();
     throw new Error("OpenRouter music generation response has no body");
   }
 
@@ -131,13 +142,16 @@ async function streamOpenRouterMusic(params: {
     }
   } catch (error) {
     await reader.cancel().catch(() => {});
+    release();
     throw error;
   }
 
   if (audioChunks.length === 0) {
+    release();
     throw new Error("OpenRouter music generation response missing audio data");
   }
 
+  release();
   return { audioBuffer: Buffer.concat(audioChunks), transcriptPieces };
 }
 
@@ -246,6 +260,9 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
         label: "OpenRouter music generation",
       });
 
+      const allowPrivateNetwork =
+        req.cfg?.models?.providers?.openrouter?.allowPrivateNetwork === true;
+
       const { audioBuffer, transcriptPieces } = await streamOpenRouterMusic({
         baseUrl,
         headers,
@@ -254,6 +271,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           deadline,
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
+        allowPrivateNetwork,
       });
 
       const { mimeType, ext } = detectAudioFormat(audioBuffer);
