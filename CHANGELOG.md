@@ -157,6 +157,7 @@ Docs: https://docs.openclaw.ai
 - DeepSeek: backfill V4 `reasoning_content` replay fields for unowned OpenAI-compatible proxy providers, preventing follow-up request failures outside the bundled DeepSeek and OpenRouter routes. Fixes #79608.
 - iMessage: emit a WARN log when an action is blocked because the imsg private API bridge is not attached, so operators see the silent-drop in `~/.openclaw/logs/openclaw.log` instead of having to read per-session trajectory JSONL `tool.result` payloads. Common after a gateway restart un-injects the dylib from Messages.app. (#80035) Thanks @omarshahine.
 - Codex: cross-fill missing `thread.id` and `thread.sessionId` before schema validation so live Codex app-server responses that omit `sessionId` no longer fail `thread/start` or `thread/resume`. Fixes #80124. (#80137) Thanks @kagura-agent.
+- Agents/Pi: wait for embedded abort cleanup to settle before releasing the session write lock, preventing follow-up turns from racing previous prompt teardown. (#80239) Thanks @samzong.
 
 ## 2026.5.9
 
