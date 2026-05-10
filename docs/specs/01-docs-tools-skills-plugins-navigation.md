@@ -102,7 +102,7 @@ docs.
 ## Validation results
 
 - `pnpm docs:list`: passed.
-- `pnpm docs:check-mdx`: passed, 635 files.
+- `pnpm docs:check-mdx`: passed, 636 files.
 - `pnpm docs:check-links`: passed, `checked_internal_links=4304`,
   `broken_links=0`.
 - `pnpm docs:check-i18n-glossary`: passed.
