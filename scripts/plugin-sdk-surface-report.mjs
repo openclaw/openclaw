@@ -27,7 +27,7 @@ const budgets = {
     process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS ?? 4656,
   ),
   publicDeprecatedExports: Number(
-    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS ?? 3800,
+    process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS ?? 2800,
   ),
   publicWildcardReexports: Number(
     process.env.OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_WILDCARD_REEXPORTS ?? 207,

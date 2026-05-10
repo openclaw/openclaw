@@ -422,6 +422,10 @@ function expectSourceOmitsSnippet(subpath: string, snippet: string) {
   expect(readPluginSdkSource(subpath)).not.toContain(snippet);
 }
 
+function expectRepoSourceOmitsSnippet(relativePath: string, snippet: string) {
+  expect(readRepoSource(relativePath)).not.toContain(snippet);
+}
+
 function expectSourceOmitsImportPattern(subpath: string, specifier: string) {
   const escapedSpecifier = specifier.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const source = readPluginSdkSource(subpath);
@@ -1199,9 +1203,9 @@ describe("plugin-sdk subpath exports", () => {
     expectSourceOmitsSnippet("google-model-id", "./google.js");
     expectSourceOmitsSnippet("google-model-id", "./facade-runtime.js");
     expectSourceOmitsSnippet("google-model-id", "../../extensions/");
-    expectSourceOmitsSnippet("xai-model-id", "./xai.js");
-    expectSourceOmitsSnippet("xai-model-id", "./facade-runtime.js");
-    expectSourceOmitsSnippet("xai-model-id", "../../extensions/");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./xai.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "./facade-runtime.js");
+    expectRepoSourceOmitsSnippet("extensions/xai/model-id.ts", "../../extensions/");
     expectSourceMentions("sandbox", ["registerSandboxBackend", "runPluginCommandWithTimeout"]);
 
     expectSourceMentions("secret-input", [
