@@ -1432,4 +1432,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       nowSpy.mockRestore();
     }
   });
+
+  it("suppresses tool-kind error payloads so stale mutating-tool warnings do not appear in Feishu", async () => {
+    const { options } = createDispatcherHarness();
+
+    // Simulate a tool-error warning payload (kind="tool", isError=true) followed
+    // by a successful final reply — matches the workspace AGENTS.md edit scenario.
+    await options.deliver(
+      { text: "⚠️ 📝 Edit: in workspace/AGENTS.md failed", isError: true },
+      { kind: "tool" },
+    );
+    await options.deliver({ text: "Done." }, { kind: "final" });
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(expect.objectContaining({ text: "Done." }));
+  });
+
+  it("still delivers final error replies even when isError is true", async () => {
+    const { options } = createDispatcherHarness();
+
+    await options.deliver(
+      { text: "⚠️ Agent failed before reply: model unavailable.", isError: true },
+      { kind: "final" },
+    );
+    await options.onIdle?.();
+
+    expect(sendMessageFeishuMock).toHaveBeenCalledTimes(1);
+    expect(sendMessageFeishuMock).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "⚠️ Agent failed before reply: model unavailable." }),
+    );
+  });
 });

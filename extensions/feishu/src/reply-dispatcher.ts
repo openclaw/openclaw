@@ -514,6 +514,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
         await typingCallbacks?.onReplyStart?.();
       },
       deliver: async (payload: ReplyPayload, info) => {
+        // Tool-result error payloads (kind="tool", isError=true) are stale
+        // mutating-tool failure warnings that the LLM already recovered from.
+        // Suppress them in Feishu so they don't surface as visible channel
+        // messages — Telegram uses the same guard (#79804).
+        // Final error replies (kind="final") are still delivered unchanged.
+        if (payload.isError && info?.kind === "tool") {
+          return;
+        }
         const payloadText =
           payload.isReasoning && payload.text ? formatReasoningMessage(payload.text) : payload.text;
         const reply = resolveSendableOutboundReplyParts({ ...payload, text: payloadText });
