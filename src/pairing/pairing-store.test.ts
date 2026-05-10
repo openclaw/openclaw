@@ -22,10 +22,6 @@ vi.mock("../channels/plugins/pairing.js", () => ({
   getPairingAdapter: () => null,
 }));
 
-vi.mock("../infra/file-lock.js", () => ({
-  withFileLock: async (_path: string, _options: unknown, fn: () => unknown) => await fn(),
-}));
-
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
