@@ -325,10 +325,24 @@ function buildRealtimeInputConfig(
 
 function buildFunctionDeclarations(tools: RealtimeVoiceTool[] | undefined): FunctionDeclaration[] {
   return (tools ?? []).map((tool) => {
+    // Use `parameters` (OpenAPI 3.0.3 Schema) rather than the newer
+    // `parametersJsonSchema`. Per the Google FunctionDeclaration spec the two
+    // fields are mutually exclusive, and the Live API preview audio models
+    // (`gemini-2.5-flash-native-audio-preview-*`) ignore
+    // `parametersJsonSchema` — they read only the function description and
+    // invent parameter names like `query` or `prompt`, causing every tool
+    // call to fail validation. Our `RealtimeVoiceTool.parameters` shape
+    // (`type: "object"` with `properties`/`required`) is already a valid
+    // OpenAPI 3.0.3 Schema subset, so it works in both `parameters` and
+    // `parametersJsonSchema`; only `parameters` is honored everywhere.
     const declaration: FunctionDeclaration = {
       name: tool.name,
       description: tool.description,
-      parametersJsonSchema: tool.parameters,
+      // Cast through `unknown` because our JSON Schema shape (lowercase
+      // `type: "object"`) does not structurally overlap with Google's
+      // OpenAPI 3.0 `Schema` type (uppercase `Type` enum); the Live API
+      // accepts either at runtime.
+      parameters: tool.parameters as unknown as FunctionDeclaration["parameters"],
     };
     if (tool.name === REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
       declaration.behavior = "NON_BLOCKING" as Behavior;
