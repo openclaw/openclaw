@@ -33,6 +33,7 @@ import {
   safeCodexControlRequest,
   type SafeValue,
 } from "./command-rpc.js";
+import { handleCodexContinuityCommand } from "./continuity/commands.js";
 import {
   readCodexConversationBindingData,
   resolveCodexDefaultWorkspaceDir,
@@ -186,6 +187,10 @@ export async function handleCodexSubcommand(
   const normalized = subcommand.toLowerCase();
   if (normalized === "help") {
     return { text: buildHelp() };
+  }
+  const continuityResult = await handleCodexContinuityCommand(ctx, normalized, rest);
+  if (continuityResult) {
+    return continuityResult;
   }
   if (normalized === "status") {
     if (rest.length > 0) {
