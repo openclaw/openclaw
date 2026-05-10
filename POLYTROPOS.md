@@ -75,15 +75,6 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
    - document any new events/hooks in `docs/polytropos/POLYTROPOS-EVENTS.md`
 3) Verify in runtime.
 
-### Plugin migration completion gates
-A plugin migration is considered complete only when:
-
-- it is deployed as a **production copy** under `~/.openclaw/extensions/<pluginId>` (not a symlink), and
-- it passes the monorepo gates:
-  - `pnpm verify:plugin <pluginId>`
-  - `pnpm verify:doctor-plugin <pluginId>`
-- `openclaw plugins list` shows it loaded from `~/.openclaw/extensions/<pluginId>/...`
-
 ---
 
 ## Where to put things
