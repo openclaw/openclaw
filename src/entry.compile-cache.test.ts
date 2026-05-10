@@ -186,7 +186,7 @@ describe("entry compile cache", () => {
 
     child.emit("exit", null, "SIGTERM");
 
-    expect(exit).toHaveBeenCalledTimes(1);
+    expect(exit).toHaveBeenCalledTimes(1);# added times value
     expect(exit).toHaveBeenCalledWith(1);
   });
 
