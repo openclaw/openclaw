@@ -6,7 +6,6 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
-import { resolveCopilotApiToken } from "../plugin-sdk/provider-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
@@ -16,6 +15,7 @@ import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { resolveCopilotApiToken } from "../plugin-sdk/provider-auth.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -144,7 +144,8 @@ async function resolveImageRuntime(params: {
       allowBundledStaticCatalogFallback: true,
     },
   );
-  const { authStorage, model } = resolved;
+  const { authStorage } = resolved;
+  let { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
@@ -179,8 +180,14 @@ async function resolveImageRuntime(params: {
         githubToken: apiKey,
       });
       apiKey = copilotToken.token;
+      // Apply the endpoint derived from the minted token so enterprise
+      // or proxy-routed Copilot deployments connect to the correct host.
+      const runtimeBaseUrl = copilotToken.baseUrl?.trim();
+      if (runtimeBaseUrl) {
+        model = { ...model, baseUrl: runtimeBaseUrl };
+      }
     } catch {
-      // fall through with the original OAuth token
+      // fall through with the original OAuth token and model baseUrl
     }
   }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
