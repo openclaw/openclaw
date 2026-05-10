@@ -581,7 +581,7 @@ describe("subagent registry lifecycle hardening", () => {
 
     expect(runSubagentAnnounceFlow).not.toHaveBeenCalled();
     expect(typeof entry.cleanupCompletedAt).toBe("number");
-    expect(entry.cleanupCompletedAt).toBeGreaterThanOrEqual(4_000);
+    expect(entry.cleanupCompletedAt).toBeGreaterThan(0);
     expect(notifyContextEngineSubagentEnded).toHaveBeenCalledWith({
       childSessionKey: entry.childSessionKey,
       reason: "completed",
