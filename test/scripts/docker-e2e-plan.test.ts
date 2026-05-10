@@ -710,10 +710,10 @@ describe("scripts/lib/docker-e2e-plan", () => {
         "plugins",
         "kitchen-sink-plugin",
         "bundled-plugin-install-uninstall-0",
-      "commitments-safety",
-      "update-channel-switch",
-      "skill-install",
-      "upgrade-survivor",
+        "commitments-safety",
+        "update-channel-switch",
+        "skill-install",
+        "upgrade-survivor",
       ],
     });
 
