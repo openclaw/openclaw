@@ -23,6 +23,7 @@ import {
   type SkillsInstallPreferences,
 } from "./skills.js";
 import { resolveSkillSource } from "./skills/source.js";
+import type { SkillSetupHook } from "./skills/types.js";
 
 export type SkillInstallRequest = InstallSafetyOverrides & {
   workspaceDir: string;
@@ -449,6 +450,57 @@ async function executeInstallCommand(params: {
   });
 }
 
+const SETUP_HOOK_TIMEOUT_MS_DEFAULT = 60_000;
+const SETUP_HOOK_TIMEOUT_MS_MAX = 300_000;
+
+async function runSkillSetupHook(params: {
+  entry: SkillEntry;
+  setup: SkillSetupHook;
+  hookKind: "install" | "update";
+}): Promise<SkillInstallResult> {
+  const { entry, setup, hookKind } = params;
+  const skillDir = path.resolve(entry.skill.baseDir);
+  const scriptPath = path.resolve(skillDir, setup.script);
+
+  if (!scriptPath.startsWith(skillDir + path.sep) && scriptPath !== skillDir) {
+    return createInstallFailure({
+      message: `setup.script "${setup.script}" resolves outside the skill bundle directory`,
+    });
+  }
+
+  if (!fs.existsSync(scriptPath)) {
+    return createInstallFailure({
+      message: `setup.script "${setup.script}" not found in skill bundle`,
+    });
+  }
+
+  const timeoutMs = Math.min(
+    setup.timeoutMs ?? SETUP_HOOK_TIMEOUT_MS_DEFAULT,
+    SETUP_HOOK_TIMEOUT_MS_MAX,
+  );
+
+  const requiresEnv = entry.metadata?.requires?.env ?? [];
+  const hookEnv: NodeJS.ProcessEnv = {
+    SKILL_DIR: skillDir,
+    OPENCLAW_HOOK_KIND: hookKind,
+    ...Object.fromEntries(
+      requiresEnv.flatMap((key) => {
+        const value = process.env[key];
+        return value !== undefined ? [[key, value]] : [];
+      }),
+    ),
+  };
+
+  const result = await runCommandSafely([scriptPath], { timeoutMs, env: hookEnv });
+  if (result.code === 0) {
+    return createInstallSuccess(result);
+  }
+  return createInstallFailure({
+    message: `setup hook failed (exit ${result.code ?? "null"}): ${formatInstallFailureMessage(result)}`,
+    ...result,
+  });
+}
+
 export async function installSkill(params: SkillInstallRequest): Promise<SkillInstallResult> {
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
@@ -512,9 +564,14 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
       warnings,
     );
   }
+  const setup = entry.metadata?.setup;
+
   if (spec.kind === "download") {
     const downloadResult = await installDownloadSpec({ entry, spec, timeoutMs });
-    return withWarnings(downloadResult, warnings);
+    if (!downloadResult.ok || !setup) {
+      return withWarnings(downloadResult, warnings);
+    }
+    return withWarnings(await runSkillSetupHook({ entry, setup, hookKind: "install" }), warnings);
   }
 
   const prefs = deps.resolveSkillsInstallPreferences(params.config);
@@ -564,7 +621,11 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   }
   const env = Object.keys(envOverrides).length > 0 ? envOverrides : undefined;
 
-  return withWarnings(await executeInstallCommand({ argv, timeoutMs, env }), warnings);
+  const installResult = await executeInstallCommand({ argv, timeoutMs, env });
+  if (!installResult.ok || !setup) {
+    return withWarnings(installResult, warnings);
+  }
+  return withWarnings(await runSkillSetupHook({ entry, setup, hookKind: "install" }), warnings);
 }
 
 export const __testing = {
