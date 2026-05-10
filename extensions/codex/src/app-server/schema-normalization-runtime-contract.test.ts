@@ -8,6 +8,7 @@ import {
   normalizedParameterFreeSchema,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { CodexAppServerClient } from "./client.js";
 import { createCodexTestModel } from "./test-support.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
@@ -84,6 +85,10 @@ function threadStartResult(threadId = "thread-1", serviceTier: string | null = n
   };
 }
 
+function createTestClient(request: (method: string, params?: unknown) => Promise<unknown>) {
+  return { request } as unknown as CodexAppServerClient;
+}
+
 describe("Codex app-server dynamic tool schema boundary contract", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-schema-contract-"));
@@ -111,7 +116,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     await startOrResumeThread({
-      client: { request } as never,
+      client: createTestClient(request),
       params: createParams(sessionFile, workspaceDir),
       cwd: workspaceDir,
       dynamicTools: [dynamicTool],
@@ -137,7 +142,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     const binding = await startOrResumeThread({
-      client: { request } as never,
+      client: createTestClient(request),
       params: createParams(sessionFile, workspaceDir),
       cwd: workspaceDir,
       dynamicTools: [],
@@ -160,7 +165,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
 
     await startOrResumeThread({
-      client: { request } as never,
+      client: createTestClient(request),
       params: createParams(sessionFile, workspaceDir),
       cwd: workspaceDir,
       dynamicTools: [
@@ -174,7 +179,7 @@ describe("Codex app-server dynamic tool schema boundary contract", () => {
     });
     const permissiveTool = createPermissiveTool("message");
     await startOrResumeThread({
-      client: { request } as never,
+      client: createTestClient(request),
       params: createParams(sessionFile, workspaceDir),
       cwd: workspaceDir,
       dynamicTools: [
