@@ -658,6 +658,16 @@ describe("classifyFailoverReasonFromHttpStatus", () => {
     ).toBe("billing");
   });
 
+  it("lets OpenRouter API-key budget limit 403 responses bypass generic auth", () => {
+    expect(
+      classifyFailoverReasonFromHttpStatus(
+        403,
+        "403 API key budget limit exceeded (monthly limit). Contact your org admin.",
+        { provider: "openrouter" },
+      ),
+    ).toBe("billing");
+  });
+
   it("keeps generic HTTP 401 key-limit text on the auth path without provider context", () => {
     expect(
       classifyFailoverReasonFromHttpStatus(401, "401 Key limit exceeded (monthly limit)"),

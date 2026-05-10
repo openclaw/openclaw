@@ -2957,7 +2957,7 @@ describe("runAgentTurnWithFallback", () => {
   it("surfaces direct provider auth guidance for missing API keys", async () => {
     state.runEmbeddedPiAgentMock.mockRejectedValueOnce(
       new Error(
-        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth. Use openai-codex/gpt-5.5, or set OPENAI_API_KEY for direct OpenAI API access.',
+        'No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces. | No API key found for provider "openai". You are authenticated with OpenAI Codex OAuth; OpenAI agent model runs use openai/gpt-* through the Codex runtime. Set OPENAI_API_KEY only for direct OpenAI API-key surfaces.',
       ),
     );
 
@@ -2989,7 +2989,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Missing API key for OpenAI on the gateway. Use `openai-codex/gpt-5.5`, or set `OPENAI_API_KEY`, then try again.",
+        "⚠️ Missing API key for OpenAI on the gateway. Use `openai/gpt-5.5` with the Codex OAuth profile, or set `OPENAI_API_KEY` for direct OpenAI API-key runs.",
       );
     }
   });
@@ -3652,8 +3652,45 @@ describe("runAgentTurnWithFallback", () => {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet",
       modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
       authProfileOverride: "anthropic:openclaw",
       authProfileOverrideSource: "user",
+    });
+  });
+
+  it("preserves original auto-fallback origin across chained fallbacks", async () => {
+    const applyFallbackCandidateSelectionToEntry =
+      await getApplyFallbackCandidateSelectionToEntry();
+    const entry = {
+      sessionId: "session",
+      updatedAt: 1,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-b",
+      modelOverrideSource: "auto" as const,
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
+    } as SessionEntry;
+
+    const { updated } = applyFallbackCandidateSelectionToEntry({
+      entry,
+      run: {
+        provider: "openrouter",
+        model: "fallback-b",
+      } as FollowupRun["run"],
+      provider: "openrouter",
+      model: "fallback-c",
+      now: 123,
+    });
+
+    expect(updated).toBe(true);
+    expect(entry).toMatchObject({
+      updatedAt: 123,
+      providerOverride: "openrouter",
+      modelOverride: "fallback-c",
+      modelOverrideSource: "auto",
+      modelOverrideFallbackOriginProvider: "anthropic",
+      modelOverrideFallbackOriginModel: "claude-opus",
     });
   });
 });

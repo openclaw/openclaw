@@ -73,10 +73,7 @@ import {
   type CodexPluginConfig,
 } from "./config.js";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import {
-  applyCodexDynamicToolProfile,
-  normalizeCodexDynamicToolName,
-} from "./dynamic-tool-profile.js";
+import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
@@ -1175,6 +1172,11 @@ export async function runCodexAppServerAttempt(
         name: call.tool,
         arguments: call.arguments,
       });
+      projector?.recordDynamicToolCall({
+        callId: call.callId,
+        tool: call.tool,
+        arguments: call.arguments,
+      });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
@@ -1212,6 +1214,12 @@ export async function runCodexAppServerAttempt(
         turnId: call.turnId,
         toolCallId: call.callId,
         name: call.tool,
+        success: response.success,
+        contentItems: response.contentItems,
+      });
+      projector?.recordDynamicToolResult({
+        callId: call.callId,
+        tool: call.tool,
         success: response.success,
         contentItems: response.contentItems,
       });
@@ -1896,8 +1904,8 @@ async function buildDynamicTools(input: DynamicToolBuildParams) {
       input.runAbortController.abort("sessions_yield");
     },
   });
-  const profiledTools = applyCodexDynamicToolProfile(allTools, input.pluginConfig);
-  const visionFilteredTools = filterToolsForVisionInputs(profiledTools, {
+  const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+  const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
     modelHasVision,
     hasInboundImages: (params.images?.length ?? 0) > 0,
   });
@@ -2358,7 +2366,7 @@ export const __testing = {
   CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
   CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
   buildCodexNativeHookRelayId,
-  applyCodexDynamicToolProfile,
+  filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
   filterToolsForVisionInputs,

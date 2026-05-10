@@ -1624,7 +1624,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
+      "Shelling\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
     );
   });
 
@@ -1659,7 +1659,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
   });
 
-  it("keeps Discord progress labels as rolling lines", async () => {
+  it("keeps Discord progress lines below the configured label", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

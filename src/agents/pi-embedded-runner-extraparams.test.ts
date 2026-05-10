@@ -291,6 +291,7 @@ import { createMinimaxFastModeWrapper } from "./pi-embedded-runner/minimax-strea
 import {
   createCodexNativeWebSearchWrapper,
   createOpenAIAttributionHeadersWrapper,
+  createOpenAICompletionsStrictMessageKeysWrapper,
   createOpenAIDefaultTransportWrapper,
   createOpenAIFastModeWrapper,
   createOpenAIReasoningCompatibilityWrapper,
@@ -437,6 +438,7 @@ function createTestOpenAIProviderWrapper(
     agentDir: params.context.agentDir,
   });
   streamFn = createOpenAIStringContentWrapper(streamFn);
+  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
   return createOpenAIResponsesContextManagementWrapper(
     createOpenAIReasoningCompatibilityWrapper(
       createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
@@ -676,6 +678,33 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "opencode",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "opencode",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        messages: [
+          { role: "user", content: "continue" },
+          { role: "assistant", content: "I used a tool" },
+          { role: "tool", content: "ok" },
+        ],
+      },
+    });
+
+    const messages = payload.messages as Array<Record<string, unknown>>;
+    expect(payload.thinking).toEqual({ type: "enabled" });
+    expect(payload.reasoning_effort).toBe("high");
+    expect(messages[0]).not.toHaveProperty("reasoning_content");
+    expect(messages[1]).toHaveProperty("reasoning_content", "");
+    expect(messages[2]).not.toHaveProperty("reasoning_content");
   });
 
   it("strips xai Responses reasoning payload fields", () => {
@@ -1094,6 +1123,55 @@ describe("applyExtraParamsToAgent", () => {
       {
         role: "user",
         content: "Line one\nLine two",
+      },
+    ]);
+  });
+
+  it("strips extra OpenAI completions message keys for strict-key compat models", () => {
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "infomaniak",
+      applyModelId: "mistral3",
+      model: {
+        api: "openai-completions",
+        provider: "infomaniak",
+        id: "mistral3",
+        name: "mistral3",
+        baseUrl: "https://api.infomaniak.com/1/ai/example/openai",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 32768,
+        maxTokens: 4096,
+        compat: {
+          strictMessageKeys: true,
+        } as Record<string, unknown>,
+      } as unknown as Model<"openai-completions">,
+      payload: {
+        messages: [
+          {
+            role: "assistant",
+            content: "calling tool",
+            name: "agent",
+            tool_calls: [{ id: "call_1", type: "function", function: { name: "noop" } }],
+            cache_control: { type: "ephemeral" },
+          },
+          {
+            role: "tool",
+            content: "tool result",
+            tool_call_id: "call_1",
+          },
+        ],
+      },
+    });
+
+    expect(payload.messages).toEqual([
+      {
+        role: "assistant",
+        content: "calling tool",
+      },
+      {
+        role: "tool",
+        content: "tool result",
       },
     ]);
   });

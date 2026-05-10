@@ -12,7 +12,11 @@ import type {
 
 export function buildOpenAICompatibleReplayPolicy(
   modelApi: string | null | undefined,
-  options: { sanitizeToolCallIds?: boolean; modelId?: string | null } = {},
+  options: {
+    sanitizeToolCallIds?: boolean;
+    modelId?: string | null;
+    dropReasoningFromHistory?: boolean;
+  } = {},
 ): ProviderReplayPolicy | undefined {
   if (
     modelApi !== "openai-completions" &&
@@ -24,6 +28,7 @@ export function buildOpenAICompatibleReplayPolicy(
   }
 
   const sanitizeToolCallIds = options.sanitizeToolCallIds ?? true;
+  const dropReasoningFromHistory = options.dropReasoningFromHistory ?? true;
 
   return {
     ...(sanitizeToolCallIds
@@ -40,7 +45,8 @@ export function buildOpenAICompatibleReplayPolicy(
           validateGeminiTurns: false,
           validateAnthropicTurns: false,
         }),
-    ...(modelApi === "openai-completions" && isGemma4ModelId(options.modelId)
+    ...(modelApi === "openai-completions" &&
+    (dropReasoningFromHistory || isGemma4ModelId(options.modelId))
       ? { dropReasoningFromHistory: true }
       : {}),
   };

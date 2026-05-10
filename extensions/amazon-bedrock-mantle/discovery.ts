@@ -225,6 +225,10 @@ interface MantleCacheEntry {
   fetchedAt: number;
 }
 
+type MantleDiscoveryConfig = {
+  enabled?: boolean;
+};
+
 const discoveryCache = new Map<string, MantleCacheEntry>();
 
 /** Clear the discovery cache (for testing). */
@@ -322,10 +326,14 @@ export async function discoverMantleModels(params: {
  */
 export async function resolveImplicitMantleProvider(params: {
   env?: NodeJS.ProcessEnv;
+  pluginConfig?: { discovery?: MantleDiscoveryConfig };
   fetchFn?: typeof fetch;
   tokenProviderFactory?: MantleBearerTokenProviderFactory;
 }): Promise<ModelProviderConfig | null> {
   const env = params.env ?? process.env;
+  if (params.pluginConfig?.discovery?.enabled === false) {
+    return null;
+  }
   const region = resolveMantleRegion(env);
   const explicitBearerToken = resolveMantleBearerToken(env);
 

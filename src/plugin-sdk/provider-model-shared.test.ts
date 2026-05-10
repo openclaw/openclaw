@@ -22,6 +22,7 @@ describe("buildProviderReplayFamilyHooks", () => {
           sanitizeToolCallIds: true,
           applyAssistantFirstOrderingFix: true,
           validateGeminiTurns: true,
+          dropReasoningFromHistory: true,
         },
         hasSanitizeReplayHistory: false,
         reasoningMode: undefined,
@@ -196,6 +197,7 @@ describe("buildProviderReplayFamilyHooks", () => {
     const nativeIdsHooks = buildProviderReplayFamilyHooks({
       family: "openai-compatible",
       sanitizeToolCallIds: false,
+      dropReasoningFromHistory: false,
     });
     const nativeIdsPolicy = nativeIdsHooks.buildReplayPolicy?.({
       provider: "moonshot",

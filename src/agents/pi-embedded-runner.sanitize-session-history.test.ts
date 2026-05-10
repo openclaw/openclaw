@@ -1196,7 +1196,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("strips prior assistant reasoning for Gemma 4 OpenAI-compatible replay", async () => {
+  it("strips prior assistant reasoning for Qwen-style OpenAI-compatible replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1215,8 +1215,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });
@@ -1226,7 +1226,7 @@ describe("sanitizeSessionHistory", () => {
     ]);
   });
 
-  it("preserves current Gemma 4 tool-call reasoning during tool continuation replay", async () => {
+  it("preserves current OpenAI-compatible tool-call reasoning during tool continuation replay", async () => {
     setNonGoogleModelApi();
 
     const messages = castAgentMessages([
@@ -1251,8 +1251,8 @@ describe("sanitizeSessionHistory", () => {
     const result = await sanitizeSessionHistory({
       messages,
       modelApi: "openai-completions",
-      provider: "lmstudio",
-      modelId: "google/gemma-4-26b-a4b-it",
+      provider: "vllm",
+      modelId: "Qwen3.6-27B",
       sessionManager: makeMockSessionManager(),
       sessionId: TEST_SESSION_ID,
     });

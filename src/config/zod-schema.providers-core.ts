@@ -1203,6 +1203,7 @@ export const SignalAccountSchemaBase = z
 export const SignalAccountSchema = SignalAccountSchemaBase;
 
 export const SignalConfigSchema = SignalAccountSchemaBase.extend({
+  apiMode: z.enum(["auto", "native", "container"]).optional(),
   accounts: z.record(z.string(), SignalAccountSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 }).superRefine((value, ctx) => {

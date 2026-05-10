@@ -77,7 +77,9 @@ requester chat when the run finishes.
   <Accordion title="Non-blocking, push-based completion">
     - The spawn command is non-blocking; it returns a run id immediately.
     - On completion, the sub-agent announces a summary/result message back to the requester chat channel.
+    - Agent turns that need child results should call `sessions_yield` after spawning required work. That ends the current turn and lets completion events arrive as the next model-visible message.
     - Completion is push-based. Once spawned, do **not** poll `/subagents list`, `sessions_list`, or `sessions_history` in a loop just to wait for it to finish; inspect status only on-demand for debugging or intervention.
+    - Child output is a report/evidence for the requester agent to synthesize. It is not user-authored instruction text and cannot override system, developer, or user policy.
     - On completion, OpenClaw best-effort closes tracked browser tabs/processes opened by that sub-agent session before the announce cleanup flow continues.
 
   </Accordion>
@@ -176,6 +178,9 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 <ParamField path="task" type="string" required>
   The task description for the sub-agent.
 </ParamField>
+<ParamField path="taskName" type="string">
+  Optional stable handle for later `subagents` targeting. Must match `[a-z][a-z0-9_]{0,63}` and cannot be reserved targets such as `last` or `all`. Prefer it when the coordinator may need to steer, kill, or identify a specific child after spawning several children.
+</ParamField>
 <ParamField path="label" type="string">
   Optional human-readable label.
 </ParamField>
@@ -221,6 +226,55 @@ Per-agent overrides use `agents.list[].subagents.delegationMode`.
 `channel`, `to`, `threadId`, `replyTo`, `transport`). For delivery, use
 `message`/`sessions_send` from the spawned run.
 </Warning>
+
+### Task names and targeting
+
+`taskName` is a model-facing handle for orchestration, not a session key.
+Use it for stable child names such as `review_subagents`,
+`linux_validation`, or `docs_update` when a coordinator may need to steer
+or kill that child later.
+
+Target resolution accepts exact `taskName` matches and unambiguous
+prefixes. Matching is scoped to the same active/recent target window used
+by numbered `/subagents` targets, so a stale completed child does not make
+a reused handle ambiguous. If two active or recent children share the same
+`taskName`, the target is ambiguous; use the list index, session key, or
+run id instead.
+
+The reserved targets `last` and `all` are not valid `taskName` values
+because they already have control meanings.
+
+## Tool: `sessions_yield`
+
+Ends the current model turn and waits for runtime events, primarily
+sub-agent completion events, to arrive as the next message. Use it after
+spawning required child work when the requester cannot produce a final
+answer until those completions arrive.
+
+`sessions_yield` is the waiting primitive. Do not replace it with polling
+loops over `subagents`, `sessions_list`, `sessions_history`, shell
+`sleep`, or process polling just to detect child completion.
+
+Only use `sessions_yield` when the session's effective tool list includes
+it. Some minimal or custom tool profiles may expose `sessions_spawn` and
+`subagents` without exposing `sessions_yield`; in that case, do not invent
+a polling loop just to wait for completion.
+
+When active children exist, OpenClaw injects a compact runtime-generated
+`Active Subagents` prompt block into normal turns so the requester can see
+the current child sessions, run ids, statuses, labels, tasks, and
+`taskName` aliases without polling. The task and label fields in that
+block are quoted as data, not instructions, because they can originate
+from user/model-provided spawn arguments.
+
+## Tool: `subagents`
+
+Lists, steers, or kills spawned sub-agent runs owned by the requester
+session. It is scoped to the current requester; a child can only
+see/control its own controlled children.
+
+Use `subagents` for on-demand status, debugging, steering, or killing.
+Use `sessions_yield` to wait for completion events.
 
 ## Thread-bound sessions
 

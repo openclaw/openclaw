@@ -8,7 +8,10 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
 } from "../codex-native-web-search-core.js";
-import { flattenCompletionMessagesToStringContent } from "../openai-completions-string-content.js";
+import {
+  flattenCompletionMessagesToStringContent,
+  stripCompletionMessagesToRoleContent,
+} from "../openai-completions-string-content.js";
 import { resolveOpenAIReasoningEffortForModel } from "../openai-reasoning-effort.js";
 import {
   applyOpenAIResponsesPayloadPolicy,
@@ -106,6 +109,17 @@ function shouldStripOpenAICompletionTools(model: { api?: unknown; compat?: unkno
       ? (model.compat as { supportsTools?: unknown })
       : undefined;
   return model.api === "openai-completions" && compat?.supportsTools === false;
+}
+
+function shouldStripOpenAICompletionMessageKeys(model: {
+  api?: unknown;
+  compat?: unknown;
+}): boolean {
+  const compat =
+    model.compat && typeof model.compat === "object"
+      ? (model.compat as { strictMessageKeys?: unknown })
+      : undefined;
+  return model.api === "openai-completions" && compat?.strictMessageKeys === true;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -309,6 +323,23 @@ export function createOpenAIStringContentWrapper(baseStreamFn: StreamFn | undefi
         return;
       }
       payloadObj.messages = flattenCompletionMessagesToStringContent(payloadObj.messages);
+    });
+  };
+}
+
+export function createOpenAICompletionsStrictMessageKeysWrapper(
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    if (!shouldStripOpenAICompletionMessageKeys(model)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
+      if (!Array.isArray(payloadObj.messages)) {
+        return;
+      }
+      payloadObj.messages = stripCompletionMessagesToRoleContent(payloadObj.messages);
     });
   };
 }

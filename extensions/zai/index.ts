@@ -18,8 +18,8 @@ import {
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import {
+  buildProviderReplayFamilyHooks,
   normalizeModelCompat,
-  OPENAI_COMPATIBLE_REPLAY_HOOKS,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   createPayloadPatchStreamWrapper,
@@ -319,7 +319,10 @@ export default definePluginEntry({
         }),
       ],
       resolveDynamicModel: (ctx) => resolveGlm5ForwardCompatModel(ctx),
-      ...OPENAI_COMPATIBLE_REPLAY_HOOKS,
+      ...buildProviderReplayFamilyHooks({
+        family: "openai-compatible",
+        dropReasoningFromHistory: false,
+      }),
       prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
       wrapStreamFn: (ctx) => wrapZaiStreamFn(ctx),
       resolveThinkingProfile: () => ({

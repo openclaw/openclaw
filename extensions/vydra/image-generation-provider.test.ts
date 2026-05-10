@@ -35,15 +35,14 @@ describe("vydra image-generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://www.vydra.ai/api/v1/models/grok-imagine",
-      expect.objectContaining({
-        method: "POST",
-        body: JSON.stringify({
-          prompt: "draw a cat",
-          model: "text-to-image",
-        }),
+    const createCall = fetchMock.mock.calls[0];
+    expect(createCall?.[0]).toBe("https://www.vydra.ai/api/v1/models/grok-imagine");
+    const createInit = createCall?.[1] as { method?: string; body?: unknown } | undefined;
+    expect(createInit?.method).toBe("POST");
+    expect(createInit?.body).toBe(
+      JSON.stringify({
+        prompt: "draw a cat",
+        model: "text-to-image",
       }),
     );
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
@@ -94,11 +93,10 @@ describe("vydra image-generation provider", () => {
       ssrfPolicy: { allowRfc2544BenchmarkRange: true },
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      "https://198.18.0.10/api/v1/models/grok-imagine",
-      expect.objectContaining({ method: "POST" }),
-    );
+    const createCall = fetchMock.mock.calls[0];
+    expect(createCall?.[0]).toBe("https://198.18.0.10/api/v1/models/grok-imagine");
+    const createInit = createCall?.[1] as { method?: string } | undefined;
+    expect(createInit?.method).toBe("POST");
   });
 
   it("polls jobs when the create response is not completed yet", async () => {
@@ -121,10 +119,9 @@ describe("vydra image-generation provider", () => {
       cfg: {},
     });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      2,
-      "https://www.vydra.ai/api/v1/jobs/job-456",
-      expect.objectContaining({ method: "GET" }),
-    );
+    const pollCall = fetchMock.mock.calls[1];
+    expect(pollCall?.[0]).toBe("https://www.vydra.ai/api/v1/jobs/job-456");
+    const pollInit = pollCall?.[1] as { method?: string } | undefined;
+    expect(pollInit?.method).toBe("GET");
   });
 });

@@ -47,6 +47,7 @@ function createPlugin(params: {
   imageGenerationProviderMetadata?: PluginManifestRecord["imageGenerationProviderMetadata"];
   videoGenerationProviderMetadata?: PluginManifestRecord["videoGenerationProviderMetadata"];
   musicGenerationProviderMetadata?: PluginManifestRecord["musicGenerationProviderMetadata"];
+  providerAuthEnvVars?: PluginManifestRecord["providerAuthEnvVars"];
   setupProviders?: Array<{ id: string; envVars?: string[] }>;
 }): PluginManifestRecord {
   return {
@@ -64,6 +65,7 @@ function createPlugin(params: {
     imageGenerationProviderMetadata: params.imageGenerationProviderMetadata,
     videoGenerationProviderMetadata: params.videoGenerationProviderMetadata,
     musicGenerationProviderMetadata: params.musicGenerationProviderMetadata,
+    providerAuthEnvVars: params.providerAuthEnvVars,
     setup: params.setupProviders ? { providers: params.setupProviders } : undefined,
   };
 }
@@ -379,6 +381,28 @@ describe("optional media tool factory planning", () => {
       musicGenerate: true,
       pdf: true,
     });
+  });
+
+  it("keeps manifest provider auth env aliases on the music factory path", () => {
+    const config: OpenClawConfig = {};
+    installSnapshot(config, [
+      createPlugin({
+        id: "minimax",
+        contracts: { musicGenerationProviders: ["minimax", "minimax-portal"] },
+        providerAuthEnvVars: {
+          minimax: ["MINIMAX_CODE_PLAN_KEY", "MINIMAX_CODING_API_KEY", "MINIMAX_API_KEY"],
+          "minimax-portal": ["MINIMAX_OAUTH_TOKEN", "MINIMAX_API_KEY"],
+        },
+      }),
+    ]);
+    vi.stubEnv("MINIMAX_API_KEY", "minimax-key");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(),
+      }).musicGenerate,
+    ).toBe(true);
   });
 
   it("defers PDF model resolution from the tool-prep hot path", async () => {

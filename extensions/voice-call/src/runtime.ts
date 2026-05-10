@@ -334,6 +334,7 @@ export async function createVoiceCallRuntime(params: {
       realtimeProvider.provider,
       realtimeProvider.providerConfig,
       config.serve.path,
+      cfg,
     );
     if (config.realtime.toolPolicy !== "none") {
       realtimeHandler.registerToolHandler(

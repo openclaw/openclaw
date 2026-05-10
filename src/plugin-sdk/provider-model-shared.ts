@@ -172,7 +172,11 @@ type ProviderReplayFamilyHooks = Pick<
 >;
 
 type BuildProviderReplayFamilyHooksOptions =
-  | { family: "openai-compatible"; sanitizeToolCallIds?: boolean }
+  | {
+      family: "openai-compatible";
+      sanitizeToolCallIds?: boolean;
+      dropReasoningFromHistory?: boolean;
+    }
   | { family: "anthropic-by-model" }
   | { family: "native-anthropic-by-model" }
   | { family: "google-gemini" }
@@ -187,7 +191,10 @@ export function buildProviderReplayFamilyHooks(
 ): ProviderReplayFamilyHooks {
   switch (options.family) {
     case "openai-compatible": {
-      const policyOptions = { sanitizeToolCallIds: options.sanitizeToolCallIds };
+      const policyOptions = {
+        sanitizeToolCallIds: options.sanitizeToolCallIds,
+        dropReasoningFromHistory: options.dropReasoningFromHistory,
+      };
       return {
         buildReplayPolicy: (ctx: ProviderReplayPolicyContext) =>
           buildOpenAICompatibleReplayPolicy(ctx.modelApi, {

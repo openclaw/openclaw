@@ -135,7 +135,11 @@ describe("deliverDiscordReply", () => {
         {
           text: [
             "📊 Session Status: current",
-            "🛠️ Exec: run git status",
+            "🛠️ run git status",
+            "🛠️ `gh pr view`",
+            "🛠️ `docker compose up`",
+            "🛠️ elevated · `cd /tmp && pnpm test`",
+            "🛠️ pty · `apply_patch update`",
             "📖 Read: lines 1-40 from secret.md",
             "Visible reply.",
           ].join("\n"),

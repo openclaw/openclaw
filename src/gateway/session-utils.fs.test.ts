@@ -113,6 +113,38 @@ function buildBasicSessionTranscript(
   ];
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function expectMessageFields(
+  message: unknown,
+  fields: { role?: string; content?: unknown; openclaw?: Record<string, unknown> },
+) {
+  const record = requireRecord(message, "message");
+  if ("role" in fields) {
+    expect(record.role).toBe(fields.role);
+  }
+  if ("content" in fields) {
+    expect(record.content).toEqual(fields.content);
+  }
+  if (fields.openclaw) {
+    const metadata = requireRecord(record.__openclaw, "message metadata");
+    for (const [key, value] of Object.entries(fields.openclaw)) {
+      expect(metadata[key]).toEqual(value);
+    }
+  }
+}
+
+function expectUsageFields(usage: unknown, fields: Record<string, unknown>) {
+  const record = requireRecord(usage, "usage");
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
 describe("readFirstUserMessageFromTranscript", () => {
   let tmpDir: string;
   let storePath: string;
@@ -616,18 +648,9 @@ describe("readSessionMessages", () => {
       maxBytes: 1024,
     });
 
-    expect(out).toEqual([
-      expect.objectContaining({
-        role: "user",
-        content: "recent",
-        __openclaw: expect.objectContaining({ seq: 3 }),
-      }),
-      expect.objectContaining({
-        role: "assistant",
-        content: "latest",
-        __openclaw: expect.objectContaining({ seq: 4 }),
-      }),
-    ]);
+    expect(out).toHaveLength(2);
+    expectMessageFields(out[0], { role: "user", content: "recent", openclaw: { seq: 3 } });
+    expectMessageFields(out[1], { role: "assistant", content: "latest", openclaw: { seq: 4 } });
   });
 
   test("bounds recent-message reads for large append-only transcripts", () => {
@@ -654,7 +677,7 @@ describe("readSessionMessages", () => {
         maxBytes: 64 * 1024,
       });
       expect(out).toHaveLength(1);
-      expect(out[0]).toMatchObject({ role: "assistant", content: "tail" });
+      expectMessageFields(out[0], { role: "assistant", content: "tail" });
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
@@ -677,16 +700,9 @@ describe("readSessionMessages", () => {
     });
 
     expect(result.totalMessages).toBe(4);
-    expect(result.messages).toEqual([
-      expect.objectContaining({
-        content: "recent",
-        __openclaw: expect.objectContaining({ seq: 3 }),
-      }),
-      expect.objectContaining({
-        content: "latest",
-        __openclaw: expect.objectContaining({ seq: 4 }),
-      }),
-    ]);
+    expect(result.messages).toHaveLength(2);
+    expectMessageFields(result.messages[0], { content: "recent", openclaw: { seq: 3 } });
+    expectMessageFields(result.messages[1], { content: "latest", openclaw: { seq: 4 } });
   });
 
   test("preserves real sequence metadata for async bounded recent-message reads", async () => {
@@ -712,16 +728,9 @@ describe("readSessionMessages", () => {
       );
 
       expect(result.totalMessages).toBe(4);
-      expect(result.messages).toEqual([
-        expect.objectContaining({
-          content: "recent",
-          __openclaw: expect.objectContaining({ seq: 3 }),
-        }),
-        expect.objectContaining({
-          content: "latest",
-          __openclaw: expect.objectContaining({ seq: 4 }),
-        }),
-      ]);
+      expect(result.messages).toHaveLength(2);
+      expectMessageFields(result.messages[0], { content: "recent", openclaw: { seq: 3 } });
+      expectMessageFields(result.messages[1], { content: "latest", openclaw: { seq: 4 } });
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
@@ -747,7 +756,8 @@ describe("readSessionMessages", () => {
         maxBytes: 2048,
       });
 
-      expect(out).toEqual([expect.objectContaining({ role: "assistant", content: "tail" })]);
+      expect(out).toHaveLength(1);
+      expectMessageFields(out[0], { role: "assistant", content: "tail" });
       expect(JSON.stringify(out)).not.toContain("huge");
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
@@ -790,7 +800,8 @@ describe("readSessionMessages", () => {
         maxBytes: 2048,
       });
 
-      expect(out).toEqual([expect.objectContaining({ role: "assistant", content: "tail" })]);
+      expect(out).toHaveLength(1);
+      expectMessageFields(out[0], { role: "assistant", content: "tail" });
       expect(JSON.stringify(out)).not.toContain("huge");
       expect(readFileSpy).not.toHaveBeenCalled();
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
@@ -883,9 +894,7 @@ describe("readSessionMessages", () => {
         "active branch",
         "latest active",
       ]);
-      expect(messages[2]).toMatchObject({
-        __openclaw: expect.objectContaining({ id: "user-2", seq: 3 }),
-      });
+      expectMessageFields(messages[2], { openclaw: { id: "user-2", seq: 3 } });
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
@@ -953,7 +962,7 @@ describe("readSessionMessages", () => {
         maxBytes: 2048,
       });
       expect(messages).toHaveLength(1);
-      expect(messages[0]).toMatchObject({ role: "user", content: "latest" });
+      expectMessageFields(messages[0], { role: "user", content: "latest" });
       expect(JSON.stringify(messages)).not.toContain("older");
       expect(openSpy).toHaveBeenCalledTimes(1);
     } finally {
@@ -978,7 +987,7 @@ describe("readSessionMessages", () => {
       2048,
     );
 
-    expect(usage).toMatchObject({
+    expectUsageFields(usage, {
       inputTokens: 42,
       outputTokens: 7,
     });
@@ -1007,8 +1016,8 @@ describe("readSessionMessages", () => {
       2048,
     );
 
-    expect(aggregate).toMatchObject({ inputTokens: 120, outputTokens: 14 });
-    expect(latest).toMatchObject({ inputTokens: 70, outputTokens: 9 });
+    expectUsageFields(aggregate, { inputTokens: 120, outputTokens: 14 });
+    expectUsageFields(latest, { inputTokens: 70, outputTokens: 9 });
   });
 
   test("tails transcript lines for manual compaction without loading the whole file", () => {
@@ -1096,18 +1105,13 @@ describe("readSessionMessages", () => {
     try {
       const out = readSessionMessages(sessionId, storePath, sessionFile);
       expect(out).toHaveLength(2);
-      expect(out).toEqual([
-        expect.objectContaining({
-          role: "user",
-          content: "clean prompt",
-          __openclaw: expect.objectContaining({ seq: 1 }),
-        }),
-        expect.objectContaining({
-          role: "assistant",
-          content: [{ type: "text", text: "clean answer" }],
-          __openclaw: expect.objectContaining({ seq: 2 }),
-        }),
-      ]);
+      expect(out).toHaveLength(2);
+      expectMessageFields(out[0], { role: "user", content: "clean prompt", openclaw: { seq: 1 } });
+      expectMessageFields(out[1], {
+        role: "assistant",
+        content: [{ type: "text", text: "clean answer" }],
+        openclaw: { seq: 2 },
+      });
       expect(JSON.stringify(out)).not.toContain("original wrapped prompt");
       expect(sessionManagerOpenSpy).not.toHaveBeenCalled();
     } finally {
@@ -1168,7 +1172,7 @@ describe("readSessionMessages", () => {
 
       const out = readSessionMessages(sessionId, wrongStorePath, sessionFile);
       expect(out).toHaveLength(1);
-      expect(out[0]).toMatchObject(message);
+      expectMessageFields(out[0], message);
       expect((out[0] as { __openclaw?: { seq?: number } }).__openclaw?.seq).toBe(1);
     },
   );
@@ -1608,7 +1612,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     ]);
 
     const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
-    expect(snapshot).toMatchObject({
+    expectUsageFields(snapshot, {
       modelProvider: "anthropic",
       model: "claude-sonnet-4-6",
       inputTokens: 4200,
@@ -1653,7 +1657,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
 
     try {
       const snapshot = await readLatestSessionUsageFromTranscriptAsync(sessionId, storePath);
-      expect(snapshot).toMatchObject({
+      expectUsageFields(snapshot, {
         modelProvider: "anthropic",
         model: "claude-sonnet-4-6",
         inputTokens: 4200,
@@ -1704,7 +1708,7 @@ describe("readLatestSessionUsageFromTranscript", () => {
     ]);
 
     const snapshot = readLatestSessionUsageFromTranscript(sessionId, storePath);
-    expect(snapshot).toMatchObject({
+    expectUsageFields(snapshot, {
       modelProvider: "openai",
       model: "gpt-5.4",
       inputTokens: 1500,
@@ -1743,15 +1747,16 @@ describe("readLatestSessionUsageFromTranscript", () => {
     const readFileSpy = vi.spyOn(fs, "readFileSync");
 
     try {
-      expect(
+      expectUsageFields(
         readRecentSessionUsageFromTranscript(sessionId, storePath, undefined, undefined, 64 * 1024),
-      ).toMatchObject({
-        modelProvider: "openai",
-        model: "gpt-5.4",
-        inputTokens: 900,
-        outputTokens: 100,
-        totalTokens: 900,
-      });
+        {
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          inputTokens: 900,
+          outputTokens: 100,
+          totalTokens: 900,
+        },
+      );
       expect(readFileSpy).not.toHaveBeenCalled();
     } finally {
       readFileSpy.mockRestore();
@@ -1824,7 +1829,7 @@ describe("resolveSessionTranscriptCandidates safety", () => {
     const normalizedCandidates = candidates.map((value) => path.resolve(value));
     const expectedFallback = path.resolve(path.dirname(storePath), "sess-safe.jsonl");
 
-    expect(candidates).not.toEqual(expect.arrayContaining([expect.stringContaining("etc/passwd")]));
+    expect(candidates.every((candidate) => !candidate.includes("etc/passwd"))).toBe(true);
     expect(normalizedCandidates).toContain(expectedFallback);
   });
 
@@ -2074,7 +2079,7 @@ describe("oversized transcript line guards", () => {
       512 * 1024,
     );
 
-    expect(usage).toMatchObject({ modelProvider: "test-provider" });
+    expectUsageFields(usage, { modelProvider: "test-provider" });
   });
 
   test("readSessionTitleFieldsFromTranscriptAsync delegates to bounded sync reader", async () => {
