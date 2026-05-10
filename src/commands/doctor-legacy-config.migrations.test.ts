@@ -596,8 +596,8 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.changes).toStrictEqual([]);
   });
 
-  it("migrates legacy Claude CLI primary refs to Anthropic refs plus model runtime", () => {
-    const res = normalizeCompatibilityConfigValues({
+  it("preserves claude-cli primary refs unchanged — not a legacy alias to rewrite", () => {
+    const input = {
       agents: {
         defaults: {
           model: {
@@ -610,23 +610,17 @@ describe("normalizeCompatibilityConfigValues", () => {
           },
         },
       },
-    } as unknown as OpenClawConfig);
+    } as unknown as OpenClawConfig;
 
+    const res = normalizeCompatibilityConfigValues(input);
+
+    // claude-cli/* is a current canonical provider prefix, not a legacy alias;
+    // doctor must not rewrite it to anthropic/*.
     expect(res.config.agents?.defaults?.model).toEqual({
-      primary: "anthropic/claude-opus-4-7",
-      fallbacks: ["anthropic/claude-sonnet-4-6"],
+      primary: "claude-cli/claude-opus-4-7",
+      fallbacks: ["claude-cli/claude-sonnet-4-6"],
     });
-    expect(res.config.agents?.defaults?.agentRuntime).toBeUndefined();
-    expect(res.config.agents?.defaults?.models).toEqual({
-      "claude-cli/claude-opus-4-7": { alias: "Opus" },
-      "anthropic/claude-opus-4-7": {
-        alias: "Anthropic Opus",
-        agentRuntime: { id: "claude-cli" },
-      },
-      "anthropic/claude-sonnet-4-6": {
-        agentRuntime: { id: "claude-cli" },
-      },
-    });
+    expect(res.changes).toStrictEqual([]);
   });
 
   it("migrates legacy Codex CLI primary refs to OpenAI refs plus model runtime", () => {

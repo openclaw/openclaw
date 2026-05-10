@@ -245,14 +245,17 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 } {
   if (typeof raw === "string") {
     const migrated = migrateLegacyRuntimeModelRef(raw);
-    return migrated
-      ? {
-          value: migrated.ref,
-          changed: true,
-          selectedRuntime: migrated.runtime,
-          selectedRefs: [migrated.ref],
-        }
-      : { value: raw, changed: false, selectedRefs: [] };
+    // claude-cli/* is the canonical provider prefix users explicitly configure
+    // (analogous to openai-codex/*); do not rewrite it to anthropic/*.
+    if (!migrated || migrated.legacyProvider === "claude-cli") {
+      return { value: raw, changed: false, selectedRefs: [] };
+    }
+    return {
+      value: migrated.ref,
+      changed: true,
+      selectedRuntime: migrated.runtime,
+      selectedRefs: [migrated.ref],
+    };
   }
   if (!isRecord(raw)) {
     return { value: raw, changed: false, selectedRefs: [] };
@@ -260,7 +263,8 @@ function normalizeLegacyRuntimeAgentModelConfig(raw: unknown): {
 
   const migratedPrimary =
     typeof raw.primary === "string" ? migrateLegacyRuntimeModelRef(raw.primary) : null;
-  if (!migratedPrimary) {
+  // claude-cli/* is the canonical provider prefix; skip rewrite.
+  if (!migratedPrimary || migratedPrimary.legacyProvider === "claude-cli") {
     return { value: raw, changed: false, selectedRefs: [] };
   }
 
