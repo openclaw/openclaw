@@ -1572,6 +1572,8 @@ export function createExecTool(
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        mainKey: defaults?.mainKey,
+        sessionScope: defaults?.sessionScope,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,
