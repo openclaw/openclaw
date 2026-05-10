@@ -129,6 +129,25 @@ vi.mock("@opentelemetry/semantic-conventions", () => ({
   ATTR_SERVICE_NAME: "service.name",
 }));
 
+const { registerUnhandledRejectionHandlerMock, emitUnhandledRejection } = vi.hoisted(() => {
+  let capturedHandler: ((reason: unknown) => boolean) | undefined;
+  return {
+    registerUnhandledRejectionHandlerMock: vi.fn((handler: (reason: unknown) => boolean) => {
+      capturedHandler = handler;
+      return () => {
+        if (capturedHandler === handler) {
+          capturedHandler = undefined;
+        }
+      };
+    }),
+    emitUnhandledRejection: (reason: unknown): boolean => capturedHandler?.(reason) ?? false,
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  registerUnhandledRejectionHandler: registerUnhandledRejectionHandlerMock,
+}));
+
 import {
   emitTrustedDiagnosticEvent,
   onInternalDiagnosticEvent,
@@ -136,7 +155,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import type { OpenClawPluginServiceContext } from "../api.js";
 import { emitDiagnosticEvent } from "../api.js";
-import { createDiagnosticsOtelService } from "./service.js";
+import { createDiagnosticsOtelService, isOtlpExporterError } from "./service.js";
 
 const OTEL_TEST_STATE_DIR = "/tmp/openclaw-diagnostics-otel-test";
 const OTEL_TEST_ENDPOINT = "http://otel-collector:4318";
@@ -2569,6 +2588,92 @@ describe("diagnostics-otel service", () => {
     expect(String(attrs?.["openclaw.reason"])).not.toContain(
       "ghp_abcdefghijklmnopqrstuvwxyz123456", // pragma: allowlist secret
     );
+    await service.stop?.(ctx);
+  });
+});
+
+describe("isOtlpExporterError", () => {
+  test("returns true for an Error instance with name OTLPExporterError", () => {
+    const err = Object.assign(new Error("export failed"), { name: "OTLPExporterError" });
+    expect(isOtlpExporterError(err)).toBe(true);
+  });
+
+  test("returns true for a plain object with name OTLPExporterError", () => {
+    expect(isOtlpExporterError({ name: "OTLPExporterError", code: 410, data: "user_stop" })).toBe(
+      true,
+    );
+  });
+
+  test("returns true for an array of OTLPExporterError objects", () => {
+    expect(
+      isOtlpExporterError([
+        { name: "OTLPExporterError", code: 410 },
+        { name: "OTLPExporterError", code: 410 },
+      ]),
+    ).toBe(true);
+  });
+
+  test("returns false for an array mixing OTLPExporterError and other errors", () => {
+    expect(isOtlpExporterError([{ name: "OTLPExporterError" }, { name: "Error" }])).toBe(false);
+  });
+
+  test("returns false for an empty array", () => {
+    expect(isOtlpExporterError([])).toBe(false);
+  });
+
+  test("returns false for a plain Error without OTLPExporterError name", () => {
+    expect(isOtlpExporterError(new Error("network error"))).toBe(false);
+  });
+
+  test("returns false for null, undefined, and string", () => {
+    expect(isOtlpExporterError(null)).toBe(false);
+    expect(isOtlpExporterError(undefined)).toBe(false);
+    expect(isOtlpExporterError("OTLPExporterError")).toBe(false);
+  });
+});
+
+describe("OTLPExporterError unhandled rejection handler", () => {
+  beforeEach(() => {
+    registerUnhandledRejectionHandlerMock.mockClear();
+  });
+
+  test("registers a handler on start and deregisters on stop", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+    expect(registerUnhandledRejectionHandlerMock).toHaveBeenCalledTimes(1);
+    await service.stop?.(ctx);
+    // After stop the handler should not fire for OTLPExporterError
+    const handled = emitUnhandledRejection({ name: "OTLPExporterError", code: 410 });
+    expect(handled).toBe(false);
+  });
+
+  test("suppresses OTLPExporterError plain-object rejection after start", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+    const handled = emitUnhandledRejection({ name: "OTLPExporterError", code: 410 });
+    expect(handled).toBe(true);
+    await service.stop?.(ctx);
+  });
+
+  test("suppresses OTLPExporterError array-wrapped rejection after start", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+    const handled = emitUnhandledRejection([
+      { name: "OTLPExporterError", code: 410, data: "user_stop" },
+    ]);
+    expect(handled).toBe(true);
+    await service.stop?.(ctx);
+  });
+
+  test("does not suppress unrelated rejection errors after start", async () => {
+    const service = createDiagnosticsOtelService();
+    const ctx = createOtelContext(OTEL_TEST_ENDPOINT, { traces: true });
+    await service.start(ctx);
+    const handled = emitUnhandledRejection(new Error("ECONNRESET"));
+    expect(handled).toBe(false);
     await service.stop?.(ctx);
   });
 });

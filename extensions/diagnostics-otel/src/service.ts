@@ -15,6 +15,7 @@ import { PeriodicExportingMetricReader } from "@opentelemetry/sdk-metrics";
 import { NodeSDK } from "@opentelemetry/sdk-node";
 import { ParentBasedSampler, TraceIdRatioBasedSampler } from "@opentelemetry/sdk-trace-base";
 import { ATTR_SERVICE_NAME } from "@opentelemetry/semantic-conventions";
+import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
@@ -519,23 +520,46 @@ function addTraceAttributes(
   }
 }
 
+const OTLP_EXPORTER_ERROR_NAME = "OTLPExporterError";
+
+function isOtlpExporterErrorCandidate(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  return (value as { name?: unknown }).name === OTLP_EXPORTER_ERROR_NAME;
+}
+
+export function isOtlpExporterError(reason: unknown): boolean {
+  if (isOtlpExporterErrorCandidate(reason)) {
+    return true;
+  }
+  if (Array.isArray(reason)) {
+    return reason.length > 0 && reason.every((item) => isOtlpExporterErrorCandidate(item));
+  }
+  return false;
+}
+
 export function createDiagnosticsOtelService(): OpenClawPluginService {
   let sdk: NodeSDK | null = null;
   let logProvider: LoggerProvider | null = null;
   let unsubscribe: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
+  let deregisterRejectionHandler: (() => void) | null = null;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
+    const currentDeregisterRejectionHandler = deregisterRejectionHandler;
 
     unsubscribe = null;
     logProvider = null;
     sdk = null;
     stopActiveTrustedSpans = null;
+    deregisterRejectionHandler = null;
 
+    currentDeregisterRejectionHandler?.();
     currentUnsubscribe?.();
     currentStopActiveTrustedSpans?.();
     if (currentLogProvider) {
@@ -691,6 +715,14 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       } else if (sdkPreloaded && (tracesEnabled || metricsEnabled)) {
         ctx.logger.info("diagnostics-otel: using preloaded OpenTelemetry SDK");
       }
+
+      deregisterRejectionHandler = registerUnhandledRejectionHandler((reason) => {
+        if (!isOtlpExporterError(reason)) {
+          return false;
+        }
+        ctx.logger.warn(`diagnostics-otel: suppressed OTLPExporterError: ${formatError(reason)}`);
+        return true;
+      });
 
       const logSeverityMap: Record<string, SeverityNumber> = {
         TRACE: 1 as SeverityNumber,
