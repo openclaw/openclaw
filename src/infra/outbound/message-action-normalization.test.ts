@@ -181,4 +181,84 @@ describe("normalizeMessageActionInput", () => {
       }),
     ).toThrow(/requires a target/);
   });
+
+  describe("card-aware text sanitization", () => {
+    it("clears message param when card is present on send action", () => {
+      const result = normalizeMessageActionInput({
+        action: "send",
+        args: {
+          target: "user:ou_123",
+          message: "Daily Report",
+          card: { header: { title: { tag: "plain_text", content: "Daily Report" } } },
+        },
+      });
+      expect(result.message).toBeUndefined();
+      expect(result._cardNotificationHint).toBe("Daily Report");
+      expect(result.card).toBeDefined();
+    });
+
+    it("clears text param when card is present on send action", () => {
+      const result = normalizeMessageActionInput({
+        action: "send",
+        args: {
+          target: "user:ou_123",
+          text: "Alert Title",
+          card: { elements: [] },
+        },
+      });
+      expect(result.text).toBeUndefined();
+      expect(result._cardNotificationHint).toBe("Alert Title");
+    });
+
+    it("preserves message param when no card is present", () => {
+      const result = normalizeMessageActionInput({
+        action: "send",
+        args: {
+          target: "user:ou_123",
+          message: "Hello world",
+        },
+      });
+      expect(result.message).toBe("Hello world");
+      expect(result._cardNotificationHint).toBeUndefined();
+    });
+
+    it("does not sanitize for non-send actions", () => {
+      const result = normalizeMessageActionInput({
+        action: "edit",
+        args: {
+          messageId: "msg_123",
+          message: "Updated text",
+          card: { elements: [] },
+        },
+      });
+      expect(result.message).toBe("Updated text");
+    });
+
+    it("handles empty message with card gracefully", () => {
+      const result = normalizeMessageActionInput({
+        action: "send",
+        args: {
+          target: "user:ou_123",
+          message: "",
+          card: { elements: [] },
+        },
+      });
+      expect(result._cardNotificationHint).toBeUndefined();
+    });
+
+    it("prefers message over text for notification hint", () => {
+      const result = normalizeMessageActionInput({
+        action: "send",
+        args: {
+          target: "user:ou_123",
+          message: "Primary",
+          text: "Secondary",
+          card: { elements: [] },
+        },
+      });
+      expect(result._cardNotificationHint).toBe("Primary");
+      expect(result.message).toBeUndefined();
+      expect(result.text).toBeUndefined();
+    });
+  });
 });

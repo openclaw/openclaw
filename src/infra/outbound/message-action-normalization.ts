@@ -70,5 +70,23 @@ export function normalizeMessageActionInput(params: {
     throw new Error(`Action ${action} requires a target.`);
   }
 
+  // Card-aware text sanitization: when a card payload is present, the
+  // `message`/`text` parameter is typically a notification preview or card
+  // title rather than a standalone message body. Channel plugins that support
+  // cards (Feishu, Teams, Slack, etc.) would otherwise send both a text
+  // message and the card, resulting in duplicates. Move the text to a hint
+  // field so plugins can use it for push-notification previews without
+  // sending a visible text message.
+  if (action === "send" && normalizedArgs.card != null && typeof normalizedArgs.card === "object") {
+    const msgText = normalizeOptionalString(normalizedArgs.message as string) ?? "";
+    const altText = normalizeOptionalString(normalizedArgs.text as string) ?? "";
+    const hintText = msgText || altText;
+    if (hintText) {
+      normalizedArgs._cardNotificationHint = hintText;
+    }
+    if (msgText) delete normalizedArgs.message;
+    if (altText) delete normalizedArgs.text;
+  }
+
   return normalizedArgs;
 }
