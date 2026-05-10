@@ -749,6 +749,7 @@ Use jobId as the canonical identifier; id is accepted for compatibility. Use con
               break;
             }
             offset = nextOffset;
+          // oxlint-disable-next-line no-constant-condition -- pagination loop with internal breaks
           } while (true);
           return jsonResult(
             selfRemoveOnlyJobId ? filterCronListResultToJobId(result, selfRemoveOnlyJobId) : result,
