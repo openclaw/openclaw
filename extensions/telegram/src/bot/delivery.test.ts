@@ -843,11 +843,7 @@ describe("deliverReplies", () => {
     ).rejects.toThrow("message thread not found");
 
     expect(sendPhoto).toHaveBeenCalledTimes(1);
-    expect(sendPhoto.mock.calls[0]?.[2]).toEqual(
-      expect.objectContaining({
-        message_thread_id: 42,
-      }),
-    );
+    expectRecordFields(sendPhoto.mock.calls[0]?.[2], { message_thread_id: 42 });
     expect(runtime.error).toHaveBeenCalledTimes(1);
   });
 
@@ -861,18 +857,14 @@ describe("deliverReplies", () => {
       linkPreview: true,
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.not.objectContaining({
-        link_preview_options: expect.anything(),
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("link_preview_options");
   });
 
   it("falls back to plain text when markdown renders to empty HTML in threaded mode", async () => {
     const runtime = createRuntime();
-    const sendMessage = vi.fn(async (_chatId: string, text: string) => {
+    const sendMessage = vi.fn(async (_chatId: string, text: string, _options?: unknown) => {
       if (text === "") {
         throw new Error("400: Bad Request: message text is empty");
       }
@@ -895,13 +887,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      ">",
-      expect.objectContaining({
-        message_thread_id: 42,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toBe(">");
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], { message_thread_id: 42 });
   });
 
   it("skips whitespace-only text replies without calling Telegram", async () => {
@@ -942,26 +930,18 @@ describe("deliverReplies", () => {
       replyQuoteEntities: [{ type: "bold", offset: 0, length: 6 }],
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        reply_parameters: {
-          message_id: 500,
-          quote: " quoted text\n",
-          quote_position: 17,
-          quote_entities: [{ type: "bold", offset: 0, length: 6 }],
-          allow_sending_without_reply: true,
-        },
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.not.objectContaining({
-        reply_to_message_id: expect.anything(),
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+      reply_parameters: {
+        message_id: 500,
+        quote: " quoted text\n",
+        quote_position: 17,
+        quote_entities: [{ type: "bold", offset: 0, length: 6 }],
+        allow_sending_without_reply: true,
+      },
+    });
+    expect(sendMessage.mock.calls[0]?.[2]).not.toHaveProperty("reply_to_message_id");
   });
 
   it("uses the native quote candidate that matches each reply target", async () => {
@@ -986,26 +966,22 @@ describe("deliverReplies", () => {
       },
     });
 
-    expect(sendMessage.mock.calls[0]?.[2]).toEqual(
-      expect.objectContaining({
-        reply_parameters: {
-          message_id: 500,
-          quote: "first quote",
-          quote_position: 0,
-          allow_sending_without_reply: true,
-        },
-      }),
-    );
-    expect(sendMessage.mock.calls[1]?.[2]).toEqual(
-      expect.objectContaining({
-        reply_parameters: {
-          message_id: 501,
-          quote: "second quote",
-          quote_position: 0,
-          allow_sending_without_reply: true,
-        },
-      }),
-    );
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+      reply_parameters: {
+        message_id: 500,
+        quote: "first quote",
+        quote_position: 0,
+        allow_sending_without_reply: true,
+      },
+    });
+    expectRecordFields(sendMessage.mock.calls[1]?.[2], {
+      reply_parameters: {
+        message_id: 501,
+        quote: "second quote",
+        quote_position: 0,
+        allow_sending_without_reply: true,
+      },
+    });
   });
 
   it("retries with legacy reply id when native quote parameters are rejected", async () => {
@@ -1034,21 +1010,17 @@ describe("deliverReplies", () => {
       });
 
       expect(sendMessage).toHaveBeenCalledTimes(2);
-      expect(sendMessage.mock.calls[0][2]).toEqual(
-        expect.objectContaining({
-          reply_parameters: {
-            message_id: 500,
-            quote: " quoted text\n",
-            allow_sending_without_reply: true,
-          },
-        }),
-      );
-      expect(sendMessage.mock.calls[1][2]).toEqual(
-        expect.objectContaining({
-          reply_to_message_id: 500,
+      expectRecordFields(sendMessage.mock.calls[0][2], {
+        reply_parameters: {
+          message_id: 500,
+          quote: " quoted text\n",
           allow_sending_without_reply: true,
-        }),
-      );
+        },
+      });
+      expectRecordFields(sendMessage.mock.calls[1][2], {
+        reply_to_message_id: 500,
+        allow_sending_without_reply: true,
+      });
       expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
     }
   });
@@ -1070,14 +1042,12 @@ describe("deliverReplies", () => {
       replyQuoteText: "quoted text",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        reply_to_message_id: 501,
-        allow_sending_without_reply: true,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+      reply_to_message_id: 501,
+      allow_sending_without_reply: true,
+    });
     expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
   });
 
@@ -1118,14 +1088,12 @@ describe("deliverReplies", () => {
       replyQuoteText: "quoted text",
     });
 
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.any(String),
-      expect.objectContaining({
-        reply_to_message_id: 501,
-        allow_sending_without_reply: true,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(typeof sendMessage.mock.calls[0]?.[1]).toBe("string");
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], {
+      reply_to_message_id: 501,
+      allow_sending_without_reply: true,
+    });
     expect(sendMessage.mock.calls[0][2]).not.toHaveProperty("reply_parameters");
   });
 
@@ -1152,11 +1120,9 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     // Fallback to text succeeded
     expect(sendMessage).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("Hello there"),
-      expect.any(Object),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Hello there");
+    expect(sendMessage.mock.calls[0]?.[2]).toBeDefined();
   });
 
   it("keeps disable_notification on voice fallback text when silent is true", async () => {
@@ -1180,13 +1146,9 @@ describe("deliverReplies", () => {
     });
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
-    expect(sendMessage).toHaveBeenCalledWith(
-      "123",
-      expect.stringContaining("Hello there"),
-      expect.objectContaining({
-        disable_notification: true,
-      }),
-    );
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("Hello there");
+    expectRecordFields(sendMessage.mock.calls[0]?.[2], { disable_notification: true });
   });
 
   it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
@@ -1224,21 +1186,17 @@ describe("deliverReplies", () => {
 
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({
-        reply_parameters: {
-          message_id: 77,
-          quote: "quoted context",
-          allow_sending_without_reply: true,
-        },
-        reply_markup: {
-          inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
-        },
-      }),
-    );
-    expect(sendMessage.mock.calls[1][2]).not.toEqual(
-      expect.objectContaining({ reply_to_message_id: 77 }),
-    );
+    expectRecordFields(sendMessage.mock.calls[0][2], {
+      reply_parameters: {
+        message_id: 77,
+        quote: "quoted context",
+        allow_sending_without_reply: true,
+      },
+      reply_markup: {
+        inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
+      },
+    });
+    expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id", 77);
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_parameters");
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_markup");
   });
@@ -1285,12 +1243,10 @@ describe("deliverReplies", () => {
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // First chunk should have reply_to_message_id
-    expect(sendMessage.mock.calls[0][2]).toEqual(
-      expect.objectContaining({
-        reply_to_message_id: 700,
-        allow_sending_without_reply: true,
-      }),
-    );
+    expectRecordFields(sendMessage.mock.calls[0][2], {
+      reply_to_message_id: 700,
+      allow_sending_without_reply: true,
+    });
     // Second chunk should NOT have reply_to_message_id
     expect(sendMessage.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
   });
@@ -1316,12 +1272,10 @@ describe("deliverReplies", () => {
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     // Both chunks should have reply_to_message_id
     for (const call of sendMessage.mock.calls) {
-      expect(call[2]).toEqual(
-        expect.objectContaining({
-          reply_to_message_id: 800,
-          allow_sending_without_reply: true,
-        }),
-      );
+      expectRecordFields(call[2], {
+        reply_to_message_id: 800,
+        allow_sending_without_reply: true,
+      });
     }
   });
 
@@ -1348,12 +1302,10 @@ describe("deliverReplies", () => {
 
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     // First media should have reply_to_message_id
-    expect(sendPhoto.mock.calls[0][2]).toEqual(
-      expect.objectContaining({
-        reply_to_message_id: 900,
-        allow_sending_without_reply: true,
-      }),
-    );
+    expectRecordFields(sendPhoto.mock.calls[0][2], {
+      reply_to_message_id: 900,
+      allow_sending_without_reply: true,
+    });
     // Second media should NOT have reply_to_message_id
     expect(sendPhoto.mock.calls[1][2]).not.toHaveProperty("reply_to_message_id");
   });
