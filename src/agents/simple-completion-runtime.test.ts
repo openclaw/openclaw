@@ -100,7 +100,9 @@ function expectPreparedModelResult(
   }
 }
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+type MockWithFirstArg<T> = { mock: { calls: unknown[][] }; __firstArg?: T };
+
+function callArg<T>(mock: MockWithFirstArg<T>, index = 0): T {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
   return call?.[0] as T;

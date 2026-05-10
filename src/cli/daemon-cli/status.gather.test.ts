@@ -182,7 +182,9 @@ vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+type MockWithFirstArg<T> = { mock: { calls: unknown[][] }; __firstArg?: T };
+
+function callArg<T>(mock: MockWithFirstArg<T>, index = 0): T {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
   return call?.[0] as T;
@@ -400,9 +402,7 @@ describe("gatherDaemonStatus", () => {
     });
 
     expect(
-      serviceReadRuntime.mock.calls.some(
-        ([env]) => (env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT === "19001",
-      ),
+      serviceReadRuntime.mock.calls.some(([env]) => env?.OPENCLAW_GATEWAY_PORT === "19001"),
     ).toBe(true);
     expect(status.service.runtime?.status).toBe("running");
     expect((status.service.runtime as { detail?: string }).detail).toBe("19001");
