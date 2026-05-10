@@ -64,6 +64,7 @@ const resolveAndPersistSessionFile = vi.hoisted(() =>
 );
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async () => null));
+const runtimeProofRaw = vi.hoisted(() => vi.fn());
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
 const findModelInCatalog = vi.hoisted(() => vi.fn(() => null));
 const modelSupportsVision = vi.hoisted(() => vi.fn(() => false));
@@ -143,6 +144,17 @@ vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
   resolveAgentDir,
   resolveDefaultModelForAgent,
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => {
+      const logger = actual.createSubsystemLogger(subsystem);
+      return subsystem === "telegram/runtime-proof" ? { ...logger, raw: runtimeProofRaw } : logger;
+    },
+  };
+});
 
 vi.mock("./sticker-cache.js", () => ({
   cacheSticker: vi.fn(),
@@ -225,6 +237,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     resolveMarkdownTableMode.mockClear();
     resolveSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
+    runtimeProofRaw.mockReset();
+    delete process.env.STOMME_E2E_RUN_ID;
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
     modelSupportsVision.mockReset();
@@ -1611,6 +1625,92 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     expect(statusReactionController.setDone).not.toHaveBeenCalled();
     expect(reactionApi).not.toHaveBeenCalledWith(123, 456, []);
+  });
+
+  it("emits run-scoped Telegram runtime proof events for final visible replies", async () => {
+    process.env.STOMME_E2E_RUN_ID = "RUN-1234";
+    createTelegramDraftStream.mockReturnValue(createDraftStream());
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+      async ({ dispatcherOptions, replyOptions }) => {
+        replyOptions?.onModelSelected?.({
+          provider: "openai",
+          model: "gpt-test",
+          thinkLevel: undefined,
+        });
+        await dispatcherOptions.deliver({ text: "Assistant reply secret-free" }, { kind: "final" });
+        return { queuedFinal: true };
+      },
+    );
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "telegram:raw-session-secret",
+          MessageSid: "telegram-message-456",
+          RawBody: "Manual Telegram E2E window for run_id=RUN-1234: raw prompt secret",
+          BodyForAgent: "raw prompt secret",
+        } as TelegramMessageContext["ctxPayload"],
+        route: {
+          agentId: "default",
+          accountId: "default",
+          sessionKey: "route-session-secret",
+        } as TelegramMessageContext["route"],
+      }),
+    });
+
+    const events = runtimeProofRaw.mock.calls.map((call) => {
+      const line = String(call[0]);
+      const payload = JSON.parse(line.replace("telegram_runtime_proof ", ""));
+      return { line, payload };
+    });
+
+    expect(events.map((event) => event.payload.kind)).toEqual([
+      "inbound_accepted",
+      "model_invocation_started",
+      "assistant_response_observed",
+      "telegram_delivery_observed",
+    ]);
+    for (const { line, payload } of events) {
+      expect(payload).toMatchObject({
+        event: payload.kind,
+        proofEvent: "telegram_runtime_proof",
+        status: "observed",
+        channel: "telegram",
+        runId: "RUN-1234",
+        accountId: "default",
+      });
+      expect(payload.type).toBe(payload.kind);
+      expect(payload.sessionKeyHash).toMatch(/^[a-f0-9]{12}$/u);
+      expect(payload.messageIdHash).toMatch(/^[a-f0-9]{12}$/u);
+      expect(line).not.toContain("raw prompt secret");
+      expect(line).not.toContain("Assistant reply secret-free");
+      expect(line).not.toContain("raw-session-secret");
+      expect(line).not.toContain("telegram-message-456");
+      expect(line).not.toContain("token");
+    }
+  });
+
+  it("does not emit delivery proof for error fallbacks", async () => {
+    process.env.STOMME_E2E_RUN_ID = "RUN-1234";
+    dispatchReplyWithBufferedBlockDispatcher.mockRejectedValue(new Error("dispatcher exploded"));
+    deliverReplies.mockResolvedValue({ delivered: true });
+
+    await dispatchWithContext({
+      context: createContext({
+        ctxPayload: {
+          SessionKey: "s1",
+          MessageSid: "m1",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+    });
+
+    const kinds = runtimeProofRaw.mock.calls.map((call) => {
+      const line = String(call[0]);
+      return JSON.parse(line.replace("telegram_runtime_proof ", "")).kind;
+    });
+    expect(kinds).toEqual(["inbound_accepted"]);
   });
 
   it("uses resolved DM config for auto-topic-label overrides", async () => {

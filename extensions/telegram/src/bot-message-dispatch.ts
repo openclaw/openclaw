@@ -99,6 +99,13 @@ import {
   createTelegramReasoningStepState,
   splitTelegramReasoningText,
 } from "./reasoning-lane-coordinator.js";
+import {
+  buildTelegramRuntimeProofBase,
+  emitTelegramRuntimeProofEvent,
+  TELEGRAM_RUNTIME_PROOF_KINDS,
+  type TelegramRuntimeProofBase,
+  type TelegramRuntimeProofKind,
+} from "./runtime-proof.js";
 import { editMessageTelegram } from "./send.js";
 import { cacheSticker, describeStickerImage } from "./sticker-cache.js";
 
@@ -106,6 +113,19 @@ export { pruneStickerMediaFromContext } from "./bot-message-dispatch.media.js";
 
 const EMPTY_RESPONSE_FALLBACK = "No response generated. Please try again.";
 const silentReplyDispatchLogger = createSubsystemLogger("telegram/silent-reply-dispatch");
+const runtimeProofLogger = createSubsystemLogger("telegram/runtime-proof");
+
+function mergeTelegramRuntimeProofBase(
+  primary: TelegramRuntimeProofBase,
+  fallback: TelegramRuntimeProofBase,
+): TelegramRuntimeProofBase {
+  return {
+    runId: primary.runId ?? fallback.runId,
+    accountId: primary.accountId ?? fallback.accountId,
+    sessionKeyHash: primary.sessionKeyHash ?? fallback.sessionKeyHash,
+    messageIdHash: primary.messageIdHash ?? fallback.messageIdHash,
+  };
+}
 
 /** Minimum chars before sending first streaming message (improves push notification UX) */
 const DRAFT_MIN_INITIAL_CHARS = 30;
@@ -842,6 +862,35 @@ export const dispatchTelegramMessage = async ({
   };
   const silentErrorReplies = telegramCfg.silentErrorReplies === true;
   const isDmTopic = !isGroup && threadSpec.scope === "dm" && threadSpec.id != null;
+  const runtimeProofBase = buildTelegramRuntimeProofBase({
+    accountId: route.accountId,
+    sessionKey: ctxPayload.SessionKey ?? route.sessionKey,
+    messageId: ctxPayload.MessageSid ?? msg.message_id,
+    cfg,
+    env: process.env,
+    textCandidates: [
+      ctxPayload.RawBody,
+      ctxPayload.BodyForAgent,
+      ctxPayload.Body,
+      ctxPayload.CommandBody,
+    ],
+  });
+  const emittedRuntimeProofKinds = new Set<TelegramRuntimeProofKind>();
+  const emitRuntimeProof = (kind: TelegramRuntimeProofKind, base = runtimeProofBase) => {
+    const eventBase = mergeTelegramRuntimeProofBase(base, runtimeProofBase);
+    if (emittedRuntimeProofKinds.has(kind)) {
+      return;
+    }
+    emitTelegramRuntimeProofEvent({
+      logger: runtimeProofLogger,
+      base: eventBase,
+      kind,
+      env: process.env,
+    });
+    if (eventBase.runId) {
+      emittedRuntimeProofKinds.add(kind);
+    }
+  };
   let queuedFinal = false;
   let suppressSilentReplyFallback = false;
   let hadErrorReplyFailureOrSkip = false;
@@ -978,6 +1027,9 @@ export const dispatchTelegramMessage = async ({
         }
         if (durable.status === "handled_visible") {
           deliveryState.markDelivered();
+          if (payload.isError !== true && !silent) {
+            emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+          }
           return true;
         }
         if (durable.status === "handled_no_send") {
@@ -993,8 +1045,36 @@ export const dispatchTelegramMessage = async ({
       });
       if (result.delivered) {
         deliveryState.markDelivered();
+        if (options?.durable && payload.isError !== true && !silent) {
+          emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+        }
       }
       return result.delivered;
+    };
+    const emitAssistantRuntimeProofIfFinal = (
+      payload: ReplyPayload,
+      info: { kind: "tool" | "block" | "final" },
+    ) => {
+      if (info.kind !== "final" || payload.isError === true || isDispatchSuperseded()) {
+        return;
+      }
+      const reply = resolveSendableOutboundReplyParts(payload);
+      if (reply.text.length === 0 && !reply.hasMedia) {
+        return;
+      }
+      emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.assistantResponseObserved);
+    };
+    const emitDeliveryRuntimeProofFromLaneResult = (result: LaneDeliveryResult) => {
+      if (isDispatchSuperseded()) {
+        return;
+      }
+      if (result.kind === "sent" || result.kind === "preview-retained") {
+        emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+        return;
+      }
+      if (result.kind === "preview-finalized" && typeof result.delivery.messageId === "number") {
+        emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+      }
     };
     const emitPreviewFinalizedHook = (result: LaneDeliveryResult) => {
       if (isDispatchSuperseded() || result.kind !== "preview-finalized") {
@@ -1105,8 +1185,13 @@ export const dispatchTelegramMessage = async ({
         },
       },
     });
+    const onRuntimeProofModelSelected: typeof onModelSelected = (modelContext) => {
+      onModelSelected?.(modelContext);
+      emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.modelInvocationStarted);
+    };
 
     try {
+      emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.inboundAccepted);
       const turnResult = await runInboundReplyTurn({
         channel: "telegram",
         accountId: route.accountId,
@@ -1142,6 +1227,7 @@ export const dispatchTelegramMessage = async ({
                     if (payload.isError === true) {
                       hadErrorReplyFailureOrSkip = true;
                     }
+                    emitAssistantRuntimeProofIfFinal(payload, info);
                     if (info.kind === "final") {
                       await enqueueDraftLaneEvent(async () => {});
                     }
@@ -1216,6 +1302,7 @@ export const dispatchTelegramMessage = async ({
                             });
                       if (info.kind === "final") {
                         emitPreviewFinalizedHook(result);
+                        emitDeliveryRuntimeProofFromLaneResult(result);
                       }
                       if (segment.lane === "reasoning") {
                         if (result.kind !== "skipped") {
@@ -1235,9 +1322,12 @@ export const dispatchTelegramMessage = async ({
                       if (reply.hasMedia) {
                         const payloadWithoutSuppressedReasoning =
                           typeof payload.text === "string" ? { ...payload, text: "" } : payload;
-                        await sendPayload(payloadWithoutSuppressedReasoning, {
+                        const delivered = await sendPayload(payloadWithoutSuppressedReasoning, {
                           durable: info.kind === "final",
                         });
+                        if (delivered && info.kind === "final") {
+                          emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+                        }
                       }
                       if (info.kind === "final") {
                         await flushBufferedFinalAnswer();
@@ -1257,7 +1347,12 @@ export const dispatchTelegramMessage = async ({
                       }
                       return;
                     }
-                    await sendPayload(payload, { durable: info.kind === "final" });
+                    const delivered = await sendPayload(payload, {
+                      durable: info.kind === "final",
+                    });
+                    if (delivered && info.kind === "final") {
+                      emitRuntimeProof(TELEGRAM_RUNTIME_PROOF_KINDS.telegramDeliveryObserved);
+                    }
                     if (info.kind === "final") {
                       await flushBufferedFinalAnswer();
                     }
@@ -1447,7 +1542,7 @@ export const dispatchTelegramMessage = async ({
                         await statusReactionController.setThinking();
                       }
                     : undefined,
-                  onModelSelected,
+                  onModelSelected: onRuntimeProofModelSelected,
                 },
               }),
           }),

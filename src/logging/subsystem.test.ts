@@ -262,6 +262,23 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(written).toContain("sk-raw…3456");
   });
 
+  it("keeps raw subsystem proof marker parseable in file logs", () => {
+    const logFile = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+    const log = createSubsystemLogger("telegram/runtime-proof");
+    const marker =
+      'telegram_runtime_proof {"event":"inbound_accepted","kind":"inbound_accepted","type":"inbound_accepted","proofEvent":"telegram_runtime_proof","status":"observed","runId":"RUN-1234"}';
+
+    log.raw(marker);
+
+    const written = fs.readFileSync(logFile, "utf8");
+    const record = JSON.parse(written.trim());
+    expect(record.message).toBe(marker);
+    const match = String(record.message).match(/telegram_runtime_proof\s+(\{.*\})/u);
+    expect(match?.[1]).toBeDefined();
+    expect(JSON.parse(match![1]).kind).toBe("inbound_accepted");
+  });
+
   it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
     const logDir = path.dirname(logPathTracker.nextPath());
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
