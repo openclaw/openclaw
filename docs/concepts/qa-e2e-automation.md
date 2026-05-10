@@ -572,8 +572,14 @@ Telegram, Discord, Slack, and WhatsApp lanes can lease credentials from a shared
 Payload shapes the broker validates on `admin/add`:
 
 - Telegram (`kind: "telegram"`): `{ groupId: string, driverToken: string, sutToken: string }` - `groupId` must be a numeric chat-id string.
+- Telegram real user (`kind: "telegram-user"`): `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }` - one exclusive burner-account lease used by both the TDLib CLI driver and Telegram Desktop visual witness.
 - Discord (`kind: "discord"`): `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string }`.
 - WhatsApp (`kind: "whatsapp"`): `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }` - phone numbers must be distinct E.164 strings.
+
+For visual real-user Telegram proof, prefer `pnpm qa:telegram-user:crabbox -- --text /status`.
+It uses one Convex `telegram-user` lease for both the TDLib CLI driver and the
+Telegram Desktop witness, captures a Crabbox recording plus motion-trimmed
+video/GIF artifacts, and releases the lease on shutdown.
 
 Slack lanes can also use the pool. Slack payload shape checks currently live in the Slack QA runner rather than the broker; use `{ channelId: string, driverBotToken: string, sutBotToken: string, sutAppToken: string }`, with a Slack channel id like `Cxxxxxxxxxx`. See [Setting up the Slack workspace](#setting-up-the-slack-workspace) for app and scope provisioning.
 

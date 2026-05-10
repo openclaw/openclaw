@@ -404,6 +404,9 @@ Default endpoint contract (`OPENCLAW_QA_CONVEX_SITE_URL` + `/qa-credentials/v1`)
   - Request: `{ kind, ownerId, actorRole, leaseTtlMs, heartbeatIntervalMs }`
   - Success: `{ status: "ok", credentialId, leaseToken, payload, leaseTtlMs?, heartbeatIntervalMs? }`
   - Exhausted/retryable: `{ status: "error", code: "POOL_EXHAUSTED" | "NO_CREDENTIAL_AVAILABLE", ... }`
+- `POST /payload-chunk`
+  - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, index }`
+  - Success: `{ status: "ok", index, data }`
 - `POST /heartbeat`
   - Request: `{ kind, ownerId, actorRole, credentialId, leaseToken, leaseTtlMs }`
   - Success: `{ status: "ok" }` (or empty `2xx`)
@@ -426,6 +429,46 @@ Payload shape for Telegram kind:
 - `{ groupId: string, driverToken: string, sutToken: string }`
 - `groupId` must be a numeric Telegram chat id string.
 - `admin/add` validates this shape for `kind: "telegram"` and rejects malformed payloads.
+
+Payload shape for Telegram real-user kind:
+
+- `{ groupId: string, sutToken: string, testerUserId: string, testerUsername: string, telegramApiId: string, telegramApiHash: string, tdlibDatabaseEncryptionKey: string, tdlibArchiveBase64: string, tdlibArchiveSha256: string, desktopTdataArchiveBase64: string, desktopTdataArchiveSha256: string }`
+- `groupId`, `testerUserId`, and `telegramApiId` must be numeric strings.
+- `tdlibArchiveSha256` and `desktopTdataArchiveSha256` must be SHA-256 hex strings.
+- `kind: "telegram-user"` represents one Telegram burner account. Treat the lease as account-wide: the TDLib CLI driver and Telegram Desktop visual witness restore from the same payload, and only one job should hold the lease at a time.
+
+Telegram real-user lease restore:
+
+```bash
+tmp=$(mktemp -d /tmp/openclaw-telegram-user.XXXXXX)
+node --import tsx scripts/e2e/telegram-user-credential.ts lease-restore \
+  --user-driver-dir "$tmp/user-driver" \
+  --desktop-workdir "$tmp/desktop" \
+  --lease-file "$tmp/lease.json"
+TELEGRAM_USER_DRIVER_STATE_DIR="$tmp/user-driver" \
+  uv run ~/.codex/skills/custom/telegram-e2e-bot-to-bot/scripts/user-driver.py status --json
+node --import tsx scripts/e2e/telegram-user-credential.ts release --lease-file "$tmp/lease.json"
+```
+
+Use the restored Desktop profile with `Telegram -workdir "$tmp/desktop"` when a visual recording is needed. In local operator environments, `scripts/e2e/telegram-user-credential.ts` reads `~/.codex/skills/custom/telegram-e2e-bot-to-bot/convex.local.env` by default if process env vars are absent.
+
+One-command Crabbox proof:
+
+```bash
+pnpm qa:telegram-user:crabbox -- --text /status
+```
+
+That command leases the `telegram-user` credential, restores the same account
+into TDLib and Telegram Desktop on a Crabbox Linux desktop, starts a local mock
+SUT gateway from the current checkout, sends the command as the real QA user,
+records the visible Telegram Desktop session, trims the recording to the motion
+window, writes artifacts under `.artifacts/qa-e2e/telegram-user-crabbox/`, then
+releases the credential and stops the box. Use `--id <cbx_...>` to reuse a warm
+desktop lease, `--keep-box` to keep VNC open after failure,
+`--desktop-chat-title <name>` to pick the visible chat, and `--tdlib-url <tgz>`
+when using a prebaked Linux `libtdjson.so` archive instead of building TDLib on
+a fresh box. The runner verifies `--tdlib-url` with `--tdlib-sha256 <hex>` or,
+by default, a sibling `<url>.sha256` file.
 
 Broker-validated multi-channel payloads:
 

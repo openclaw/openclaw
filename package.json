@@ -1506,6 +1506,7 @@
     "qa:lab:up:fast": "node --import tsx scripts/qa-lab-up.ts --use-prebuilt-image --bind-ui-dist --skip-ui-build",
     "qa:lab:watch": "vite build --watch --config extensions/qa-lab/web/vite.config.ts",
     "qa:otel:smoke": "node --import tsx scripts/qa-otel-smoke.ts",
+    "qa:telegram-user:crabbox": "node --import tsx scripts/e2e/telegram-user-crabbox-proof.ts",
     "release-metadata:check": "node scripts/check-release-metadata-only.mjs",
     "release:beta-smoke": "node --import tsx scripts/release-beta-smoke.ts",
     "release:check": "pnpm release:generated:check && node --import tsx scripts/release-check.ts",
