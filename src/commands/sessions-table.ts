@@ -25,6 +25,16 @@ export type SessionDisplayRow = {
   providerOverride?: string;
   modelOverride?: string;
   contextTokens?: number;
+  spawnedBy?: string;
+  spawnDepth?: number;
+  sessionFile?: string;
+  label?: string;
+  status?: "running" | "done" | "failed" | "killed" | "timeout";
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
+  startedAt?: number;
+  endedAt?: number;
+  runtimeMs?: number;
 };
 
 export const SESSION_KEY_PAD = 26;
@@ -56,6 +66,16 @@ export function toSessionDisplayRow(key: string, entry: SessionEntry): SessionDi
     providerOverride: entry?.providerOverride,
     modelOverride: entry?.modelOverride,
     contextTokens: entry?.contextTokens,
+    spawnedBy: entry?.spawnedBy,
+    spawnDepth: entry?.spawnDepth,
+    sessionFile: entry?.sessionFile,
+    label: entry?.label,
+    status: entry?.status,
+    sessionStartedAt: entry?.sessionStartedAt,
+    lastInteractionAt: entry?.lastInteractionAt,
+    startedAt: entry?.startedAt,
+    endedAt: entry?.endedAt,
+    runtimeMs: entry?.runtimeMs,
   };
 }
 
