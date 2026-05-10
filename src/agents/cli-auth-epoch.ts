@@ -179,21 +179,30 @@ export async function resolveCliAuthEpoch(params: {
   const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
-  if (params.skipLocalCredential !== true) {
-    const localFingerprint = getLocalCliCredentialFingerprint(provider);
-    if (localFingerprint) {
-      parts.push(`local:${provider}:${localFingerprint}`);
-    }
-  }
-
+  // Resolve auth-profile credential first. When it is present it is the
+  // canonical identity source and the local CLI credential file is not
+  // included in the epoch hash. The local file's *presence* on disk can
+  // flip independently of the OAuth identity (e.g. `claude` writes
+  // ~/.claude/.credentials.json while the keychain entry is unchanged),
+  // causing a spurious epoch change that invalidates every live CLI session
+  // even though the user has not re-authed. Only fall back to the local
+  // fingerprint when no auth-profile credential is available (bootstrap case).
+  let profileCredential: ReturnType<typeof getAuthProfileCredential>;
   if (authProfileId) {
     const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
       readOnly: true,
       allowKeychainPrompt: false,
     });
-    const credential = getAuthProfileCredential(store, authProfileId);
-    if (credential) {
-      parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
+    profileCredential = getAuthProfileCredential(store, authProfileId);
+    if (profileCredential) {
+      parts.push(encodeAuthProfileEpochPart(authProfileId, profileCredential));
+    }
+  }
+
+  if (params.skipLocalCredential !== true && !profileCredential) {
+    const localFingerprint = getLocalCliCredentialFingerprint(provider);
+    if (localFingerprint) {
+      parts.push(`local:${provider}:${localFingerprint}`);
     }
   }
 

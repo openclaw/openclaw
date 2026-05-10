@@ -316,20 +316,24 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).not.toBe(first);
   });
 
-  it("mixes local codex and auth-profile state", async () => {
-    let access = "local-access-a";
+  it("profile credential is canonical when present — local codex state does not affect epoch", async () => {
+    // When authProfileId resolves to a profile credential, the local CLI credential
+    // is excluded from the epoch entirely. Only profile identity fields (email,
+    // accountId) shift the epoch; local token rotation and local identity changes
+    // are irrelevant once the profile is the canonical source.
+    let localAccess = "local-access-a";
     let localRefresh = "local-refresh-a";
-    let refresh = "profile-refresh-a";
-    let accountId = "acct-1";
+    let localAccountId = "acct-local-1";
+    let profileRefresh = "profile-refresh-a";
     let email = "user-a@example.com";
     setCliAuthEpochTestDeps({
       readCodexCliCredentialsCached: () => ({
         type: "oauth",
         provider: "openai-codex",
-        access,
+        access: localAccess,
         refresh: localRefresh,
         expires: 1,
-        accountId,
+        accountId: localAccountId,
       }),
       loadAuthProfileStoreForRuntime: () => ({
         version: 1,
@@ -338,7 +342,7 @@ describe("resolveCliAuthEpoch", () => {
             type: "oauth",
             provider: "openai",
             access: "profile-access",
-            refresh,
+            refresh: profileRefresh,
             expires: 1,
             email,
           },
@@ -350,7 +354,8 @@ describe("resolveCliAuthEpoch", () => {
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
-    access = "local-access-b";
+    // Local token rotation — must not affect epoch
+    localAccess = "local-access-b";
     const second = await resolveCliAuthEpoch({
       provider: "codex-cli",
       authProfileId: "openai:work",
@@ -360,16 +365,19 @@ describe("resolveCliAuthEpoch", () => {
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
-    refresh = "profile-refresh-b";
+    // Local accountId change — must not affect epoch (local is excluded)
+    localAccountId = "acct-local-2";
     const fourth = await resolveCliAuthEpoch({
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
-    accountId = "acct-2";
+    // Profile refresh rotation — must not affect epoch (non-identity field)
+    profileRefresh = "profile-refresh-b";
     const fifth = await resolveCliAuthEpoch({
       provider: "codex-cli",
       authProfileId: "openai:work",
     });
+    // Profile email change — MUST shift epoch
     email = "user-b@example.com";
     const sixth = await resolveCliAuthEpoch({
       provider: "codex-cli",
@@ -380,9 +388,8 @@ describe("resolveCliAuthEpoch", () => {
     expect(second).toBe(first);
     expect(third).toBe(second);
     expect(fourth).toBe(third);
-    expectCliAuthEpoch(fifth);
+    expect(fifth).toBe(fourth);
     expectCliAuthEpoch(sixth);
-    expect(fifth).not.toBe(fourth);
     expect(sixth).not.toBe(fifth);
   });
 
@@ -443,6 +450,92 @@ describe("resolveCliAuthEpoch", () => {
     expect(third).toBe(second);
     expectCliAuthEpoch(fourth);
     expect(fourth).not.toBe(third);
+  });
+
+  it("keeps epoch stable when local credential file flips while auth-profile credential is present", async () => {
+    // Regression for #80178: when claude writes ~/.claude/.credentials.json during
+    // a background refresh, the local file presence flipped, causing a spurious epoch
+    // change that invalidated every live CLI session. The profile credential is the
+    // canonical identity; local file is only used in the bootstrap (no-profile) case.
+    let localCredential: {
+      type: "oauth";
+      provider: "anthropic";
+      access: string;
+      refresh: string;
+      expires: number;
+    } | null = {
+      type: "oauth",
+      provider: "anthropic",
+      access: "local-access",
+      refresh: "local-refresh",
+      expires: 1,
+    };
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "anthropic:work": {
+          type: "oauth",
+          provider: "anthropic",
+          access: "profile-access",
+          refresh: "profile-refresh",
+          expires: 1,
+          email: "user@example.com",
+        },
+      },
+    };
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => localCredential,
+      loadAuthProfileStoreForRuntime: () => store,
+    });
+
+    const withLocal = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:work",
+    });
+    // Simulate local file disappearing (e.g. credential rotation in progress)
+    localCredential = null;
+    const withoutLocal = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:work",
+    });
+
+    expectCliAuthEpoch(withLocal);
+    // Local file presence must not affect epoch when profile credential is present
+    expect(withoutLocal).toBe(withLocal);
+  });
+
+  it("falls back to local credential fingerprint when no auth-profile credential exists", async () => {
+    // Bootstrap case: auth profile store exists but profile is not yet populated.
+    // Local credential must still be used to form the epoch.
+    let access = "local-access-a";
+    setCliAuthEpochTestDeps({
+      readClaudeCliCredentialsCached: () => ({
+        type: "oauth",
+        provider: "anthropic",
+        access,
+        refresh: "local-refresh",
+        expires: 1,
+      }),
+      loadAuthProfileStoreForRuntime: () => ({
+        version: 1,
+        profiles: {},
+      }),
+    });
+
+    const first = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:work",
+    });
+    expectCliAuthEpoch(first);
+
+    // When no profile credential is present, local credential is the epoch source.
+    // But token rotation (access/refresh only) should not shift it for oauth.
+    access = "local-access-b";
+    const second = await resolveCliAuthEpoch({
+      provider: "claude-cli",
+      authProfileId: "anthropic:work",
+    });
+    expect(second).toBe(first);
   });
 
   it("uses non-prompting Codex CLI credential reads for epoch fingerprints", async () => {
