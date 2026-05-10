@@ -18,6 +18,11 @@ export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
   sourceMessage: Message;
 };
 
+export type TelegramConversationContextNode = {
+  node: TelegramCachedMessageNode;
+  isReplyTarget?: boolean;
+};
+
 export type TelegramMessageCache = {
   record: (params: {
     accountId: string;
@@ -425,4 +430,81 @@ export function buildTelegramReplyChain(params: {
   }
 
   return chain;
+}
+
+export function buildTelegramConversationContext(params: {
+  cache: TelegramMessageCache;
+  accountId: string;
+  chatId: string | number;
+  messageId?: string;
+  threadId?: number;
+  replyChainNodes: TelegramCachedMessageNode[];
+  recentLimit: number;
+  replyTargetWindowSize: number;
+}): TelegramConversationContextNode[] {
+  const selected = new Map<string, TelegramConversationContextNode>();
+  const replyTargetIds = new Set<string>();
+  const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
+    if (!node.messageId || node.messageId === params.messageId) {
+      return;
+    }
+    const existing = selected.get(node.messageId);
+    const isReplyTarget = existing?.isReplyTarget === true || flags?.replyTarget === true;
+    selected.set(node.messageId, {
+      node: existing?.node ?? node,
+      isReplyTarget: isReplyTarget ? true : undefined,
+    });
+  };
+  const addReplyTargetWindow = (messageId: string) => {
+    replyTargetIds.add(messageId);
+    for (const node of params.cache.around({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+      before: params.replyTargetWindowSize,
+      after: params.replyTargetWindowSize,
+    })) {
+      addNode(node, { replyTarget: node.messageId === messageId });
+    }
+  };
+
+  const currentWindow = params.cache.recentBefore({
+    accountId: params.accountId,
+    chatId: params.chatId,
+    messageId: params.messageId,
+    ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
+    limit: params.recentLimit,
+  });
+  for (const node of currentWindow) {
+    addNode(node);
+    if (node.replyToId) {
+      addReplyTargetWindow(node.replyToId);
+    }
+  }
+
+  params.replyChainNodes.forEach((node, index) => {
+    addNode(node, { replyTarget: index === 0 });
+    if (index === 0 && node.messageId) {
+      addReplyTargetWindow(node.messageId);
+    }
+    if (node.replyToId) {
+      replyTargetIds.add(node.replyToId);
+    }
+  });
+
+  for (const messageId of replyTargetIds) {
+    const node = params.cache.get({
+      accountId: params.accountId,
+      chatId: params.chatId,
+      messageId,
+    });
+    if (node) {
+      addNode(node, { replyTarget: true });
+    }
+  }
+
+  return Array.from(selected.values()).toSorted((left, right) =>
+    compareCachedMessageNodes(left.node, right.node),
+  );
 }

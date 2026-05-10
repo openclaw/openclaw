@@ -137,13 +137,15 @@ describe("openshell backend manager", () => {
       actualConfigLabel: "custom-source",
       configLabelMatch: true,
     });
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "openshell",
+      from: "custom-source",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-1234",
-        config: expect.objectContaining({
-          from: "custom-source",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "get", "openclaw-session-1234"],
     });
   });
@@ -176,14 +178,15 @@ describe("openshell backend manager", () => {
       config: {},
     });
 
+    const expectedConfig = resolveOpenShellPluginConfig({
+      command: "/usr/local/bin/openshell",
+      gateway: "lab",
+    });
     expect(cliMocks.runOpenShellCli).toHaveBeenCalledWith({
-      context: expect.objectContaining({
+      context: {
         sandboxName: "openclaw-session-5678",
-        config: expect.objectContaining({
-          command: "/usr/local/bin/openshell",
-          gateway: "lab",
-        }),
-      }),
+        config: expectedConfig,
+      },
       args: ["sandbox", "delete", "openclaw-session-5678"],
     });
   });

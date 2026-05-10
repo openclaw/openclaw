@@ -29,7 +29,7 @@ import type {
   OpenClawConfig,
   ReplyToMode,
   TelegramAccountConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { runInboundReplyTurn } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import {

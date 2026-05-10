@@ -120,7 +120,7 @@ describe("docker build helper", () => {
     const openWebUiRunner = readFileSync(OPENWEBUI_DOCKER_E2E_PATH, "utf8");
 
     expect(scenarios).toContain(
-      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=1500 OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=300 pnpm test:install:e2e"',
+      '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=openai OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-openai:local OPENCLAW_INSTALL_E2E_AGENT_TOOL_SMOKE=0 OPENCLAW_INSTALL_E2E_OPENAI_MODEL=openai/gpt-5.4-mini OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS=120 OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS=120 pnpm test:install:e2e"',
     );
     expect(scenarios).toContain(
       '"OPENCLAW_INSTALL_TAG=beta OPENCLAW_E2E_MODELS=anthropic OPENCLAW_INSTALL_E2E_IMAGE=openclaw-install-e2e-anthropic:local pnpm test:install:e2e"',
@@ -145,14 +145,18 @@ describe("docker build helper", () => {
     expect(runner).toContain("phase_mark_start");
     expect(runner).toContain("run_agent_turn_bg");
     expect(runner).toContain("wait_agent_turn_batch");
-    expect(runner).toContain('run_agent_turn_bg "read proof"');
+    expect(runner).not.toContain('run_agent_turn_bg "read proof"');
     expect(runner).toContain('run_agent_turn_bg "image write"');
     expect(runner).toContain('run_agent_turn_logged "read proof copy"');
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURNS_PARALLEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
+    expect(wrapper).toContain("OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_MODEL");
     expect(runner).toContain("OPENCLAW_INSTALL_E2E_OPENAI_PROVIDER_TIMEOUT_SECONDS");
+    expect(runner).toContain(
+      'AGENT_TURN_TIMEOUT_SECONDS="${OPENCLAW_INSTALL_E2E_AGENT_TURN_TIMEOUT_SECONDS:-300}"',
+    );
   });
 
   it("keeps package acceptance plugin coverage offline-capable", () => {
@@ -265,7 +269,7 @@ describe("docker build helper", () => {
     const runner = readFileSync(INSTALL_E2E_RUNNER_PATH, "utf8");
 
     expect(runner).toContain('SESSION_ID_PREFIX="e2e-tools-${profile}"');
-    expect(runner).toContain('TURN1_SESSION_ID="${SESSION_ID_PREFIX}-read-proof"');
+    expect(runner).toContain('TURN2B_SESSION_ID="${SESSION_ID_PREFIX}-read-copy"');
     expect(runner).toContain('TURN3_SESSION_ID="${SESSION_ID_PREFIX}-exec-hostname"');
     expect(runner).toContain('TURN4_SESSION_ID="${SESSION_ID_PREFIX}-image-write"');
   });

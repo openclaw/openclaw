@@ -136,7 +136,7 @@ const CODEX_WORKSPACE_BOOTSTRAP_INSTRUCTIONS = [
   "# Project Context",
   "",
   "The following project context files have been loaded:",
-  "If SOUL.md is present, embody its persona and tone. Avoid stiff, generic replies; follow its guidance unless higher-priority instructions override it.",
+  "SOUL.md: persona/tone. Follow it unless higher-priority instructions override.",
   "",
   ...CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.flatMap((file) => [
     `## ${file.path}`,

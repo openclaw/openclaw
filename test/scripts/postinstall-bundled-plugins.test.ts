@@ -63,7 +63,6 @@ async function writeBaileysMediaFile(packageRoot: string, text: string) {
   const mediaFile = path.join(
     packageRoot,
     "node_modules",
-    "@whiskeysockets",
     "baileys",
     "lib",
     "Utils",

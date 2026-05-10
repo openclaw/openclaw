@@ -409,6 +409,18 @@ export const FIELD_HELP: Record<string, string> = {
     "Experimental built-in tool flags. Keep these off by default and enable only when you are intentionally testing a preview surface.",
   "tools.experimental.planTool":
     "Enable the experimental structured `update_plan` tool for non-trivial multi-step work tracking. Leave this off unless you explicitly want the tool outside strict-agentic embedded Pi runs.",
+  "tools.toolSearch":
+    "Compact large OpenClaw, MCP, and client tool catalogs behind one search/call surface. Set to true for the default code bridge or use the object form to choose the structured fallback.",
+  "tools.toolSearch.enabled":
+    "Enables Tool Search. When on, OpenClaw hides large tool catalogs behind `tool_search_code` or structured search/describe/call tools during PI runs.",
+  "tools.toolSearch.mode":
+    'Choose the model-facing surface: "code" exposes `tool_search_code`; "tools" exposes structured search/describe/call fallback tools.',
+  "tools.toolSearch.codeTimeoutMs":
+    "Maximum milliseconds for one `tool_search_code` execution. Runtime clamps values to the supported 1s..60s range.",
+  "tools.toolSearch.searchDefaultLimit":
+    "Default number of Tool Search results returned when the model omits a limit. Runtime clamps this to `maxSearchLimit`.",
+  "tools.toolSearch.maxSearchLimit":
+    "Maximum number of Tool Search results a model can request. Runtime clamps values to the supported 1..50 range.",
   "tools.elevated":
     "Elevated tool access controls for privileged command surfaces that should only be reachable from trusted senders. Keep disabled unless operator workflows explicitly require elevated actions.",
   "tools.elevated.enabled":
@@ -905,6 +917,21 @@ export const FIELD_HELP: Record<string, string> = {
     "Optional low-level agent runtime policy for this provider. Use provider/model runtime policy instead of agent-wide runtime pins; omitted/default lets OpenClaw choose the runtime for the selected provider.",
   "models.providers.*.agentRuntime.id":
     'Provider agent runtime id: "pi", "auto", a registered plugin harness id such as "codex", or a supported CLI backend alias such as "claude-cli". OpenAI on the official endpoint defaults to the Codex harness when omitted.',
+  "models.providers.*.localService":
+    "Optional on-demand local model server process for this provider. OpenClaw probes healthUrl, starts the command when needed, waits for readiness, and then sends the model request.",
+  "models.providers.*.localService.command":
+    "Absolute executable path for the local model server process. Keep this path explicit so provider startup is deterministic and does not depend on shell PATH lookup.",
+  "models.providers.*.localService.args":
+    "Argument list passed to the local model server command without shell expansion.",
+  "models.providers.*.localService.cwd": "Working directory for the local model server process.",
+  "models.providers.*.localService.env":
+    "Additional environment variables for the local model server process. Values that look secret are redacted from config snapshots.",
+  "models.providers.*.localService.healthUrl":
+    "Readiness URL probed before model requests. If omitted, OpenClaw uses the provider baseUrl with /models appended.",
+  "models.providers.*.localService.readyTimeoutMs":
+    "Maximum milliseconds to wait for the local model server readiness probe after starting the process.",
+  "models.providers.*.localService.idleStopMs":
+    "Milliseconds to keep an OpenClaw-started local model server alive after the last request finishes. Set 0 to keep it alive until OpenClaw exits.",
   "models.providers.*.request":
     "Optional request overrides for model-provider requests, including extra headers, auth overrides, proxy routing, TLS client settings, and optional allowPrivateNetwork for trusted self-hosted endpoints. Use these only when your upstream or enterprise network path requires transport customization.",
   "models.providers.*.request.headers":

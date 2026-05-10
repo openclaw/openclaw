@@ -13,13 +13,13 @@ type RootPackageJson = {
 
 type WorkspaceConfig = PnpmBuildConfig;
 
-function readJson<T>(filePath: string): T {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as T;
+function readJson(filePath: string): unknown {
+  return JSON.parse(fs.readFileSync(filePath, "utf8")) as unknown;
 }
 
 describe("package manager build policy", () => {
   it("keeps optional native Discord opus builds disabled by default", () => {
-    const packageJson = readJson<RootPackageJson>("package.json");
+    const packageJson = readJson("package.json") as RootPackageJson;
     const workspace = parse(fs.readFileSync("pnpm-workspace.yaml", "utf8")) as WorkspaceConfig;
 
     for (const config of [packageJson.pnpm, workspace]) {

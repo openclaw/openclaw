@@ -235,18 +235,24 @@ describe("GatewayPlugin", () => {
     gateway.send(presenceUpdate(PresenceUpdateStatus.Idle));
 
     expect(send).toHaveBeenCalledTimes(120);
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ remainingEvents: 0, currentEventCount: 120, queuedEvents: 1 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 120,
+      queuedEvents: 1,
+    });
 
     vi.advanceTimersByTime(59_999);
     expect(send).toHaveBeenCalledTimes(120);
 
     vi.advanceTimersByTime(1);
     expect(send).toHaveBeenCalledTimes(121);
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ currentEventCount: 1, queuedEvents: 0 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 119,
+      resetTime: 120_000,
+      currentEventCount: 1,
+      queuedEvents: 0,
+    });
   });
 
   it("sends critical gateway events immediately even when regular sends are queued", () => {
@@ -266,9 +272,12 @@ describe("GatewayPlugin", () => {
       op: GatewayOpcodes.Heartbeat,
       d: 1,
     });
-    expect(gateway.getRateLimitStatus()).toEqual(
-      expect.objectContaining({ remainingEvents: 0, queuedEvents: 1 }),
-    );
+    expect(gateway.getRateLimitStatus()).toEqual({
+      remainingEvents: 0,
+      resetTime: 60_000,
+      currentEventCount: 121,
+      queuedEvents: 1,
+    });
   });
 
   it("rejects gateway payloads that exceed Discord's size limit", () => {

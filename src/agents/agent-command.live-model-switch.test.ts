@@ -241,6 +241,7 @@ vi.mock("../sessions/level-overrides.js", () => ({
 
 vi.mock("../sessions/model-overrides.js", () => ({
   applyModelOverrideToSessionEntry: () => ({ updated: false }),
+  repairProviderWrappedModelOverride: () => ({ updated: false }),
 }));
 
 vi.mock("../sessions/send-policy.js", () => ({

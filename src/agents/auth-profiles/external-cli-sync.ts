@@ -13,6 +13,7 @@ import {
 import { log } from "./constants.js";
 import {
   areOAuthCredentialsEquivalent,
+  hasUsableOAuthCredential,
   isSafeToAdoptBootstrapOAuthIdentity,
   shouldBootstrapFromExternalCliCredential,
 } from "./oauth-shared.js";
@@ -30,6 +31,7 @@ export {
 export type ExternalCliResolvedProfile = {
   profileId: string;
   credential: OAuthCredential;
+  persistence?: "runtime-only" | "persisted";
 };
 
 export type ExternalCliAuthProfileOptions = {
@@ -232,12 +234,6 @@ export function resolveExternalCliAuthProfiles(
     if (!isExternalCliProviderInScope({ providerConfig, store, options })) {
       continue;
     }
-    const creds = providerConfig.readCredentials({
-      allowKeychainPrompt: options?.allowKeychainPrompt,
-    });
-    if (!creds) {
-      continue;
-    }
     const existing = store.profiles[providerConfig.profileId];
     const existingOAuth =
       existing?.type === "oauth" && existing.provider === providerConfig.provider
@@ -257,6 +253,19 @@ export function resolveExternalCliAuthProfiles(
         profileId: providerConfig.profileId,
         provider: providerConfig.provider,
       });
+      continue;
+    }
+    if (
+      existingOAuth &&
+      !providerConfig.bootstrapOnly &&
+      hasUsableOAuthCredential(existingOAuth, now)
+    ) {
+      continue;
+    }
+    const creds = providerConfig.readCredentials({
+      allowKeychainPrompt: options?.allowKeychainPrompt,
+    });
+    if (!creds) {
       continue;
     }
     if (existingOAuth && !isSafeToUseExternalCliCredential(existingOAuth, creds)) {
@@ -303,6 +312,7 @@ export function resolveExternalCliAuthProfiles(
     profiles.push({
       profileId: providerConfig.profileId,
       credential: creds,
+      persistence: providerConfig.bootstrapOnly ? "runtime-only" : "persisted",
     });
   }
   return profiles;

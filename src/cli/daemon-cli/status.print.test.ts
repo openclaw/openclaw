@@ -290,4 +290,40 @@ describe("printDaemonStatus", () => {
       tlsEnabled: true,
     });
   });
+
+  it("prints deep config warnings", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        config: {
+          cli: {
+            path: "/tmp/openclaw-cli/openclaw.json",
+            exists: true,
+            valid: true,
+            warnings: [
+              {
+                path: "plugins.entries.test-bad-plugin",
+                message:
+                  "plugin test-bad-plugin: channel plugin manifest declares test-bad-plugin without channelConfigs metadata",
+              },
+            ],
+          },
+          mismatch: false,
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Config warnings:"));
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("without channelConfigs metadata"),
+    );
+  });
 });
