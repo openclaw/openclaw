@@ -383,12 +383,13 @@ function applyResumePrompt(params: HandleCommandsParams, content: string): void 
     ].join("\n"),
     MAX_RESUME_CONTEXT_CHARS,
   );
-  params.ctx.Body = prompt;
-  params.ctx.BodyForAgent = prompt;
-  params.ctx.BodyStripped = prompt;
-  params.ctx.RawBody = prompt;
-  params.ctx.CommandBody = prompt;
-  params.ctx.BodyForCommands = prompt;
+  const mutableCtx = params.ctx as Record<string, unknown>;
+  mutableCtx.Body = prompt;
+  mutableCtx.BodyForAgent = prompt;
+  mutableCtx.BodyStripped = prompt;
+  mutableCtx.RawBody = prompt;
+  mutableCtx.CommandBody = prompt;
+  mutableCtx.BodyForCommands = prompt;
 }
 
 export const handleHandoffCommand: CommandHandler = async (params, allowTextCommands) => {

@@ -184,9 +184,10 @@ describe("handleHandoffCommand", () => {
     expect(result?.reply).toBeUndefined();
     expect(params.ctx.BodyForAgent).toContain("<openclaw_handoff_packet>");
     expect(params.ctx.BodyForAgent).toContain("resume this mainline");
-    expect(params.ctx.BodyStripped).toContain("<openclaw_handoff_packet>");
-    expect(params.ctx.BodyStripped).toContain("resume this mainline");
-    expect(params.ctx.BodyStripped).not.toBe("/resume latest");
+    const mutableCtx = params.ctx as Record<string, unknown>;
+    expect(mutableCtx.BodyStripped).toContain("<openclaw_handoff_packet>");
+    expect(mutableCtx.BodyStripped).toContain("resume this mainline");
+    expect(mutableCtx.BodyStripped).not.toBe("/resume latest");
   });
 
   it("does not resume when no scoped handoff exists", async () => {
