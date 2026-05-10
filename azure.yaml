@@ -19,6 +19,18 @@ services:
     uses:
       - postgres
       - keyvault
+  harvester:
+    project: .
+    language: docker
+    host: containerapp
+    resourceName: ${SERVICE_HARVESTER_RESOURCE_NAME}
+    docker:
+      path: ./infra/images/harvester/Dockerfile
+      context: .
+      remoteBuild: false
+    uses:
+      - postgres
+      - keyvault
   alpa-engine:
     project: ./infra/images/alpa-engine
     language: docker

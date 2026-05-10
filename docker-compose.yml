@@ -1,103 +1,69 @@
-services:
-  openclaw-gateway:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
-      # Empty means auto: Bonjour disables itself in detected containers.
-      # Set 0 only on host/macvlan/mDNS-capable networks; set 1 to force off.
-      OPENCLAW_DISABLE_BONJOUR: ${OPENCLAW_DISABLE_BONJOUR:-}
-      # OpenTelemetry export is outbound OTLP/HTTP from the Gateway. Prometheus
-      # uses the existing authenticated Gateway route; it does not need a port.
-      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_TRACES_ENDPOINT: ${OTEL_EXPORTER_OTLP_TRACES_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_METRICS_ENDPOINT: ${OTEL_EXPORTER_OTLP_METRICS_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_LOGS_ENDPOINT: ${OTEL_EXPORTER_OTLP_LOGS_ENDPOINT:-}
-      OTEL_EXPORTER_OTLP_PROTOCOL: ${OTEL_EXPORTER_OTLP_PROTOCOL:-http/protobuf}
-      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME:-}
-      OTEL_SEMCONV_STABILITY_OPT_IN: ${OTEL_SEMCONV_STABILITY_OPT_IN:-}
-      OPENCLAW_OTEL_PRELOADED: ${OPENCLAW_OTEL_PRELOADED:-}
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
-      TZ: ${OPENCLAW_TZ:-UTC}
-    volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
-      ## Uncomment the lines below to enable sandbox isolation
-      ## (agents.defaults.sandbox). Requires Docker CLI in the image
-      ## (build with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1) or use
-      ## scripts/docker/setup.sh with OPENCLAW_SANDBOX=1 for automated setup.
-      ## Set DOCKER_GID to the host's docker group GID (run: stat -c '%g' /var/run/docker.sock).
-      # - /var/run/docker.sock:/var/run/docker.sock
-    # group_add:
-    #   - "${DOCKER_GID:-999}"
-    # Let bundled local-model providers reach host-side LM Studio/Ollama via
-    # http://host.docker.internal:<port>. Docker Desktop usually provides this
-    # alias; the host-gateway mapping makes it work on Linux Docker Engine too.
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    ports:
-      - "${OPENCLAW_GATEWAY_PORT:-18789}:18789"
-      - "${OPENCLAW_BRIDGE_PORT:-18790}:18790"
-    init: true
-    restart: unless-stopped
-    command:
-      [
-        "node",
-        "dist/index.js",
-        "gateway",
-        "--bind",
-        "${OPENCLAW_GATEWAY_BIND:-lan}",
-        "--port",
-        "18789",
-      ]
-    healthcheck:
-      test:
-        [
-          "CMD",
-          "node",
-          "-e",
-          "fetch('http://127.0.0.1:18789/healthz').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
-        ]
-      interval: 30s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
+version: '3.8'
 
-  openclaw-cli:
-    image: ${OPENCLAW_IMAGE:-openclaw:local}
-    network_mode: "service:openclaw-gateway"
-    cap_drop:
-      - NET_RAW
-      - NET_ADMIN
-    security_opt:
-      - no-new-privileges:true
+services:
+  # ALPHABET KJARNINN (Harvester Engine með 15 workers!)
+  alpacore:
+    image: node:18-alpine
+    container_name: alpa-engine
+    working_dir: /app
+    command: sh -c "cp harvester-package.json package.json && npm install --production && node harvester-server.mjs"
+    ports:
+      - "8080:8080"
+      - "5143:5143"
     environment:
-      HOME: /home/node
-      TERM: xterm-256color
-      OPENCLAW_GATEWAY_TOKEN: ${OPENCLAW_GATEWAY_TOKEN:-}
-      OPENCLAW_ALLOW_INSECURE_PRIVATE_WS: ${OPENCLAW_ALLOW_INSECURE_PRIVATE_WS:-}
-      BROWSER: echo
-      CLAUDE_AI_SESSION_KEY: ${CLAUDE_AI_SESSION_KEY:-}
-      CLAUDE_WEB_SESSION_KEY: ${CLAUDE_WEB_SESSION_KEY:-}
-      CLAUDE_WEB_COOKIE: ${CLAUDE_WEB_COOKIE:-}
-      OPENCLAW_PLUGIN_STAGE_DIR: /var/lib/openclaw/plugin-runtime-deps
-      TZ: ${OPENCLAW_TZ:-UTC}
+      - HOST=0.0.0.0
+      - HARVESTER_WORKERS=15
+      - HARVESTER_PORT=8080
+      - REVOLUT_SIGNER_BASE_URL=${REVOLUT_SIGNER_BASE_URL:-}
+      - REVOLUT_SIGNER_SERVICE_TOKEN=${REVOLUT_SIGNER_SERVICE_TOKEN:-}
+      - REVOLUT_REFRESH_TOKEN=${REVOLUT_REFRESH_TOKEN:-}
+      - REVOLUT_BASE_URL=${REVOLUT_BASE_URL:-}
+      - REVOLUT_CLIENT_ID=${REVOLUT_CLIENT_ID:-}
+      - SHOPIFY_API_SECRET=${SHOPIFY_API_SECRET:-}
+      - HARVESTER_GITHUB_TOKEN=${HARVESTER_GITHUB_TOKEN:-}
+      - HARVESTER_HF_TOKEN=${HARVESTER_HF_TOKEN:-}
+      - HARVESTER_HUGGINGFACE_TOKEN=${HARVESTER_HUGGINGFACE_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - OPENCLAW_GH_TOKEN=${OPENCLAW_GH_TOKEN:-}
     volumes:
-      - ${OPENCLAW_CONFIG_DIR}:/home/node/.openclaw
-      - ${OPENCLAW_WORKSPACE_DIR}:/home/node/.openclaw/workspace
-      - openclaw-plugin-runtime-deps:/var/lib/openclaw/plugin-runtime-deps
-    stdin_open: true
-    tty: true
-    init: true
-    entrypoint: ["node", "dist/index.js"]
+      - ./harvester-server.mjs:/app/harvester-server.mjs:ro
+      - ./harvester-package.json:/app/harvester-package.json:ro
+      - harvester-node-modules:/app/node_modules
+    networks:
+      - alpa-net
+    restart: always
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+
+  # ALPHABET STJÓRNSTÖÐIN (Control UI á 5173)
+  control-ui:
+    image: node:18-alpine
+    container_name: alpa-control-ui
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      - HOST=0.0.0.0
+      - VITE_API_URL=http://localhost:8080
+    volumes:
+      - ./control-ui:/app
     depends_on:
-      - openclaw-gateway
+      - alpacore
+    networks:
+      - alpa-net
+    restart: always
+
+networks:
+  alpa-net:
+    driver: bridge
 
 volumes:
-  openclaw-plugin-runtime-deps:
+  harvester-node-modules:

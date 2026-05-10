@@ -1,0 +1,1082 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.43.8.12551",
+      "templateHash": "422832566310965132"
+    }
+  },
+  "parameters": {
+    "environmentName": {
+      "type": "string",
+      "metadata": {
+        "description": "Environment name used by Azure Developer CLI."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Primary Azure region for all resources in this deployment."
+      }
+    },
+    "postgresAdminLogin": {
+      "type": "string",
+      "defaultValue": "alpacoreadmin",
+      "metadata": {
+        "description": "Administrator username for Azure Database for PostgreSQL."
+      }
+    },
+    "postgresAdminPassword": {
+      "type": "securestring",
+      "metadata": {
+        "description": "Administrator password for Azure Database for PostgreSQL."
+      }
+    },
+    "postgresDatabaseName": {
+      "type": "string",
+      "defaultValue": "alpacoredb",
+      "metadata": {
+        "description": "Application database name for the AlpaCore services."
+      }
+    },
+    "baseContainerImage": {
+      "type": "string",
+      "defaultValue": "mcr.microsoft.com/azuredocs/containerapps-helloworld:latest",
+      "metadata": {
+        "description": "Fallback image used when a service-specific image is not supplied yet."
+      }
+    },
+    "openClawImage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Built OpenClaw image reference. Leave empty to provision with the fallback image until azd deploy pushes the real image."
+      }
+    },
+    "harvesterImage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Built Alphabet Harvester image reference. Leave empty to provision with the fallback image until azd deploy pushes the real image."
+      }
+    },
+    "alpaEngineImage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Image reference for the AlpaCore Engine workload."
+      }
+    },
+    "alpaCoreServiceImage": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Image reference for the supporting AlpaCore service workload."
+      }
+    },
+    "openWebUiImage": {
+      "type": "string",
+      "defaultValue": "ghcr.io/open-webui/open-webui:main",
+      "metadata": {
+        "description": "Image reference for Open WebUI."
+      }
+    },
+    "externalOllamaUrl": {
+      "type": "string",
+      "defaultValue": "http://replace-me.example.com:11434",
+      "metadata": {
+        "description": "Cloud-reachable Ollama endpoint kept outside Azure Container Apps."
+      }
+    },
+    "openClawGatewayToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shared-secret token for the OpenClaw gateway admin surface."
+      }
+    },
+    "webUiSecretKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Secret key for Open WebUI sessions."
+      }
+    },
+    "openAiApiKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional OpenAI API key used by Open WebUI."
+      }
+    },
+    "shopifyApiSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Shopify webhook secret used to validate direct HMAC deliveries into the Alphabet Harvester."
+      }
+    },
+    "stripeSecretKey": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Stripe secret key written to Key Vault for the Alphabet Harvester runtime."
+      }
+    },
+    "revolutClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Revolut client ID consumed by the AlpaCore Engine."
+      }
+    },
+    "revolutClientSecret": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Revolut client secret consumed by the AlpaCore Engine."
+      }
+    },
+    "telegramBotToken": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional Telegram bot token consumed by the AlpaCore Engine."
+      }
+    },
+    "openClawTimezone": {
+      "type": "string",
+      "defaultValue": "UTC",
+      "metadata": {
+        "description": "Timezone for the OpenClaw gateway container."
+      }
+    },
+    "openClawDisableBonjour": {
+      "type": "string",
+      "defaultValue": "1",
+      "metadata": {
+        "description": "Disable Bonjour in containerized OpenClaw deployments unless a private network explicitly needs it."
+      }
+    }
+  },
+  "variables": {
+    "resourceToken": "[uniqueString(subscription().id, resourceGroup().id, parameters('location'), parameters('environmentName'))]",
+    "commonTags": {
+      "azd-env-name": "[parameters('environmentName')]",
+      "azd-project-name": "openclaw"
+    },
+    "logAnalyticsWorkspaceName": "[format('azlaw{0}', variables('resourceToken'))]",
+    "managedEnvironmentName": "[format('azcae{0}', variables('resourceToken'))]",
+    "containerRegistryName": "[format('azacr{0}', variables('resourceToken'))]",
+    "userAssignedIdentityName": "[format('azid{0}', variables('resourceToken'))]",
+    "keyVaultName": "[format('azkv{0}', variables('resourceToken'))]",
+    "postgresServerName": "[format('azpg{0}', variables('resourceToken'))]",
+    "openClawContainerAppName": "[format('azocg{0}', variables('resourceToken'))]",
+    "harvesterContainerAppName": "[format('azhar{0}', variables('resourceToken'))]",
+    "alpaEngineContainerAppName": "[format('azeng{0}', variables('resourceToken'))]",
+    "alpaCoreServiceContainerAppName": "[format('azsvc{0}', variables('resourceToken'))]",
+    "openWebUiContainerAppName": "[format('azwui{0}', variables('resourceToken'))]",
+    "openClawImageRef": "[if(empty(parameters('openClawImage')), parameters('baseContainerImage'), parameters('openClawImage'))]",
+    "harvesterImageRef": "[if(empty(parameters('harvesterImage')), parameters('baseContainerImage'), parameters('harvesterImage'))]",
+    "alpaEngineImageRef": "[if(empty(parameters('alpaEngineImage')), parameters('baseContainerImage'), parameters('alpaEngineImage'))]",
+    "alpaCoreServiceImageRef": "[if(empty(parameters('alpaCoreServiceImage')), parameters('baseContainerImage'), parameters('alpaCoreServiceImage'))]",
+    "openWebUiImageRef": "[if(empty(parameters('openWebUiImage')), parameters('baseContainerImage'), parameters('openWebUiImage'))]",
+    "openClawSecretDefinitions": "[if(empty(parameters('openClawGatewayToken')), createArray(), createArray(createObject('name', 'openclaw-gateway-token', 'value', parameters('openClawGatewayToken'))))]",
+    "harvesterSecretDefinitions": "[concat(createArray(createObject('name', 'postgres-admin-password', 'value', parameters('postgresAdminPassword'))), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'shopify-api-secret', 'value', parameters('shopifyApiSecret')))))]",
+    "alpaEngineSecretDefinitions": "[concat(createArray(createObject('name', 'postgres-admin-password', 'value', parameters('postgresAdminPassword'))), if(empty(parameters('revolutClientSecret')), createArray(), createArray(createObject('name', 'revolut-client-secret', 'value', parameters('revolutClientSecret')))), if(empty(parameters('telegramBotToken')), createArray(), createArray(createObject('name', 'telegram-bot-token', 'value', parameters('telegramBotToken')))))]",
+    "openWebUiSecretDefinitions": "[concat(if(empty(parameters('webUiSecretKey')), createArray(), createArray(createObject('name', 'webui-secret-key', 'value', parameters('webUiSecretKey')))), if(empty(parameters('openAiApiKey')), createArray(), createArray(createObject('name', 'openai-api-key', 'value', parameters('openAiApiKey')))))]",
+    "openWebUiEnv": "[concat(createArray(createObject('name', 'PORT', 'value', '8080'), createObject('name', 'ENV', 'value', 'prod'), createObject('name', 'OLLAMA_HOST', 'value', parameters('externalOllamaUrl')), createObject('name', 'OLLAMA_BASE_URL', 'value', parameters('externalOllamaUrl')), createObject('name', 'USE_OLLAMA_DOCKER', 'value', 'false'), createObject('name', 'SCARF_NO_ANALYTICS', 'value', 'true'), createObject('name', 'DO_NOT_TRACK', 'value', 'true'), createObject('name', 'ANONYMIZED_TELEMETRY', 'value', 'false')), if(empty(parameters('webUiSecretKey')), createArray(), createArray(createObject('name', 'WEBUI_SECRET_KEY', 'secretRef', 'webui-secret-key'))), if(empty(parameters('openAiApiKey')), createArray(), createArray(createObject('name', 'OPENAI_API_KEY', 'secretRef', 'openai-api-key'))))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('logAnalyticsWorkspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "properties": {
+        "sku": {
+          "name": "PerGB2018"
+        },
+        "retentionInDays": 30,
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        },
+        "publicNetworkAccessForIngestion": "Enabled",
+        "publicNetworkAccessForQuery": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.ContainerRegistry/registries",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('containerRegistryName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "sku": {
+        "name": "Standard"
+      },
+      "properties": {
+        "adminUserEnabled": false,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+      "apiVersion": "2023-01-31",
+      "name": "[variables('userAssignedIdentityName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]"
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('keyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "properties": {
+        "tenantId": "[subscription().tenantId]",
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "enableRbacAuthorization": true,
+        "enablePurgeProtection": true,
+        "publicNetworkAccess": "Enabled",
+        "softDeleteRetentionInDays": 90
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+      "apiVersion": "2024-08-01",
+      "name": "[variables('postgresServerName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "sku": {
+        "name": "Standard_B1ms",
+        "tier": "Burstable"
+      },
+      "properties": {
+        "administratorLogin": "[parameters('postgresAdminLogin')]",
+        "administratorLoginPassword": "[parameters('postgresAdminPassword')]",
+        "version": "17",
+        "storage": {
+          "storageSizeGB": 32
+        },
+        "backup": {
+          "backupRetentionDays": 7,
+          "geoRedundantBackup": "Disabled"
+        },
+        "highAvailability": {
+          "mode": "Disabled"
+        },
+        "network": {
+          "publicNetworkAccess": "Enabled"
+        },
+        "authConfig": {
+          "activeDirectoryAuth": "Disabled",
+          "passwordAuth": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/databases",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('postgresServerName'), parameters('postgresDatabaseName'))]",
+      "properties": {
+        "charset": "UTF8",
+        "collation": "en_US.utf8"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.DBforPostgreSQL/flexibleServers/firewallRules",
+      "apiVersion": "2024-08-01",
+      "name": "[format('{0}/{1}', variables('postgresServerName'), 'allowazureservices')]",
+      "properties": {
+        "startIpAddress": "0.0.0.0",
+        "endIpAddress": "0.0.0.0"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'postgres-admin-password')]",
+      "properties": {
+        "value": "[parameters('postgresAdminPassword')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'postgres-connection-string')]",
+      "properties": {
+        "value": "[format('Host={0};Port=5432;Database={1};Username={2};Password={3};Ssl Mode=Require;Trust Server Certificate=false;', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName, parameters('postgresDatabaseName'), parameters('postgresAdminLogin'), parameters('postgresAdminPassword'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('postgresServerName'), parameters('postgresDatabaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('openClawGatewayToken')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'openclaw-gateway-token')]",
+      "properties": {
+        "value": "[parameters('openClawGatewayToken')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('webUiSecretKey')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'webui-secret-key')]",
+      "properties": {
+        "value": "[parameters('webUiSecretKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('openAiApiKey')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'openai-api-key')]",
+      "properties": {
+        "value": "[parameters('openAiApiKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('stripeSecretKey')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'STRIPE-SECRET-KEY')]",
+      "properties": {
+        "value": "[parameters('stripeSecretKey')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('shopifyApiSecret')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'shopify-api-secret')]",
+      "properties": {
+        "value": "[parameters('shopifyApiSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('revolutClientSecret')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'revolut-client-secret')]",
+      "properties": {
+        "value": "[parameters('revolutClientSecret')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('telegramBotToken')))]",
+      "type": "Microsoft.KeyVault/vaults/secrets",
+      "apiVersion": "2023-07-01",
+      "name": "[format('{0}/{1}', variables('keyVaultName'), 'telegram-bot-token')]",
+      "properties": {
+        "value": "[parameters('telegramBotToken')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/managedEnvironments",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('managedEnvironmentName')]",
+      "location": "[parameters('location')]",
+      "tags": "[variables('commonTags')]",
+      "properties": {
+        "appLogsConfiguration": {
+          "destination": "log-analytics",
+          "logAnalyticsConfiguration": {
+            "customerId": "[reference(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName')), '2023-09-01').customerId]",
+            "sharedKey": "[listKeys(resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName')), '2023-09-01').primarySharedKey]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('logAnalyticsWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+      "name": "[guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull')]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').principalId]",
+        "principalType": "ServicePrincipal",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '7f951dda-4ed3-4680-a7ca-43fe172d538d')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('openClawContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(variables('commonTags'), createObject('azd-service-name', 'openclaw'))]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', variables('containerRegistryName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "allowInsecure": true,
+            "external": true,
+            "targetPort": 18789,
+            "transport": "auto",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "*"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ],
+              "exposeHeaders": [
+                "*"
+              ],
+              "maxAge": 86400
+            }
+          },
+          "secrets": "[variables('openClawSecretDefinitions')]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "openclaw",
+              "image": "[variables('openClawImageRef')]",
+              "command": [
+                "node"
+              ],
+              "args": [
+                "openclaw.mjs",
+                "gateway",
+                "--allow-unconfigured",
+                "--bind",
+                "lan",
+                "--port",
+                "18789"
+              ],
+              "env": "[concat(createArray(createObject('name', 'TZ', 'value', parameters('openClawTimezone')), createObject('name', 'OPENCLAW_DISABLE_BONJOUR', 'value', parameters('openClawDisableBonjour')), createObject('name', 'OPENCLAW_GATEWAY_BIND', 'value', 'lan'), createObject('name', 'OPENCLAW_PLUGIN_STAGE_DIR', 'value', '/var/lib/openclaw/plugin-runtime-deps'), createObject('name', 'OPENCLAW_CONTROL_UI_ALLOWED_ORIGINS', 'value', format('[\"https://{0}.{1}\",\"http://{2}.{3}\"]', variables('openClawContainerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2024-03-01').defaultDomain, variables('openClawContainerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2024-03-01').defaultDomain))), if(empty(parameters('openClawGatewayToken')), createArray(), createArray(createObject('name', 'OPENCLAW_GATEWAY_TOKEN', 'secretRef', 'openclaw-gateway-token'))))]",
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/healthz",
+                    "port": 18789
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/readyz",
+                    "port": 18789
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                }
+              ],
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'postgres-connection-string')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('harvesterContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(variables('commonTags'), createObject('azd-service-name', 'harvester'))]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', variables('containerRegistryName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "*"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ],
+              "exposeHeaders": [
+                "*"
+              ],
+              "maxAge": 86400
+            }
+          },
+          "secrets": "[variables('harvesterSecretDefinitions')]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "harvester",
+              "image": "[variables('harvesterImageRef')]",
+              "env": "[concat(createArray(createObject('name', 'NODE_ENV', 'value', 'production'), createObject('name', 'HARVESTER_PORT', 'value', '8080'), createObject('name', 'HARVESTER_WORKERS', 'value', '15'), createObject('name', 'HARVESTER_PUBLIC_URL', 'value', format('https://{0}.{1}', variables('harvesterContainerAppName'), reference(resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName')), '2024-03-01').defaultDomain)), createObject('name', 'HARVESTER_KEY_VAULT_URL', 'value', reference(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), '2023-07-01').vaultUri), createObject('name', 'STRIPE_SECRET_KEY_SECRET_NAME', 'value', 'STRIPE-SECRET-KEY'), createObject('name', 'AZURE_CLIENT_ID', 'value', reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), '2023-01-31').clientId), createObject('name', 'DATABASE_HOST', 'value', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName), createObject('name', 'DATABASE_PORT', 'value', '5432'), createObject('name', 'DATABASE_NAME', 'value', parameters('postgresDatabaseName')), createObject('name', 'DATABASE_USER', 'value', parameters('postgresAdminLogin')), createObject('name', 'DATABASE_PASSWORD', 'secretRef', 'postgres-admin-password'), createObject('name', 'DATABASE_SSLMODE', 'value', 'require')), if(empty(parameters('shopifyApiSecret')), createArray(), createArray(createObject('name', 'SHOPIFY_API_SECRET', 'secretRef', 'shopify-api-secret'))))]",
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                }
+              ],
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 1
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'postgres-connection-string')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('postgresServerName'), parameters('postgresDatabaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('postgresServerName'), 'allowazureservices')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('alpaEngineContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(variables('commonTags'), createObject('azd-service-name', 'alpa-engine'))]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', variables('containerRegistryName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "*"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ],
+              "exposeHeaders": [
+                "*"
+              ],
+              "maxAge": 86400
+            }
+          },
+          "secrets": "[variables('alpaEngineSecretDefinitions')]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "alpa-engine",
+              "image": "[variables('alpaEngineImageRef')]",
+              "env": "[concat(createArray(createObject('name', 'ASPNETCORE_ENVIRONMENT', 'value', 'Production'), createObject('name', 'ASPNETCORE_URLS', 'value', 'http://+:8080'), createObject('name', 'ASPNETCORE_HTTP_PORTS', 'value', '8080'), createObject('name', 'DATABASE_HOST', 'value', reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName), createObject('name', 'DATABASE_PORT', 'value', '5432'), createObject('name', 'DATABASE_NAME', 'value', parameters('postgresDatabaseName')), createObject('name', 'DATABASE_USER', 'value', parameters('postgresAdminLogin')), createObject('name', 'DATABASE_PASSWORD', 'secretRef', 'postgres-admin-password'), createObject('name', 'OLLAMA_HOST', 'value', parameters('externalOllamaUrl')), createObject('name', 'HTTP_TIMEOUT', 'value', '60'), createObject('name', 'OLLAMA_TIMEOUT', 'value', '60000')), if(empty(parameters('revolutClientId')), createArray(), createArray(createObject('name', 'REVOLUT_CLIENT_ID', 'value', parameters('revolutClientId')))), if(empty(parameters('revolutClientSecret')), createArray(), createArray(createObject('name', 'REVOLUT_CLIENT_SECRET', 'secretRef', 'revolut-client-secret'))), if(empty(parameters('telegramBotToken')), createArray(), createArray(createObject('name', 'TELEGRAM_BOT_TOKEN', 'secretRef', 'telegram-bot-token'))))]",
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/api/health",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 30
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/api/ready",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 30
+                }
+              ],
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 2
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'postgres-connection-string')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('postgresServerName'), parameters('postgresDatabaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('postgresServerName'), 'allowazureservices')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('alpaCoreServiceContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(variables('commonTags'), createObject('azd-service-name', 'alpacore-service'))]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', variables('containerRegistryName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": false,
+            "targetPort": 8081,
+            "transport": "auto",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "*"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ],
+              "exposeHeaders": [
+                "*"
+              ],
+              "maxAge": 86400
+            }
+          },
+          "secrets": [
+            {
+              "name": "postgres-admin-password",
+              "value": "[parameters('postgresAdminPassword')]"
+            }
+          ]
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "alpacore-service",
+              "image": "[variables('alpaCoreServiceImageRef')]",
+              "env": [
+                {
+                  "name": "PORT",
+                  "value": "8081"
+                },
+                {
+                  "name": "DATABASE_HOST",
+                  "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName]"
+                },
+                {
+                  "name": "DATABASE_PORT",
+                  "value": "5432"
+                },
+                {
+                  "name": "DATABASE_NAME",
+                  "value": "[parameters('postgresDatabaseName')]"
+                },
+                {
+                  "name": "DATABASE_USER",
+                  "value": "[parameters('postgresAdminLogin')]"
+                },
+                {
+                  "name": "DATABASE_PASSWORD",
+                  "secretRef": "postgres-admin-password"
+                },
+                {
+                  "name": "OLLAMA_HOST",
+                  "value": "[parameters('externalOllamaUrl')]"
+                }
+              ],
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 30
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8081
+                  },
+                  "initialDelaySeconds": 15,
+                  "periodSeconds": 30
+                }
+              ],
+              "resources": {
+                "cpu": "[json('0.5')]",
+                "memory": "1Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 2
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'postgres-connection-string')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/databases', variables('postgresServerName'), parameters('postgresDatabaseName'))]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers/firewallRules', variables('postgresServerName'), 'allowazureservices')]",
+        "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName'))]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.App/containerApps",
+      "apiVersion": "2024-03-01",
+      "name": "[variables('openWebUiContainerAppName')]",
+      "location": "[parameters('location')]",
+      "tags": "[union(variables('commonTags'), createObject('azd-service-name', 'open-webui'))]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')))]": {}
+        }
+      },
+      "properties": {
+        "managedEnvironmentId": "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "configuration": {
+          "registries": [
+            {
+              "server": "[format('{0}.azurecr.io', variables('containerRegistryName'))]",
+              "identity": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]"
+            }
+          ],
+          "ingress": {
+            "external": true,
+            "targetPort": 8080,
+            "transport": "auto",
+            "corsPolicy": {
+              "allowedOrigins": [
+                "*"
+              ],
+              "allowedMethods": [
+                "GET",
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE",
+                "OPTIONS"
+              ],
+              "allowedHeaders": [
+                "*"
+              ],
+              "exposeHeaders": [
+                "*"
+              ],
+              "maxAge": 86400
+            }
+          },
+          "secrets": "[variables('openWebUiSecretDefinitions')]"
+        },
+        "template": {
+          "containers": [
+            {
+              "name": "open-webui",
+              "image": "[variables('openWebUiImageRef')]",
+              "env": "[variables('openWebUiEnv')]",
+              "probes": [
+                {
+                  "type": "Liveness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                },
+                {
+                  "type": "Readiness",
+                  "httpGet": {
+                    "path": "/health",
+                    "port": 8080
+                  },
+                  "initialDelaySeconds": 20,
+                  "periodSeconds": 30
+                }
+              ],
+              "resources": {
+                "cpu": "[json('1.0')]",
+                "memory": "2Gi"
+              }
+            }
+          ],
+          "scale": {
+            "minReplicas": 1,
+            "maxReplicas": 2
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'AcrPull'))]",
+        "[resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsOfficer'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('keyVaultName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName')), 'KeyVaultSecretsUser'))]",
+        "[resourceId('Microsoft.App/managedEnvironments', variables('managedEnvironmentName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'openai-api-key')]",
+        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', variables('userAssignedIdentityName'))]",
+        "[resourceId('Microsoft.KeyVault/vaults/secrets', variables('keyVaultName'), 'webui-secret-key')]"
+      ]
+    }
+  ],
+  "outputs": {
+    "AZURE_CONTAINER_REGISTRY_ENDPOINT": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.ContainerRegistry/registries', variables('containerRegistryName')), '2023-07-01').loginServer]"
+    },
+    "AZURE_KEY_VAULT_NAME": {
+      "type": "string",
+      "value": "[variables('keyVaultName')]"
+    },
+    "AZURE_POSTGRES_SERVER_NAME": {
+      "type": "string",
+      "value": "[variables('postgresServerName')]"
+    },
+    "AZURE_POSTGRES_FQDN": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.DBforPostgreSQL/flexibleServers', variables('postgresServerName')), '2024-08-01').fullyQualifiedDomainName]"
+    },
+    "SERVICE_OPENCLAW_RESOURCE_NAME": {
+      "type": "string",
+      "value": "[variables('openClawContainerAppName')]"
+    },
+    "SERVICE_HARVESTER_RESOURCE_NAME": {
+      "type": "string",
+      "value": "[variables('harvesterContainerAppName')]"
+    },
+    "SERVICE_ALPA_ENGINE_RESOURCE_NAME": {
+      "type": "string",
+      "value": "[variables('alpaEngineContainerAppName')]"
+    },
+    "SERVICE_ALPACORE_SERVICE_RESOURCE_NAME": {
+      "type": "string",
+      "value": "[variables('alpaCoreServiceContainerAppName')]"
+    },
+    "SERVICE_OPEN_WEBUI_RESOURCE_NAME": {
+      "type": "string",
+      "value": "[variables('openWebUiContainerAppName')]"
+    },
+    "SERVICE_HARVESTER_ENDPOINT_URL": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('harvesterContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "SERVICE_HARVESTER_WEBHOOK_URL": {
+      "type": "string",
+      "value": "[format('https://{0}/api/webhooks/shopify', reference(resourceId('Microsoft.App/containerApps', variables('harvesterContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "SERVICE_ALPA_ENGINE_ENDPOINT_URL": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('alpaEngineContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    },
+    "SERVICE_OPEN_WEBUI_ENDPOINT_URL": {
+      "type": "string",
+      "value": "[format('https://{0}', reference(resourceId('Microsoft.App/containerApps', variables('openWebUiContainerAppName')), '2024-03-01').configuration.ingress.fqdn)]"
+    }
+  }
+}

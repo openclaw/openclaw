@@ -20,6 +20,9 @@ param baseContainerImage string = 'mcr.microsoft.com/azuredocs/containerapps-hel
 @description('Built OpenClaw image reference. Leave empty to provision with the fallback image until azd deploy pushes the real image.')
 param openClawImage string = ''
 
+@description('Built Alphabet Harvester image reference. Leave empty to provision with the fallback image until azd deploy pushes the real image.')
+param harvesterImage string = ''
+
 @description('Image reference for the AlpaCore Engine workload.')
 param alpaEngineImage string = ''
 
@@ -43,6 +46,14 @@ param webUiSecretKey string = ''
 @secure()
 @description('Optional OpenAI API key used by Open WebUI.')
 param openAiApiKey string = ''
+
+@secure()
+@description('Shopify webhook secret used to validate direct HMAC deliveries into the Alphabet Harvester.')
+param shopifyApiSecret string = ''
+
+@secure()
+@description('Stripe secret key written to Key Vault for the Alphabet Harvester runtime.')
+param stripeSecretKey string = ''
 
 @description('Optional Revolut client ID consumed by the AlpaCore Engine.')
 param revolutClientId string = ''
@@ -74,11 +85,13 @@ var userAssignedIdentityName = 'azid${resourceToken}'
 var keyVaultName = 'azkv${resourceToken}'
 var postgresServerName = 'azpg${resourceToken}'
 var openClawContainerAppName = 'azocg${resourceToken}'
+var harvesterContainerAppName = 'azhar${resourceToken}'
 var alpaEngineContainerAppName = 'azeng${resourceToken}'
 var alpaCoreServiceContainerAppName = 'azsvc${resourceToken}'
 var openWebUiContainerAppName = 'azwui${resourceToken}'
 
 var openClawImageRef = empty(openClawImage) ? baseContainerImage : openClawImage
+var harvesterImageRef = empty(harvesterImage) ? baseContainerImage : harvesterImage
 var alpaEngineImageRef = empty(alpaEngineImage) ? baseContainerImage : alpaEngineImage
 var alpaCoreServiceImageRef = empty(alpaCoreServiceImage) ? baseContainerImage : alpaCoreServiceImage
 var openWebUiImageRef = empty(openWebUiImage) ? baseContainerImage : openWebUiImage
@@ -118,6 +131,80 @@ var openClawEnv = concat([
       {
         name: 'OPENCLAW_GATEWAY_TOKEN'
         secretRef: 'openclaw-gateway-token'
+      }
+    ])
+var harvesterSecretDefinitions = concat([
+  {
+    name: 'postgres-admin-password'
+    value: postgresAdminPassword
+  }
+], empty(shopifyApiSecret)
+  ? []
+  : [
+      {
+        name: 'shopify-api-secret'
+        value: shopifyApiSecret
+      }
+    ])
+var harvesterEnv = concat([
+  {
+    name: 'NODE_ENV'
+    value: 'production'
+  }
+  {
+    name: 'HARVESTER_PORT'
+    value: '8080'
+  }
+  {
+    name: 'HARVESTER_WORKERS'
+    value: '15'
+  }
+  {
+    name: 'HARVESTER_PUBLIC_URL'
+    value: 'https://${harvesterContainerAppName}.${managedEnvironment.properties.defaultDomain}'
+  }
+  {
+    name: 'HARVESTER_KEY_VAULT_URL'
+    value: keyVault.properties.vaultUri
+  }
+  {
+    name: 'STRIPE_SECRET_KEY_SECRET_NAME'
+    value: 'STRIPE-SECRET-KEY'
+  }
+  {
+    name: 'AZURE_CLIENT_ID'
+    value: userAssignedIdentity.properties.clientId
+  }
+  {
+    name: 'DATABASE_HOST'
+    value: postgresServer.properties.fullyQualifiedDomainName
+  }
+  {
+    name: 'DATABASE_PORT'
+    value: '5432'
+  }
+  {
+    name: 'DATABASE_NAME'
+    value: postgresDatabaseName
+  }
+  {
+    name: 'DATABASE_USER'
+    value: postgresAdminLogin
+  }
+  {
+    name: 'DATABASE_PASSWORD'
+    secretRef: 'postgres-admin-password'
+  }
+  {
+    name: 'DATABASE_SSLMODE'
+    value: 'require'
+  }
+], empty(shopifyApiSecret)
+  ? []
+  : [
+      {
+        name: 'SHOPIFY_API_SECRET'
+        secretRef: 'shopify-api-secret'
       }
     ])
 var alpaEngineSecretDefinitions = concat([
@@ -450,6 +537,28 @@ resource openAiApiKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if 
   ]
 }
 
+resource stripeSecretKeySecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(stripeSecretKey)) {
+  parent: keyVault
+  name: 'STRIPE-SECRET-KEY'
+  properties: {
+    value: stripeSecretKey
+  }
+  dependsOn: [
+    keyVaultSecretsOfficerRole
+  ]
+}
+
+resource shopifyApiSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(shopifyApiSecret)) {
+  parent: keyVault
+  name: 'shopify-api-secret'
+  properties: {
+    value: shopifyApiSecret
+  }
+  dependsOn: [
+    keyVaultSecretsOfficerRole
+  ]
+}
+
 resource revolutClientSecretSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (!empty(revolutClientSecret)) {
   parent: keyVault
   name: 'revolut-client-secret'
@@ -471,6 +580,7 @@ resource telegramBotTokenSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' =
     keyVaultSecretsOfficerRole
   ]
 }
+
 
 resource managedEnvironment 'Microsoft.App/managedEnvironments@2024-03-01' = {
   name: managedEnvironmentName
@@ -600,6 +710,102 @@ resource openClawContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
     acrPullRole
     keyVaultSecretsOfficerRole
     keyVaultSecretsUserRole
+    postgresConnectionStringSecret
+  ]
+}
+
+resource harvesterContainerApp 'Microsoft.App/containerApps@2024-03-01' = {
+  name: harvesterContainerAppName
+  location: location
+  tags: union(commonTags, {
+    'azd-service-name': 'harvester'
+  })
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${userAssignedIdentity.id}': {}
+    }
+  }
+  properties: {
+    managedEnvironmentId: managedEnvironment.id
+    configuration: {
+      registries: [
+        {
+          server: '${containerRegistry.name}.azurecr.io'
+          identity: userAssignedIdentity.id
+        }
+      ]
+      ingress: {
+        external: true
+        targetPort: 8080
+        transport: 'auto'
+        corsPolicy: {
+          allowedOrigins: [
+            '*'
+          ]
+          allowedMethods: [
+            'GET'
+            'POST'
+            'PUT'
+            'PATCH'
+            'DELETE'
+            'OPTIONS'
+          ]
+          allowedHeaders: [
+            '*'
+          ]
+          exposeHeaders: [
+            '*'
+          ]
+          maxAge: 86400
+        }
+      }
+      secrets: harvesterSecretDefinitions
+    }
+    template: {
+      containers: [
+        {
+          name: 'harvester'
+          image: harvesterImageRef
+          env: harvesterEnv
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/health'
+                port: 8080
+              }
+              initialDelaySeconds: 20
+              periodSeconds: 30
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/api/health'
+                port: 8080
+              }
+              initialDelaySeconds: 20
+              periodSeconds: 30
+            }
+          ]
+          resources: {
+            cpu: json('1.0')
+            memory: '2Gi'
+          }
+        }
+      ]
+      scale: {
+        minReplicas: 1
+        maxReplicas: 1
+      }
+    }
+  }
+  dependsOn: [
+    acrPullRole
+    keyVaultSecretsOfficerRole
+    keyVaultSecretsUserRole
+    postgresDatabase
+    postgresFirewallRule
     postgresConnectionStringSecret
   ]
 }
@@ -930,8 +1136,11 @@ output AZURE_KEY_VAULT_NAME string = keyVault.name
 output AZURE_POSTGRES_SERVER_NAME string = postgresServer.name
 output AZURE_POSTGRES_FQDN string = postgresServer.properties.fullyQualifiedDomainName
 output SERVICE_OPENCLAW_RESOURCE_NAME string = openClawContainerApp.name
+output SERVICE_HARVESTER_RESOURCE_NAME string = harvesterContainerApp.name
 output SERVICE_ALPA_ENGINE_RESOURCE_NAME string = alpaEngineContainerApp.name
 output SERVICE_ALPACORE_SERVICE_RESOURCE_NAME string = alpaCoreServiceContainerApp.name
 output SERVICE_OPEN_WEBUI_RESOURCE_NAME string = openWebUiContainerApp.name
+output SERVICE_HARVESTER_ENDPOINT_URL string = 'https://${harvesterContainerApp.properties.configuration.ingress.fqdn}'
+output SERVICE_HARVESTER_WEBHOOK_URL string = 'https://${harvesterContainerApp.properties.configuration.ingress.fqdn}/api/webhooks/shopify'
 output SERVICE_ALPA_ENGINE_ENDPOINT_URL string = 'https://${alpaEngineContainerApp.properties.configuration.ingress.fqdn}'
 output SERVICE_OPEN_WEBUI_ENDPOINT_URL string = 'https://${openWebUiContainerApp.properties.configuration.ingress.fqdn}'
