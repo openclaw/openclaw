@@ -6,6 +6,7 @@ import {
   requireApiKey,
   resolveApiKeyForProvider,
 } from "../agents/model-auth.js";
+import { resolveCopilotApiToken } from "../plugin-sdk/provider-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
 import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
@@ -168,7 +169,20 @@ async function resolveImageRuntime(params: {
     preferredProfile: params.preferredProfile,
     store: params.authStore,
   });
-  const apiKey = requireApiKey(apiKeyInfo, model.provider);
+  let apiKey = requireApiKey(apiKeyInfo, model.provider);
+  // Image tool bypasses prepareRuntimeAuth — exchange OAuth token for
+  // a short-lived Copilot API token so the integrator scope (vscode-chat)
+  // matches what runtime chat requests send.
+  if (model.provider === "github-copilot") {
+    try {
+      const copilotToken = await resolveCopilotApiToken({
+        githubToken: apiKey,
+      });
+      apiKey = copilotToken.token;
+    } catch {
+      // fall through with the original OAuth token
+    }
+  }
   authStorage.setRuntimeApiKey(model.provider, apiKey);
   return { apiKey, model };
 }
