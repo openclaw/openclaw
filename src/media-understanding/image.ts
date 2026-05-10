@@ -200,6 +200,13 @@ function buildImageContext(
 }
 
 function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+  // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
+  // prompt text to be in the user message alongside the image. Placing it
+  // in a separate system message produces "Request must contain at least
+  // one non-empty message" (400).
+  if (model.provider === "github-copilot") {
+    return true;
+  }
   const capabilities = resolveProviderRequestCapabilities({
     provider: model.provider,
     api: model.api,
