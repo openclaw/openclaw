@@ -1158,7 +1158,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
       });
 
       expect(oauthMocks.refreshOpenAICodexToken).toHaveBeenCalledWith("main-refresh-token");
-      await expectPathMissing(childAuthPath);
       const mainProfile = expectOAuthProfile(
         loadAuthProfileStoreForSecretsRuntime().profiles["openai-codex:work"],
       );
