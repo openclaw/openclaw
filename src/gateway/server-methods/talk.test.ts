@@ -498,6 +498,7 @@ describe("talk.session unified handlers", () => {
               realtime: {
                 provider: "openai",
                 providers: { openai: { apiKey: "openai-key" } },
+                instructions: "Speak warmly.",
               },
             },
           }) as OpenClawConfig,
@@ -513,6 +514,7 @@ describe("talk.session unified handlers", () => {
           model: "gpt-realtime",
           voice: "alloy",
         }),
+        instructions: expect.stringContaining("Additional realtime instructions:\nSpeak warmly."),
       }),
     );
     expect(createRespond).toHaveBeenCalledWith(
@@ -565,7 +567,7 @@ describe("talk.session unified handlers", () => {
         sessionId: "relay-unified-1",
         callId: "call-1",
         result: { status: "working" },
-        options: { willContinue: true },
+        options: { suppressResponse: true, willContinue: true },
       },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
@@ -577,7 +579,7 @@ describe("talk.session unified handlers", () => {
       connId: "conn-1",
       callId: "call-1",
       result: { status: "working" },
-      options: { willContinue: true },
+      options: { suppressResponse: true, willContinue: true },
     });
 
     const closeRespond = vi.fn();
@@ -1196,8 +1198,8 @@ describe("talk.client.create handler", () => {
     vi.clearAllMocks();
   });
 
-  it("uses talk.realtime provider, model, and voice without reading speech provider config", async () => {
-    const createBrowserSession = vi.fn(async () => ({
+  it("uses talk.realtime provider, model, voice, and instructions without reading speech provider config", async () => {
+    const createBrowserSession = vi.fn(async (_input: unknown) => ({
       provider: "openai",
       transport: "webrtc" as const,
       clientSecret: "secret",
@@ -1217,7 +1219,13 @@ describe("talk.client.create handler", () => {
     const respond = vi.fn();
     await talkHandlers["talk.client.create"]({
       req: { type: "req", id: "1", method: "talk.client.create" },
-      params: { sessionKey: "main" },
+      params: {
+        sessionKey: "main",
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
+      },
       client: { connId: "conn-1" } as never,
       isWebchatConnect: () => false,
       respond: respond as never,
@@ -1232,6 +1240,7 @@ describe("talk.client.create handler", () => {
                 providers: { openai: { apiKey: "openai-key" } },
                 model: "gpt-realtime",
                 voice: "alloy",
+                instructions: "Speak warmly.",
               },
             },
           }) as OpenClawConfig,
@@ -1248,8 +1257,17 @@ describe("talk.client.create handler", () => {
       expect.objectContaining({
         model: "gpt-realtime",
         voice: "alloy",
+        instructions: expect.stringContaining("Additional realtime instructions:\nSpeak warmly."),
+        vadThreshold: 0.45,
+        silenceDurationMs: 650,
+        prefixPaddingMs: 250,
+        reasoningEffort: "low",
       }),
     );
+    const createInput = createBrowserSession.mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(createInput).not.toHaveProperty("provider");
+    expect(createInput).not.toHaveProperty("providers");
+    expect(createInput).not.toHaveProperty("transport");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ provider: "openai", transport: "webrtc" }),

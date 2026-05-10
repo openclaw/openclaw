@@ -49,6 +49,16 @@ function resolveOpusDecoderFactory(params: {
 }): OpusDecoderFactory | null {
   const factories: OpusDecoderFactory[] = [
     {
+      name: "opusscript",
+      load: () => {
+        const OpusScript = require("opusscript") as {
+          new (sampleRate: number, channels: number, application: number): OpusDecoder;
+          Application: { AUDIO: number };
+        };
+        return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
+      },
+    },
+    {
       name: "@discordjs/opus",
       load: () => {
         const DiscordOpus = require("@discordjs/opus") as {
@@ -60,16 +70,6 @@ function resolveOpusDecoderFactory(params: {
           };
         };
         return new DiscordOpus.OpusEncoder(SAMPLE_RATE, CHANNELS);
-      },
-    },
-    {
-      name: "opusscript",
-      load: () => {
-        const OpusScript = require("opusscript") as {
-          new (sampleRate: number, channels: number, application: number): OpusDecoder;
-          Application: { AUDIO: number };
-        };
-        return new OpusScript(SAMPLE_RATE, CHANNELS, OpusScript.Application.AUDIO);
       },
     },
   ];

@@ -25,6 +25,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:droid": 4,
   "live:gemini": 4,
   "live:opencode": 4,
+  "live:openai": 1,
   npm: 10,
   service: 7,
 };

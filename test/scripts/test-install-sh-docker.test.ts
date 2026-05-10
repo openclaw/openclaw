@@ -68,6 +68,12 @@ describe("test-install-sh-docker", () => {
     expect(dockerfile).toContain("node scripts/check-package-dist-imports.mjs /app");
   });
 
+  it("runs the root Dockerfile build with the CI heap limit", () => {
+    const dockerfile = readFileSync("Dockerfile", "utf8");
+
+    expect(dockerfile).toContain("NODE_OPTIONS=--max-old-space-size=8192 pnpm build:docker");
+  });
+
   it("allows repository branch history and release tags for secret-backed Docker release checks", () => {
     const workflow = readFileSync(LIVE_E2E_WORKFLOW_PATH, "utf8");
 

@@ -1278,6 +1278,10 @@
         "task": {
           "type": "string"
         },
+        "taskName": {
+          "description": "Stable optional alias for later subagents targeting. Use lowercase letters, digits, and underscores, starting with a letter.",
+          "type": "string"
+        },
         "thinking": {
           "type": "string"
         },
@@ -1306,7 +1310,7 @@
   },
   {
     "deferLoading": true,
-    "description": "List, kill, or steer spawned sub-agents for this requester session. Use this for sub-agent orchestration.",
+    "description": "On-demand list, kill, or steer spawned sub-agents for this requester session. If sessions_yield is available, use it to wait for completion events; do not poll this tool in wait loops.",
     "inputSchema": {
       "properties": {
         "action": {

@@ -152,4 +152,40 @@ describe("buildEmbeddedSystemPrompt", () => {
 
     expect(prompt).not.toContain("## Memory Recall");
   });
+
+  it("includes active background process references in the embedded prompt", () => {
+    const prompt = buildEmbeddedSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      reasoningTagHint: false,
+      runtimeInfo: {
+        host: "local",
+        os: "darwin",
+        arch: "arm64",
+        node: process.version,
+        model: "gpt-5.4",
+        provider: "openai",
+        activeProcessSessions: [
+          {
+            sessionId: "sess-active",
+            status: "running",
+            startedAt: 0,
+            runtimeMs: 5_000,
+            command: "sleep 600",
+            name: "sleep 600",
+            cwd: "/tmp/work",
+            pid: 1234,
+            truncated: false,
+          },
+        ],
+      },
+      tools: [],
+      modelAliasLines: [],
+      userTimezone: "UTC",
+    });
+
+    expect(prompt).toContain("Active background exec sessions in this scope:");
+    expect(prompt).toContain("sess-active running pid=1234 cwd=/tmp/work :: sleep 600");
+    expect(prompt).toContain("process tool with a sessionId");
+    expect(prompt).toContain("process list");
+  });
 });

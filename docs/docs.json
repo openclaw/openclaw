@@ -1708,6 +1708,14 @@
                 ]
               },
               {
+                "group": "Codex harness",
+                "pages": [
+                  "plugins/codex-harness-reference",
+                  "plugins/codex-harness-runtime",
+                  "plugins/codex-native-plugins"
+                ]
+              },
+              {
                 "group": "Templates",
                 "pages": [
                   "reference/AGENTS.default",

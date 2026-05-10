@@ -300,10 +300,37 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["scripts/install.cmd"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
   });
 
   it("runs changed-smoke for install and packaging surfaces", () => {
     expect(detectChangedScope(["scripts/install.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -453,6 +480,18 @@ describe("detectChangedScope", () => {
       runFullInstallSmoke: false,
     });
     expect(detectInstallSmokeScope(["scripts/install.sh"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
+    expect(detectInstallSmokeScope(["scripts/install-cli.sh"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
+    expect(detectInstallSmokeScope(["scripts/install.ps1"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
+    expect(detectInstallSmokeScope(["scripts/install.cmd"])).toEqual({
       runFastInstallSmoke: true,
       runFullInstallSmoke: true,
     });

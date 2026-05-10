@@ -1,11 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
+import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
 
 describe("buildEmbeddedCompactionRuntimeContext", () => {
+  afterEach(() => {
+    resetProcessRegistryForTests();
+  });
+
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
@@ -118,6 +124,62 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.provider).toBe("ollama");
     expect(result.model).toBe("minimax-m2.7:cloud");
     expect(result.authProfileId).toBe("ollama:default");
+  });
+
+  it("preserves scoped active process session references for compaction", () => {
+    const active = createProcessSessionFixture({
+      id: "sess-active",
+      command: "sleep 600",
+      backgrounded: true,
+      pid: 1234,
+      startedAt: 1_000,
+    });
+    active.scopeKey = "agent:main:thread:1";
+    const other = createProcessSessionFixture({
+      id: "sess-other",
+      command: "sleep 600",
+      backgrounded: true,
+    });
+    other.scopeKey = "agent:other";
+    addSession(active);
+    addSession(other);
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      sessionKey: "agent:main:thread:1",
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(result.activeProcessSessions).toEqual([
+      expect.objectContaining({
+        sessionId: "sess-active",
+        status: "running",
+        command: "sleep 600",
+        pid: 1234,
+      }),
+    ]);
+    expect(result.activeProcessSessions).not.toEqual(
+      expect.arrayContaining([expect.objectContaining({ sessionId: "sess-other" })]),
+    );
+  });
+
+  it("omits active process session references when no safe scope is available", () => {
+    const active = createProcessSessionFixture({
+      id: "sess-active",
+      command: "sleep 600",
+      backgrounded: true,
+    });
+    active.scopeKey = "agent:main:thread:1";
+    addSession(active);
+
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      config: {} as OpenClawConfig,
+    });
+
+    expect(result.activeProcessSessions).toBeUndefined();
   });
 
   it("applies runtime defaults when resolving the effective compaction target", () => {

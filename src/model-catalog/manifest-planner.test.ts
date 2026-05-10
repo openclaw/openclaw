@@ -124,23 +124,17 @@ describe("manifest model catalog planner", () => {
       },
     });
 
-    expect(plan.entries).toEqual([
-      expect.objectContaining({
-        pluginId: "openai",
-        provider: "azure-openai-responses",
-        discovery: "static",
-      }),
-    ]);
-    expect(plan.rows).toEqual([
-      expect.objectContaining({
-        provider: "azure-openai-responses",
-        id: "gpt-5.4",
-        ref: "azure-openai-responses/gpt-5.4",
-        mergeKey: "azure-openai-responses::gpt-5.4",
-        api: "azure-openai-responses",
-        baseUrl: "https://example.openai.azure.com/openai/v1",
-      }),
-    ]);
+    expect(plan.entries).toHaveLength(1);
+    expect(plan.entries[0]?.pluginId).toBe("openai");
+    expect(plan.entries[0]?.provider).toBe("azure-openai-responses");
+    expect(plan.entries[0]?.discovery).toBe("static");
+    expect(plan.rows).toHaveLength(1);
+    expect(plan.rows[0]?.provider).toBe("azure-openai-responses");
+    expect(plan.rows[0]?.id).toBe("gpt-5.4");
+    expect(plan.rows[0]?.ref).toBe("azure-openai-responses/gpt-5.4");
+    expect(plan.rows[0]?.mergeKey).toBe("azure-openai-responses::gpt-5.4");
+    expect(plan.rows[0]?.api).toBe("azure-openai-responses");
+    expect(plan.rows[0]?.baseUrl).toBe("https://example.openai.azure.com/openai/v1");
   });
 
   it("keeps alias provider rows out of unfiltered broad planning", () => {
@@ -173,11 +167,7 @@ describe("manifest model catalog planner", () => {
 
     expect(plan.entries.map((entry) => entry.provider)).toEqual(["openai"]);
     expect(plan.rows.map((row) => row.ref)).toEqual(["openai/gpt-5.4"]);
-    expect(plan.rows).not.toContainEqual(
-      expect.objectContaining({
-        provider: "azure-openai-responses",
-      }),
-    );
+    expect(plan.rows.some((row) => row.provider === "azure-openai-responses")).toBe(false);
   });
 
   it("reports duplicate provider/model keys and excludes conflicted rows", () => {
@@ -223,10 +213,8 @@ describe("manifest model catalog planner", () => {
       },
     ]);
     expect(plan.rows).toHaveLength(1);
-    expect(plan.rows[0]).toMatchObject({
-      mergeKey: "openai::gpt-5.5",
-      name: "GPT-5.5",
-    });
+    expect(plan.rows[0]?.mergeKey).toBe("openai::gpt-5.5");
+    expect(plan.rows[0]?.name).toBe("GPT-5.5");
   });
 });
 

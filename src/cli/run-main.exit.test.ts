@@ -34,6 +34,7 @@ const runCrestodianMock = vi.hoisted(() =>
 const commanderParseAsyncMock = vi.hoisted(() => vi.fn(async () => {}));
 const addGatewayRunCommandMock = vi.hoisted(() => vi.fn((command: unknown) => command));
 const emitCliBannerMock = vi.hoisted(() => vi.fn());
+const enableConsoleCaptureMock = vi.hoisted(() => vi.fn());
 const progressDoneMock = vi.hoisted(() => vi.fn());
 const createCliProgressMock = vi.hoisted(() =>
   vi.fn(() => ({
@@ -93,6 +94,11 @@ vi.mock("../version.js", () => ({
 
 vi.mock("./banner.js", () => ({
   emitCliBanner: emitCliBannerMock,
+}));
+
+vi.mock("../logging.js", async () => ({
+  ...(await vi.importActual<typeof import("../logging.js")>("../logging.js")),
+  enableConsoleCapture: enableConsoleCaptureMock,
 }));
 
 vi.mock("./container-target.js", () => ({
@@ -323,6 +329,17 @@ describe("runCli exit behavior", () => {
       "gateway",
       "--force",
     ]);
+  });
+
+  it("installs console capture before parsing the gateway foreground fast path", async () => {
+    await runCli(["node", "openclaw", "gateway", "--force"]);
+
+    expect(enableConsoleCaptureMock).toHaveBeenCalledTimes(1);
+    expect(commanderParseAsyncMock).toHaveBeenCalledTimes(1);
+    const captureOrder = enableConsoleCaptureMock.mock.invocationCallOrder[0] ?? 0;
+    const parseOrder = commanderParseAsyncMock.mock.invocationCallOrder[0] ?? 0;
+    expect(captureOrder).toBeGreaterThan(0);
+    expect(parseOrder).toBeGreaterThan(captureOrder);
   });
 
   it("honors banner suppression on the gateway foreground fast path", async () => {

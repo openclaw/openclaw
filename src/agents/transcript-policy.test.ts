@@ -411,6 +411,64 @@ describe("resolveTranscriptPolicy", () => {
     expect(sonnet37.dropThinkingBlocks).toBe(true);
   });
 
+  it("strips thinking blocks for unowned Anthropic-compatible models that opt out of reasoning", () => {
+    const policy = resolveTranscriptPolicy({
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: {
+        id: "moonshotai/kimi-k2.5",
+        name: "Kimi K2.5",
+        provider: "qiniu",
+        api: "anthropic-messages",
+        baseUrl: "https://api.qnaigc.com",
+        reasoning: false,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 256_000,
+        maxTokens: 16_384,
+        compat: { supportsReasoningEffort: false },
+      },
+    });
+
+    expect(policy.dropThinkingBlocks).toBe(true);
+    expect(policy.validateAnthropicTurns).toBe(true);
+  });
+
+  it("does not reuse cached unowned Anthropic policies across reasoning compat changes", () => {
+    const config = {} as OpenClawConfig;
+    const model = {
+      id: "moonshotai/kimi-k2.5",
+      name: "Kimi K2.5",
+      provider: "qiniu",
+      api: "anthropic-messages" as const,
+      baseUrl: "https://api.qnaigc.com",
+      reasoning: false,
+      input: ["text" as const, "image" as const],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 256_000,
+      maxTokens: 16_384,
+    };
+
+    const defaultPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model,
+    });
+    const noReasoningPolicy = resolveTranscriptPolicy({
+      config,
+      provider: "qiniu",
+      modelId: "moonshotai/kimi-k2.5",
+      modelApi: "anthropic-messages",
+      model: { ...model, compat: { supportsReasoningEffort: false } },
+    });
+
+    expect(defaultPolicy.dropThinkingBlocks).toBe(false);
+    expect(noReasoningPolicy.dropThinkingBlocks).toBe(true);
+  });
+
   it("preserves transport defaults when a runtime plugin has not adopted replay hooks", () => {
     expectStrictOpenAiCompatibleReplayDefaults("vllm");
   });

@@ -84,6 +84,11 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
   return /(?:^|[./:_-])claude(?:$|[./:_-])/.test(id);
 }
 
+function modelDisablesReasoningEffort(model?: ProviderRuntimeModel): boolean {
+  const compat = model?.compat as { supportsReasoningEffort?: boolean } | undefined;
+  return compat?.supportsReasoningEffort === false;
+}
+
 /**
  * Provides a narrow replay-policy fallback for providers that do not have an
  * owning runtime plugin.
@@ -94,6 +99,7 @@ function isClaudeFamilyModelId(modelId?: string | null): boolean {
 function buildUnownedProviderTransportReplayFallback(params: {
   modelApi?: string | null;
   modelId?: string | null;
+  model?: ProviderRuntimeModel;
 }): ProviderReplayPolicy | undefined {
   const isGoogle = isGoogleModelApi(params.modelApi);
   const isAnthropic = isAnthropicApi(params.modelApi);
@@ -136,6 +142,9 @@ function buildUnownedProviderTransportReplayFallback(params: {
       : {}),
     ...(isAnthropic && modelId.includes("claude")
       ? { dropThinkingBlocks: !shouldPreserveThinkingBlocks(modelId) }
+      : {}),
+    ...(isAnthropic && modelDisablesReasoningEffort(params.model)
+      ? { dropThinkingBlocks: true }
       : {}),
     ...(isStrictOpenAiCompatible && isGemma4ModelRequiringReasoningStrip(modelId)
       ? { dropReasoningFromHistory: true }
@@ -213,6 +222,7 @@ function resolveTranscriptPolicyCacheKey(params: {
   modelApi?: string | null;
   provider: string;
   modelId?: string | null;
+  model?: ProviderRuntimeModel;
   config: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -221,6 +231,7 @@ function resolveTranscriptPolicyCacheKey(params: {
     provider: params.provider,
     modelApi: params.modelApi ?? "",
     modelId: params.modelId ?? "",
+    dropsThinkingForReasoningCompat: modelDisablesReasoningEffort(params.model),
     workspaceDir: params.workspaceDir ?? "",
     pluginControlPlane: resolvePluginControlPlaneFingerprint({
       config: params.config,
@@ -280,6 +291,7 @@ export function resolveTranscriptPolicy(params: {
         buildUnownedProviderTransportReplayFallback({
           modelApi: params.modelApi,
           modelId: params.modelId,
+          model: params.model,
         }),
       );
   if (cacheConfig && cacheKey) {

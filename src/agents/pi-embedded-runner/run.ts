@@ -36,6 +36,7 @@ import {
   markAuthProfileGood,
   markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -81,6 +82,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -258,6 +260,23 @@ function createEmptyAuthProfileStore(): AuthProfileStore {
     version: 1,
     profiles: {},
   };
+}
+
+function createScopedAuthProfileStore(
+  store: AuthProfileStore,
+  profileId: string | undefined,
+): AuthProfileStore {
+  const normalizedProfileId = profileId?.trim();
+  const profiles = store.profiles ?? {};
+  const credential = normalizedProfileId ? profiles[normalizedProfileId] : undefined;
+  return credential && normalizedProfileId
+    ? {
+        version: store.version,
+        profiles: {
+          [normalizedProfileId]: credential,
+        },
+      }
+    : createEmptyAuthProfileStore();
 }
 
 function buildTraceToolSummary(params: {
@@ -573,6 +592,11 @@ export async function runEmbeddedPiAgent(
         : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
             allowKeychainPrompt: false,
           });
+      const attemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          })
+        : authStore;
       const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
         if (requestedProfileId) {
@@ -593,12 +617,9 @@ export async function runEmbeddedPiAgent(
         if (!harnessAuthProvider) {
           return undefined;
         }
-        const harnessAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
         return resolveAuthProfileOrder({
           cfg: params.config,
-          store: harnessAuthStore,
+          store: attemptAuthProfileStore,
           provider: harnessAuthProvider,
         })[0]?.trim();
       };
@@ -775,6 +796,9 @@ export async function runEmbeddedPiAgent(
         lastProfileId = forwardedPluginHarnessProfileId;
       }
       startupStages.mark("auth");
+      const runAttemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? createScopedAuthProfileStore(attemptAuthProfileStore, lastProfileId)
+        : attemptAuthProfileStore;
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -1209,7 +1233,7 @@ export async function runEmbeddedPiAgent(
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
-            authProfileStore: authStore,
+            authProfileStore: runAttemptAuthProfileStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
@@ -1495,6 +1519,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -1660,6 +1691,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -2042,15 +2080,13 @@ export async function runEmbeddedPiAgent(
               (await advanceAuthProfile())
             ) {
               if (failedPromptProfileId && promptProfileFailureReason) {
-                try {
-                  await maybeMarkAuthProfileFailure({
-                    profileId: failedPromptProfileId,
-                    reason: promptProfileFailureReason,
-                    modelId,
-                  });
-                } catch (err) {
+                void maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) => {
                   log.warn(`prompt profile failure mark failed: ${String(err)}`);
-                }
+                });
               }
               traceAttempts.push({
                 provider,

@@ -42,10 +42,6 @@ vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
   resolveApprovalOverGateway: (arg: unknown) => resolveApprovalOverGatewayMock(arg),
 }));
 
-vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  readStoreAllowFromForDmPolicy: async () => [],
-}));
-
 vi.mock("../../interactive-dispatch.js", () => ({
   dispatchSlackPluginInteractiveHandler: (params: {
     data: string;
