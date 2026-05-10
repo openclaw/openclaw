@@ -14,8 +14,16 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
   resolveProviderCacheTtlEligibility: () => undefined,
   resolveProviderRuntimePlugin: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
 }));
 
 vi.mock("../../plugins/provider-hook-runtime.js", () => ({
@@ -164,6 +172,62 @@ describe("buildEmbeddedExtensionFactories", () => {
     });
   });
 
+  it("resolves configured safeguard compaction model from inline provider config", () => {
+    const sessionManager = {} as SessionManager;
+    const sessionModel = createAnthropicModel("claude-opus-4-7");
+    const modelRegistry = {
+      find: vi.fn(() => null),
+    };
+
+    buildEmbeddedExtensionFactories({
+      cfg: {
+        agents: {
+          defaults: {
+            compaction: {
+              mode: "safeguard",
+              model: "foo/custom-summary",
+            },
+          },
+        },
+        models: {
+          providers: {
+            foo: {
+              baseUrl: "https://foo.example/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "custom-summary",
+                  name: "Custom Summary",
+                  contextWindow: 123_456,
+                  maxTokens: 4096,
+                  reasoning: false,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      sessionManager,
+      provider: "anthropic",
+      modelId: "claude-opus-4-7",
+      model: sessionModel,
+      modelRegistry: modelRegistry as unknown as ModelRegistry,
+    });
+
+    const runtime = getCompactionSafeguardRuntime(sessionManager);
+    expect(modelRegistry.find).not.toHaveBeenCalled();
+    expect(runtime?.model).not.toBe(sessionModel);
+    expect(runtime?.model).toMatchObject({
+      provider: "foo",
+      id: "custom-summary",
+      api: "openai-responses",
+      contextWindow: 123_456,
+    });
+    expect(runtime?.contextWindowTokens).toBe(123_456);
+  });
+
   it("keeps the session model in safeguard runtime when no compaction model is configured", () => {
     const sessionManager = {} as SessionManager;
     const sessionModel = createAnthropicModel("claude-opus-4-7");
@@ -216,7 +280,7 @@ describe("buildEmbeddedExtensionFactories", () => {
       model: undefined,
     });
     expect(mocks.log.warn).toHaveBeenCalledWith(
-      'Configured safeguard compaction model "anthropic/claude-typo-4-6" was not found in the model registry; falling back to the session model.',
+      'Configured safeguard compaction model "anthropic/claude-typo-4-6" could not be resolved; falling back to the session model.',
     );
   });
 

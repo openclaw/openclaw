@@ -21,6 +21,19 @@ import {
 } from "./compaction-safeguard-runtime.js";
 import compactionSafeguardExtension, { __testing } from "./compaction-safeguard.js";
 
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  applyProviderResolvedModelCompatWithPlugins: () => undefined,
+  applyProviderResolvedTransportWithPlugin: () => undefined,
+  buildProviderUnknownModelHintWithPlugin: () => undefined,
+  normalizeProviderResolvedModelWithPlugin: () => undefined,
+  normalizeProviderTransportWithPlugin: () => undefined,
+  prepareProviderDynamicModel: async () => {},
+  resolveProviderCacheTtlEligibility: () => undefined,
+  resolveProviderRuntimePlugin: () => undefined,
+  runProviderDynamicModel: () => undefined,
+  shouldPreferProviderRuntimeResolvedModel: () => false,
+}));
+
 vi.mock("../compaction.js", async () => {
   const actual = await vi.importActual<typeof compactionModule>("../compaction.js");
   return {
