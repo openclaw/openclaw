@@ -4,7 +4,7 @@ Polytropos is a fork of **OpenClaw** focused on one thing: **making feature work
 
 OpenClaw already has a powerful plugin system; the problem we kept hitting in practice was that “quick additions” often turn into a pile of ad‑hoc patches, scripts, and one-off deployments. Polytropos formalizes a workflow where:
 
-- most changes live in **plugins** and **scripts** (fast iteration, low risk)
+- most changes live in **plugins** (fast iteration, low risk)
 - when core changes are needed, they are **tiny, explicit seams** (mergeable, reviewable)
 
 This repository is the *core fork* (the runtime + loader). Plugins live in a separate repo (see below).
