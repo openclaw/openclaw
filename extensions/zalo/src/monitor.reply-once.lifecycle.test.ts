@@ -114,7 +114,6 @@ describe("Zalo reply-once lifecycle", () => {
         },
         undefined,
       );
-      expect(sendMessageCall?.[2]).toBeUndefined();
     } finally {
       await monitor.stop();
     }

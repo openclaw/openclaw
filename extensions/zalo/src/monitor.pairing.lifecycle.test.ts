@@ -85,9 +85,12 @@ describe("Zalo pairing lifecycle", () => {
       });
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
       const pairingTextCall = sendMessageMock.mock.calls[0];
+      const pairingTextPayload = pairingTextCall?.[1] as
+        | { chat_id?: string; text?: string }
+        | undefined;
       expect(pairingTextCall?.[0]).toBe("zalo-token");
-      expect(pairingTextCall?.[1]?.chat_id).toBe("dm-pairing-1");
-      expect(pairingTextCall?.[1]?.text).toContain("PAIRCODE");
+      expect(pairingTextPayload?.chat_id).toBe("dm-pairing-1");
+      expect(pairingTextPayload?.text).toContain("PAIRCODE");
       expect(pairingTextCall?.[2]).toBeUndefined();
     } finally {
       await monitor.stop();
