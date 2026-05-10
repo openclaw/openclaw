@@ -441,7 +441,7 @@ describe("feishuOutbound.sendPayload native cards", () => {
               body: {
                 elements: expect.arrayContaining([
                   { tag: "markdown", content: "Approve the request?" },
-                  expect.objectContaining({ tag: "action" }),
+                  expect.objectContaining({ tag: "column_set" }),
                 ]),
               },
             }),
@@ -518,25 +518,35 @@ describe("feishuOutbound.sendPayload native cards", () => {
             { tag: "markdown", content: "Choose an action" },
             { tag: "markdown", content: "Approve the request?" },
             expect.objectContaining({
-              tag: "action",
-              actions: [
+              tag: "column_set",
+              columns: [
                 expect.objectContaining({
-                  text: { tag: "plain_text", content: "Approve" },
-                  type: "primary",
-                  value: expect.objectContaining({
-                    oc: "ocf1",
-                    k: "quick",
-                    q: "/approve req_1 allow-once",
-                  }),
+                  tag: "column",
+                  elements: [
+                    expect.objectContaining({
+                      text: { tag: "plain_text", content: "Approve" },
+                      type: "primary",
+                      value: expect.objectContaining({
+                        oc: "ocf1",
+                        k: "quick",
+                        q: "/approve req_1 allow-once",
+                      }),
+                    }),
+                  ],
                 }),
                 expect.objectContaining({
-                  text: { tag: "plain_text", content: "Deny" },
-                  type: "danger",
-                  value: expect.objectContaining({
-                    oc: "ocf1",
-                    k: "quick",
-                    q: "/approve req_1 deny",
-                  }),
+                  tag: "column",
+                  elements: [
+                    expect.objectContaining({
+                      text: { tag: "plain_text", content: "Deny" },
+                      type: "danger",
+                      value: expect.objectContaining({
+                        oc: "ocf1",
+                        k: "quick",
+                        q: "/approve req_1 deny",
+                      }),
+                    }),
+                  ],
                 }),
               ],
             }),
@@ -582,15 +592,20 @@ describe("feishuOutbound.sendPayload native cards", () => {
           content:
             "<font color='grey'>&lt;/font&gt;&lt;at id=\"ou_2\"&gt;Injected&lt;/at&gt;</font>",
         },
-        {
-          tag: "action",
-          actions: [
+        expect.objectContaining({
+          tag: "column_set",
+          columns: [
             expect.objectContaining({
-              text: { tag: "plain_text", content: "Open" },
-              url: "https://example.com/path",
+              tag: "column",
+              elements: [
+                expect.objectContaining({
+                  text: { tag: "plain_text", content: "Open" },
+                  url: "https://example.com/path",
+                }),
+              ],
             }),
           ],
-        },
+        }),
       ]),
     );
     expect(JSON.stringify(card)).not.toContain("javascript:");
@@ -643,15 +658,20 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(card.header.template).toBe("blue");
     expect(card.body.elements).toEqual([
       { tag: "markdown", content: '&lt;at id="ou_1"&gt;ping&lt;/at&gt;' },
-      {
-        tag: "action",
-        actions: [
+      expect.objectContaining({
+        tag: "column_set",
+        columns: [
           expect.objectContaining({
-            text: { tag: "plain_text", content: "Good link" },
-            url: "https://example.com",
+            tag: "column",
+            elements: [
+              expect.objectContaining({
+                text: { tag: "plain_text", content: "Good link" },
+                url: "https://example.com",
+              }),
+            ],
           }),
         ],
-      },
+      }),
     ]);
     expect(JSON.stringify(card)).not.toContain("file://");
     expect(JSON.stringify(card)).not.toContain("image-secret");

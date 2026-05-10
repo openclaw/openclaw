@@ -152,6 +152,30 @@ function sanitizeNativeFeishuCardButton(button: unknown): Record<string, unknown
   return rendered.url || rendered.value ? rendered : undefined;
 }
 
+/**
+ * Wrap an array of card button records as a Feishu V2 `column_set` row.
+ *
+ * The legacy `{ tag: "action", actions: [...] }` container that Feishu cards V1
+ * used was dropped in V2; sending it now fails with `feishu_code 230099 / sub
+ * 200861 / "cards of schema V2 no longer support this capability"`. V2 expresses
+ * a row of buttons as a `column_set` with one auto-width column per button.
+ */
+export function actionRowToColumnSet(
+  actions: Record<string, unknown>[],
+): Record<string, unknown> {
+  return {
+    tag: "column_set",
+    flex_mode: "none",
+    horizontal_spacing: "default",
+    columns: actions.map((button) => ({
+      tag: "column",
+      width: "auto",
+      vertical_align: "center",
+      elements: [button],
+    })),
+  };
+}
+
 function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unknown> | undefined {
   if (!isRecord(element) || typeof element.tag !== "string") {
     return undefined;
@@ -163,10 +187,27 @@ function sanitizeNativeFeishuCardElement(element: unknown): Record<string, unkno
     return { tag: "markdown", content: escapeFeishuCardMarkdownText(element.content) };
   }
   if (element.tag === "action" && Array.isArray(element.actions)) {
+    // Legacy V1 input shape — accepted for back-compat with callers that still
+    // hand-build native cards in the old format. Always emit the V2 shape.
     const actions = element.actions
       .map((action) => sanitizeNativeFeishuCardButton(action))
       .filter((action): action is Record<string, unknown> => Boolean(action));
-    return actions.length > 0 ? { tag: "action", actions } : undefined;
+    return actions.length > 0 ? actionRowToColumnSet(actions) : undefined;
+  }
+  if (element.tag === "column_set" && Array.isArray(element.columns)) {
+    const columns = element.columns
+      .map((column) => {
+        if (!isRecord(column)) {
+          return undefined;
+        }
+        const rawElements = Array.isArray(column.elements) ? column.elements : [];
+        const buttons = rawElements
+          .map((entry) => sanitizeNativeFeishuCardButton(entry))
+          .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+        return buttons.length > 0 ? buttons[0] : undefined;
+      })
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry));
+    return columns.length > 0 ? actionRowToColumnSet(columns) : undefined;
   }
   return undefined;
 }
@@ -280,10 +321,7 @@ function buildFeishuCardElementForBlock(
     if (actions.length === 0) {
       return undefined;
     }
-    return {
-      tag: "action",
-      actions,
-    };
+    return actionRowToColumnSet(actions);
   }
   const labels = block.options.map((option) => `- ${option.label}`).join("\n");
   return {

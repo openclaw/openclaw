@@ -28,14 +28,19 @@ export function expectSentCardHasP2pAction(sendCardMock: unknown) {
         body: expect.objectContaining({
           elements: expect.arrayContaining([
             expect.objectContaining({
-              tag: "action",
-              actions: expect.arrayContaining([
+              tag: "column_set",
+              columns: expect.arrayContaining([
                 expect.objectContaining({
-                  value: expect.objectContaining({
-                    c: expect.objectContaining({
-                      t: "p2p",
+                  tag: "column",
+                  elements: expect.arrayContaining([
+                    expect.objectContaining({
+                      value: expect.objectContaining({
+                        c: expect.objectContaining({
+                          t: "p2p",
+                        }),
+                      }),
                     }),
-                  }),
+                  ]),
                 }),
               ]),
             }),

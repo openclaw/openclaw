@@ -3,6 +3,7 @@ import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { createFeishuCardInteractionEnvelope } from "./card-interaction.js";
 import { FEISHU_APPROVAL_REQUEST_ACTION } from "./card-ux-approval.js";
 import { buildFeishuCardButton, buildFeishuCardInteractionContext } from "./card-ux-shared.js";
+import { actionRowToColumnSet } from "./outbound.js";
 import { sendCardFeishu } from "./send.js";
 
 const FEISHU_QUICK_ACTION_CARD_TTL_MS = 10 * 60_000;
@@ -39,46 +40,43 @@ export function createQuickActionLauncherCard(params: {
           tag: "markdown",
           content: "Run common actions without typing raw commands.",
         },
-        {
-          tag: "action",
-          actions: [
-            buildFeishuCardButton({
-              label: "Help",
-              value: createFeishuCardInteractionEnvelope({
-                k: "quick",
-                a: "feishu.quick_actions.help",
-                q: "/help",
-                c: context,
-              }),
+        actionRowToColumnSet([
+          buildFeishuCardButton({
+            label: "Help",
+            value: createFeishuCardInteractionEnvelope({
+              k: "quick",
+              a: "feishu.quick_actions.help",
+              q: "/help",
+              c: context,
             }),
-            buildFeishuCardButton({
-              label: "New session",
-              type: "primary",
-              value: createFeishuCardInteractionEnvelope({
-                k: "meta",
-                a: FEISHU_APPROVAL_REQUEST_ACTION,
-                m: {
-                  command: "/new",
-                  prompt: "Start a fresh session? This will reset the current chat context.",
-                },
-                c: context,
-              }),
+          }),
+          buildFeishuCardButton({
+            label: "New session",
+            type: "primary",
+            value: createFeishuCardInteractionEnvelope({
+              k: "meta",
+              a: FEISHU_APPROVAL_REQUEST_ACTION,
+              m: {
+                command: "/new",
+                prompt: "Start a fresh session? This will reset the current chat context.",
+              },
+              c: context,
             }),
-            buildFeishuCardButton({
-              label: "Reset",
-              type: "danger",
-              value: createFeishuCardInteractionEnvelope({
-                k: "meta",
-                a: FEISHU_APPROVAL_REQUEST_ACTION,
-                m: {
-                  command: "/reset",
-                  prompt: "Reset this session now? Any active conversation state will be cleared.",
-                },
-                c: context,
-              }),
+          }),
+          buildFeishuCardButton({
+            label: "Reset",
+            type: "danger",
+            value: createFeishuCardInteractionEnvelope({
+              k: "meta",
+              a: FEISHU_APPROVAL_REQUEST_ACTION,
+              m: {
+                command: "/reset",
+                prompt: "Reset this session now? Any active conversation state will be cleared.",
+              },
+              c: context,
             }),
-          ],
-        },
+          }),
+        ]),
       ],
     },
   };
