@@ -32,10 +32,27 @@ function createSlackMessageIdActionSchema(): Record<string, TSchema> {
 
 function createSlackSendActionSchema(): Record<string, TSchema> {
   return {
+    topLevel: Type.Optional(
+      Type.Boolean({
+        description:
+          'Slack-only opt-out for action="send" from a threaded same-channel context. Set true to post a new parent-channel message instead of inheriting the current Slack thread. `threadId: null` is accepted as the same top-level request.',
+      }),
+    ),
     replyBroadcast: Type.Optional(
       Type.Boolean({
         description:
           'Slack-only opt-in for action="send" thread replies. Set true with threadId or replyTo on text/block sends to also broadcast the reply to the parent channel. Not supported for media or upload-file.',
+      }),
+    ),
+  };
+}
+
+function createSlackTopLevelActionSchema(): Record<string, TSchema> {
+  return {
+    topLevel: Type.Optional(
+      Type.Boolean({
+        description:
+          "Slack-only opt-out from threaded same-channel context. Set true to post at the channel root instead of inheriting the current Slack thread.",
       }),
     ),
   };
@@ -66,6 +83,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackSendActionSchema(),
       actions: ["send"],
+    });
+  }
+  if (actions.includes("upload-file")) {
+    schema.push({
+      properties: createSlackTopLevelActionSchema(),
+      actions: ["upload-file"],
     });
   }
   const messageIdActions: ChannelMessageActionName[] = [];

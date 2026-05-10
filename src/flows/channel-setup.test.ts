@@ -78,7 +78,7 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
   } as unknown as PluginRegistry;
 }
 
-function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
   return call?.[0] as T;

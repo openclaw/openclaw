@@ -22,14 +22,18 @@ vi.mock("./channel-resolution.js", () => ({
   resolveOutboundChannelMessageAdapter: resolveOutboundChannelMessageAdapterMock,
 }));
 
-function mockCallArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0): T {
+function mockCallArg<T>(
+  mock: { mock: { calls: unknown[][] } },
+  index = 0,
+  _type?: (value: T) => T,
+): T {
   const call = mock.mock.calls[index];
   expect(call).toBeDefined();
   return call[0] as T;
 }
 
 function expectMockMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
-  const messages = mock.mock.calls.map((call) => String(call[0] ?? ""));
+  const messages = mock.mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
   expect(messages.some((message) => message.includes(expected))).toBe(true);
 }
 

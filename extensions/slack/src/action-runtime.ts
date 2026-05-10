@@ -108,10 +108,14 @@ function resolveThreadTsFromContext(
   explicitThreadTs: string | undefined,
   targetChannel: string,
   context: SlackActionContext | undefined,
+  opts?: { suppressImplicitThread?: boolean },
 ): string | undefined {
   // Agent explicitly provided threadTs - use it
   if (explicitThreadTs) {
     return explicitThreadTs;
+  }
+  if (opts?.suppressImplicitThread) {
+    return undefined;
   }
   // No context or missing required fields
   if (!context?.currentThreadTs || !context?.currentChannelId) {
@@ -253,6 +257,9 @@ export async function handleSlackAction(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
         const sendOpts = {
           ...writeOpts,
@@ -311,6 +318,9 @@ export async function handleSlackAction(
           readStringParam(params, "threadTs"),
           to,
           context,
+          {
+            suppressImplicitThread: params.topLevel === true || params.threadTs === null,
+          },
         );
         const result = await slackActionRuntime.sendSlackMessage(to, initialComment ?? "", {
           ...writeOpts,
