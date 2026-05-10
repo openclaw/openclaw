@@ -316,11 +316,36 @@ describe("cron tool", () => {
     });
   });
 
+  it("allows scoped isolated cron runs to inspect current job run history", async () => {
+    callGatewayMock.mockResolvedValueOnce({ runs: [], total: 0 });
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await tool.execute("call-runs-current", {
+      action: "runs",
+      jobId: "job-current",
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.runs");
+    expect(params).toEqual({ id: "job-current" });
+  });
+
+  it("denies scoped isolated cron runs from inspecting another job's run history", async () => {
+    const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
+
+    await expect(
+      tool.execute("call-runs-other", {
+        action: "runs",
+        jobId: "job-other",
+      }),
+    ).rejects.toThrow("Cron tool is restricted to removing the current cron job.");
+
+    expect(callGatewayMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["add", { action: "add", job: buildReminderAgentTurnJob() }],
     ["update", { action: "update", jobId: "job-current", patch: { enabled: false } }],
     ["run", { action: "run", jobId: "job-current" }],
-    ["runs", { action: "runs", jobId: "job-current" }],
     ["wake", { action: "wake", text: "wake up" }],
   ])("denies scoped isolated cron runs from using %s", async (_action, args) => {
     const tool = createTestCronTool({ selfRemoveOnlyJobId: "job-current" });
