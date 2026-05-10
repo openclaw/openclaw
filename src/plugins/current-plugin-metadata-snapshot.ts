@@ -5,6 +5,7 @@ import {
   setCurrentPluginMetadataSnapshotState,
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
+import { resolveInstalledManifestRegistryIndexFingerprint } from "./manifest-registry-installed.js";
 import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
@@ -21,6 +22,13 @@ export function resolvePluginMetadataControlPlaneFingerprint(
   });
 }
 
+function resolveSnapshotInventoryFingerprint(snapshot: PluginMetadataSnapshot): string {
+  return (
+    snapshot.inventoryFingerprint ??
+    resolveInstalledManifestRegistryIndexFingerprint(snapshot.index)
+  );
+}
+
 // Single-slot Gateway-owned handoff. Replace or clear it at lifecycle boundaries;
 // never accumulate historical metadata snapshots here.
 export function setCurrentPluginMetadataSnapshot(
@@ -32,6 +40,7 @@ export function setCurrentPluginMetadataSnapshot(
     workspaceDir?: string;
   } = {},
 ): void {
+  const inventoryFingerprint = snapshot ? resolveSnapshotInventoryFingerprint(snapshot) : undefined;
   const compatiblePolicyHashes = snapshot
     ? options.compatibleConfigs?.map((config) => resolveInstalledPluginIndexPolicyHash(config))
     : undefined;
@@ -39,7 +48,7 @@ export function setCurrentPluginMetadataSnapshot(
     ? options.compatibleConfigs?.map((config, index) =>
         resolvePluginMetadataControlPlaneFingerprint(config, {
           env: options.env,
-          index: snapshot.index,
+          inventoryFingerprint,
           policyHash: compatiblePolicyHashes?.[index],
           workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
         }),
@@ -50,7 +59,7 @@ export function setCurrentPluginMetadataSnapshot(
     snapshot
       ? resolvePluginMetadataControlPlaneFingerprint(options.config, {
           env: options.env,
-          index: snapshot.index,
+          inventoryFingerprint,
           policyHash: snapshot.policyHash,
           workspaceDir: options.workspaceDir ?? snapshot.workspaceDir,
         })
@@ -95,10 +104,11 @@ export function getCurrentPluginMetadataSnapshot(
   const requestedWorkspaceDir =
     params.workspaceDir ??
     (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
+  const inventoryFingerprint = resolveSnapshotInventoryFingerprint(snapshot);
   if (params.config) {
     const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
       env: params.env,
-      index: snapshot.index,
+      inventoryFingerprint,
       policyHash: requestedPolicyHash,
       workspaceDir: requestedWorkspaceDir,
     });
@@ -116,7 +126,7 @@ export function getCurrentPluginMetadataSnapshot(
       {},
       {
         env: params.env,
-        index: snapshot.index,
+        inventoryFingerprint,
         policyHash: snapshot.policyHash,
         workspaceDir: requestedWorkspaceDir,
       },
