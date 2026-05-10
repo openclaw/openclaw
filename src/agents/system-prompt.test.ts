@@ -1256,7 +1256,10 @@ describe("buildSubagentSystemPrompt", () => {
     expect(prompt).toContain(
       "After spawning children, do NOT call sessions_list, sessions_history, exec sleep, or any polling tool.",
     );
-    expect(prompt).toContain("call `sessions_yield` to end the turn and wait");
+    expect(prompt).toContain(
+      "If required completions have not arrived yet and `sessions_yield` is available",
+    );
+    expect(prompt).toContain("If it is not available, do not invent polling loops");
     expect(prompt).toContain("expected output, relevant files/inputs, write scope");
     expect(prompt).toContain(
       "Track expected child session keys and only send your final answer after completion events for ALL expected children arrive.",
