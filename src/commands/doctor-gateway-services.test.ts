@@ -1015,12 +1015,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair({ gateway: {} });
 
-        const gatewayConfigNotes = mocks.note.mock.calls.filter(
-          (args: unknown[]) => args[1] === "Gateway service config",
-        );
         // source-checkout content and audit issues must appear in the same note body
-        expect(gatewayConfigNotes[0][0]).toContain("resolves to a source checkout");
-        expect(gatewayConfigNotes[0][0]).toContain("Gateway port mismatch");
+        expectNoteContaining("resolves to a source checkout", "Gateway service config");
+        expectNoteContaining("Gateway port mismatch", "Gateway service config");
+        // verify only one "Gateway service config" panel fires (not two separate ones)
+        const allGatewayConfigCalls = mocks.note.mock.calls.filter(
+          (args) => args[1] === "Gateway service config",
+        );
+        expect(allGatewayConfigCalls).toHaveLength(1);
       } finally {
         await fs.rm(root, { recursive: true, force: true });
       }
