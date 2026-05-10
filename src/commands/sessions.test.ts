@@ -338,4 +338,51 @@ describe("sessionsCommand", () => {
 
     fs.rmSync(store);
   });
+
+  it("exposes subagent runtime parent metadata in JSON output", async () => {
+    const store = writeStore({
+      "sub:abc123": {
+        sessionId: "sub-session",
+        updatedAt: Date.now() - 2 * 60_000,
+        spawnedBy: "main",
+        spawnedWorkspaceDir: "/workspace/abc",
+        spawnDepth: 1,
+        subagentRole: "leaf",
+        subagentControlScope: "none",
+        label: "Research agent",
+        status: "done",
+        sessionStartedAt: Date.now() - 10 * 60_000,
+        lastInteractionAt: Date.now() - 3 * 60_000,
+        sessionFile: "/path/to/transcript.jsonl",
+      },
+    });
+
+    const payload = await runSessionsJson<{
+      sessions?: Array<{
+        key: string;
+        spawnedBy?: string;
+        spawnedWorkspaceDir?: string;
+        spawnDepth?: number;
+        subagentRole?: string;
+        subagentControlScope?: string;
+        label?: string;
+        status?: string;
+        sessionStartedAt?: number;
+        lastInteractionAt?: number;
+        sessionFile?: string;
+      }>;
+    }>(sessionsCommand, store);
+
+    const sub = payload.sessions?.find((row) => row.key === "sub:abc123");
+    expect(sub?.spawnedBy).toBe("main");
+    expect(sub?.spawnedWorkspaceDir).toBe("/workspace/abc");
+    expect(sub?.spawnDepth).toBe(1);
+    expect(sub?.subagentRole).toBe("leaf");
+    expect(sub?.subagentControlScope).toBe("none");
+    expect(sub?.label).toBe("Research agent");
+    expect(sub?.status).toBe("done");
+    expect(typeof sub?.sessionStartedAt).toBe("number");
+    expect(typeof sub?.lastInteractionAt).toBe("number");
+    expect(sub?.sessionFile).toBe("/path/to/transcript.jsonl");
+  });
 });
