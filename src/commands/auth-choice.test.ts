@@ -617,6 +617,29 @@ describe("applyAuthChoice", () => {
   async function readAuthProfile(profileId: string) {
     return (await readAuthProfiles()).profiles?.[profileId];
   }
+  function expectAuthProfileConfig(
+    result: { config: OpenClawConfig },
+    profileId: string,
+    expected: { provider: string; mode: string },
+  ) {
+    const profile = result.config.auth?.profiles?.[profileId];
+    expect(profile?.provider).toBe(expected.provider);
+    expect(profile?.mode).toBe(expected.mode);
+  }
+  function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
+    return mock.mock.calls.map((call) => String((call[0] as { message?: unknown })?.message ?? ""));
+  }
+  function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
+    expect(promptMessages(mock).some((message) => message.includes(expected))).toBe(true);
+  }
+  function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
+    expect(promptMessages(mock)).toContain(expected);
+  }
+  function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }): T {
+    const call = mock.mock.calls[0];
+    expect(call).toBeDefined();
+    return call?.[0] as T;
+  }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];
 
@@ -695,7 +718,7 @@ describe("applyAuthChoice", () => {
       },
     });
 
-    expect(result.config.auth?.profiles?.["anthropic:default"]).toMatchObject({
+    expectAuthProfileConfig(result, "anthropic:default", {
       provider: "anthropic",
       mode: "token",
     });
@@ -782,10 +805,8 @@ describe("applyAuthChoice", () => {
         setDefaultModel: true,
       });
 
-      expect(text).toHaveBeenCalledWith(
-        expect.objectContaining({ message: expect.stringContaining(scenario.promptContains) }),
-      );
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectPromptMessageContaining(text, scenario.promptContains);
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -858,15 +879,14 @@ describe("applyAuthChoice", () => {
         expect(detectZaiEndpoint).toHaveBeenCalledWith(scenario.expectedDetectCall);
       }
       if (scenario.shouldPromptForEndpoint) {
-        expect(select).toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint", initialValue: "global" }),
-        );
+        const endpointPrompt = select.mock.calls
+          .map((call) => call[0] as { message?: string; initialValue?: string })
+          .find((call) => call.message === "Select Z.AI endpoint");
+        expect(endpointPrompt?.initialValue).toBe("global");
       } else {
-        expect(select).not.toHaveBeenCalledWith(
-          expect.objectContaining({ message: "Select Z.AI endpoint" }),
-        );
+        expect(promptMessages(select)).not.toContain("Select Z.AI endpoint");
       }
-      expect(result.config.auth?.profiles?.["zai:default"]).toMatchObject({
+      expectAuthProfileConfig(result, "zai:default", {
         provider: "zai",
         mode: "api_key",
       });
@@ -932,7 +952,7 @@ describe("applyAuthChoice", () => {
 
       expect(text).not.toHaveBeenCalled();
       expect(confirm).not.toHaveBeenCalled();
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -996,16 +1016,12 @@ describe("applyAuthChoice", () => {
       });
 
       if (scenario.expectEnvPrompt) {
-        expect(confirm).toHaveBeenCalledWith(
-          expect.objectContaining({
-            message: expect.stringContaining(scenario.envKey),
-          }),
-        );
+        expectPromptMessageContaining(confirm, scenario.envKey);
       } else {
         expect(confirm).not.toHaveBeenCalled();
       }
       expect(text).toHaveBeenCalledTimes(scenario.expectedTextCalls);
-      expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+      expectAuthProfileConfig(result, scenario.profileId, {
         provider: scenario.provider,
         mode: "api_key",
       });
@@ -1104,7 +1120,7 @@ describe("applyAuthChoice", () => {
       });
 
       expect(result.config.plugins?.entries?.["github-copilot"]).toEqual({ enabled: true });
-      expect(result.config.auth?.profiles?.["github-copilot:github"]).toMatchObject({
+      expectAuthProfileConfig(result, "github-copilot:github", {
         provider: "github-copilot",
         mode: "token",
       });
@@ -1141,19 +1157,14 @@ describe("applyAuthChoice", () => {
       setDefaultModel: false,
     });
 
-    expect(resolvePluginProviders).toHaveBeenCalledWith(
-      expect.objectContaining({
-        env,
-        mode: "setup",
-      }),
+    const providerResolveInput = firstCallArg<{ env?: NodeJS.ProcessEnv; mode?: string }>(
+      resolvePluginProviders,
     );
-    expect(confirm).toHaveBeenCalledWith(
-      expect.objectContaining({
-        message: expect.stringContaining("OPENAI_API_KEY"),
-      }),
-    );
+    expect(providerResolveInput.env).toBe(env);
+    expect(providerResolveInput.mode).toBe("setup");
+    expectPromptMessageContaining(confirm, "OPENAI_API_KEY");
     expect(text).not.toHaveBeenCalled();
-    expect(result.config.auth?.profiles?.["openai:default"]).toMatchObject({
+    expectAuthProfileConfig(result, "openai:default", {
       provider: "openai",
       mode: "api_key",
     });
@@ -1211,15 +1222,13 @@ describe("applyAuthChoice", () => {
         agentId: scenario.agentId,
       });
 
-      expect(text).toHaveBeenCalledWith(
-        expect.objectContaining({ message: scenario.promptMessage }),
-      );
+      expectPromptMessage(text, scenario.promptMessage);
       expect(resolveAgentModelPrimaryValue(result.config.agents?.defaults?.model)).toBe(
         scenario.existingPrimary,
       );
       expect(result.agentModelOverride).toBe(scenario.expectedOverride);
       if (scenario.profileId && scenario.profileProvider) {
-        expect(result.config.auth?.profiles?.[scenario.profileId]).toMatchObject({
+        expectAuthProfileConfig(result, scenario.profileId, {
           provider: scenario.profileProvider,
           mode: "api_key",
         });

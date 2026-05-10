@@ -115,22 +115,17 @@ describe("handleClickClackInbound", () => {
 
     expect(runtime.channel.turn.runPrepared).not.toHaveBeenCalled();
     expect(runtime.agent.runEmbeddedPiAgent).not.toHaveBeenCalled();
-    expect(runtime.llm.complete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentId: "service-bot",
-        model: "openai/gpt-5.4-mini",
-        maxTokens: 96,
-        purpose: "clickclack bot reply",
-        messages: [{ role: "user", content: "hello bot" }],
-      }),
-    );
-    expect(sendClickClackTextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        accountId: "service",
-        to: "channel:chn_1",
-        text: "service bot online",
-        replyToId: "msg_1",
-      }),
-    );
+    const completionRequest = runtime.llm.complete.mock.calls[0]?.[0];
+    expect(completionRequest?.agentId).toBe("service-bot");
+    expect(completionRequest?.model).toBe("openai/gpt-5.4-mini");
+    expect(completionRequest?.maxTokens).toBe(96);
+    expect(completionRequest?.purpose).toBe("clickclack bot reply");
+    expect(completionRequest?.messages).toEqual([{ role: "user", content: "hello bot" }]);
+
+    const sendRequest = sendClickClackTextMock.mock.calls[0]?.[0];
+    expect(sendRequest?.accountId).toBe("service");
+    expect(sendRequest?.to).toBe("channel:chn_1");
+    expect(sendRequest?.text).toBe("service bot online");
+    expect(sendRequest?.replyToId).toBe("msg_1");
   });
 });

@@ -153,6 +153,38 @@ describe("handleSlackMessageAction", () => {
     expectForwardedCfg(invoke, cfg);
   });
 
+  it("passes replyBroadcast through for Slack thread sends", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "Visible from the channel",
+          threadId: "111.222",
+          replyBroadcast: true,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:C1",
+        content: "Visible from the channel",
+        threadTs: "111.222",
+        replyBroadcast: true,
+      }),
+      cfg,
+      undefined,
+    );
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();
@@ -188,6 +220,25 @@ describe("handleSlackMessageAction", () => {
       undefined,
     );
     expectForwardedCfg(invoke, cfg);
+  });
+
+  it("rejects replyBroadcast for upload-file", async () => {
+    await expect(
+      handleSlackMessageAction({
+        providerId: "slack",
+        ctx: {
+          action: "upload-file",
+          cfg: {},
+          params: {
+            to: "channel:C1",
+            filePath: "/tmp/report.png",
+            threadId: "111.222",
+            replyBroadcast: true,
+          },
+        } as never,
+        invoke: createInvokeSpy() as never,
+      }),
+    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
   });
 
   it("maps upload-file aliases to upload params", async () => {

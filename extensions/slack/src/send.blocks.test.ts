@@ -254,6 +254,44 @@ describe("sendMessageSlack blocks", () => {
     expect(result.receipt.threadId).toBe("171234.100");
   });
 
+  it("passes reply_broadcast for threaded text sends only on the first chunk", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "a".repeat(8500), {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      threadTs: "171234.100",
+      replyBroadcast: true,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(2);
+    expect(client.chat.postMessage.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({
+        thread_ts: "171234.100",
+        reply_broadcast: true,
+      }),
+    );
+    expect(client.chat.postMessage.mock.calls[1]?.[0]).not.toHaveProperty("reply_broadcast");
+  });
+
+  it("does not pass reply_broadcast when no thread is selected", async () => {
+    const client = createSlackSendTestClient();
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      replyBroadcast: true,
+    });
+
+    expect(client.chat.postMessage).toHaveBeenCalledWith(
+      expect.not.objectContaining({
+        reply_broadcast: true,
+      }),
+    );
+  });
+
   it("does not retry Slack platform errors", async () => {
     const client = createSlackSendTestClient();
     const platformError = Object.assign(
@@ -372,6 +410,21 @@ describe("sendMessageSlack blocks", () => {
         blocks: [{ type: "divider" }],
       }),
     ).rejects.toThrow(/does not support blocks with mediaUrl/i);
+    expect(client.chat.postMessage).not.toHaveBeenCalled();
+  });
+
+  it("rejects replyBroadcast combined with mediaUrl", async () => {
+    const client = createSlackSendTestClient();
+    await expect(
+      sendMessageSlack("channel:C123", "hi", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        mediaUrl: "https://example.com/image.png",
+        threadTs: "171234.100",
+        replyBroadcast: true,
+      }),
+    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
     expect(client.chat.postMessage).not.toHaveBeenCalled();
   });
 

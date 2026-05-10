@@ -129,7 +129,8 @@ describe("irc inbound behavior", () => {
       expect.stringContaining("Your IRC id: alice!ident@example.com"),
       undefined,
     );
-    expect(sendReply).toHaveBeenCalledWith("alice", expect.stringContaining("CODE"), undefined);
+    const replyMessages = sendReply.mock.calls.map((call) => String(call[1]));
+    expect(replyMessages.some((message) => message.includes("CODE"))).toBe(true);
   });
 
   it("drops unauthorized group control commands before dispatch", async () => {
@@ -184,10 +185,7 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
-    expect(coreRuntime.channel.turn.runAssembled).toHaveBeenCalledWith(
-      expect.objectContaining({
-        replyPipeline: {},
-      }),
-    );
+    const assembledRequest = coreRuntime.channel.turn.runAssembled.mock.calls[0]?.[0];
+    expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

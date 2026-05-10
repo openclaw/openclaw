@@ -197,6 +197,52 @@ function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEng
   return engine;
 }
 
+type MockCallReader = { mock: { calls: unknown[][] } };
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstCallArg<T>(mock: unknown, label: string): T {
+  const call = (mock as MockCallReader).mock.calls.at(0);
+  if (!call) {
+    throw new Error(`expected ${label} to be called`);
+  }
+  return call[0] as T;
+}
+
+function requireRequestParams(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  method: string,
+): Record<string, unknown> {
+  const request = harness.requests.find((entry) => entry.method === method);
+  return requireRecord(request?.params, `${method} params`);
+}
+
+function requireArray(value: unknown, label: string): unknown[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`expected ${label} to be an array`);
+  }
+  return value;
+}
+
+function expectRequestInputTextContains(
+  harness: ReturnType<typeof createStartedThreadHarness>,
+  expected: string,
+): void {
+  const params = requireRequestParams(harness, "turn/start");
+  const input = requireArray(params.input, "turn/start input");
+  expect(
+    input.some((entry) => {
+      const item = requireRecord(entry, "turn/start input entry");
+      return item.type === "text" && String(item.text ?? "").includes(expected);
+    }),
+  ).toBe(true);
+}
+
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-context-engine-"));
@@ -225,46 +271,36 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
 
-    expect(contextEngine.bootstrap).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        sessionFile,
-      }),
+    if (!contextEngine.bootstrap) {
+      throw new Error("expected bootstrap hook");
+    }
+    expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
+    const bootstrapParams = requireFirstCallArg<
+      Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]
+    >(contextEngine.bootstrap, "bootstrap");
+    expect(bootstrapParams.sessionId).toBe("session-1");
+    expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
+    expect(bootstrapParams.sessionFile).toBe(sessionFile);
+
+    expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
+    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
+      contextEngine.assemble,
+      "assemble",
     );
-    expect(contextEngine.assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionId: "session-1",
-        sessionKey: "agent:main:session-1",
-        tokenBudget: 321,
-        citationsMode: "on",
-        model: "gpt-5.4-codex",
-        prompt: "hello",
-        messages: [expect.objectContaining({ role: "assistant" })],
-        availableTools: new Set(),
-      }),
+    expect(assembleParams.sessionId).toBe("session-1");
+    expect(assembleParams.sessionKey).toBe("agent:main:session-1");
+    expect(assembleParams.tokenBudget).toBe(321);
+    expect(assembleParams.citationsMode).toBe("on");
+    expect(assembleParams.model).toBe("gpt-5.4-codex");
+    expect(assembleParams.prompt).toBe("hello");
+    expect(assembleParams.messages.map((message) => message.role)).toEqual(["assistant"]);
+    expect(assembleParams.availableTools).toEqual(new Set());
+
+    const threadStartParams = requireRequestParams(harness, "thread/start");
+    expect(String(threadStartParams.developerInstructions ?? "")).toContain(
+      "context-engine system",
     );
-    expect(harness.requests).toEqual(
-      expect.arrayContaining([
-        {
-          method: "thread/start",
-          params: expect.objectContaining({
-            developerInstructions: expect.stringContaining("context-engine system"),
-          }),
-        },
-        {
-          method: "turn/start",
-          params: expect.objectContaining({
-            input: expect.arrayContaining([
-              expect.objectContaining({
-                type: "text",
-                text: expect.stringContaining("OpenClaw assembled context for this turn:"),
-              }),
-            ]),
-          }),
-        },
-      ]),
-    );
+    expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
 
     await harness.completeTurn();
     await run;
@@ -290,19 +326,15 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
 
     expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = afterTurn.mock.calls.at(0)?.[0];
-    expect(afterTurnCall).toMatchObject({
-      sessionId: "session-1",
-      sessionKey: "agent:main:session-1",
-      prePromptMessageCount: 0,
-      tokenBudget: 111,
-    });
-    expect(afterTurnCall?.messages).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ role: "user" }),
-        expect.objectContaining({ role: "assistant" }),
-      ]),
-    );
+    const afterTurnCall = requireFirstCallArg<
+      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
+    >(afterTurn, "afterTurn");
+    expect(afterTurnCall.sessionId).toBe("session-1");
+    expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
+    expect(afterTurnCall.prePromptMessageCount).toBe(0);
+    expect(afterTurnCall.tokenBudget).toBe(111);
+    expect(afterTurnCall.messages.some((message) => message.role === "user")).toBe(true);
+    expect(afterTurnCall.messages.some((message) => message.role === "assistant")).toBe(true);
     expect(maintain).toHaveBeenCalledTimes(1);
   });
 
@@ -337,30 +369,19 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    expect(contextEngine.assemble).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messages: [
-          expect.objectContaining({ role: "assistant" }),
-          expect.objectContaining({ role: "assistant" }),
-        ],
-      }),
+    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
+      contextEngine.assemble,
+      "assemble",
     );
-    expect(afterTurn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        prePromptMessageCount: 2,
-      }),
-    );
-    const turnStart = harness.requests.find((request) => request.method === "turn/start");
-    expect(turnStart?.params).toEqual(
-      expect.objectContaining({
-        input: expect.arrayContaining([
-          expect.objectContaining({
-            type: "text",
-            text: expect.stringContaining("bootstrap context"),
-          }),
-        ]),
-      }),
-    );
+    expect(assembleParams.messages.map((message) => message.role)).toEqual([
+      "assistant",
+      "assistant",
+    ]);
+    const afterTurnParams = requireFirstCallArg<
+      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
+    >(afterTurn, "afterTurn");
+    expect(afterTurnParams.prePromptMessageCount).toBe(2);
+    expectRequestInputTextContains(harness, "bootstrap context");
   });
 
   it("logs assemble failures as a formatted message instead of the raw error object", async () => {
@@ -383,19 +404,13 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    expect(warn).toHaveBeenCalledWith(
-      "context engine assemble failed; using Codex baseline prompt",
-      {
-        error: expect.any(String),
-      },
-    );
     const warning = warn.mock.calls.find(
       ([message]) => message === "context engine assemble failed; using Codex baseline prompt",
     );
+    const details = requireRecord(warning?.[1], "assemble warning details");
+    expect(typeof details.error).toBe("string");
     expect(warning?.[1]).not.toEqual({ error: rawError });
-    expect(String((warning?.[1] as { error?: unknown } | undefined)?.error)).not.toContain(
-      "sk-abcdefghijklmnopqrstuv",
-    );
+    expect(String(details.error)).not.toContain("sk-abcdefghijklmnopqrstuv");
   });
 
   it("falls back to ingestBatch and skips turn maintenance on prompt failure", async () => {

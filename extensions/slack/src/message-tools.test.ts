@@ -172,6 +172,25 @@ describe("Slack message tools", () => {
     expect(alias.description).toMatch(/Alias for messageId/i);
   });
 
+  it("describes Slack reply broadcasts as send-only thread hints", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+    });
+
+    const { schema, property } = requireSchemaProperty(discovery, "replyBroadcast");
+
+    expect(schema.actions).toEqual(["send"]);
+    expect(property.description).toContain('action="send"');
+    expect(property.description).toContain("threadId");
+    expect(property.description).toContain("Not supported for media or upload-file");
+  });
+
   it("omits Slack file and message id schemas when those actions are disabled", () => {
     const discovery = describeSlackMessageTool({
       cfg: {
@@ -191,6 +210,13 @@ describe("Slack message tools", () => {
     });
 
     expect(discovery.actions).toEqual(["send"]);
-    expect(discovery.schema).toBeNull();
+    const schemas = Array.isArray(discovery.schema)
+      ? discovery.schema
+      : discovery.schema
+        ? [discovery.schema]
+        : [];
+    expect(schemas.some((entry) => "fileId" in entry.properties)).toBe(false);
+    expect(schemas.some((entry) => "messageId" in entry.properties)).toBe(false);
+    expect(schemas.some((entry) => "replyBroadcast" in entry.properties)).toBe(true);
   });
 });

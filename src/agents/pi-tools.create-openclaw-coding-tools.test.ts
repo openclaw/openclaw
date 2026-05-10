@@ -10,6 +10,7 @@ import {
 import "./test-helpers/fast-bash-tools.js";
 import "./test-helpers/fast-coding-tools.js";
 import "./test-helpers/fast-openclaw-tools.js";
+import * as openClawPluginTools from "./openclaw-plugin-tools.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { createOpenClawCodingTools } from "./pi-tools.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
@@ -417,6 +418,40 @@ describe("createOpenClawCodingTools", () => {
     });
 
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+  });
+
+  it("forwards active model metadata to plugin-only tool construction", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+    const resolvePluginToolsSpy = vi
+      .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
+      .mockReturnValue([]);
+
+    try {
+      createOpenClawCodingTools({
+        config: testConfig,
+        includeCoreTools: false,
+        runtimeToolAllowlist: ["memory_search"],
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+        toolConstructionPlan: {
+          includeBaseCodingTools: false,
+          includeShellTools: false,
+          includeChannelTools: false,
+          includeOpenClawTools: false,
+          includePluginTools: true,
+        },
+      });
+
+      expect(createOpenClawToolsMock).not.toHaveBeenCalled();
+      expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
+      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options).toMatchObject({
+        modelProvider: "openrouter",
+        modelId: "openrouter/auto",
+      });
+    } finally {
+      resolvePluginToolsSpy.mockRestore();
+    }
   });
 
   it("uses tools.alsoAllow for optional plugin discovery without widening to all plugins", () => {

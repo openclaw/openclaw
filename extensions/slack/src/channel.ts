@@ -47,7 +47,7 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "./channel-api.js";
-import { resolveSlackChannelType } from "./channel-type.js";
+import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
 import { resolveSlackGroupRequireMention, resolveSlackGroupToolPolicy } from "./group-policy.js";
 import {
@@ -276,7 +276,19 @@ async function resolveSlackOutboundSessionRoute(params: {
   }
   const isDm = parsed.kind === "user";
   let peerKind: "direct" | "channel" | "group" = isDm ? "direct" : "channel";
-  if (!isDm && /^G/i.test(parsed.id)) {
+  let peerId = parsed.id;
+  if (!isDm && /^D/i.test(parsed.id)) {
+    const conversation = await resolveSlackConversationInfo({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      channelId: parsed.id,
+    });
+    if (conversation.type !== "dm" || !conversation.user) {
+      return null;
+    }
+    peerKind = "direct";
+    peerId = conversation.user;
+  } else if (!isDm && /^G/i.test(parsed.id)) {
     const channelType = await resolveSlackChannelType({
       cfg: params.cfg,
       accountId: params.accountId,
@@ -291,7 +303,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   }
   const peer: RoutePeer = {
     kind: peerKind,
-    id: parsed.id,
+    id: peerId,
   };
   const baseSessionKey = buildSlackBaseSessionKey({
     cfg: params.cfg,
@@ -307,11 +319,11 @@ async function resolveSlackOutboundSessionRoute(params: {
       chatType: peerKind === "direct" ? ("direct" as const) : ("channel" as const),
       from:
         peerKind === "direct"
-          ? `slack:${parsed.id}`
+          ? `slack:${peerId}`
           : peerKind === "group"
-            ? `slack:group:${parsed.id}`
-            : `slack:channel:${parsed.id}`,
-      to: peerKind === "direct" ? `user:${parsed.id}` : `channel:${parsed.id}`,
+            ? `slack:group:${peerId}`
+            : `slack:channel:${peerId}`,
+      to: peerKind === "direct" ? `user:${peerId}` : `channel:${peerId}`,
     },
     replyToId: params.replyToId,
     threadId: params.threadId,
@@ -366,6 +378,10 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   deliveryMode: "direct",
   chunker: null,
   textChunkLimit: SLACK_TEXT_LIMIT,
+  normalizePayload: ({ payload, cfg, accountId }) =>
+    isSlackInteractiveRepliesEnabled({ cfg, accountId })
+      ? compileSlackInteractiveReplies(payload)
+      : payload,
   deliveryCapabilities: {
     durableFinal: {
       text: true,

@@ -252,6 +252,27 @@ describe("handleSlackAction", () => {
     });
   });
 
+  it("passes replyBroadcast to sendSlackMessage for thread replies", async () => {
+    const cfg = slackConfig();
+    await handleSlackAction(
+      {
+        action: "sendMessage",
+        to: "channel:C123",
+        content: "Hello thread",
+        threadTs: "1234567890.123456",
+        replyBroadcast: true,
+      },
+      cfg,
+    );
+    expectSlackSendCall(0, "channel:C123", "Hello thread", {
+      cfg,
+      mediaUrl: undefined,
+      threadTs: "1234567890.123456",
+      replyBroadcast: true,
+      blocks: undefined,
+    });
+  });
+
   it("returns a friendly error when downloadFile cannot fetch the attachment", async () => {
     downloadSlackFile.mockResolvedValueOnce(null);
     const result = await handleSlackAction(
@@ -434,6 +455,21 @@ describe("handleSlackAction", () => {
       uploadFileName: "report-final.png",
       uploadTitle: "Report Final",
     });
+  });
+
+  it("rejects replyBroadcast for uploadFile", async () => {
+    await expect(
+      handleSlackAction(
+        {
+          action: "uploadFile",
+          to: "channel:C123",
+          filePath: "/tmp/report.txt",
+          threadTs: "111.222",
+          replyBroadcast: true,
+        },
+        slackConfig(),
+      ),
+    ).rejects.toThrow(/replyBroadcast is only supported for text or block thread replies/i);
   });
 
   it("sends media before a separate blocks message", async () => {

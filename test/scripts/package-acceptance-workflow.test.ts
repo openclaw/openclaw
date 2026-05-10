@@ -7,6 +7,7 @@ const LIVE_E2E_WORKFLOW = ".github/workflows/openclaw-live-and-e2e-checks-reusab
 const NPM_TELEGRAM_WORKFLOW = ".github/workflows/npm-telegram-beta-e2e.yml";
 const PACKAGE_JSON = "package.json";
 const RELEASE_CHECKS_WORKFLOW = ".github/workflows/openclaw-release-checks.yml";
+const RELEASE_PUBLISH_WORKFLOW = ".github/workflows/openclaw-release-publish.yml";
 const FULL_RELEASE_VALIDATION_WORKFLOW = ".github/workflows/full-release-validation.yml";
 const QA_LIVE_TRANSPORTS_WORKFLOW = ".github/workflows/qa-live-transports-convex.yml";
 const UPDATE_MIGRATION_WORKFLOW = ".github/workflows/update-migration.yml";
@@ -239,6 +240,7 @@ describe("package artifact reuse", () => {
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:
         "${{ inputs.published_upgrade_survivor_baselines }}",
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "${{ inputs.published_upgrade_survivor_scenarios }}",
+      RELEASE_TEST_PROFILE: "${{ inputs.release_test_profile }}",
     });
     expect(workflow).toContain("plan_docker_lane_groups:");
     expect(workflow).toContain("targeted_docker_lane_group_size:");
@@ -341,12 +343,12 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
-    expect(workflow).toContain('add_profile_suite docker-live-models "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite docker-live-models "beta minimum stable full"');
     expect(workflow).toContain(
-      'add_profile_suite native-live-src-gateway-core "minimum stable full"',
+      'add_profile_suite native-live-src-gateway-core "beta minimum stable full"',
     );
     expect(workflow).toContain('add_profile_suite native-live-src-infra "stable full"');
-    expect(workflow).toContain('add_profile_suite live-gateway-docker "minimum stable full"');
+    expect(workflow).toContain('add_profile_suite live-gateway-docker "beta minimum stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-anthropic-docker "stable full"');
     expect(workflow).toContain('add_profile_suite live-gateway-advisory-docker "full"');
     expect(workflow).toContain(
@@ -828,5 +830,24 @@ describe("package artifact reuse", () => {
     );
     expect(workflow).toContain("(.started_at | ts) - (.created_at | ts)");
     expect(workflow).not.toContain('gh run view "$run_id" --json createdAt,jobs');
+  });
+
+  it("keeps release publish creation compatible with gh api and prerelease notes", () => {
+    const workflow = readFileSync(RELEASE_PUBLISH_WORKFLOW, "utf8");
+    const npmWorkflow = readFileSync(".github/workflows/openclaw-npm-release.yml", "utf8");
+
+    expect(workflow).toContain("timeout-minutes: 60");
+    expect(workflow).toContain("Download OpenClaw npm preflight manifest");
+    expect(workflow).toContain("Validate OpenClaw npm preflight manifest");
+    expect(workflow).toContain("preflight-manifest.json");
+    expect(npmWorkflow).toContain("preflight-manifest.json");
+    expect(npmWorkflow).toContain("tarballSha256");
+    expect(workflow).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/contents/CHANGELOG.md?ref=${TARGET_SHA}"',
+    );
+    expect(workflow).toContain('$0 == "## Unreleased" { in_section = 1; next }');
+    expect(workflow).toContain("Unreleased prerelease fallback");
+    expect(workflow).not.toContain("gh api --repo");
+    expect(workflow).not.toContain("timeout-minutes: 360");
   });
 });

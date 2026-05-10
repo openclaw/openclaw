@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const probeMock = vi.hoisted(() => ({
   getCachedIMessagePrivateApiStatus: vi.fn(),
+  probeIMessagePrivateApi: vi.fn(),
 }));
 
 const runtimeMock = vi.hoisted(() => ({
@@ -13,8 +14,28 @@ const runtimeMock = vi.hoisted(() => ({
   sendAttachment: vi.fn(),
 }));
 
+const loggerMock = vi.hoisted(() => ({
+  warn: vi.fn(),
+  info: vi.fn(),
+  error: vi.fn(),
+  debug: vi.fn(),
+  trace: vi.fn(),
+  fatal: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
+    "openclaw/plugin-sdk/runtime-env",
+  );
+  return {
+    ...actual,
+    createSubsystemLogger: () => loggerMock,
+  };
+});
+
 vi.mock("./probe.js", () => ({
   getCachedIMessagePrivateApiStatus: probeMock.getCachedIMessagePrivateApiStatus,
+  probeIMessagePrivateApi: probeMock.probeIMessagePrivateApi,
 }));
 
 vi.mock("./private-api-status.js", () => ({
@@ -48,6 +69,8 @@ describe("imessage message actions", () => {
     runtimeMock.sendRichMessage.mockReset();
     runtimeMock.sendAttachment.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
+    probeMock.probeIMessagePrivateApi.mockReset();
+    loggerMock.warn.mockReset();
   });
 
   it("does not advertise private API actions when the bridge is known unavailable", () => {
@@ -128,6 +151,33 @@ describe("imessage message actions", () => {
     expect(described?.actions).not.toContain("react");
     expect(described?.actions).not.toContain("reply");
     expect(described?.actions).toContain("edit");
+  });
+
+  it("emits a channels/imessage WARN when the private API bridge is unavailable", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue(undefined);
+    probeMock.probeIMessagePrivateApi.mockResolvedValue({
+      available: false,
+      v2Ready: false,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow(/imsg private API bridge/);
+
+    expect(loggerMock.warn).toHaveBeenCalledTimes(1);
+    const warnArg = String(loggerMock.warn.mock.calls[0][0]);
+    expect(warnArg).toMatch(/iMessage react blocked: private API bridge unavailable/);
+    expect(warnArg).toMatch(/imsg launch/);
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("rejects configured-off actions at execution time", async () => {

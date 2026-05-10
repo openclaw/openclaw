@@ -32,7 +32,7 @@ on:
         default: stable
         type: choice
         options:
-          - minimum
+          - beta
           - stable
           - full
       run_release_soak:
@@ -202,7 +202,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","ci"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 240
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 240 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -301,7 +301,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","plugin-prerelease"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 300
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 300 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -400,7 +400,7 @@ jobs:
     needs: [resolve_target]
     if: contains(fromJSON('["all","release-checks","install-smoke","cross-os","live-e2e","package","qa","qa-parity","qa-live"]'), inputs.rerun_group)
     runs-on: ubuntu-24.04
-    timeout-minutes: 720
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 720 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}
@@ -616,7 +616,7 @@ jobs:
     needs: [resolve_target, prepare_release_package]
     if: ${{ always() && contains(fromJSON('["all","npm-telegram"]'), inputs.rerun_group) && (inputs.npm_telegram_package_spec != '' || (inputs.rerun_group == 'all' && inputs.release_profile == 'full')) }}
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: ${{ inputs.release_profile == 'full' && 120 || 60 }}
     outputs:
       run_id: ${{ steps.dispatch.outputs.run_id }}
       url: ${{ steps.dispatch.outputs.url }}

@@ -195,58 +195,54 @@ describe("nextcloud-talk send cfg threading", () => {
     mockNextcloudMessageResponse(22346, 1_706_000_004);
     mockNextcloudMessageResponse(22347, 1_706_000_005);
 
-    await expect(
-      verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "nextcloud-talk",
-        adapter: nextcloudTalkMessageAdapter,
-        proofs: {
-          text: async () => {
-            const result = await nextcloudTalkMessageAdapter.send?.text?.({
-              cfg: cfg as CoreConfig,
-              to: "room:abc123",
-              text: "hello",
-              accountId: "work",
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["22345"]);
-          },
-          media: async () => {
-            const result = await nextcloudTalkMessageAdapter.send?.media?.({
-              cfg: cfg as CoreConfig,
-              to: "room:abc123",
-              text: "image",
-              mediaUrl: "https://example.com/image.png",
-              accountId: "work",
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["22346"]);
-            expect(fetchMock).toHaveBeenNthCalledWith(
-              2,
-              "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
-              expect.objectContaining({
-                body: JSON.stringify({
-                  message: "image\n\nAttachment: https://example.com/image.png",
-                }),
-              }),
-            );
-          },
-          replyTo: async () => {
-            const result = await nextcloudTalkMessageAdapter.send?.text?.({
-              cfg: cfg as CoreConfig,
-              to: "room:abc123",
-              text: "threaded",
-              replyToId: "parent-1",
-              accountId: "work",
-            });
-            expect(result?.receipt.replyToId).toBe("parent-1");
-          },
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "nextcloud-talk",
+      adapter: nextcloudTalkMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await nextcloudTalkMessageAdapter.send?.text?.({
+            cfg: cfg as CoreConfig,
+            to: "room:abc123",
+            text: "hello",
+            accountId: "work",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["22345"]);
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { capability: "text", status: "verified" },
-        { capability: "media", status: "verified" },
-        { capability: "replyTo", status: "verified" },
-      ]),
-    );
+        media: async () => {
+          const result = await nextcloudTalkMessageAdapter.send?.media?.({
+            cfg: cfg as CoreConfig,
+            to: "room:abc123",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+            accountId: "work",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["22346"]);
+          const mediaSendCall = fetchMock.mock.calls[1];
+          expect(mediaSendCall?.[0]).toBe(
+            "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/abc123/message",
+          );
+          expect((mediaSendCall?.[1] as RequestInit | undefined)?.body).toBe(
+            JSON.stringify({
+              message: "image\n\nAttachment: https://example.com/image.png",
+            }),
+          );
+        },
+        replyTo: async () => {
+          const result = await nextcloudTalkMessageAdapter.send?.text?.({
+            cfg: cfg as CoreConfig,
+            to: "room:abc123",
+            text: "threaded",
+            replyToId: "parent-1",
+            accountId: "work",
+          });
+          expect(result?.receipt.replyToId).toBe("parent-1");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
   });
 
   it("fails hard for sendReaction when cfg is omitted", async () => {

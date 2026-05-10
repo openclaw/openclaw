@@ -609,13 +609,12 @@ describe("handleLineWebhookEvents", () => {
     });
 
     expect(processMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "line",
-        id: "user-5",
-        accountId: "default",
-      }),
-    );
+    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+      | { accountId?: string; channel?: string; id?: string }
+      | undefined;
+    expect(pairingRequest?.channel).toBe("line");
+    expect(pairingRequest?.id).toBe("user-5");
+    expect(pairingRequest?.accountId).toBe("default");
   });
 
   it("does not authorize DM senders from another account's pairing-store entries", async () => {
@@ -657,13 +656,12 @@ describe("handleLineWebhookEvents", () => {
 
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
     expect(processMessage).not.toHaveBeenCalled();
-    expect(upsertPairingRequestMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "line",
-        id: "cross-account-user",
-        accountId: "work",
-      }),
-    );
+    const pairingRequest = upsertPairingRequestMock.mock.calls[0]?.[0] as
+      | { accountId?: string; channel?: string; id?: string }
+      | undefined;
+    expect(pairingRequest?.channel).toBe("line");
+    expect(pairingRequest?.id).toBe("cross-account-user");
+    expect(pairingRequest?.accountId).toBe("work");
   });
 
   it("deduplicates replayed webhook events by webhookEventId before processing", async () => {

@@ -30,6 +30,17 @@ function createSlackMessageIdActionSchema(): Record<string, TSchema> {
   };
 }
 
+function createSlackSendActionSchema(): Record<string, TSchema> {
+  return {
+    replyBroadcast: Type.Optional(
+      Type.Boolean({
+        description:
+          'Slack-only opt-in for action="send" thread replies. Set true with threadId or replyTo on text/block sends to also broadcast the reply to the parent channel. Not supported for media or upload-file.',
+      }),
+    ),
+  };
+}
+
 export function describeSlackMessageTool({
   cfg,
   accountId,
@@ -49,6 +60,12 @@ export function describeSlackMessageTool({
     schema.push({
       properties: createSlackFileActionSchema(),
       actions: ["download-file"],
+    });
+  }
+  if (actions.includes("send")) {
+    schema.push({
+      properties: createSlackSendActionSchema(),
+      actions: ["send"],
     });
   }
   const messageIdActions: ChannelMessageActionName[] = [];

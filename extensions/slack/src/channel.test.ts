@@ -12,6 +12,10 @@ const { handleSlackActionMock } = vi.hoisted(() => ({
 const { sendMessageSlackMock } = vi.hoisted(() => ({
   sendMessageSlackMock: vi.fn(),
 }));
+const { conversationsInfoMock, conversationsOpenMock } = vi.hoisted(() => ({
+  conversationsInfoMock: vi.fn(),
+  conversationsOpenMock: vi.fn(),
+}));
 
 vi.mock("./action-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./action-runtime.js")>("./action-runtime.js");
@@ -25,10 +29,25 @@ vi.mock("./send.runtime.js", () => ({
   sendMessageSlack: sendMessageSlackMock,
 }));
 
+vi.mock("./client.js", async () => {
+  const actual = await vi.importActual<typeof import("./client.js")>("./client.js");
+  return {
+    ...actual,
+    createSlackWebClient: vi.fn(() => ({
+      conversations: {
+        info: conversationsInfoMock,
+        open: conversationsOpenMock,
+      },
+    })),
+  };
+});
+
 beforeEach(async () => {
   handleSlackActionMock.mockReset();
   sendMessageSlackMock.mockReset();
   sendMessageSlackMock.mockResolvedValue({ messageId: "msg-1", channelId: "D123" });
+  conversationsInfoMock.mockReset();
+  conversationsOpenMock.mockReset();
   setSlackRuntime({
     channel: {
       slack: {
@@ -433,6 +452,122 @@ describe("slackPlugin status", () => {
       threadId: "1712345678.123456",
     });
   });
+
+  it("canonicalizes bare Slack IM channel targets to direct user session routes", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+    conversationsOpenMock.mockResolvedValueOnce({
+      channel: {
+        id: "D0AEWSDHAQH",
+        is_im: true,
+        user: "U09G2DJ0275",
+      },
+    });
+
+    const route = await resolveRoute({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      target: "D0AEWSDHAQH",
+      threadId: "1778110574.653649",
+    });
+
+    expect(conversationsOpenMock).toHaveBeenCalledWith({
+      channel: "D0AEWSDHAQH",
+      prevent_creation: true,
+      return_im: true,
+    });
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:direct:u09g2dj0275:thread:1778110574.653649",
+      baseSessionKey: "agent:main:slack:direct:u09g2dj0275",
+      peer: { kind: "direct", id: "U09G2DJ0275" },
+      chatType: "direct",
+      from: "slack:U09G2DJ0275",
+      to: "user:U09G2DJ0275",
+      threadId: "1778110574.653649",
+    });
+  });
+
+  it("canonicalizes explicit channel-prefixed Slack IM targets for mirror routing", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+    conversationsOpenMock.mockResolvedValueOnce({
+      channel: {
+        id: "D123",
+        is_im: true,
+        user: "U123",
+      },
+    });
+
+    const route = await resolveRoute({
+      cfg: {
+        session: { dmScope: "per-channel-peer" },
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+          },
+        },
+      } as OpenClawConfig,
+      agentId: "main",
+      target: "channel:D123",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:direct:u123",
+      peer: { kind: "direct", id: "U123" },
+    });
+  });
+
+  it("skips mirror routing for unresolved Slack IM channel targets", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+    conversationsOpenMock.mockResolvedValueOnce({ channel: { id: "D0NOUSER001", is_im: true } });
+
+    await expect(
+      resolveRoute({
+        cfg: {} as OpenClawConfig,
+        agentId: "main",
+        target: "D0NOUSER001",
+        threadId: "1778110574.653649",
+      }),
+    ).resolves.toBeNull();
+  });
+
+  it("keeps Slack MPIM outbound routing as group", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+    conversationsInfoMock.mockResolvedValueOnce({ channel: { id: "G123", is_mpim: true } });
+
+    const route = await resolveRoute({
+      cfg: { channels: { slack: { botToken: "xoxb-test" } } } as OpenClawConfig,
+      agentId: "main",
+      target: "G123",
+    });
+
+    expect(route).toMatchObject({
+      sessionKey: "agent:main:slack:group:g123",
+      peer: { kind: "group", id: "G123" },
+      chatType: "channel",
+      from: "slack:group:G123",
+      to: "channel:G123",
+    });
+  });
 });
 
 describe("slackPlugin security", () => {
@@ -684,6 +819,40 @@ describe("slackPlugin outbound", () => {
       mediaLocalRoots,
     });
     expect(result).toEqual({ channel: "slack", messageId: "m-media-local" });
+  });
+
+  it("normalizes slack button directives for direct outbound delivery", () => {
+    const normalized = slackPlugin.outbound?.normalizePayload?.({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+            appToken: "xapp-test",
+            capabilities: { interactiveReplies: true },
+          },
+        },
+      },
+      accountId: "default",
+      payload: {
+        text: "Slack interactive minimal test\n[[slack_buttons: Test:test-value]]",
+      },
+    });
+
+    expect(normalized).toEqual({
+      text: "Slack interactive minimal test",
+      interactive: {
+        blocks: [
+          {
+            type: "text",
+            text: "Slack interactive minimal test",
+          },
+          {
+            type: "buttons",
+            buttons: [{ label: "Test", value: "test-value" }],
+          },
+        ],
+      },
+    });
   });
 
   it("sends block payload media first, then the final block message", async () => {

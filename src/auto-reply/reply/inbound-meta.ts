@@ -26,6 +26,16 @@ function normalizePromptMetadataString(value: unknown): string | undefined {
   return sanitized || undefined;
 }
 
+function normalizePromptMetadataStringArray(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized = value
+    .map((entry) => normalizePromptMetadataString(entry))
+    .filter((entry): entry is string => Boolean(entry));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
 function sanitizePromptBody(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -98,6 +108,22 @@ function formatUntrustedJsonBlock(label: string, payload: unknown): string {
     JSON.stringify(sanitizeUntrustedJsonValue(payload), null, 2),
     "```",
   ].join("\n");
+}
+
+function buildConversationMentionMetadataPayload(
+  ctx: TemplateContext,
+  isDirect: boolean,
+): Record<string, unknown> {
+  return {
+    is_group_chat: !isDirect ? true : undefined,
+    was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    explicitly_mentioned_bot:
+      typeof ctx.ExplicitlyMentionedBot === "boolean" ? ctx.ExplicitlyMentionedBot : undefined,
+    mentioned_user_ids: normalizePromptMetadataStringArray(ctx.MentionedUserIds),
+    mentioned_subteam_ids: normalizePromptMetadataStringArray(ctx.MentionedSubteamIds),
+    implicit_mention_kinds: normalizePromptMetadataStringArray(ctx.ImplicitMentionKinds),
+    mention_source: normalizePromptMetadataString(ctx.MentionSource),
+  };
 }
 
 function formatStructuredContextRelation(value: unknown): string | undefined {
@@ -348,8 +374,7 @@ export function buildInboundUserContextPrefix(
         : undefined,
     topic_name: normalizePromptMetadataString(ctx.TopicName) ?? undefined,
     is_forum: ctx.IsForum === true ? true : undefined,
-    is_group_chat: !isDirect ? true : undefined,
-    was_mentioned: ctx.WasMentioned === true ? true : undefined,
+    ...buildConversationMentionMetadataPayload(ctx, isDirect),
     has_reply_context:
       replyChainPayload.length > 0 || sanitizePromptBody(ctx.ReplyToBody) ? true : undefined,
     has_forwarded_context: normalizePromptMetadataString(ctx.ForwardedFrom) ? true : undefined,
