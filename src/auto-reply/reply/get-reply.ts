@@ -973,6 +973,7 @@ export async function getReplyFromConfig(
       storePath,
       workspaceDir,
       abortedLastRun,
+      hasAppliedImageModelOverride,
     }),
   );
 }

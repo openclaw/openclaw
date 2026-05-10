@@ -5,7 +5,11 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { buildModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
+import {
+  buildModelAliasIndex,
+  modelKey,
+  resolveModelRefFromString,
+} from "../../agents/model-selection.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
 import { resolveProviderIdForAuth } from "../../agents/provider-auth-aliases.js";
 import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
@@ -2287,6 +2291,10 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (overrideRef) {
               parseProvider = overrideRef.ref.provider;
               parseModel = overrideRef.ref.model;
+              // Canonicalize modelOverride so downstream getReplyFromConfig
+              // receives "provider/model" and resolves against the correct
+              // provider context, not the session model's defaultProvider.
+              modelOverride = modelKey(overrideRef.ref.provider, overrideRef.ref.model);
             } else {
               // Alias resolution failed; use the raw modelOverride string as parseModel
               // so that resolveModelSupportsVision can still match it against imageModelConfig.
