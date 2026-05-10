@@ -127,11 +127,16 @@ describe("isRecoverableTelegramNetworkError", () => {
     ).toBe(true);
   });
 
-  it("skips broad message matches for send context", () => {
+  it("classifies bare pre-connect grammY errors as recoverable for send context", () => {
+    // Bare form: no "after" — socket dropped before bytes hit the wire, safe to retry.
     const networkRequestErr = new Error("Network request for 'sendMessage' failed!");
-    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(false);
+    expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "send" })).toBe(true);
     expect(isRecoverableTelegramNetworkError(networkRequestErr, { context: "polling" })).toBe(true);
+  });
 
+  it("skips broad message-snippet matches for send context", () => {
+    // Non-grammy snippets (e.g. "undici") are still blocked for send — only the
+    // specific grammy pre-connect form is safe.
     const undiciSnippetErr = new Error("Undici: socket failure");
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "send" })).toBe(false);
     expect(isRecoverableTelegramNetworkError(undiciSnippetErr, { context: "polling" })).toBe(true);

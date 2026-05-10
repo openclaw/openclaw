@@ -56,6 +56,11 @@ const RECOVERABLE_ERROR_NAMES = new Set([
 const ALWAYS_RECOVERABLE_MESSAGES = new Set(["fetch failed", "typeerror: fetch failed"]);
 const GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE =
   /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed\s+after\b.*[!.]?$/i;
+// Bare pre-connect form: "Network request for 'sendX' failed!" — no "after",
+// meaning the socket was dropped before bytes hit the wire. Safe to retry for
+// all contexts including "send" because the message was never delivered.
+const GRAMMY_NETWORK_REQUEST_FAILED_BARE_RE =
+  /^network request(?:\s+for\s+["']?[^"']+["']?)?\s+failed[!.]?\s*$/i;
 
 const RECOVERABLE_MESSAGE_SNIPPETS = [
   "undici",
@@ -260,6 +265,9 @@ export function isRecoverableTelegramNetworkError(
       return true;
     }
     if (message && GRAMMY_NETWORK_REQUEST_FAILED_AFTER_RE.test(message)) {
+      return true;
+    }
+    if (message && GRAMMY_NETWORK_REQUEST_FAILED_BARE_RE.test(message)) {
       return true;
     }
     if (allowMessageMatch && message) {
