@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
 import { saveJsonFile } from "../../infra/json-file.js";
-import { isPidAlive } from "../../shared/pid-alive.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
@@ -168,19 +167,6 @@ function readAuthStoreMtimeMs(authPath: string): number | null {
   }
 }
 
-function sleepSync(ms: number): void {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
-}
-
-function computeAuthStoreLockDelayMs(attempt: number): number {
-  const retry = AUTH_STORE_LOCK_OPTIONS.retries;
-  const base = Math.min(
-    retry.maxTimeout,
-    Math.max(retry.minTimeout, retry.minTimeout * retry.factor ** attempt),
-  );
-  return retry.randomize ? Math.round(base * (1 + Math.random())) : base;
-}
-
 function readSyncLockSnapshot(lockPath: string): SyncLockSnapshot | null {
   try {
     const stat = fs.lstatSync(lockPath);
@@ -214,64 +200,34 @@ function syncLockSnapshotMatches(lockPath: string, snapshot: SyncLockSnapshot): 
   }
 }
 
-function shouldReclaimSyncAuthStoreLock(snapshot: SyncLockSnapshot, nowMs: number): boolean {
-  const pid = snapshot.payload?.pid;
-  if (typeof pid === "number" && Number.isInteger(pid) && pid > 0 && !isPidAlive(pid)) {
-    return true;
-  }
-  const createdAt = snapshot.payload?.createdAt;
-  if (typeof createdAt === "string") {
-    const createdAtMs = Date.parse(createdAt);
-    return !Number.isFinite(createdAtMs) || nowMs - createdAtMs > AUTH_STORE_LOCK_OPTIONS.stale;
-  }
-  return nowMs - snapshot.stat.mtimeMs > AUTH_STORE_LOCK_OPTIONS.stale;
-}
-
 function acquireAuthStoreLockSync(authPath: string): (() => void) | null {
   const lockPath = `${authPath}.lock`;
   fs.mkdirSync(path.dirname(authPath), { recursive: true });
 
-  for (let attempt = 0; attempt <= AUTH_STORE_LOCK_OPTIONS.retries.retries; attempt += 1) {
+  try {
+    const fd = fs.openSync(lockPath, "wx");
+    const raw = `${JSON.stringify(
+      { pid: process.pid, createdAt: new Date().toISOString() },
+      null,
+      2,
+    )}\n`;
     try {
-      const fd = fs.openSync(lockPath, "wx");
-      const raw = `${JSON.stringify(
-        { pid: process.pid, createdAt: new Date().toISOString() },
-        null,
-        2,
-      )}\n`;
-      try {
-        fs.writeFileSync(fd, raw, "utf8");
-      } finally {
-        fs.closeSync(fd);
-      }
-      const snapshot = readSyncLockSnapshot(lockPath);
-      return () => {
-        if (snapshot && syncLockSnapshotMatches(lockPath, snapshot)) {
-          fs.rmSync(lockPath, { force: true });
-        }
-      };
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException)?.code !== "EEXIST") {
-        throw err;
-      }
-      const snapshot = readSyncLockSnapshot(lockPath);
-      if (!snapshot) {
-        continue;
-      }
-      if (shouldReclaimSyncAuthStoreLock(snapshot, Date.now())) {
-        if (syncLockSnapshotMatches(lockPath, snapshot)) {
-          fs.rmSync(lockPath, { force: true });
-        }
-        continue;
-      }
-      if (attempt >= AUTH_STORE_LOCK_OPTIONS.retries.retries) {
-        return null;
-      }
-      const delayMs = computeAuthStoreLockDelayMs(attempt);
-      sleepSync(delayMs);
+      fs.writeFileSync(fd, raw, "utf8");
+    } finally {
+      fs.closeSync(fd);
     }
+    const snapshot = readSyncLockSnapshot(lockPath);
+    return () => {
+      if (snapshot && syncLockSnapshotMatches(lockPath, snapshot)) {
+        fs.rmSync(lockPath, { force: true });
+      }
+    };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === "EEXIST") {
+      return null;
+    }
+    throw err;
   }
-  return null;
 }
 
 function readCachedAuthProfileStore(params: {
@@ -385,7 +341,7 @@ function maybeSyncPersistedExternalCliAuthProfiles(params: {
     log.warn("skipped persisted external cli auth sync because auth store is locked", {
       authPath,
     });
-    return synced;
+    return params.store;
   }
   try {
     const latestStore = loadPersistedAuthProfileStore(params.agentDir) ?? {

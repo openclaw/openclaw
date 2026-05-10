@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
+import { AUTH_STORE_LOCK_OPTIONS, AUTH_STORE_VERSION } from "./auth-profiles/constants.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStore,
@@ -340,6 +340,49 @@ describe("auth profile store cache", () => {
         "manual-concurrent-access",
       );
       expect(persisted.profiles[profileId]?.access).toBe("manual-concurrent-access");
+    });
+  });
+
+  it("does not reclaim an existing auth-store lock while syncing external CLI oauth", async () => {
+    await withAgentDirEnv("openclaw-auth-store-external-cli-live-lock-", (agentDir) => {
+      const profileId = "anthropic:claude-cli";
+      const authPath = writeOAuthStore(agentDir, profileId, {
+        type: "oauth",
+        provider: "claude-cli",
+        access: "stale-local-access",
+        refresh: "stale-local-refresh",
+        expires: Date.now() - 60_000,
+      });
+      const lockPath = `${authPath}.lock`;
+      const lockRaw = `${JSON.stringify(
+        {
+          pid: process.pid,
+          createdAt: new Date(Date.now() - AUTH_STORE_LOCK_OPTIONS.stale - 1_000).toISOString(),
+        },
+        null,
+        2,
+      )}\n`;
+      fs.writeFileSync(lockPath, lockRaw, "utf8");
+      const oldLockTime = new Date(Date.now() - AUTH_STORE_LOCK_OPTIONS.stale - 1_000);
+      fs.utimesSync(lockPath, oldLockTime, oldLockTime);
+      mocks.resolveExternalCliAuthProfiles.mockReturnValue([
+        createPersistedOverlay(profileId, {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "fresh-cli-access",
+          refresh: "fresh-cli-refresh",
+          expires: Date.now() + 60_000,
+        }),
+      ]);
+
+      ensureAuthProfileStore(agentDir);
+      const persisted = JSON.parse(fs.readFileSync(authPath, "utf8")) as {
+        profiles: Record<string, OAuthCredential>;
+      };
+
+      expect(fs.readFileSync(lockPath, "utf8")).toBe(lockRaw);
+      expect(persisted.profiles[profileId]?.access).toBe("stale-local-access");
+      expect(persisted.profiles[profileId]?.refresh).toBe("stale-local-refresh");
     });
   });
 });
