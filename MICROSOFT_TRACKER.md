@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-09 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-10 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 6      | 44     | 50      | 0      | 50        |
-| Windows platform          | 67     | 40     | 107     | 0      | 107       |
+| MS Teams (channel plugin) | 6      | 39     | 45      | 0      | 45        |
+| Windows platform          | 66     | 39     | 105     | 0      | 105       |
 | WSL                       | 9      | 5      | 14      | 0      | 14        |
 | Azure                     | 5      | 6      | 11      | 0      | 11        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **87** | **95** | **182** | **0**  | **182**   |
+| **Total**                 | **86** | **89** | **175** | **0**  | **175**   |
 
 ---
 
@@ -50,21 +50,17 @@
 
 | Resolved? | Priority | #      | Title                                                                                                | Size | Assignee    |
 | --------- | -------- | ------ | ---------------------------------------------------------------------------------------------------- | ---- | ----------- |
+| [ ]       | P0       | #79972 | feat: add SQLite transcript frontier and delta API                                                   | XL   |             |
+| [ ]       | P0       | #79971 | fix: tighten SQLite runtime truth in session refactor                                                | XL   |             |
+| [ ]       | P0       | #79970 | feat: expose durable session id match selection helpers                                              | XL   |             |
 | [ ]       | P0       | #78595 | Refactor runtime state into SQLite                                                                   | XL   |             |
-| [ ]       | P0       | #73590 | feat: add tool-scoped hooks and fork guard                                                           | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
-| [ ]       | P0       | #46423 | fix(cron): retry recurring jobs on transient errors with backoff                                     | XL   |             |
 | [ ]       | P1       | #79444 | [codex] refresh plugin regression fixtures                                                           | S    |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
-| [ ]       | P1       | #71449 | fix(startup): clarify gateway vs channel readiness                                                   | XL   |             |
 | [ ]       | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                      | L    |             |
-| [ ]       | P2       | #79491 | fix(gateway): keep newer node session on stale disconnect                                            | XL   |             |
-| [ ]       | P2       | #79476 | fix(google): support Vertex ADC from GCE metadata service accounts                                   | XL   |             |
-| [ ]       | P2       | #79092 | refactor: centralize channel ingress access                                                          | XL   | @steipete   |
+| [ ]       | P2       | #79609 | Show session cleanup dry-run counts by label                                                         | L    |             |
 | [ ]       | P2       | #78850 | fix(msteams): make resolveMSTeamsRouteSessionKey idempotent against pre-suffixed bases (#66771)      | S    |             |
 | [ ]       | P2       | #78839 | [codex] Add Teams member-info action gate                                                            | S    |             |
-| [ ]       | P2       | #78757 | [codex] keep long app-server turns alive through progress                                            | XL   |             |
-| [ ]       | P2       | #78305 | fix(acp): propagate AcpRuntimeError detail through lifecycle boundary                                | XL   |             |
 | [ ]       | P2       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                             | XS   |             |
 | [ ]       | P2       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                               | L    | @vincentkoc |
 | [ ]       | P2       | #76262 | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration                                 | XL   | @BradGroux  |
@@ -91,7 +87,6 @@
 | [ ]       | P2       | #55828 | feat(msteams): add native plugin interactivity parity                                                | XL   |             |
 | [ ]       | P2       | #55485 | Config: plumb opt-in SSRF policy for web fetch, citation redirects, and remote media                 | L    |             |
 | [ ]       | P2       | #50875 | feat: add before_identity_resolve plugin hook                                                        | M    |             |
-| [ ]       | P2       | #46303 | fix: drain inbound debounce buffer and followup queues before SIGUSR1 reload                         | XL   |             |
 | [ ]       | P2       | #43190 | MS Teams: add channel archive persistence and deleted-channel cleanup                                | XL   |             |
 | [ ]       | P2       | #37656 | feat: load workspace .env per-agent at exec time                                                     | S    |             |
 
@@ -125,8 +120,7 @@
 | [ ]       | P1       | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows                                               | `bug` `regression`   |             |
 | [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
 | [ ]       | P1       | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows                                                                     | `bug` `bug:crash`    |             |
-| [ ]       | P1       | #39038 | [Bug]: OpenClaw节点程序在Windows 11 24H2上启动后卡在PATH信息，无法连接Gateway                                                                             | `bug` `bug:crash`    |             |
-| [ ]       | P2       | #79708 | Bug: memory index --force fails with EBUSY on Windows                                                                                                     |                      |             |
+| [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                             |                      |             |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                    |                      |             |
 | [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                        |                      |             |
 | [ ]       | P2       | #78435 | [Bug]: `channels.slack.start-account` phase blocks event loop 5+ minutes while a model_call is in flight (Windows, 2026.5.4)                              |                      |             |
@@ -186,7 +180,6 @@
 | [ ]       | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                        | M    |             |
 | [ ]       | P0       | #38846 | security(windows): enhance command argument validation                               | S    |             |
 | [ ]       | P2       | #79694 | fix(update): hide post-core update and completion cache child windows on Windows     | XS   |             |
-| [ ]       | P2       | #79505 | [AI-assisted] fix(status): restore Codex usage windows                               | S    |             |
 | [ ]       | P2       | #76245 | [codex] Fallback when Windows gateway task exits early                               | S    |             |
 | [ ]       | P2       | #75649 | fix(windows): preserve staged update handoff                                         | XL   |             |
 | [ ]       | P2       | #74425 | fix: ensure CLI processes exit after command completion on Windows                   | S    |             |
@@ -314,10 +307,11 @@ _No currently open items found._
 
 | Category                  | Type  | Priority | #      | Title                                                                                                         |
 | ------------------------- | ----- | -------- | ------ | ------------------------------------------------------------------------------------------------------------- |
+| MS Teams (channel plugin) | pr    | P0       | #79972 | feat: add SQLite transcript frontier and delta API                                                            |
+| MS Teams (channel plugin) | pr    | P0       | #79971 | fix: tighten SQLite runtime truth in session refactor                                                         |
+| MS Teams (channel plugin) | pr    | P0       | #79970 | feat: expose durable session id match selection helpers                                                       |
 | MS Teams (channel plugin) | pr    | P0       | #78595 | Refactor runtime state into SQLite                                                                            |
-| MS Teams (channel plugin) | pr    | P0       | #73590 | feat: add tool-scoped hooks and fork guard                                                                    |
 | MS Teams (channel plugin) | pr    | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                                  |
-| MS Teams (channel plugin) | pr    | P0       | #46423 | fix(cron): retry recurring jobs on transient errors with backoff                                              |
 | Windows platform          | issue | P0       | #74350 | [Security] Windows ACL audit bypass: Anonymous and Guest SIDs are misclassified as "group" instead of "world" |
 | Windows platform          | pr    | P0       | #74383 | fix(security): classify broad Windows SIDs as world principals                                                |
 | Windows platform          | pr    | P0       | #63074 | fix(security): classify dangerous Windows sandbox binds first                                                 |
@@ -332,7 +326,6 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #79444 | [codex] refresh plugin regression fixtures                                                                                                              |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
-| MS Teams (channel plugin) | pr    | P1       | #71449 | fix(startup): clarify gateway vs channel readiness                                                                                                      |
 | MS Teams (channel plugin) | pr    | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                                                                         |
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
 | Windows platform          | issue | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    |
@@ -355,7 +348,6 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows                                             |
 | Windows platform          | issue | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                        |
 | Windows platform          | issue | P1       | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows                                                                   |
-| Windows platform          | issue | P1       | #39038 | [Bug]: OpenClaw节点程序在Windows 11 24H2上启动后卡在PATH信息，无法连接Gateway                                                                           |
 | WSL                       | issue | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                           |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                             |
 | WSL                       | issue | P1       | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments                                            |
