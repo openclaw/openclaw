@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RequestClient } from "../internal/discord.js";
@@ -135,7 +135,11 @@ describe("deliverDiscordReply", () => {
         {
           text: [
             "📊 Session Status: current",
-            "🛠️ Exec: run git status",
+            "🛠️ run git status",
+            "🛠️ `gh pr view`",
+            "🛠️ `docker compose up`",
+            "🛠️ elevated · `cd /tmp && pnpm test`",
+            "🛠️ pty · `apply_patch update`",
             "📖 Read: lines 1-40 from secret.md",
             "Visible reply.",
           ].join("\n"),

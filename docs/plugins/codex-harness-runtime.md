@@ -200,6 +200,9 @@ settings such as `agents.defaults.imageGenerationModel`, `videoGenerationModel`,
 
 Text, images, video, music, TTS, approvals, and messaging-tool output continue
 through the normal OpenClaw delivery path. Media generation does not require PI.
+When Codex emits a native image-generation item with a `savedPath`, OpenClaw
+forwards that exact file through the normal reply-media path even if the Codex
+turn has no assistant text.
 
 ## Related
 

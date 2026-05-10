@@ -10,8 +10,37 @@ import { resolveMedia } from "./bot/delivery.resolve-media.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
 
+function resolveScheduledTimerForDelay(
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  delayMs: number,
+) {
+  const timerCallIndex = setTimeoutSpy.mock.calls.findLastIndex(
+    (call: Parameters<typeof setTimeout>) => call[1] === delayMs,
+  );
+  const flushTimer =
+    timerCallIndex >= 0
+      ? (setTimeoutSpy.mock.calls[timerCallIndex]?.[0] as (() => unknown) | undefined)
+      : undefined;
+  if (timerCallIndex >= 0) {
+    clearTimeout(
+      setTimeoutSpy.mock.results[timerCallIndex]?.value as ReturnType<typeof setTimeout>,
+    );
+  }
+  return flushTimer;
+}
+
+async function flushScheduledTimerForDelay(
+  setTimeoutSpy: ReturnType<typeof vi.spyOn>,
+  delayMs: number,
+) {
+  const flushTimer = resolveScheduledTimerForDelay(setTimeoutSpy, delayMs);
+  expect(flushTimer).toBeTypeOf("function");
+  await flushTimer?.();
+}
+
 describe("telegram stickers", () => {
-  const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 30_000 : 20_000;
+  // Parallel Testbox shards can make these media-path e2e tests slower than standalone local runs.
+  const STICKER_TEST_TIMEOUT_MS = process.platform === "win32" ? 120_000 : 90_000;
 
   async function createStaticStickerHarness() {
     const proxyFetch = vi.fn().mockResolvedValue(
@@ -172,7 +201,6 @@ describe("telegram text fragments", () => {
   });
 
   const TEXT_FRAGMENT_TEST_TIMEOUT_MS = process.platform === "win32" ? 45_000 : 20_000;
-  const TEXT_FRAGMENT_FLUSH_MS = TELEGRAM_TEST_TIMINGS.textFragmentGapMs + 80;
 
   it(
     "buffers near-limit text and processes sequential parts as one message",
@@ -180,42 +208,43 @@ describe("telegram text fragments", () => {
       const { handler, replySpy } = await createBotHandlerWithOptions({});
       const part1 = "A".repeat(4050);
       const part2 = "B".repeat(50);
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "Ada" },
-          message_id: 10,
-          date: 1736380800,
-          text: part1,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+      try {
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            message_id: 10,
+            date: 1736380800,
+            text: part1,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
 
-      await handler({
-        message: {
-          chat: { id: 42, type: "private" },
-          from: { id: 777, is_bot: false, first_name: "Ada" },
-          message_id: 11,
-          date: 1736380801,
-          text: part2,
-        },
-        me: { username: "openclaw_bot" },
-        getFile: async () => ({}),
-      });
+        await handler({
+          message: {
+            chat: { id: 42, type: "private" },
+            from: { id: 777, is_bot: false, first_name: "Ada" },
+            message_id: 11,
+            date: 1736380801,
+            text: part2,
+          },
+          me: { username: "openclaw_bot" },
+          getFile: async () => ({}),
+        });
 
-      expect(replySpy).not.toHaveBeenCalled();
-      await vi.waitFor(
-        () => {
-          expect(replySpy).toHaveBeenCalledTimes(1);
-        },
-        { timeout: TEXT_FRAGMENT_FLUSH_MS * 6, interval: 5 },
-      );
+        expect(replySpy).not.toHaveBeenCalled();
+        await flushScheduledTimerForDelay(setTimeoutSpy, TELEGRAM_TEST_TIMINGS.textFragmentGapMs);
 
-      const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
-      expect(payload.RawBody).toContain(part1.slice(0, 32));
-      expect(payload.RawBody).toContain(part2.slice(0, 32));
+        expect(replySpy).toHaveBeenCalledTimes(1);
+        const payload = replySpy.mock.calls[0][0] as { RawBody?: string };
+        expect(payload.RawBody).toContain(part1.slice(0, 32));
+        expect(payload.RawBody).toContain(part2.slice(0, 32));
+      } finally {
+        setTimeoutSpy.mockRestore();
+      }
     },
     TEXT_FRAGMENT_TEST_TIMEOUT_MS,
   );

@@ -157,7 +157,7 @@ describe("normalizeProviders", () => {
         "gemini-3.1-pro-preview",
       ]);
       expect(normalized?.openrouter?.models?.map((model) => model.id)).toEqual([
-        "google/gemini-3-pro-preview",
+        "google/gemini-3.1-pro-preview",
       ]);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });

@@ -612,11 +612,11 @@ describe("xai provider models", () => {
     expect(grok43Alias?.reasoning).toBe(true);
     expect(grok43Alias?.thinkingLevelMap).toEqual({
       off: null,
-      minimal: null,
-      low: null,
-      medium: null,
-      high: null,
-      xhigh: null,
+      minimal: "low",
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: "high",
     });
     expect(grok43Alias?.input).toEqual(["text", "image"]);
     expect(grok43Alias?.contextWindow).toBe(1_000_000);

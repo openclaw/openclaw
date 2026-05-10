@@ -60,6 +60,22 @@
     "target": "频道消息 API"
   },
   {
+    "source": "Channel ingress API",
+    "target": "频道入口 API"
+  },
+  {
+    "source": "Channel access cleanup",
+    "target": "频道访问清理"
+  },
+  {
+    "source": "Ingress core shrink plan",
+    "target": "入口核心精简计划"
+  },
+  {
+    "source": "Ingress core shrink",
+    "target": "入口核心精简"
+  },
+  {
     "source": "Talk mode",
     "target": "Talk 模式"
   },
@@ -846,5 +862,25 @@
   {
     "source": "fs-safe Cleanup Plan",
     "target": "fs-safe Cleanup Plan"
+  },
+  {
+    "source": "Tool Search",
+    "target": "工具搜索"
+  },
+  {
+    "source": "Tools and plugins",
+    "target": "工具和插件"
+  },
+  {
+    "source": "Multi-agent sandbox and tools",
+    "target": "多 Agent 沙盒和工具"
+  },
+  {
+    "source": "Exec tool",
+    "target": "Exec 工具"
+  },
+  {
+    "source": "ACP agents setup",
+    "target": "ACP Agents 设置"
   }
 ]

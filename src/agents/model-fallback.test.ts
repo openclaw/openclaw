@@ -485,6 +485,26 @@ describe("runWithModelFallback", () => {
         model: "mimo-v2-pro-mit",
         expected: ["openai", "xiaomi/mimo-v2-pro-mit"],
       },
+      {
+        name: "keeps explicit provider when a different provider owns the bare alias",
+        cfg: makeCfg({
+          agents: {
+            defaults: {
+              model: {
+                primary: "openrouter/deepseek/deepseek-v4-pro",
+                fallbacks: [],
+              },
+              models: {
+                "openrouter/deepseek/deepseek-v4-pro": { alias: "deepseek-v4-pro" },
+                "opencode-go/deepseek-v4-pro": { alias: "OpenCode Go DeepSeek V4 Pro" },
+              },
+            },
+          },
+        }),
+        provider: "opencode-go",
+        model: "deepseek-v4-pro",
+        expected: ["opencode-go", "deepseek-v4-pro"],
+      },
     ] satisfies Array<{
       name: string;
       cfg: OpenClawConfig;
@@ -1104,6 +1124,43 @@ describe("runWithModelFallback", () => {
     });
 
     expect(result.result).toBe("ok");
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]?.reason).toBe("billing");
+  });
+
+  it("falls back on OpenRouter API-key budget limit errors", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openrouter/xiaomi/mimo-v2-pro",
+            fallbacks: ["openai/gpt-4.1-mini"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(
+        Object.assign(
+          new Error("403 API key budget limit exceeded (monthly limit). Contact your org admin."),
+          { status: 403 },
+        ),
+      )
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openrouter",
+      model: "xiaomi/mimo-v2-pro",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run.mock.calls).toEqual([
+      ["openrouter", "xiaomi/mimo-v2-pro"],
+      ["openai", "gpt-4.1-mini"],
+    ]);
     expect(result.attempts).toHaveLength(1);
     expect(result.attempts[0]?.reason).toBe("billing");
   });

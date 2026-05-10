@@ -52,8 +52,11 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", () => ({
   resolveMarkdownTableMode: vi.fn(() => "off"),
 }));
 
-vi.mock("openclaw/plugin-sdk/text-runtime", () => ({
+vi.mock("openclaw/plugin-sdk/text-chunking", () => ({
   convertMarkdownTables: vi.fn((text: string) => text),
+}));
+
+vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
   normalizeLowercaseStringOrEmpty: vi.fn((value: string | null | undefined) => {
     if (typeof value !== "string") {
       return "";

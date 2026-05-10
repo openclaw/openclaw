@@ -243,23 +243,6 @@ async function runBestEffortPartialFailureDelivery(params?: { onError?: boolean 
   return { sendMatrix, onError, results };
 }
 
-function expectSuccessfulMatrixInternalHookPayload(
-  expected: Partial<{
-    content: string;
-    messageId: string;
-    isGroup: boolean;
-    groupId: string;
-  }>,
-) {
-  return expect.objectContaining({
-    to: "!room:example",
-    success: true,
-    channelId: "matrix",
-    conversationId: "!room:example",
-    ...expected,
-  });
-}
-
 describe("deliverOutboundPayloads", () => {
   beforeAll(async () => {
     ({
@@ -947,12 +930,11 @@ describe("deliverOutboundPayloads", () => {
       queuePolicy: "best_effort",
     });
 
-    expect(afterCommit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "text",
-        result: expect.objectContaining({ messageId: "message-adapter-1" }),
-      }),
-    );
+    const [[commitParams]] = afterCommit.mock.calls as unknown as Array<
+      [Record<string, unknown> & { result?: { messageId?: string } }]
+    >;
+    expect(commitParams?.kind).toBe("text");
+    expect(commitParams?.result?.messageId).toBe("message-adapter-1");
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
   });
 
@@ -1043,23 +1025,20 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    const deliveryEvents = events.filter((event) => event.type.startsWith("message.delivery."));
-    expect(deliveryEvents).toEqual([
-      expect.objectContaining({
-        type: "message.delivery.started",
-        channel: "matrix",
-        deliveryKind: "text",
-        sessionKey: "session-1",
-      }),
-      expect.objectContaining({
-        type: "message.delivery.completed",
-        channel: "matrix",
-        deliveryKind: "text",
-        durationMs: expect.any(Number),
-        resultCount: 1,
-        sessionKey: "session-1",
-      }),
-    ]);
+    const deliveryEvents = events.filter((event) =>
+      event.type.startsWith("message.delivery."),
+    ) as Array<Record<string, unknown>>;
+    expect(deliveryEvents).toHaveLength(2);
+    expect(deliveryEvents[0]?.type).toBe("message.delivery.started");
+    expect(deliveryEvents[0]?.channel).toBe("matrix");
+    expect(deliveryEvents[0]?.deliveryKind).toBe("text");
+    expect(deliveryEvents[0]?.sessionKey).toBe("session-1");
+    expect(deliveryEvents[1]?.type).toBe("message.delivery.completed");
+    expect(deliveryEvents[1]?.channel).toBe("matrix");
+    expect(deliveryEvents[1]?.deliveryKind).toBe("text");
+    expect(typeof deliveryEvents[1]?.durationMs).toBe("number");
+    expect(deliveryEvents[1]?.resultCount).toBe(1);
+    expect(deliveryEvents[1]?.sessionKey).toBe("session-1");
     expect(JSON.stringify(deliveryEvents)).not.toContain("secret delivery body");
     expect(JSON.stringify(deliveryEvents)).not.toContain("!room:example");
   });
@@ -1086,17 +1065,15 @@ describe("deliverOutboundPayloads", () => {
       unsubscribe();
     }
 
-    const errorEvent = events.find((event) => event.type === "message.delivery.error");
-    expect(errorEvent).toEqual(
-      expect.objectContaining({
-        type: "message.delivery.error",
-        channel: "matrix",
-        deliveryKind: "text",
-        durationMs: expect.any(Number),
-        errorCategory: "TypeError",
-        sessionKey: "session-1",
-      }),
-    );
+    const errorEvent = events.find((event) => event.type === "message.delivery.error") as
+      | Record<string, unknown>
+      | undefined;
+    expect(errorEvent?.type).toBe("message.delivery.error");
+    expect(errorEvent?.channel).toBe("matrix");
+    expect(errorEvent?.deliveryKind).toBe("text");
+    expect(typeof errorEvent?.durationMs).toBe("number");
+    expect(errorEvent?.errorCategory).toBe("TypeError");
+    expect(errorEvent?.sessionKey).toBe("session-1");
     expect(
       JSON.stringify(events.filter((event) => event.type.startsWith("message.delivery."))),
     ).not.toContain("secret delivery body");
@@ -1121,13 +1098,10 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:matrix:room:ops",
-        messageProvider: undefined,
-        requesterSenderId: "attacker",
-      }),
-    );
+    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
+    expect(mediaAccessOptions?.messageProvider).toBeUndefined();
+    expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -1153,14 +1127,11 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSenderId: "id:matrix:123",
-        requesterSenderName: "Alice",
-        requesterSenderUsername: "alice_u",
-        requesterSenderE164: "+15551234567",
-      }),
-    );
+    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    expect(mediaAccessOptions?.requesterSenderId).toBe("id:matrix:123");
+    expect(mediaAccessOptions?.requesterSenderName).toBe("Alice");
+    expect(mediaAccessOptions?.requesterSenderUsername).toBe("alice_u");
+    expect(mediaAccessOptions?.requesterSenderE164).toBe("+15551234567");
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -1185,13 +1156,10 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(resolveMediaAccessSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:matrix:room:ops",
-        accountId: "source-account",
-        requesterSenderId: "attacker",
-      }),
-    );
+    const [mediaAccessOptions] = resolveMediaAccessSpy.mock.calls[0] ?? [];
+    expect(mediaAccessOptions?.sessionKey).toBe("agent:main:matrix:room:ops");
+    expect(mediaAccessOptions?.accountId).toBe("source-account");
+    expect(mediaAccessOptions?.requesterSenderId).toBe("attacker");
     resolveMediaAccessSpy.mockRestore();
   });
 
@@ -1258,12 +1226,8 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendText).toHaveBeenCalledTimes(2);
     for (const call of sendText.mock.calls) {
-      expect(call[0]).toEqual(
-        expect.objectContaining({
-          accountId: "default",
-          replyToId: "777",
-        }),
-      );
+      expect(call[0]?.accountId).toBe("default");
+      expect(call[0]?.replyToId).toBe("777");
     }
     expect(results.map((entry) => entry.messageId)).toEqual(["ab", "cd"]);
   });
@@ -1455,18 +1419,13 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(results).toEqual([
-      expect.objectContaining({
-        channel: "matrix",
-        messageId: "visible",
-      }),
-    ]);
-    expect(payloadOutcomes).toEqual([
-      expect.objectContaining({
-        index: 1,
-        status: "sent",
-      }),
-    ]);
+    expect(results).toHaveLength(1);
+    expect(results[0]?.channel).toBe("matrix");
+    expect(results[0]?.messageId).toBe("visible");
+    expect(payloadOutcomes).toHaveLength(1);
+    const payloadOutcome = payloadOutcomes[0] as { index?: unknown; status?: unknown } | undefined;
+    expect(payloadOutcome?.index).toBe(1);
+    expect(payloadOutcome?.status).toBe("sent");
   });
 
   it("strips internal runtime scaffolding added by message_sending hooks before delivery", async () => {
@@ -1505,7 +1464,7 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "original" }],
     });
 
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "visible" }));
+    expect(sendText.mock.calls[0]?.[0]?.text).toBe("visible");
   });
 
   it("strips internal runtime scaffolding before adapter payload normalization copies text", async () => {
@@ -1549,14 +1508,11 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "original" }],
     });
 
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          text: "visible",
-          channelData: { copiedText: "visible" },
-        }),
-      }),
-    );
+    const deliveredPayload = sendPayload.mock.calls[0]?.[0]?.payload as
+      | { channelData?: unknown; text?: unknown }
+      | undefined;
+    expect(deliveredPayload?.text).toBe("visible");
+    expect(deliveredPayload?.channelData).toStrictEqual({ copiedText: "visible" });
   });
 
   it("strips internal runtime scaffolding copied into rendered and normalized nested payloads", async () => {
@@ -1621,21 +1577,18 @@ describe("deliverOutboundPayloads", () => {
     expect(JSON.stringify(sendPayload.mock.calls[0]?.[0]?.payload)).not.toContain(
       "previous_response",
     );
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({
-          text: "visible",
-          channelData: {
-            renderedText: "visible",
-            renderedBlocks: [{ text: "visible" }],
-            normalizedText: "visible",
-          },
-          interactive: {
-            blocks: [{ type: "text", text: "visible" }],
-          },
-        }),
-      }),
-    );
+    const deliveredPayload = sendPayload.mock.calls[0]?.[0]?.payload as
+      | { channelData?: unknown; interactive?: unknown; text?: unknown }
+      | undefined;
+    expect(deliveredPayload?.text).toBe("visible");
+    expect(deliveredPayload?.channelData).toStrictEqual({
+      renderedText: "visible",
+      renderedBlocks: [{ text: "visible" }],
+      normalizedText: "visible",
+    });
+    expect(deliveredPayload?.interactive).toStrictEqual({
+      blocks: [{ type: "text", text: "visible" }],
+    });
   });
 
   it("runs adapter after-delivery hooks with the payload delivery results", async () => {
@@ -1667,13 +1620,19 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "hello" }],
     });
 
-    expect(afterDeliverPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        target: expect.objectContaining({ channel: "matrix", to: "!room" }),
-        payload: expect.objectContaining({ text: "hello" }),
-        results: [{ channel: "matrix", messageId: "hello" }],
-      }),
-    );
+    const afterDeliveryOptions = afterDeliverPayload.mock.calls[0]?.[0] as
+      | {
+          payload?: { text?: unknown };
+          results?: unknown;
+          target?: { channel?: unknown; to?: unknown };
+        }
+      | undefined;
+    expect(afterDeliveryOptions?.target?.channel).toBe("matrix");
+    expect(afterDeliveryOptions?.target?.to).toBe("!room");
+    expect(afterDeliveryOptions?.payload?.text).toBe("hello");
+    expect(afterDeliveryOptions?.results).toStrictEqual([
+      { channel: "matrix", messageId: "hello" },
+    ]);
   });
 
   it("uses adapter-provided formatted senders and scoped media roots when available", async () => {
@@ -1723,13 +1682,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendFormattedText).toHaveBeenCalledTimes(1);
-    expect(sendFormattedText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "U123",
-        text: "hello **boss**",
-        accountId: "default",
-      }),
-    );
+    const formattedTextOptions = sendFormattedText.mock.calls[0]?.[0] as
+      | { accountId?: unknown; text?: unknown; to?: unknown }
+      | undefined;
+    expect(formattedTextOptions?.to).toBe("U123");
+    expect(formattedTextOptions?.text).toBe("hello **boss**");
+    expect(formattedTextOptions?.accountId).toBe("default");
     expect(sendText).not.toHaveBeenCalled();
     expect(textResults.map((entry) => entry.messageId)).toEqual([
       "fmt:hello **boss**:1",
@@ -1746,17 +1704,13 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendFormattedMedia).toHaveBeenCalledTimes(1);
-    expect(sendFormattedMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "U123",
-        text: "photo",
-        mediaUrl: "file:///tmp/f.png",
-        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
-      }),
-    );
     const sendFormattedMediaCall = sendFormattedMedia.mock.calls[0]?.[0] as
-      | { mediaLocalRoots?: string[] }
+      | { mediaLocalRoots?: string[]; mediaUrl?: unknown; text?: unknown; to?: unknown }
       | undefined;
+    expect(sendFormattedMediaCall?.to).toBe("U123");
+    expect(sendFormattedMediaCall?.text).toBe("photo");
+    expect(sendFormattedMediaCall?.mediaUrl).toBe("file:///tmp/f.png");
+    expect(sendFormattedMediaCall?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
     expect(
       sendFormattedMediaCall?.mediaLocalRoots?.some((root) =>
         root.endsWith(path.join(".openclaw", "workspace-work")),
@@ -1776,13 +1730,12 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledWith(
-      "!room:example",
-      "hi",
-      expect.objectContaining({
-        mediaLocalRoots: expect.arrayContaining([expectedPreferredTmpRoot]),
-      }),
-    );
+    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
+    expect(sendMatrix.mock.calls[0]?.[1]).toBe("hi");
+    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as
+      | { mediaLocalRoots?: string[] }
+      | undefined;
+    expect(sendMatrixOptions?.mediaLocalRoots).toContain(expectedPreferredTmpRoot);
   });
 
   it("sends plugin media to an explicit target once instead of fanning out over allowFrom", async () => {
@@ -1819,14 +1772,23 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMedia).toHaveBeenCalledTimes(1);
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "!explicit:example",
-        text: "HEARTBEAT_OK",
-        mediaUrl: "https://example.com/img.png",
-        accountId: undefined,
-      }),
-    );
+    const sendMediaOptions = (
+      sendMedia.mock.calls as Array<
+        [
+          {
+            accountId?: unknown;
+            audioAsVoice?: unknown;
+            mediaUrl?: unknown;
+            text?: unknown;
+            to?: unknown;
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(sendMediaOptions?.to).toBe("!explicit:example");
+    expect(sendMediaOptions?.text).toBe("HEARTBEAT_OK");
+    expect(sendMediaOptions?.mediaUrl).toBe("https://example.com/img.png");
+    expect(sendMediaOptions?.accountId).toBeUndefined();
   });
 
   it("forwards audioAsVoice through generic plugin media delivery", async () => {
@@ -1862,14 +1824,15 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "voice caption", mediaUrl: "file:///tmp/clip.mp3", audioAsVoice: true }],
     });
 
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "room:!room:example",
-        text: "voice caption",
-        mediaUrl: "file:///tmp/clip.mp3",
-        audioAsVoice: true,
-      }),
-    );
+    const sendMediaOptions = (
+      sendMedia.mock.calls as unknown as Array<
+        [{ audioAsVoice?: unknown; mediaUrl?: unknown; text?: unknown; to?: unknown }]
+      >
+    )[0]?.[0];
+    expect(sendMediaOptions?.to).toBe("room:!room:example");
+    expect(sendMediaOptions?.text).toBe("voice caption");
+    expect(sendMediaOptions?.mediaUrl).toBe("file:///tmp/clip.mp3");
+    expect(sendMediaOptions?.audioAsVoice).toBe(true);
   });
 
   it("exposes audio-only spokenText to hooks without rendering it as media caption", async () => {
@@ -1912,26 +1875,25 @@ describe("deliverOutboundPayloads", () => {
       ],
     });
 
-    expect(hookMocks.runner.runMessageSending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "original hidden transcript",
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "",
-        mediaUrl: "file:///tmp/clip.opus",
-        audioAsVoice: true,
-      }),
-    );
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "rewritten hidden transcript",
-        success: true,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
+    const sendingCall = hookMocks.runner.runMessageSending.mock.calls[0] as
+      | [{ content?: unknown }, { channelId?: unknown }]
+      | undefined;
+    expect(sendingCall?.[0]?.content).toBe("original hidden transcript");
+    expect(sendingCall?.[1]?.channelId).toBe("matrix");
+    const sendMediaOptions = (
+      sendMedia.mock.calls as unknown as Array<
+        [{ audioAsVoice?: unknown; mediaUrl?: unknown; text?: unknown }]
+      >
+    )[0]?.[0];
+    expect(sendMediaOptions?.text).toBe("");
+    expect(sendMediaOptions?.mediaUrl).toBe("file:///tmp/clip.opus");
+    expect(sendMediaOptions?.audioAsVoice).toBe(true);
+    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+      | [{ content?: unknown; success?: unknown }, { channelId?: unknown }]
+      | undefined;
+    expect(sentCall?.[0]?.content).toBe("rewritten hidden transcript");
+    expect(sentCall?.[0]?.success).toBe(true);
+    expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 
   it("chunks plugin text and returns all results", async () => {
@@ -1958,18 +1920,14 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalledTimes(2);
-    expect(sendMatrix).toHaveBeenNthCalledWith(
-      1,
-      "!room:example",
-      "Line one",
-      expect.objectContaining({ cfg }),
-    );
-    expect(sendMatrix).toHaveBeenNthCalledWith(
-      2,
-      "!room:example",
-      "Line two",
-      expect.objectContaining({ cfg }),
-    );
+    const firstChunkCall = sendMatrix.mock.calls[0];
+    expect(firstChunkCall?.[0]).toBe("!room:example");
+    expect(firstChunkCall?.[1]).toBe("Line one");
+    expect((firstChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
+    const secondChunkCall = sendMatrix.mock.calls[1];
+    expect(secondChunkCall?.[0]).toBe("!room:example");
+    expect(secondChunkCall?.[1]).toBe("Line two");
+    expect((secondChunkCall?.[2] as { cfg?: unknown } | undefined)?.cfg).toBe(cfg);
   });
 
   it("lets explicit formatting options override configured chunking", async () => {
@@ -2158,14 +2116,13 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledWith(
-      "!room:example",
-      "hello",
-      expect.objectContaining({
-        cfg,
-        mediaUrl: "https://example.com/a.png",
-      }),
-    );
+    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as
+      | { cfg?: unknown; mediaUrl?: unknown }
+      | undefined;
+    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
+    expect(sendMatrix.mock.calls[0]?.[1]).toBe("hello");
+    expect(sendMatrixOptions?.cfg).toBe(cfg);
+    expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/a.png");
   });
 
   it("keeps markdown images as text for channels that do not opt in", async () => {
@@ -2179,11 +2136,12 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledWith(
-      "!room:example",
+    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as { mediaUrl?: unknown } | undefined;
+    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
+    expect(sendMatrix.mock.calls[0]?.[1]).toBe(
       "Tech: ![Node.js](https://img.shields.io/badge/Node.js-339933)",
-      expect.not.objectContaining({ mediaUrl: expect.any(String) }),
     );
+    expect(sendMatrixOptions?.mediaUrl).toBeUndefined();
   });
 
   it("extracts markdown images for channels that opt in", async () => {
@@ -2209,11 +2167,10 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(sendMatrix).toHaveBeenCalledWith(
-      "!room:example",
-      "Chart now",
-      expect.objectContaining({ mediaUrl: "https://example.com/chart.png" }),
-    );
+    const sendMatrixOptions = sendMatrix.mock.calls[0]?.[2] as { mediaUrl?: unknown } | undefined;
+    expect(sendMatrix.mock.calls[0]?.[0]).toBe("!room:example");
+    expect(sendMatrix.mock.calls[0]?.[1]).toBe("Chart now");
+    expect(sendMatrixOptions?.mediaUrl).toBe("https://example.com/chart.png");
   });
 
   it("normalizes payloads and drops empty entries", () => {
@@ -2247,17 +2204,34 @@ describe("deliverOutboundPayloads", () => {
     expect(sendMatrix).toHaveBeenCalledTimes(2);
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "sent",
-      "agent:main:main",
-      expectSuccessfulMatrixInternalHookPayload({
-        content: "abcd",
-        messageId: "m2",
-        isGroup: true,
-        groupId: "matrix:room:123",
-      }),
-    );
+    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
+      | [
+          unknown,
+          unknown,
+          unknown,
+          {
+            channelId?: unknown;
+            content?: unknown;
+            conversationId?: unknown;
+            groupId?: unknown;
+            isGroup?: unknown;
+            messageId?: unknown;
+            success?: unknown;
+            to?: unknown;
+          },
+        ]
+      | undefined;
+    expect(createHookCall?.[0]).toBe("message");
+    expect(createHookCall?.[1]).toBe("sent");
+    expect(createHookCall?.[2]).toBe("agent:main:main");
+    expect(createHookCall?.[3]?.to).toBe("!room:example");
+    expect(createHookCall?.[3]?.success).toBe(true);
+    expect(createHookCall?.[3]?.channelId).toBe("matrix");
+    expect(createHookCall?.[3]?.conversationId).toBe("!room:example");
+    expect(createHookCall?.[3]?.content).toBe("abcd");
+    expect(createHookCall?.[3]?.messageId).toBe("m2");
+    expect(createHookCall?.[3]?.isGroup).toBe(true);
+    expect(createHookCall?.[3]?.groupId).toBe("matrix:room:123");
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
@@ -2272,12 +2246,30 @@ describe("deliverOutboundPayloads", () => {
     await deliverSingleMatrixForHookTest({ sessionKey: "agent:main:main" });
 
     expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledTimes(1);
-    expect(internalHookMocks.createInternalHookEvent).toHaveBeenCalledWith(
-      "message",
-      "sent",
-      "agent:main:main",
-      expectSuccessfulMatrixInternalHookPayload({ content: "hello", messageId: "m1" }),
-    );
+    const createHookCall = internalHookMocks.createInternalHookEvent.mock.calls[0] as
+      | [
+          unknown,
+          unknown,
+          unknown,
+          {
+            channelId?: unknown;
+            content?: unknown;
+            conversationId?: unknown;
+            messageId?: unknown;
+            success?: unknown;
+            to?: unknown;
+          },
+        ]
+      | undefined;
+    expect(createHookCall?.[0]).toBe("message");
+    expect(createHookCall?.[1]).toBe("sent");
+    expect(createHookCall?.[2]).toBe("agent:main:main");
+    expect(createHookCall?.[3]?.to).toBe("!room:example");
+    expect(createHookCall?.[3]?.success).toBe(true);
+    expect(createHookCall?.[3]?.channelId).toBe("matrix");
+    expect(createHookCall?.[3]?.conversationId).toBe("!room:example");
+    expect(createHookCall?.[3]?.content).toBe("hello");
+    expect(createHookCall?.[3]?.messageId).toBe("m1");
     expect(internalHookMocks.triggerInternalHook).toHaveBeenCalledTimes(1);
   });
 
@@ -2294,10 +2286,15 @@ describe("deliverOutboundPayloads", () => {
       session: { agentId: "agent-main" },
     });
 
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
       "deliverOutboundPayloads: session.agentId present without session key; internal message:sent hook will be skipped",
-      expect.objectContaining({ channel: "matrix", to: "!room:example", agentId: "agent-main" }),
     );
+    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+      | { agentId?: unknown; channel?: unknown; to?: unknown }
+      | undefined;
+    expect(warnContext?.channel).toBe("matrix");
+    expect(warnContext?.to).toBe("!room:example");
+    expect(warnContext?.agentId).toBe("agent-main");
   });
 
   it("calls failDelivery instead of ackDelivery on bestEffort partial failure", async () => {
@@ -2342,29 +2339,40 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(queueMocks.enqueueDelivery).toHaveBeenCalledTimes(1);
-    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [
-          { text: "NO_REPLY" },
-          { text: '{"action":"NO_REPLY"}' },
-          { text: "caption\nMEDIA:https://x.test/a.png" },
-          { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
-        ],
-        renderedBatchPlan: expect.objectContaining({
-          payloadCount: 4,
-          textCount: 4,
-          mediaCount: 1,
-          items: expect.arrayContaining([
-            expect.objectContaining({
-              index: 3,
-              kinds: ["text", "media"],
-              text: "NO_REPLY",
-              mediaUrls: ["https://x.test/b.png"],
-            }),
-          ]),
-        }),
-      }),
-    );
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<
+        [
+          {
+            payloads?: unknown;
+            renderedBatchPlan?: {
+              items?: Array<{
+                index?: unknown;
+                kinds?: unknown;
+                mediaUrls?: unknown;
+                text?: unknown;
+              }>;
+              mediaCount?: unknown;
+              payloadCount?: unknown;
+              textCount?: unknown;
+            };
+          },
+        ]
+      >
+    )[0]?.[0];
+    expect(queuedDelivery?.payloads).toStrictEqual([
+      { text: "NO_REPLY" },
+      { text: '{"action":"NO_REPLY"}' },
+      { text: "caption\nMEDIA:https://x.test/a.png" },
+      { text: "NO_REPLY", mediaUrl: " https://x.test/b.png " },
+    ]);
+    const renderedPlan = queuedDelivery?.renderedBatchPlan;
+    expect(renderedPlan?.payloadCount).toBe(4);
+    expect(renderedPlan?.textCount).toBe(4);
+    expect(renderedPlan?.mediaCount).toBe(1);
+    const noReplyMediaItem = renderedPlan?.items?.find((item) => item.index === 3);
+    expect(noReplyMediaItem?.kinds).toStrictEqual(["text", "media"]);
+    expect(noReplyMediaItem?.text).toBe("NO_REPLY");
+    expect(noReplyMediaItem?.mediaUrls).toStrictEqual(["https://x.test/b.png"]);
   });
 
   it("strips internal runtime scaffolding before queue persistence", async () => {
@@ -2400,27 +2408,31 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<
+        [
           {
-            text: "visible\nafter",
-            channelData: {
-              internal: "",
-            },
+            payloads?: unknown;
+            renderedBatchPlan?: {
+              items?: Array<{ text?: unknown }>;
+              payloadCount?: unknown;
+              textCount?: unknown;
+            };
           },
-        ],
-        renderedBatchPlan: expect.objectContaining({
-          payloadCount: 1,
-          textCount: 1,
-          items: [
-            expect.objectContaining({
-              text: "visible\nafter",
-            }),
-          ],
-        }),
-      }),
-    );
+        ]
+      >
+    )[0]?.[0];
+    expect(queuedDelivery?.payloads).toStrictEqual([
+      {
+        text: "visible\nafter",
+        channelData: {
+          internal: "",
+        },
+      },
+    ]);
+    expect(queuedDelivery?.renderedBatchPlan?.payloadCount).toBe(1);
+    expect(queuedDelivery?.renderedBatchPlan?.textCount).toBe(1);
+    expect(queuedDelivery?.renderedBatchPlan?.items?.[0]?.text).toBe("visible\nafter");
   });
 
   it("persists rendered batch plans with queued deliveries", async () => {
@@ -2448,11 +2460,10 @@ describe("deliverOutboundPayloads", () => {
       renderedBatchPlan,
     });
 
-    expect(queueMocks.enqueueDelivery).toHaveBeenCalledWith(
-      expect.objectContaining({
-        renderedBatchPlan,
-      }),
-    );
+    const queuedDelivery = (
+      queueMocks.enqueueDelivery.mock.calls as unknown as Array<[{ renderedBatchPlan?: unknown }]>
+    )[0]?.[0];
+    expect(queuedDelivery?.renderedBatchPlan).toBe(renderedBatchPlan);
   });
 
   it("applies silent-reply rewrite policy from the outbound session", async () => {
@@ -2566,10 +2577,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(onError).toHaveBeenCalledTimes(1);
-    expect(onError).toHaveBeenCalledWith(
-      expect.any(Error),
-      expect.objectContaining({ text: "hi", mediaUrls: ["https://x.test/a.jpg"] }),
-    );
+    const [error, failedPayload] = onError.mock.calls[0] ?? [];
+    expect(error).toBeInstanceOf(Error);
+    expect((failedPayload as { text?: unknown } | undefined)?.text).toBe("hi");
+    expect((failedPayload as { mediaUrls?: unknown } | undefined)?.mediaUrls).toStrictEqual([
+      "https://x.test/a.jpg",
+    ]);
   });
 
   it("mirrors delivered output when mirror options are provided", async () => {
@@ -2605,13 +2618,14 @@ describe("deliverOutboundPayloads", () => {
       },
     });
 
-    expect(mocks.appendAssistantMessageToSessionTranscript).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "report.pdf",
-        idempotencyKey: "idem-deliver-1",
-        config: cfg,
-      }),
-    );
+    const appendOptions = (
+      mocks.appendAssistantMessageToSessionTranscript.mock.calls as unknown as Array<
+        [{ config?: unknown; idempotencyKey?: unknown; text?: unknown }]
+      >
+    )[0]?.[0];
+    expect(appendOptions?.text).toBe("report.pdf");
+    expect(appendOptions?.idempotencyKey).toBe("idem-deliver-1");
+    expect(appendOptions?.config).toBe(cfg);
   });
 
   it("emits message_sent success for text-only deliveries", async () => {
@@ -2626,10 +2640,13 @@ describe("deliverOutboundPayloads", () => {
       deps: { matrix: sendMatrix },
     });
 
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "!room:example", content: "hello", success: true }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
+    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+      | [{ content?: unknown; success?: unknown; to?: unknown }, { channelId?: unknown }]
+      | undefined;
+    expect(sentCall?.[0]?.to).toBe("!room:example");
+    expect(sentCall?.[0]?.content).toBe("hello");
+    expect(sentCall?.[0]?.success).toBe(true);
+    expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 
   it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {
@@ -2698,7 +2715,7 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
-    expect(sendText).toHaveBeenCalledWith(expect.objectContaining({ text: "provider exploded" }));
+    expect(sendText.mock.calls[0]?.[0]?.text).toBe("provider exploded");
     expect(sendPayload).not.toHaveBeenCalled();
   });
 
@@ -2731,12 +2748,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "provider exploded",
-        payload: expect.objectContaining({ text: "provider exploded", isError: true }),
-      }),
-    );
+    const sendPayloadOptions = sendPayload.mock.calls[0]?.[0] as
+      | { payload?: { isError?: unknown; text?: unknown }; text?: unknown }
+      | undefined;
+    expect(sendPayloadOptions?.text).toBe("provider exploded");
+    expect(sendPayloadOptions?.payload?.text).toBe("provider exploded");
+    expect(sendPayloadOptions?.payload?.isError).toBe(true);
     expect(sendText).not.toHaveBeenCalled();
   });
 
@@ -2806,10 +2823,13 @@ describe("deliverOutboundPayloads", () => {
       payloads: [{ text: "payload text", channelData: { mode: "custom" } }],
     });
 
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({ to: "!room:1", content: "payload text", success: true }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
+    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+      | [{ content?: unknown; success?: unknown; to?: unknown }, { channelId?: unknown }]
+      | undefined;
+    expect(sentCall?.[0]?.to).toBe("!room:1");
+    expect(sentCall?.[0]?.content).toBe("payload text");
+    expect(sentCall?.[0]?.success).toBe(true);
+    expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 
   it("does not fail successful sends when optional delivery pinning fails", async () => {
@@ -2837,14 +2857,15 @@ describe("deliverOutboundPayloads", () => {
 
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
     expect(pinDeliveredMessage).toHaveBeenCalledTimes(1);
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
       "Delivery pin requested, but channel failed to pin delivered message.",
-      expect.objectContaining({
-        channel: "matrix",
-        messageId: "mx-1",
-        error: "pin denied",
-      }),
     );
+    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+      | { channel?: unknown; error?: unknown; messageId?: unknown }
+      | undefined;
+    expect(warnContext?.channel).toBe("matrix");
+    expect(warnContext?.messageId).toBe("mx-1");
+    expect(warnContext?.error).toBe("pin denied");
   });
 
   it("fails sends when required delivery pinning fails", async () => {
@@ -2907,9 +2928,10 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(2);
-    expect(pinDeliveredMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "mx-1" }),
-    );
+    const pinOptions = (
+      pinDeliveredMessage.mock.calls as unknown as Array<[{ messageId?: unknown }]>
+    )[0]?.[0];
+    expect(pinOptions?.messageId).toBe("mx-1");
   });
 
   it("pins the first delivered media message for multi-media payloads", async () => {
@@ -2946,9 +2968,10 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMedia).toHaveBeenCalledTimes(2);
-    expect(pinDeliveredMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ messageId: "mx-1" }),
-    );
+    const pinOptions = (
+      pinDeliveredMessage.mock.calls as unknown as Array<[{ messageId?: unknown }]>
+    )[0]?.[0];
+    expect(pinOptions?.messageId).toBe("mx-1");
   });
 
   it("preserves channelData-only payloads with empty text for sendPayload channels", async () => {
@@ -2976,11 +2999,11 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendPayload).toHaveBeenCalledTimes(1);
-    expect(sendPayload).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payload: expect.objectContaining({ text: "", channelData: { mode: "flex" } }),
-      }),
-    );
+    const sendPayloadOptions = sendPayload.mock.calls[0]?.[0] as
+      | { payload?: { channelData?: unknown; text?: unknown } }
+      | undefined;
+    expect(sendPayloadOptions?.payload?.text).toBe("");
+    expect(sendPayloadOptions?.payload?.channelData).toStrictEqual({ mode: "flex" });
     expect(results).toEqual([{ channel: "line", messageId: "ln-1" }]);
   });
 
@@ -3007,18 +3030,15 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "caption",
-      }),
-    );
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(sendText.mock.calls[0]?.[0]?.text).toBe("caption");
+    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
-      expect.objectContaining({
-        channel: "matrix",
-        mediaCount: 1,
-      }),
     );
+    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+      | { channel?: unknown; mediaCount?: unknown }
+      | undefined;
+    expect(warnContext?.channel).toBe("matrix");
+    expect(warnContext?.mediaCount).toBe(1);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-1" }]);
   });
 
@@ -3050,18 +3070,15 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendText).toHaveBeenCalledTimes(1);
-    expect(sendText).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "caption",
-      }),
-    );
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(sendText.mock.calls[0]?.[0]?.text).toBe("caption");
+    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
-      expect.objectContaining({
-        channel: "matrix",
-        mediaCount: 2,
-      }),
     );
+    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+      | { channel?: unknown; mediaCount?: unknown }
+      | undefined;
+    expect(warnContext?.channel).toBe("matrix");
+    expect(warnContext?.mediaCount).toBe(2);
     expect(results).toEqual([{ channel: "matrix", messageId: "mx-2" }]);
   });
 
@@ -3093,23 +3110,27 @@ describe("deliverOutboundPayloads", () => {
     );
 
     expect(sendText).not.toHaveBeenCalled();
-    expect(logMocks.warn).toHaveBeenCalledWith(
+    expect(logMocks.warn.mock.calls[0]?.[0]).toBe(
       "Plugin outbound adapter does not implement sendMedia; media URLs will be dropped and text fallback will be used",
-      expect.objectContaining({
-        channel: "matrix",
-        mediaCount: 1,
-      }),
     );
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "!room:1",
-        content: "",
-        success: false,
-        error:
-          "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
+    const warnContext = logMocks.warn.mock.calls[0]?.[1] as
+      | { channel?: unknown; mediaCount?: unknown }
+      | undefined;
+    expect(warnContext?.channel).toBe("matrix");
+    expect(warnContext?.mediaCount).toBe(1);
+    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+      | [
+          { content?: unknown; error?: unknown; success?: unknown; to?: unknown },
+          { channelId?: unknown },
+        ]
+      | undefined;
+    expect(sentCall?.[0]?.to).toBe("!room:1");
+    expect(sentCall?.[0]?.content).toBe("");
+    expect(sentCall?.[0]?.success).toBe(false);
+    expect(sentCall?.[0]?.error).toBe(
+      "Plugin outbound adapter does not implement sendMedia and no text fallback is available for media payload",
     );
+    expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 
   it("emits message_sent failure when delivery errors", async () => {
@@ -3126,15 +3147,17 @@ describe("deliverOutboundPayloads", () => {
       }),
     ).rejects.toThrow("downstream failed");
 
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "!room:example",
-        content: "hi",
-        success: false,
-        error: "downstream failed",
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
+    const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
+      | [
+          { content?: unknown; error?: unknown; success?: unknown; to?: unknown },
+          { channelId?: unknown },
+        ]
+      | undefined;
+    expect(sentCall?.[0]?.to).toBe("!room:example");
+    expect(sentCall?.[0]?.content).toBe("hi");
+    expect(sentCall?.[0]?.success).toBe(false);
+    expect(sentCall?.[0]?.error).toBe("downstream failed");
+    expect(sentCall?.[1]?.channelId).toBe("matrix");
   });
 });
 

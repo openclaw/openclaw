@@ -88,6 +88,81 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Fixed.");
   });
 
+  it("delivers only the final assistant answer when accumulated text includes pre-tool progress", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I'll inspect that first.", "Done."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "/root/openclaw/src/gateway/protocol/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
+        "The schema export is fixed.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "The schema export is fixed.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "The schema export is fixed.");
+  });
+
+  it("ignores accumulated internal/status text after the final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "Done.",
+        "Background task done: Context engine turn maintenance. Rewrote 0 transcript entries and freed 0 bytes.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
   it("surfaces concise exec tool errors when verbose mode is off", () => {
     const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
@@ -260,6 +335,32 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   it("preserves media directives when stored assistant text was reduced to visible text only", () => {
     const payloads = buildPayloads({
       assistantTexts: ["Attached image"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
+  it("keeps media directives when collapsing accumulated pre-tool text to the final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Preparing the image...", "Attached image"],
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",

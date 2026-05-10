@@ -174,7 +174,8 @@ describe("createAcpxRuntimeService", () => {
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
   });
 
-  it("creates the embedded runtime state directory without probing at startup by default", async () => {
+  it("skips the startup probe and defers acpx backend health reporting when explicitly opted out", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     const workspaceDir = await makeTempDir();
     const stateDir = path.join(workspaceDir, "custom-state");
     const ctx = createServiceContext(workspaceDir);
@@ -196,6 +197,47 @@ describe("createAcpxRuntimeService", () => {
     await fs.access(stateDir);
     expect(probeAvailability).not.toHaveBeenCalled();
     expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
+
+    await service.stop?.(ctx);
+  });
+
+  it("waits for the embedded runtime startup probe before resolving", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    let releaseProbe!: () => void;
+    const probeStarted = vi.fn();
+    const probeAvailability = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          probeStarted();
+          releaseProbe = resolve;
+        }),
+    );
+    const runtime = createMockRuntime({
+      probeAvailability,
+      isHealthy: () => true,
+    });
+    const service = createAcpxRuntimeService({
+      runtimeFactory: () => runtime as never,
+    });
+
+    const startPromise = service.start(ctx) as Promise<void>;
+    await vi.waitFor(() => {
+      expect(probeStarted).toHaveBeenCalledOnce();
+    });
+
+    let resolved = false;
+    void startPromise.then(() => {
+      resolved = true;
+    });
+    await Promise.resolve();
+
+    expect(resolved).toBe(false);
+    releaseProbe();
+    await startPromise;
+
+    expect(resolved).toBe(true);
+    expect(ctx.logger.info).toHaveBeenCalledWith("embedded acpx runtime backend ready");
 
     await service.stop?.(ctx);
   });
@@ -317,7 +359,8 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("registers the default backend without importing ACPX runtime until first use", async () => {
+  it("registers the default backend lazily without importing ACPX runtime when startup probing is opted out", async () => {
+    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "0";
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const service = createAcpxRuntimeService();
@@ -344,8 +387,7 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
   });
 
-  it("can run the embedded runtime probe at startup when explicitly enabled", async () => {
-    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
+  it("runs the embedded runtime probe at startup by default and reports health", async () => {
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const probeAvailability = vi.fn(async () => {});
@@ -361,6 +403,30 @@ describe("createAcpxRuntimeService", () => {
 
     expect(probeAvailability).toHaveBeenCalledOnce();
     expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(true);
+
+    await service.stop?.(ctx);
+  });
+
+  it("bounds the embedded runtime startup probe wait with the configured timeout", async () => {
+    const workspaceDir = await makeTempDir();
+    const ctx = createServiceContext(workspaceDir);
+    const probeAvailability = vi.fn(() => new Promise<void>(() => {}));
+    const runtime = createMockRuntime({
+      probeAvailability,
+      isHealthy: () => false,
+    });
+    const service = createAcpxRuntimeService({
+      pluginConfig: { timeoutSeconds: 0.001 },
+      runtimeFactory: () => runtime as never,
+    });
+
+    await service.start(ctx);
+
+    expect(probeAvailability).toHaveBeenCalledOnce();
+    expect(getAcpRuntimeBackend("acpx")?.healthy?.()).toBe(false);
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      "embedded acpx runtime setup failed: embedded acpx runtime backend startup probe timed out after 0.001s",
+    );
 
     await service.stop?.(ctx);
   });
@@ -497,7 +563,6 @@ describe("createAcpxRuntimeService", () => {
   });
 
   it("can skip the embedded runtime probe via env", async () => {
-    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     process.env.OPENCLAW_SKIP_ACPX_RUNTIME_PROBE = "1";
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
@@ -517,12 +582,12 @@ describe("createAcpxRuntimeService", () => {
     expect(getAcpRuntimeBackend("acpx")).toMatchObject({
       runtime: expect.any(Object),
     });
+    expect(getAcpRuntimeBackend("acpx")?.healthy).toBeUndefined();
 
     await service.stop?.(ctx);
   });
 
   it("formats non-string doctor details without losing object payloads", async () => {
-    process.env.OPENCLAW_ACPX_RUNTIME_STARTUP_PROBE = "1";
     const workspaceDir = await makeTempDir();
     const ctx = createServiceContext(workspaceDir);
     const runtime = createMockRuntime({
@@ -539,11 +604,9 @@ describe("createAcpxRuntimeService", () => {
 
     await service.start(ctx);
 
-    await vi.waitFor(() => {
-      expect(ctx.logger.warn).toHaveBeenCalledWith(
-        'embedded acpx runtime backend probe failed: probe failed ({"code":"ACP_CLOSED","agent":"codex"}; stdin closed)',
-      );
-    });
+    expect(ctx.logger.warn).toHaveBeenCalledWith(
+      'embedded acpx runtime backend probe failed: probe failed ({"code":"ACP_CLOSED","agent":"codex"}; stdin closed)',
+    );
 
     await service.stop?.(ctx);
   });

@@ -1143,7 +1143,7 @@ describe("processDiscordMessage session routing", () => {
 
   it("prefers bound session keys and sets MessageThreadId for bound thread messages", async () => {
     const threadBindings = createThreadBindingManager({
-      cfg: {} as import("openclaw/plugin-sdk/config-types").OpenClawConfig,
+      cfg: {} as import("openclaw/plugin-sdk/config-contracts").OpenClawConfig,
       accountId: "default",
       persist: false,
       enableSweeper: false,
@@ -1624,7 +1624,7 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(draftStream.update).toHaveBeenCalledWith(
-      "Shelling\n🛠️ Exec: run tests, `pnpm test -- --watch=false`\n• done",
+      "Shelling\n🛠️ run tests, `pnpm test -- --watch=false`\n• done",
     );
   });
 
@@ -1659,7 +1659,7 @@ describe("processDiscordMessage draft streaming", () => {
     expect(draftStream.update).toHaveBeenCalledWith("Shelling\n🛠️ Exec\n• done");
   });
 
-  it("keeps Discord progress labels as rolling lines", async () => {
+  it("keeps Discord progress lines below the configured label", async () => {
     const draftStream = createMockDraftStreamForTest();
 
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {

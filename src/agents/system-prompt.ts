@@ -1299,7 +1299,7 @@ function buildActiveProcessSessionReferenceLines(
       const cwd = session.cwd ? ` cwd=${sanitizeForPromptLiteral(session.cwd)}` : "";
       return `- ${session.sessionId} ${session.status}${pid}${cwd} :: ${sanitizeForPromptLiteral(session.name)}`;
     }),
-    "Use the process tool with a sessionId to poll, log, write to, or terminate these sessions. If prior context lost a sessionId, run process list.",
+    "Use process log before interactive input; log/poll may report waitingForInput/stdinWritable. If prior context lost a sessionId, run process list.",
   ];
 }
 

@@ -618,7 +618,7 @@ jobs:
             timeout_minutes: 120
           - chunk_id: package-update-openai
             label: package/update OpenAI install
-            timeout_minutes: 180
+            timeout_minutes: 30
           - chunk_id: package-update-anthropic
             label: package/update Anthropic install
             timeout_minutes: 180

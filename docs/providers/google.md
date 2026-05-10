@@ -44,7 +44,7 @@ Choose your preferred auth method and follow the setup steps.
         {
           agents: {
             defaults: {
-              model: { primary: "google/gemini-2.5-flash" },
+              model: { primary: "google/gemini-3.1-pro-preview" },
             },
           },
         }

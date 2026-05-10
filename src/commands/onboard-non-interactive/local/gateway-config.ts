@@ -24,9 +24,8 @@ export function applyNonInteractiveGatewayConfig(params: {
   const { opts, runtime } = params;
 
   const gatewayPort = opts.gatewayPort;
-  const hasGatewayPort = gatewayPort !== undefined;
   if (
-    hasGatewayPort &&
+    gatewayPort !== undefined &&
     (!Number.isFinite(gatewayPort) || gatewayPort <= 0 || gatewayPort > 65_535)
   ) {
     runtime.error(formatInvalidPortOption("--gateway-port"));
