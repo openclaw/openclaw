@@ -377,6 +377,20 @@ describe("isTransientUnhandledRejectionError", () => {
     expect(isBenignUncaughtExceptionError(rawHostUnreachable)).toBe(true);
     expect(isBenignUncaughtExceptionError(generic)).toBe(false);
   });
+
+  it("treats EADDRNOTAVAIL (IPv6-unreachable TLSSocket crash) as benign", () => {
+    // Regression: pinned-lookup round-robin on dual-stack hosts emits
+    // EADDRNOTAVAIL on IPv6-unreachable networks (WSL2, corporate NAT).
+    // Both code-bearing and raw-message forms must be caught. (#80078)
+    const codeErr = Object.assign(
+      new Error("connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)"),
+      { code: "EADDRNOTAVAIL", errno: -99 },
+    );
+    const rawErr = new Error("connect EADDRNOTAVAIL 2607:6bc0::10:443 - Local (:::0)");
+
+    expect(isBenignUncaughtExceptionError(codeErr)).toBe(true);
+    expect(isBenignUncaughtExceptionError(rawErr)).toBe(true);
+  });
   it("returns true for transient SQLite errors", () => {
     const error = Object.assign(new Error("unable to open database file"), {
       code: "ERR_SQLITE_ERROR",

@@ -108,6 +108,45 @@ describe("ssrf pinning", () => {
     ).toThrow("Pinned lookup requires at least one address for example.com");
   });
 
+  it("confines round-robin to IPv4 on dual-stack addresses to avoid EADDRNOTAVAIL on IPv6-unreachable hosts", async () => {
+    // Regression: when api.anthropic.com resolves to both IPv4 and IPv6,
+    // round-robin index advancement previously handed IPv6 on the 2nd call,
+    // crashing with EADDRNOTAVAIL on WSL2 / corporate networks. (#80078)
+    const lookup = createPinnedLookup({
+      hostname: "api.anthropic.com",
+      addresses: ["160.79.104.10", "2607:6bc0::10"],
+    });
+
+    const resolve = (options?: unknown): Promise<{ address: string; family: number }> =>
+      new Promise((ok, fail) => {
+        const cb = (err: unknown, addr: string, fam: number) =>
+          err ? fail(err) : ok({ address: addr, family: fam });
+        if (options === undefined) {
+          lookup("api.anthropic.com", cb);
+        } else {
+          lookup("api.anthropic.com", options, cb);
+        }
+      });
+
+    // Without an explicit family request, all round-robin ticks must stay IPv4.
+    for (let i = 0; i < 4; i++) {
+      const r = await resolve();
+      expect(r.family).toBe(4);
+      expect(r.address).toBe("160.79.104.10");
+    }
+
+    // Explicit family=6 still reaches the IPv6 record.
+    const v6 = await resolve({ family: 6 });
+    expect(v6.family).toBe(6);
+    expect(v6.address).toBe("2607:6bc0::10");
+
+    // { all: true } still returns all records including IPv6.
+    const all = await new Promise<unknown>((ok, fail) => {
+      lookup("api.anthropic.com", { all: true }, (err, addrs) => (err ? fail(err) : ok(addrs)));
+    });
+    expect((all as Array<{ address: string }>).map((e) => e.address)).toContain("2607:6bc0::10");
+  });
+
   it("enforces hostname allowlist when configured", async () => {
     const lookup = vi.fn(async () => [
       { address: "93.184.216.34", family: 4 },

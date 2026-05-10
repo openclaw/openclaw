@@ -345,6 +345,12 @@ export function createPinnedLookup(params: {
     address,
     family: address.includes(":") ? 6 : 4,
   }));
+  // When both families are present, confine round-robin to IPv4 to avoid
+  // EADDRNOTAVAIL / ENETUNREACH crashes on IPv6-unreachable hosts (WSL2,
+  // IPv6-disabled corporate/ISP networks). IPv6 is still reachable when the
+  // caller requests family=6 explicitly or requests all addresses. (#80078)
+  const ipv4Records = records.filter((r) => r.family === 4);
+  const defaultRecords = ipv4Records.length > 0 ? ipv4Records : records;
   let index = 0;
 
   return ((host: string, options?: unknown, callback?: unknown) => {
@@ -367,15 +373,19 @@ export function createPinnedLookup(params: {
         : {};
     const requestedFamily =
       typeof options === "number" ? options : typeof opts.family === "number" ? opts.family : 0;
+    if (opts.all) {
+      const allCandidates =
+        requestedFamily === 4 || requestedFamily === 6
+          ? records.filter((entry) => entry.family === requestedFamily)
+          : records;
+      cb(null, (allCandidates.length > 0 ? allCandidates : records) as LookupAddress[]);
+      return;
+    }
     const candidates =
       requestedFamily === 4 || requestedFamily === 6
         ? records.filter((entry) => entry.family === requestedFamily)
-        : records;
+        : defaultRecords;
     const usable = candidates.length > 0 ? candidates : records;
-    if (opts.all) {
-      cb(null, usable as LookupAddress[]);
-      return;
-    }
     const chosen = usable[index % usable.length];
     index += 1;
     cb(null, chosen.address, chosen.family);
