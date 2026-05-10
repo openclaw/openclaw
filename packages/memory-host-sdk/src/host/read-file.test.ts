@@ -37,6 +37,19 @@ describe("readMemoryFile", () => {
         text: "",
         path: path.relative(workspaceDir, missingPath).replace(/\\/g, "/"),
       });
+
+      const nonDirectoryParentPath = path.join(extraDir, "note.md", "child.md");
+      await fs.writeFile(path.join(extraDir, "note.md"), "note", "utf-8");
+      await expect(
+        readMemoryFile({
+          workspaceDir,
+          extraPaths: [extraDir],
+          relPath: nonDirectoryParentPath,
+        }),
+      ).resolves.toEqual({
+        text: "",
+        path: path.relative(workspaceDir, nonDirectoryParentPath).replace(/\\/g, "/"),
+      });
     } finally {
       await fs.rm(tmpRoot, { recursive: true, force: true });
     }
