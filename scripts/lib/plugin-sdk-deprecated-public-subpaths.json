@@ -25,6 +25,7 @@
   "music-generation-core",
   "plugin-test-api",
   "plugin-test-contracts",
+  "provider-auth-login",
   "provider-http-test-mocks",
   "provider-test-contracts",
   "reply-dedupe",
