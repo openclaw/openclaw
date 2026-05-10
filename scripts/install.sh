@@ -1275,12 +1275,13 @@ install_homebrew() {
 }
 
 # Check Node.js version
-parse_node_version_components() {
-    if ! command -v node &> /dev/null; then
+parse_node_version_components_for_binary() {
+    local node_bin="${1:-node}"
+    if ! command -v "$node_bin" &> /dev/null && [[ ! -x "$node_bin" ]]; then
         return 1
     fi
     local version major minor
-    version="$(node -v 2>/dev/null || true)"
+    version="$("$node_bin" -v 2>/dev/null || true)"
     major="${version#v}"
     major="${major%%.*}"
     minor="${version#v}"
@@ -1295,6 +1296,13 @@ parse_node_version_components() {
     fi
     echo "${major} ${minor}"
     return 0
+}
+
+parse_node_version_components() {
+    if ! command -v node &> /dev/null; then
+        return 1
+    fi
+    parse_node_version_components_for_binary node
 }
 
 node_major_version() {
@@ -1321,6 +1329,58 @@ node_is_at_least_required() {
     if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
         return 0
     fi
+    return 1
+}
+
+node_binary_is_at_least_required() {
+    local node_bin="$1"
+    local version_components major minor
+    version_components="$(parse_node_version_components_for_binary "$node_bin" || true)"
+    read -r major minor <<< "$version_components"
+    if [[ ! "$major" =~ ^[0-9]+$ || ! "$minor" =~ ^[0-9]+$ ]]; then
+        return 1
+    fi
+    if [[ "$major" -gt "$NODE_MIN_MAJOR" ]]; then
+        return 0
+    fi
+    if [[ "$major" -eq "$NODE_MIN_MAJOR" && "$minor" -ge "$NODE_MIN_MINOR" ]]; then
+        return 0
+    fi
+    return 1
+}
+
+promote_supported_node_binary() {
+    local candidates=()
+    local candidate dir seen_dirs=":"
+
+    while IFS= read -r candidate; do
+        candidates+=("$candidate")
+    done < <(type -P -a node 2>/dev/null || true)
+
+    candidates+=(
+        "/usr/bin/node"
+        "/usr/local/bin/node"
+        "/opt/homebrew/bin/node"
+        "/opt/homebrew/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
+        "/usr/local/opt/node@${NODE_DEFAULT_MAJOR}/bin/node"
+    )
+
+    for candidate in "${candidates[@]}"; do
+        if [[ -z "$candidate" || ! -x "$candidate" ]]; then
+            continue
+        fi
+        dir="$(cd "$(dirname "$candidate")" && pwd 2>/dev/null || true)"
+        if [[ -z "$dir" || "$seen_dirs" == *":$dir:"* ]]; then
+            continue
+        fi
+        seen_dirs="${seen_dirs}${dir}:"
+        if node_binary_is_at_least_required "$candidate"; then
+            export PATH="$dir:$PATH"
+            refresh_shell_command_cache
+            return 0
+        fi
+    done
+
     return 1
 }
 
@@ -1379,6 +1439,7 @@ ensure_macos_default_node_active() {
 }
 
 ensure_default_node_active_shell() {
+    promote_supported_node_binary || true
     if node_is_at_least_required; then
         return 0
     fi
@@ -1487,6 +1548,7 @@ install_node() {
             else
                 run_quiet_step "Installing Node.js" sudo pacman -Sy --noconfirm nodejs npm
             fi
+            promote_supported_node_binary || true
             ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
             print_active_node_paths || true
             return 0
@@ -1532,6 +1594,7 @@ install_node() {
             exit 1
         fi
 
+        promote_supported_node_binary || true
         ui_success "Node.js v${NODE_DEFAULT_MAJOR} installed"
         print_active_node_paths || true
     fi

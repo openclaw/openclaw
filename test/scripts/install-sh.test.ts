@@ -109,6 +109,52 @@ describe("install.sh", () => {
     expect(output).toContain("version=v22.22.1");
   });
 
+  it("promotes a supported Linux Node binary over stale PATH entries", () => {
+    const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-node-promote-"));
+    const staleBin = join(tmp, "usr-local-bin");
+    const supportedBin = join(tmp, "usr-bin");
+    mkdirSync(staleBin, { recursive: true });
+    mkdirSync(supportedBin, { recursive: true });
+
+    const staleNode = join(staleBin, "node");
+    const supportedNode = join(supportedBin, "node");
+    writeFileSync(staleNode, "#!/bin/sh\necho v20.20.0\n");
+    writeFileSync(supportedNode, "#!/bin/sh\necho v22.22.0\n");
+    chmodSync(staleNode, 0o755);
+    chmodSync(supportedNode, 0o755);
+
+    let result: ReturnType<typeof runInstallShell> | undefined;
+    try {
+      result = runInstallShell(
+        [
+          `cd ${JSON.stringify(process.cwd())}`,
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          "set +e",
+          "OS=linux",
+          "promote_supported_node_binary",
+          "promote_status=$?",
+          "ensure_default_node_active_shell",
+          "active_status=$?",
+          'printf "promote=%s\\nactive=%s\\npath=%s\\nversion=%s\\n" "$promote_status" "$active_status" "$(command -v node)" "$(node -v)"',
+          "exit $active_status",
+        ].join("\n"),
+        {
+          PATH: `${staleBin}:${supportedBin}:/usr/bin:/bin`,
+          TERM: "dumb",
+        },
+      );
+    } finally {
+      rmSync(tmp, { force: true, recursive: true });
+    }
+
+    expect(result?.status).toBe(0);
+    const output = result?.stdout ?? "";
+    expect(output).toContain("promote=0");
+    expect(output).toContain("active=0");
+    expect(output).toContain(`path=${supportedNode}`);
+    expect(output).toContain("version=v22.22.0");
+  });
+
   it("warns before redirecting an unwritable npm prefix", () => {
     const tmp = mkdtempSync(join(tmpdir(), "openclaw-install-npm-prefix-"));
     const home = join(tmp, "home");
