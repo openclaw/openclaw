@@ -144,13 +144,7 @@ export class CodexAppServerEventProjector {
     private readonly threadId: string,
     private readonly turnId: string,
     private readonly options: CodexAppServerEventProjectorOptions = {},
-  ) {
-    this.nativeSubagentTaskMirror = new CodexNativeSubagentTaskMirror({
-      parentThreadId: threadId,
-      requesterSessionKey: params.sessionKey,
-      agentId: params.agentId,
-    });
-  }
+  ) {}
 
   async handleNotification(notification: CodexServerNotification): Promise<void> {
     const params = isJsonObject(notification.params) ? notification.params : undefined;
