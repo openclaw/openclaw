@@ -302,6 +302,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   if (latestEquivalentAssistantId) {
     return { ok: true, sessionFile, messageId: latestEquivalentAssistantId };
   }
+  const tailToolCallAssistantId = isRedundantDeliveryMirror(params.message)
+    ? await findTailAssistantToolCallMessageId(sessionFile)
+    : undefined;
+  if (tailToolCallAssistantId) {
+    return { ok: true, sessionFile, messageId: tailToolCallAssistantId };
+  }
 
   const message = {
     ...params.message,
@@ -359,6 +365,67 @@ async function transcriptHasIdempotencyKey(
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
   return message.provider === "openclaw" && message.model === "delivery-mirror";
+}
+
+function isAssistantToolCallContentBlock(block: unknown): boolean {
+  if (!block || typeof block !== "object") {
+    return false;
+  }
+  const type = (block as { type?: unknown }).type;
+  return (
+    type === "toolCall" ||
+    type === "toolUse" ||
+    type === "functionCall" ||
+    type === "tool_call" ||
+    type === "tool_use" ||
+    type === "function_call"
+  );
+}
+
+function assistantMessageHasToolCall(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const candidate = message as { role?: unknown; content?: unknown };
+  return (
+    candidate.role === "assistant" &&
+    Array.isArray(candidate.content) &&
+    candidate.content.some(isAssistantToolCallContentBlock)
+  );
+}
+
+async function findTailAssistantToolCallMessageId(
+  transcriptPath: string,
+): Promise<string | undefined> {
+  // Delivery mirrors are UI-only assistant rows. If they are appended as the
+  // child of a tool-call turn before the real tool result lands, raw transcript
+  // assemblers can mistake the pair for missing/corrupt tool output.
+  try {
+    const raw = await fs.promises.readFile(transcriptPath, "utf-8");
+    for (const line of raw.split(/\r?\n/).toReversed()) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const parsed = JSON.parse(line) as {
+          type?: unknown;
+          id?: unknown;
+          message?: unknown;
+        };
+        if (parsed.type !== "message") {
+          continue;
+        }
+        return assistantMessageHasToolCall(parsed.message) && typeof parsed.id === "string"
+          ? parsed.id
+          : undefined;
+      } catch {
+        return undefined;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }
 
 function extractAssistantMessageText(message: SessionTranscriptAssistantMessage): string | null {

@@ -1,5 +1,7 @@
 import fs from "node:fs";
+import type { AgentMessage } from "@mariozechner/pi-agent-core";
 import { describe, expect, it, vi } from "vitest";
+import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
 import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
@@ -281,6 +283,65 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       expect(messageLine.message.model).toBe("delivery-mirror");
       expect(messageLine.message.content[0].text).toBe("Repeated answer");
     }
+  });
+
+  it("does not insert delivery mirrors between assistant tool calls and results", async () => {
+    writeTranscriptStore();
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    const toolCallId = "call_maniple_list";
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "toolCall",
+            id: toolCallId,
+            name: "maniple__list_workers",
+            arguments: {},
+          },
+        ],
+        stopReason: "toolUse",
+      },
+    });
+
+    const mirrorResult = await appendAssistantMessageToSessionTranscript({
+      sessionKey,
+      text: "Maniple List Workers",
+      storePath: fixture.storePath(),
+    });
+
+    expect(mirrorResult.ok).toBe(true);
+    if (!mirrorResult.ok) {
+      return;
+    }
+    const linesAfterMirror = fs.readFileSync(sessionFile, "utf-8").trim().split("\n");
+    expect(linesAfterMirror).toHaveLength(2);
+
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: {
+        role: "toolResult",
+        toolCallId,
+        toolName: "maniple__list_workers",
+        content: [{ type: "text", text: "workers listed" }],
+        isError: false,
+      },
+    });
+
+    const messages = fs
+      .readFileSync(sessionFile, "utf-8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { message?: AgentMessage })
+      .flatMap((entry) => (entry.message ? [entry.message] : []));
+    const repair = repairToolUseResultPairing(messages, {
+      missingToolResultText: "aborted",
+    });
+
+    expect(repair.added).toHaveLength(0);
+    expect(repair.messages.map((message) => message.role)).toEqual(["assistant", "toolResult"]);
   });
 
   it("finds session entry using normalized (lowercased) key", async () => {
