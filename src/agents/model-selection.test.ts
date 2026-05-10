@@ -6,6 +6,7 @@ import { migrateLegacyRuntimeModelRef } from "./model-runtime-aliases.js";
 import {
   buildAllowedModelSet,
   buildConfiguredModelCatalog,
+  createModelVisibilityPolicy,
   inferUniqueProviderFromConfiguredModels,
   isModelKeyAllowedBySet,
   parseModelRef,
@@ -1002,6 +1003,46 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has(providerWildcardModelKey("openai-codex"))).toBe(true);
       expect(isModelKeyAllowedBySet(result.allowedKeys, "openai-codex/gpt-added-later")).toBe(true);
       expect(isModelKeyAllowedBySet(result.allowedKeys, "anthropic/claude-sonnet-4-6")).toBe(false);
+    });
+
+    it("exposes wildcard allow and visible catalog behavior through one policy", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/*": {},
+              "anthropic/claude-sonnet-4-6": {},
+            },
+          },
+        },
+      } as unknown as OpenClawConfig;
+
+      const policy = createModelVisibilityPolicy({
+        cfg,
+        catalog: [
+          { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+          { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+          { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+        ],
+        defaultProvider: "anthropic",
+        defaultModel: "claude-sonnet-4-6",
+      });
+
+      expect(policy.hasProviderWildcards).toBe(true);
+      expect(policy.allows({ provider: "openai-codex", model: "future-model" })).toBe(true);
+      expect(policy.allows({ provider: "vllm", model: "qwen-local" })).toBe(false);
+      expect(
+        policy.visibleCatalog({
+          catalog: [],
+          defaultVisibleCatalog: [
+            { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+            { provider: "vllm", id: "qwen-local", name: "Qwen Local" },
+          ],
+        }),
+      ).toEqual([
+        { provider: "openai-codex", id: "gpt-added-later", name: "GPT Added Later" },
+        { provider: "anthropic", id: "claude-sonnet-4-6", name: "Claude Sonnet" },
+      ]);
     });
 
     it("unions exact model entries with provider wildcard entries", () => {

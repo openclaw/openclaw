@@ -9,11 +9,10 @@ import { loadModelCatalog } from "../../agents/model-catalog.js";
 import { isModelPickerVisibleProvider } from "../../agents/model-picker-visibility.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import {
-  buildConfiguredAllowlistKeys,
   buildModelAliasIndex,
+  createModelVisibilityPolicy,
   modelKey,
   normalizeProviderId,
-  parseConfiguredModelVisibilityEntries,
   resolveBareModelDefaultProvider,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -79,6 +78,13 @@ export async function buildModelsProviderData(
   });
 
   const catalog = await loadModelCatalog({ config: cfg });
+  const visibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog,
+    defaultProvider: resolvedDefault.provider,
+    defaultModel: resolvedDefault.model,
+    agentId,
+  });
   const visibleCatalog = resolveVisibleModelCatalog({
     cfg,
     catalog,
@@ -96,13 +102,8 @@ export async function buildModelsProviderData(
     cfg,
     defaultProvider: resolvedDefault.provider,
   });
-  const visibility = parseConfiguredModelVisibilityEntries({ cfg });
-  const providerAllowlist = visibility.providerWildcards;
-  const exactAllowlist = buildConfiguredAllowlistKeys({
-    cfg,
-    defaultProvider: resolvedDefault.provider,
-  });
-  const restrictToProviderWildcards = options.view !== "all" && providerAllowlist.size > 0;
+  const restrictToProviderWildcards =
+    options.view !== "all" && visibilityPolicy.hasProviderWildcards;
 
   const byProvider = new Map<string, Set<string>>();
   const add = (p: string, m: string) => {
@@ -110,11 +111,7 @@ export async function buildModelsProviderData(
     if (!isModelPickerVisibleProvider(key)) {
       return;
     }
-    if (
-      restrictToProviderWildcards &&
-      !providerAllowlist.has(key) &&
-      !exactAllowlist?.has(modelKey(key, m))
-    ) {
+    if (restrictToProviderWildcards && !visibilityPolicy.allows({ provider: key, model: m })) {
       return;
     }
     const set = byProvider.get(key) ?? new Set<string>();
@@ -172,7 +169,7 @@ export async function buildModelsProviderData(
     add(entry.provider, entry.id);
   }
 
-  for (const raw of visibility.exactModelRefs) {
+  for (const raw of visibilityPolicy.exactModelRefs) {
     addRawModelRef(raw);
   }
 

@@ -138,6 +138,47 @@ vi.mock("../agents/model-selection.js", () => {
         allowAny: Object.keys(modelConfig).length === 0,
       };
     }),
+    createModelVisibilityPolicy: vi.fn(
+      ({ cfg, catalog = [] }: { cfg?: ConfigWithModels; catalog?: CatalogEntry[] }) => {
+        const refs = new Set<string>();
+        const modelConfig = cfg?.agents?.defaults?.models ?? {};
+        for (const raw of Object.keys(modelConfig)) {
+          const parsed = parseModelRefImpl(raw, "openai");
+          if (parsed) {
+            refs.add(modelKey(parsed.provider, parsed.model));
+          }
+        }
+        const primary = resolveDefaultRef(cfg);
+        refs.add(modelKey(primary.provider, primary.model));
+        const allowAny = Object.keys(modelConfig).length === 0;
+        const allowsKey = (key: string) => allowAny || isModelKeyAllowedBySet(refs, key);
+        return {
+          allowAny,
+          allowedKeys: refs,
+          allowedCatalog: catalog,
+          exactModelRefs: Object.keys(modelConfig).filter((key) => !key.endsWith("/*")),
+          providerWildcards: new Set(
+            Object.keys(modelConfig)
+              .filter((key) => key.endsWith("/*"))
+              .map((key) => key.slice(0, -2).trim().toLowerCase()),
+          ),
+          hasConfiguredEntries: Object.keys(modelConfig).length > 0,
+          hasProviderWildcards: Object.keys(modelConfig).some((key) => key.endsWith("/*")),
+          allowsKey,
+          allows: ({ provider, model }: ModelRef) => allowsKey(modelKey(provider, model)),
+          resolveSelection: ({ provider, model }: ModelRef) => {
+            const key = modelKey(provider, model);
+            if (allowsKey(key)) {
+              return { provider, model };
+            }
+            const fallback = catalog[0];
+            return fallback?.id ? { provider: "openai", model: fallback.id } : null;
+          },
+          visibleCatalog: ({ catalog: visibleCatalog }: { catalog: CatalogEntry[] }) =>
+            visibleCatalog,
+        };
+      },
+    ),
     buildConfiguredModelCatalog: vi.fn(() => []),
     isModelKeyAllowedBySet,
     isCliProvider: vi.fn(() => false),

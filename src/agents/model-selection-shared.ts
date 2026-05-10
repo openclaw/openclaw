@@ -143,6 +143,24 @@ export function resolveAllowedModelSelection(params: {
   return normalizeModelRef(fallback.provider, fallback.id);
 }
 
+export type ModelVisibilityPolicy = {
+  allowAny: boolean;
+  allowedCatalog: ModelCatalogEntry[];
+  allowedKeys: Set<string>;
+  exactModelRefs: readonly string[];
+  providerWildcards: ReadonlySet<string>;
+  hasConfiguredEntries: boolean;
+  hasProviderWildcards: boolean;
+  allowsKey: (key: string) => boolean;
+  allows: (ref: { provider: string; model: string }) => boolean;
+  resolveSelection: (ref: { provider: string; model: string }) => ModelRef | null;
+  visibleCatalog: (params: {
+    catalog: readonly ModelCatalogEntry[];
+    defaultVisibleCatalog: readonly ModelCatalogEntry[];
+    view?: "default" | "configured" | "all";
+  }) => ModelCatalogEntry[];
+};
+
 export function inferUniqueProviderFromConfiguredModels(params: {
   cfg: OpenClawConfig;
   model: string;
@@ -822,6 +840,84 @@ export function buildAllowedModelSetWithFallbacks(params: {
   }
 
   return { allowAny: false, allowedCatalog, allowedKeys };
+}
+
+function dedupeModelCatalogEntries(entries: readonly ModelCatalogEntry[]): ModelCatalogEntry[] {
+  const seen = new Set<string>();
+  const next: ModelCatalogEntry[] = [];
+  for (const entry of entries) {
+    const key = modelKey(entry.provider, entry.id);
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    next.push(entry);
+  }
+  return next;
+}
+
+export function createModelVisibilityPolicyWithFallbacks(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  defaultProvider: string;
+  defaultModel?: string;
+  fallbackModels: readonly string[];
+}): ModelVisibilityPolicy {
+  const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
+  const allowed = buildAllowedModelSetWithFallbacks(params);
+  const allowsKey = (key: string): boolean =>
+    allowed.allowAny || isModelKeyAllowedBySet(allowed.allowedKeys, key);
+  const policy: ModelVisibilityPolicy = {
+    allowAny: allowed.allowAny,
+    allowedCatalog: allowed.allowedCatalog,
+    allowedKeys: allowed.allowedKeys,
+    exactModelRefs: visibility.exactModelRefs,
+    providerWildcards: visibility.providerWildcards,
+    hasConfiguredEntries: visibility.hasEntries,
+    hasProviderWildcards: visibility.providerWildcards.size > 0,
+    allowsKey,
+    allows: (ref) => allowsKey(modelKey(ref.provider, ref.model)),
+    resolveSelection: (ref) =>
+      resolveAllowedModelSelection({
+        provider: ref.provider,
+        model: ref.model,
+        allowAny: allowed.allowAny,
+        allowedKeys: allowed.allowedKeys,
+        allowedCatalog: allowed.allowedCatalog,
+      }),
+    visibleCatalog: ({ catalog, defaultVisibleCatalog, view }) => {
+      if (view === "all") {
+        return [...catalog];
+      }
+      if (allowed.allowAny) {
+        return [...defaultVisibleCatalog];
+      }
+      if (visibility.providerWildcards.size === 0) {
+        return [...allowed.allowedCatalog];
+      }
+      return dedupeModelCatalogEntries([
+        ...defaultVisibleCatalog.filter((entry) =>
+          visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
+        ),
+        ...allowed.allowedCatalog.filter(
+          (entry) => !visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
+        ),
+      ]);
+    },
+  };
+  return policy;
+}
+
+export function createModelVisibilityPolicy(params: {
+  cfg: OpenClawConfig;
+  catalog: ModelCatalogEntry[];
+  defaultProvider: string;
+  defaultModel?: string;
+}): ModelVisibilityPolicy {
+  return createModelVisibilityPolicyWithFallbacks({
+    ...params,
+    fallbackModels: [],
+  });
 }
 
 export type ModelRefStatus = {

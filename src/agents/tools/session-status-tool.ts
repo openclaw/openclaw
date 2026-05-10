@@ -28,10 +28,9 @@ import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
-  buildAllowedModelSet,
   buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  isModelKeyAllowedBySet,
+  createModelVisibilityPolicy,
   modelKey,
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
@@ -289,7 +288,7 @@ async function resolveModelOverride(params: {
     defaultProvider: currentProvider,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
@@ -306,7 +305,7 @@ async function resolveModelOverride(params: {
     throw new Error(`Unrecognized model "${raw}".`);
   }
   const key = modelKey(resolved.ref.provider, resolved.ref.model);
-  if (allowed.allowedKeys.size > 0 && !isModelKeyAllowedBySet(allowed.allowedKeys, key)) {
+  if (!policy.allowsKey(key)) {
     throw new Error(`Model "${key}" is not allowed.`);
   }
   const isDefault =

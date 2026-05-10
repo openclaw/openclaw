@@ -2,11 +2,9 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
 import {
-  buildAllowedModelSet,
   buildConfiguredModelCatalog,
+  createModelVisibilityPolicy,
   modelKey,
-  normalizeProviderId,
-  parseConfiguredModelVisibilityEntries,
 } from "./model-selection.js";
 
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
@@ -65,29 +63,22 @@ export function resolveVisibleModelCatalog(params: {
     );
   };
 
-  const allowed = buildAllowedModelSet({
+  const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog: params.catalog,
     defaultProvider: params.defaultProvider,
     defaultModel: params.defaultModel,
     agentId: params.agentId,
   });
-  if (!allowed.allowAny) {
-    const visibility = parseConfiguredModelVisibilityEntries({ cfg: params.cfg });
-    if (visibility.providerWildcards.size > 0) {
-      return sortModelCatalogEntries(
-        dedupeModelCatalogEntries([
-          ...buildDefaultVisibleCatalog().filter((entry) =>
-            visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
-          ),
-          ...allowed.allowedCatalog.filter(
-            (entry) => !visibility.providerWildcards.has(normalizeProviderId(entry.provider)),
-          ),
-        ]),
-      );
-    }
-    return sortModelCatalogEntries(allowed.allowedCatalog);
-  }
-
-  return buildDefaultVisibleCatalog();
+  const defaultVisibleCatalog =
+    policy.allowAny || policy.hasProviderWildcards ? buildDefaultVisibleCatalog() : [];
+  return sortModelCatalogEntries(
+    dedupeModelCatalogEntries(
+      policy.visibleCatalog({
+        catalog: params.catalog,
+        defaultVisibleCatalog,
+        view: params.view,
+      }),
+    ),
+  );
 }

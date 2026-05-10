@@ -6,14 +6,13 @@ import { resolveAgentHarnessPolicy } from "../../agents/harness/selection.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import {
   buildConfiguredModelCatalog,
-  buildAllowedModelSet,
-  isModelKeyAllowedBySet,
+  createModelVisibilityPolicy,
+  type ModelVisibilityPolicy,
   modelKey,
   normalizeModelRef,
   normalizeProviderId,
   parseConfiguredModelVisibilityEntries,
   resolvePersistedOverrideModelRef,
-  resolveAllowedModelSelection,
   resolveReasoningDefault,
   resolveThinkingDefault,
 } from "../../agents/model-selection.js";
@@ -141,7 +140,13 @@ export async function createModelSelectionState(params: {
 
   let allowedModelKeys = new Set<string>();
   let allowedModelCatalog: ModelCatalog = configuredModelCatalog;
-  let allowAnyModel = !hasAllowlist;
+  let visibilityPolicy: ModelVisibilityPolicy = createModelVisibilityPolicy({
+    cfg,
+    catalog: configuredModelCatalog,
+    defaultProvider,
+    defaultModel,
+    agentId: params.agentId,
+  });
   let modelCatalog: ModelCatalog | null = null;
   let resetModelOverride = false;
   let resetModelOverrideRef: string | undefined;
@@ -155,31 +160,29 @@ export async function createModelSelectionState(params: {
   if (needsModelCatalog) {
     modelCatalog = await (await loadModelCatalogRuntime()).loadModelCatalog({ config: cfg });
     logStage("catalog-loaded", `entries=${modelCatalog.length}`);
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: modelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
-    allowAnyModel = allowed.allowAny;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
     );
   } else if (hasAllowlist) {
-    const allowed = buildAllowedModelSet({
+    visibilityPolicy = createModelVisibilityPolicy({
       cfg,
       catalog: configuredModelCatalog,
       defaultProvider,
       defaultModel,
       agentId: params.agentId,
     });
-    allowedModelCatalog = allowed.allowedCatalog;
-    allowedModelKeys = allowed.allowedKeys;
-    allowAnyModel = allowed.allowAny;
+    allowedModelCatalog = visibilityPolicy.allowedCatalog;
+    allowedModelKeys = visibilityPolicy.allowedKeys;
     logStage(
       "configured-allowlist-built",
       `allowed=${allowedModelCatalog.length} keys=${allowedModelKeys.size}`,
@@ -194,7 +197,7 @@ export async function createModelSelectionState(params: {
       directStoredOverride.model,
     );
     const key = modelKey(normalizedOverride.provider, normalizedOverride.model);
-    if (allowedModelKeys.size > 0 && !isModelKeyAllowedBySet(allowedModelKeys, key)) {
+    if (!visibilityPolicy.allowsKey(key)) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
         selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
@@ -234,19 +237,16 @@ export async function createModelSelectionState(params: {
       storedOverride.model,
     );
     const key = modelKey(normalizedStoredOverride.provider, normalizedStoredOverride.model);
-    if (allowedModelKeys.size === 0 || isModelKeyAllowedBySet(allowedModelKeys, key)) {
+    if (visibilityPolicy.allowsKey(key)) {
       provider = normalizedStoredOverride.provider;
       model = normalizedStoredOverride.model;
     }
   }
 
   if (!params.hasModelDirective) {
-    const allowedInitialSelection = resolveAllowedModelSelection({
+    const allowedInitialSelection = visibilityPolicy.resolveSelection({
       provider,
       model,
-      allowAny: allowAnyModel,
-      allowedKeys: allowedModelKeys,
-      allowedCatalog: allowedModelCatalog,
     });
     if (!allowedInitialSelection) {
       throw new Error(
