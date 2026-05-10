@@ -10,7 +10,7 @@ import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
-import type { ThinkLevel } from "../thinking.js";
+import { normalizeThinkLevel, type ThinkLevel } from "../thinking.js";
 import { buildCommandContext } from "./commands-context.js";
 import { clearInlineDirectives } from "./get-reply-directives-utils.js";
 import { resolveReplyDirectives } from "./get-reply-directives.js";
@@ -126,11 +126,18 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
   if (command.commandBodyNormalized === "/status") {
     const targetSessionEntry =
       sessionState.sessionStore[sessionState.sessionKey] ?? sessionState.sessionEntry;
-    const resolvedDefaultThinkingLevel = await resolveNativeSlashDefaultThinkingLevel({
-      cfg: params.cfg,
-      provider: params.provider,
-      model: params.model,
-    });
+    let resolvedDefaultThinkingLevel: ThinkLevel | undefined;
+    const resolveDefaultThinkingLevel = async () => {
+      resolvedDefaultThinkingLevel ??= await resolveNativeSlashDefaultThinkingLevel({
+        cfg: params.cfg,
+        provider: params.provider,
+        model: params.model,
+      });
+      return resolvedDefaultThinkingLevel;
+    };
+    const resolvedThinkLevel =
+      normalizeThinkLevel(targetSessionEntry?.thinkingLevel) ??
+      (await resolveDefaultThinkingLevel());
     const { buildStatusReply } = await loadStatusCommandRuntime();
     return {
       handled: true,
@@ -145,11 +152,11 @@ export async function maybeResolveNativeSlashCommandFastReply(params: {
         provider: params.provider,
         model: params.model,
         workspaceDir: params.workspaceDir,
-        resolvedThinkLevel: resolvedDefaultThinkingLevel,
+        resolvedThinkLevel,
         resolvedVerboseLevel: "off",
         resolvedReasoningLevel: "off",
         resolvedElevatedLevel: "off",
-        resolveDefaultThinkingLevel: async () => resolvedDefaultThinkingLevel,
+        resolveDefaultThinkingLevel,
         isGroup: sessionState.isGroup,
         defaultGroupActivation: () => "always",
         mediaDecisions: params.ctx.MediaUnderstandingDecisions,
