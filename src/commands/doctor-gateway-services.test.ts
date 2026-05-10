@@ -984,6 +984,48 @@ describe("maybeRepairGatewayServiceConfig", () => {
       }
     });
   });
+
+  it("consolidates source-checkout note and audit issues into a single Gateway service config note", async () => {
+    await withEnvAsync({}, async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-doctor-service-layout-"));
+      try {
+        await fs.mkdir(path.join(root, ".git"), { recursive: true });
+        await fs.mkdir(path.join(root, "src"), { recursive: true });
+        await fs.mkdir(path.join(root, "extensions"), { recursive: true });
+        await fs.mkdir(path.join(root, "dist"), { recursive: true });
+        await fs.writeFile(
+          path.join(root, "package.json"),
+          JSON.stringify({ name: "openclaw", version: "0.0.0-test" }),
+          "utf8",
+        );
+        const entrypoint = path.join(root, "dist", "index.js");
+        await fs.writeFile(entrypoint, "export {};\n", "utf8");
+        mocks.readCommand.mockResolvedValue(createGatewayCommand(entrypoint));
+        mocks.auditGatewayServiceConfig.mockResolvedValue({
+          ok: false,
+          issues: [
+            {
+              code: "port-mismatch",
+              message: "Gateway port mismatch",
+              level: "recommended" as const,
+            },
+          ],
+        });
+        mocks.buildGatewayInstallPlan.mockResolvedValue(createGatewayCommand(entrypoint));
+
+        await runRepair({ gateway: {} });
+
+        const gatewayConfigNotes = mocks.note.mock.calls.filter(
+          (args: unknown[]) => args[1] === "Gateway service config",
+        );
+        // source-checkout content and audit issues must appear in the same note body
+        expect(gatewayConfigNotes[0][0]).toContain("resolves to a source checkout");
+        expect(gatewayConfigNotes[0][0]).toContain("Gateway port mismatch");
+      } finally {
+        await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+  });
 });
 
 describe("maybeScanExtraGatewayServices", () => {
