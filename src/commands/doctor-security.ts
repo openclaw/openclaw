@@ -12,6 +12,7 @@ import { resolveDmAllowState } from "../security/dm-policy-shared.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { resolveDefaultChannelAccountContext } from "./channel-account-context.js";
+import { expandToolGroups, normalizeToolName, resolveToolProfilePolicy } from "../agents/tool-policy.js";
 
 function collectImplicitHeartbeatDirectPolicyWarnings(cfg: OpenClawConfig): string[] {
   const warnings: string[] = [];
@@ -164,6 +165,100 @@ function collectDurableExecApprovalWarnings(cfg: OpenClawConfig): string[] {
   return [];
 }
 
+/**
+ * Checks that channel-bound agents with an explicit tools.allow list include the
+ * `message` tool. Agents with explicit allow lists that omit `message` cannot use
+ * any message-tool actions (sendAttachment, reply, thread-reply, etc.) in their
+ * bound channels, and will confabulate false capability reasons rather than
+ * reporting the real cause.
+ *
+ * Does NOT warn when:
+ * - The agent uses a profile (profile-based allow implies intentional scoping).
+ * - The agent has no explicit tools.allow (default policy includes message).
+ * - The agent is not bound to any channel via cfg.bindings.
+ * - The profile already includes `message` (e.g. "messaging", "full").
+ */
+function collectAgentChannelToolBindingWarnings(cfg: OpenClawConfig): string[] {
+  const warnings: string[] = [];
+  const bindings = cfg.bindings ?? [];
+
+  if (bindings.length === 0) {
+    return warnings;
+  }
+
+  // Build a set of agent IDs that are bound to at least one channel.
+  const channelBoundAgentIds = new Set<string>();
+  for (const binding of bindings) {
+    channelBoundAgentIds.add(binding.agentId);
+  }
+
+  if (channelBoundAgentIds.size === 0) {
+    return warnings;
+  }
+
+  const messageToolName = normalizeToolName("message");
+
+  for (const agent of cfg.agents?.list ?? []) {
+    if (!channelBoundAgentIds.has(agent.id)) {
+      continue;
+    }
+
+    const toolsConfig = agent.tools;
+    if (!toolsConfig) {
+      continue;
+    }
+
+    // If the agent uses a profile, check whether that profile includes `message`.
+    if (toolsConfig.profile) {
+      const profilePolicy = resolveToolProfilePolicy(toolsConfig.profile);
+      // `full` profile has an empty policy (everything allowed), so no explicit
+      // allow list means message is included.
+      if (!profilePolicy?.allow) {
+        continue;
+      }
+      const profileExpanded = expandToolGroups(profilePolicy.allow);
+      if (profileExpanded.includes(messageToolName)) {
+        continue;
+      }
+      // Profile-based but message not in profile — still check explicit allow/deny.
+    }
+
+    // Only warn for agents with an explicit tools.allow list (hand-curated policies).
+    // Without an explicit allow list, the default policy applies and includes message.
+    const explicitAllow = toolsConfig.allow;
+    if (!explicitAllow || explicitAllow.length === 0) {
+      continue;
+    }
+
+    // Expand groups so `group:messaging` or similar shortcuts are resolved.
+    const expandedAllow = expandToolGroups(explicitAllow);
+    const alsoAllow = toolsConfig.alsoAllow ? expandToolGroups(toolsConfig.alsoAllow) : [];
+    const allAllowed = new Set([...expandedAllow, ...alsoAllow]);
+
+    if (allAllowed.has(messageToolName)) {
+      continue;
+    }
+
+    // Collect the channels this agent is bound to for the warning message.
+    const boundChannels = bindings
+      .filter((b) => b.agentId === agent.id)
+      .map((b) => b.match.channel);
+    const channelList = [...new Set(boundChannels)].join(", ");
+
+    warnings.push(
+      [
+        `- Agent \`${agent.id}\` is bound to channel(s) [${channelList}] but the \`message\` tool is not in its tool policy.`,
+        `  Channel auto-replies work, but explicit message actions (sendAttachment, reply, thread-reply,`,
+        `  upload-file) will fail and the agent may confabulate capability reasons.`,
+        `  Fix: add \`"message"\` to agents.list.${agent.id}.tools.allow, or switch to a profile that`,
+        `  includes it (e.g. \`"profile": "messaging"\` or \`"profile": "full"\`).`,
+      ].join("\n"),
+    );
+  }
+
+  return warnings;
+}
+
 export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   const warnings: string[] = [];
   const auditHint = `- Run: ${formatCliCommand("openclaw security audit --deep")}`;
@@ -179,6 +274,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   warnings.push(...collectImplicitHeartbeatDirectPolicyWarnings(cfg));
   warnings.push(...collectExecPolicyConflictWarnings(cfg));
   warnings.push(...collectDurableExecApprovalWarnings(cfg));
+  warnings.push(...collectAgentChannelToolBindingWarnings(cfg));
 
   // ===========================================
   // GATEWAY NETWORK EXPOSURE CHECK
