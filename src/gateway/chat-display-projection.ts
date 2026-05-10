@@ -529,12 +529,16 @@ function extractProjectedText(content: unknown): string {
   return parts.join("\n");
 }
 
+function isNonEmptyArray(value: unknown): value is unknown[] {
+  return Array.isArray(value) && value.length > 0;
+}
+
 function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unknown>): boolean {
   const provenance = normalizeInputProvenance(message.provenance);
   if (provenance?.kind === "inter_session" && provenance.sourceTool === "subagent_announce") {
     return true;
   }
-  const text = extractProjectedText(message.content?.length ? message.content : message.text);
+  const text = extractProjectedText(isNonEmptyArray(message.content) ? message.content : message.text);
   return (
     text.includes(INTER_SESSION_PROMPT_PREFIX_BASE) && text.includes("sourceTool=subagent_announce")
   );
@@ -548,10 +552,10 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "user" && isSubagentAnnounceInterSessionUserMessage(message)) {
     return true;
   }
-  if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content?.length ? message.content : message.text)) {
+  if (roleContent.role === "user" && isEmptyTextOnlyContent(isNonEmptyArray(message.content) ? message.content : message.text)) {
     return true;
   }
-  if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content?.length ? message.content : message.text)) {
+  if (roleContent.role === "assistant" && isEmptyTextOnlyContent(isNonEmptyArray(message.content) ? message.content : message.text)) {
     return false;
   }
   if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
