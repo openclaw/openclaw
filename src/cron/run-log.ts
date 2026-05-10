@@ -3,7 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import type { CronConfig } from "../config/types.cron.js";
-import { appendRegularFile, isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
+import { assertNoSymlinkParents } from "../infra/fs-safe-advanced.js";
+import { isPathInside, pathExists, root as fsRoot } from "../infra/fs-safe.js";
 import { privateFileStore } from "../infra/private-file-store.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -154,6 +155,24 @@ async function pruneIfNeeded(filePath: string, opts: { maxBytes: number; keepLin
   );
 }
 
+async function appendRunLogLine(filePath: string, content: string) {
+  const runDir = path.dirname(filePath);
+  await assertNoSymlinkParents({
+    rootDir: path.parse(runDir).root,
+    targetPath: runDir,
+    allowMissing: false,
+    allowRootChildSymlink: true,
+    requireDirectories: true,
+    messagePrefix: "Refusing to append under",
+  });
+  await (
+    await fsRoot(runDir, { mode: 0o600 })
+  ).append(path.basename(filePath), content, {
+    mkdir: false,
+    mode: 0o600,
+  });
+}
+
 export async function appendCronRunLog(
   filePath: string,
   entry: CronRunLogEntry,
@@ -167,11 +186,7 @@ export async function appendCronRunLog(
       const runDir = path.dirname(resolved);
       await fs.mkdir(runDir, { recursive: true, mode: 0o700 });
       await fs.chmod(runDir, 0o700).catch(() => undefined);
-      await appendRegularFile({
-        filePath: resolved,
-        content: `${JSON.stringify(entry)}\n`,
-        rejectSymlinkParents: true,
-      });
+      await appendRunLogLine(resolved, `${JSON.stringify(entry)}\n`);
       await setSecureFileMode(resolved);
       await pruneIfNeeded(resolved, {
         maxBytes: opts?.maxBytes ?? DEFAULT_CRON_RUN_LOG_MAX_BYTES,
