@@ -55,6 +55,15 @@ but new plugin code should use focused, actively consumed SDK subpaths instead:
 `music-generation-core`, `self-hosted-provider-setup`, `telegram-account`,
 `telegram-command-config`, and `zalouser`.
 
+### Deprecated rare public subpaths
+
+Public subpaths currently used by only one or two bundled plugin owners are also
+deprecated for new plugin code. They remain package exports for compatibility,
+but new code should prefer actively shared SDK seams or plugin-owned package
+APIs. Maintainers track the exact set in
+`scripts/lib/plugin-sdk-deprecated-public-subpaths.json` and the current budget
+with `pnpm plugin-sdk:surface`.
+
 ### Deprecated broad barrels
 
 These broad re-export barrels remain buildable for OpenClaw source and
