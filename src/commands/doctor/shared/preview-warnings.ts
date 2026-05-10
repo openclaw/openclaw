@@ -242,13 +242,18 @@ function collectBoundChannelTargets(cfg: OpenClawConfig): Array<{
   };
 
   const routeBindings: AgentRouteBinding[] = listRouteBindings(cfg);
+  const explicitlyBoundChannels = new Set<string>();
   for (const binding of routeBindings) {
-    add(binding.agentId, binding.match.channel);
+    const channel = binding.match.channel.trim();
+    add(binding.agentId, channel);
+    if (channel) {
+      explicitlyBoundChannels.add(channel);
+    }
   }
 
-  if (routeBindings.length === 0) {
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    for (const channel of listConfiguredChannelIds(cfg)) {
+  const defaultAgentId = resolveDefaultAgentId(cfg);
+  for (const channel of listConfiguredChannelIds(cfg)) {
+    if (!explicitlyBoundChannels.has(channel)) {
       add(defaultAgentId, channel);
     }
   }

@@ -573,4 +573,44 @@ describe("doctor preview warnings", () => {
     expect(warnings.join("\n")).not.toContain("slack");
     expect(warnings.join("\n")).not.toContain("defaults");
   });
+
+  it("warns for default-routed configured channels when other routes exist", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        discord: {},
+        telegram: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "commander",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "commander",
+          match: {
+            channel: "discord",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "main" is routed from channel "telegram"'),
+    ]);
+    expect(warnings.join("\n")).not.toContain("commander");
+    expect(warnings.join("\n")).not.toContain("discord");
+  });
 });
