@@ -6,7 +6,7 @@ import type { SandboxToolPolicy } from "../agents/sandbox/types.js";
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { AgentToolsConfig } from "../config/types.tools.js";
+import type { AgentToolsConfig, ToolPolicyConfig } from "../config/types.tools.js";
 import { hasConfiguredInternalHooks } from "../hooks/configured.js";
 import { hasConfiguredWebSearchCredential } from "../plugins/web-search-credential-presence.js";
 import { inferParamBFromIdOrName } from "../shared/model-param-b.js";
@@ -57,6 +57,28 @@ function extractAgentIdFromSource(source: string): string | null {
   return match?.[1] ?? null;
 }
 
+function lookupByProviderPolicy(
+  byProvider: Record<string, ToolPolicyConfig> | undefined,
+  modelId: string,
+): ToolPolicyConfig | undefined {
+  if (!byProvider) {
+    return undefined;
+  }
+  const lower = modelId.toLowerCase();
+  // Check full "provider/model" key first, then provider-only prefix.
+  if (Object.prototype.hasOwnProperty.call(byProvider, lower)) {
+    return byProvider[lower];
+  }
+  const slashIdx = lower.indexOf("/");
+  if (slashIdx > 0) {
+    const providerOnly = lower.slice(0, slashIdx);
+    if (Object.prototype.hasOwnProperty.call(byProvider, providerOnly)) {
+      return byProvider[providerOnly];
+    }
+  }
+  return undefined;
+}
+
 function resolveToolPolicies(params: {
   cfg: OpenClawConfig;
   agentTools?: AgentToolsConfig;
@@ -75,6 +97,15 @@ function resolveToolPolicies(params: {
   const globalPolicy = pickSandboxToolPolicy(params.cfg.tools ?? undefined);
   if (globalPolicy) {
     policies.push(globalPolicy);
+  }
+
+  if (params.modelId) {
+    const globalProviderPolicy = pickSandboxToolPolicy(
+      lookupByProviderPolicy(params.cfg.tools?.byProvider, params.modelId),
+    );
+    if (globalProviderPolicy) {
+      policies.push(globalProviderPolicy);
+    }
   }
 
   const agentPolicy = pickSandboxToolPolicy(params.agentTools);

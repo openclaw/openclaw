@@ -60,6 +60,50 @@ describe("security audit small-model risk findings", () => {
     }
   });
 
+  it("treats tools.byProvider deny as mitigating web tool exposure for the targeted model", () => {
+    const finding = requireFirstSmallModelFinding(
+      collectSmallModelRiskFindings({
+        cfg: {
+          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+          tools: {
+            web: { search: { enabled: true }, fetch: { enabled: true } },
+            byProvider: {
+              "ollama/mistral-8b": { deny: ["web_search", "web_fetch", "browser"] },
+            },
+          },
+          browser: { enabled: true },
+        },
+        env: process.env,
+      }),
+      "byProvider deny mitigates web exposure",
+    );
+    // byProvider deny removes the web tools from the model's exposure — reported as web=[off].
+    // severity stays critical because sandbox is still off; that is a separate gate.
+    expect(finding.detail).toContain("web=[off]");
+    expect(finding.detail).not.toContain("web_search");
+  });
+
+  it("does not suppress web exposure when byProvider deny targets a different model", () => {
+    const finding = requireFirstSmallModelFinding(
+      collectSmallModelRiskFindings({
+        cfg: {
+          agents: { defaults: { model: { primary: "ollama/mistral-8b" } } },
+          tools: {
+            web: { search: { enabled: true }, fetch: { enabled: true } },
+            byProvider: {
+              "openai/gpt-4o": { deny: ["web_search", "web_fetch", "browser"] },
+            },
+          },
+          browser: { enabled: true },
+        },
+        env: process.env,
+      }),
+      "byProvider deny for other model does not suppress",
+    );
+    expect(finding.severity).toBe("critical");
+    expect(finding.detail).toContain("web_search");
+  });
+
   it("resolves configured aliases before parameter-size classification", () => {
     const finding = requireFirstSmallModelFinding(
       collectSmallModelRiskFindings({
