@@ -188,7 +188,9 @@ export async function resolveCliAuthEpoch(params: {
     profileCredential = getAuthProfileCredential(store, authProfileId);
   }
 
-  if (params.skipLocalCredential !== true && !profileCredential) {
+  const profileOwnsIdentity =
+    profileCredential != null && hasOAuthAccountIdentity(profileCredential);
+  if (params.skipLocalCredential !== true && !profileOwnsIdentity) {
     const localFingerprint = getLocalCliCredentialFingerprint(provider);
     if (localFingerprint) {
       parts.push(`local:${provider}:${localFingerprint}`);
