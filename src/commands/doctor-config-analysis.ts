@@ -4,6 +4,7 @@ import { CONFIG_PATH } from "../config/config.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
+import { resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import { note } from "../terminal/note.js";
 import { isRecord } from "../utils.js";
 
@@ -133,14 +134,17 @@ export function noteOpencodeProviderOverrides(cfg: OpenClawConfig): void {
 }
 
 function isImplicitFallbackClobber(model: unknown): boolean {
+  const primary = resolvePrimaryStringValue(model);
   if (typeof model === "string") {
-    return Boolean(model.trim());
+    return primary !== undefined;
   }
   if (model !== null && typeof model === "object" && !Array.isArray(model)) {
     const obj = model as Record<string, unknown>;
     // Object with primary but no fallbacks key — intent is ambiguous; warn.
     // Object with fallbacks: [] — explicit no-fallbacks; no warn.
-    return Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks");
+    return (
+      Object.hasOwn(obj, "primary") && !Object.hasOwn(obj, "fallbacks") && primary !== undefined
+    );
   }
   return false;
 }
@@ -156,10 +160,9 @@ export function collectImplicitFallbackClobberWarnings(cfg: OpenClawConfig): str
       continue;
     }
     const id = typeof agent.id === "string" && agent.id.trim() ? agent.id.trim() : String(index);
+    const primary = resolvePrimaryStringValue(agent.model);
     const modelStr =
-      typeof agent.model === "string"
-        ? `"${agent.model}"`
-        : `{ primary: "${(agent.model as Record<string, unknown>).primary}" }`;
+      typeof agent.model === "string" ? `"${agent.model}"` : `{ primary: "${primary}" }`;
     warnings.push(
       [
         `- agents.list[${id}].model is ${modelStr} with no explicit fallbacks key. At runtime this clobbers agents.defaults.model.fallbacks (${defaultFallbacks.join(", ")}), leaving the agent with no fallbacks.`,

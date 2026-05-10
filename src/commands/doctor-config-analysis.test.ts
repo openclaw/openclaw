@@ -117,6 +117,25 @@ describe("collectImplicitFallbackClobberWarnings", () => {
     expect(warnings[0]).toContain("clobbers agents.defaults.model.fallbacks");
   });
 
+  it("does not warn for object form with blank primary", () => {
+    const cfg = buildConfig({
+      defaults: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+      list: [
+        { id: "blank", model: { primary: "" } },
+        { id: "whitespace", model: { primary: "   " } },
+      ],
+    });
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+
+  it("does not warn for object form with non-string primary", () => {
+    const cfg = buildConfig({
+      defaults: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
+      list: [{ id: "bad", model: { primary: 123 } }],
+    });
+    expect(collectImplicitFallbackClobberWarnings(cfg)).toEqual([]);
+  });
+
   it("does not warn for { primary, fallbacks: [] } (explicit empty)", () => {
     const cfg = buildConfig({
       defaults: { primary: "openai/gpt-5.5", fallbacks: ["openai/gpt-5.4"] },
