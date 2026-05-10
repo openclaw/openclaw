@@ -36,7 +36,7 @@ type XiaomiTtsFormat = (typeof XIAOMI_TTS_FORMATS)[number];
 
 type XiaomiTtsProviderConfig = {
   apiKey?: string;
-  baseUrl: string;
+  baseUrl?: string;
   model: string;
   voice: string;
   format: XiaomiTtsFormat;
@@ -54,6 +54,11 @@ function normalizeXiaomiTtsBaseUrl(baseUrl?: string): string {
   return (baseUrl?.trim() || DEFAULT_XIAOMI_TTS_BASE_URL).replace(/\/+$/, "");
 }
 
+function normalizeOptionalXiaomiTtsBaseUrl(baseUrl: unknown): string | undefined {
+  const trimmed = trimToUndefined(baseUrl);
+  return trimmed ? normalizeXiaomiTtsBaseUrl(trimmed) : undefined;
+}
+
 function normalizeXiaomiTtsFormat(value: unknown): XiaomiTtsFormat | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
   return XIAOMI_TTS_FORMATS.includes(normalized as XiaomiTtsFormat)
@@ -68,6 +73,13 @@ function resolveXiaomiTtsConfigRecord(
   return asObject(providers?.xiaomi) ?? asObject(providers?.mimo) ?? asObject(rawConfig.xiaomi);
 }
 
+function readXiaomiModelProviderConfig(cfg: unknown): Record<string, unknown> | undefined {
+  const root = asObject(cfg);
+  const models = asObject(root?.models);
+  const providers = asObject(models?.providers);
+  return asObject(providers?.xiaomi);
+}
+
 function normalizeXiaomiTtsProviderConfig(
   rawConfig: Record<string, unknown>,
 ): XiaomiTtsProviderConfig {
@@ -77,9 +89,9 @@ function normalizeXiaomiTtsProviderConfig(
       value: raw?.apiKey,
       path: "messages.tts.providers.xiaomi.apiKey",
     }),
-    baseUrl: normalizeXiaomiTtsBaseUrl(
-      trimToUndefined(raw?.baseUrl) ?? trimToUndefined(process.env.XIAOMI_BASE_URL),
-    ),
+    baseUrl:
+      normalizeOptionalXiaomiTtsBaseUrl(raw?.baseUrl) ??
+      normalizeOptionalXiaomiTtsBaseUrl(process.env.XIAOMI_BASE_URL),
     model:
       trimToUndefined(raw?.model) ??
       trimToUndefined(process.env.XIAOMI_TTS_MODEL) ??
@@ -105,12 +117,22 @@ function readXiaomiTtsProviderConfig(config: SpeechProviderConfig): XiaomiTtsPro
         value: config.apiKey,
         path: "messages.tts.providers.xiaomi.apiKey",
       }) ?? normalized.apiKey,
-    baseUrl: normalizeXiaomiTtsBaseUrl(trimToUndefined(config.baseUrl) ?? normalized.baseUrl),
+    baseUrl: normalizeOptionalXiaomiTtsBaseUrl(config.baseUrl) ?? normalized.baseUrl,
     model: trimToUndefined(config.model) ?? normalized.model,
     voice: trimToUndefined(config.voice) ?? trimToUndefined(config.voiceId) ?? normalized.voice,
     format: normalizeXiaomiTtsFormat(config.format) ?? normalized.format,
     style: trimToUndefined(config.style) ?? normalized.style,
   };
+}
+
+function resolveXiaomiTtsBaseUrl(params: {
+  cfg?: unknown;
+  providerConfig: XiaomiTtsProviderConfig;
+}): string {
+  return normalizeXiaomiTtsBaseUrl(
+    params.providerConfig.baseUrl ??
+      normalizeOptionalXiaomiTtsBaseUrl(readXiaomiModelProviderConfig(params.cfg)?.baseUrl),
+  );
 }
 
 function readXiaomiTtsOverrides(
@@ -214,7 +236,7 @@ async function xiaomiTTS(params: {
       init: {
         method: "POST",
         headers: {
-          "api-key": apiKey,
+          Authorization: `Bearer ${apiKey}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -263,7 +285,7 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
       const audioBuffer = await xiaomiTTS({
         text: req.text,
         apiKey,
-        baseUrl: config.baseUrl,
+        baseUrl: resolveXiaomiTtsBaseUrl({ cfg: req.cfg, providerConfig: config }),
         model: overrides.model ?? config.model,
         voice: overrides.voice ?? config.voice,
         format: outputFormat,

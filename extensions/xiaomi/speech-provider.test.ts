@@ -163,7 +163,10 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(mockFetch).toHaveBeenCalledOnce();
       const [url, init] = mockFetch.mock.calls[0];
       expect(url).toBe("https://api.xiaomimimo.com/v1/chat/completions");
-      expect(init?.headers).toMatchObject({ "api-key": "sk-test" });
+      expect(init?.headers).toMatchObject({
+        Authorization: "Bearer sk-test",
+        "Content-Type": "application/json",
+      });
       const body = JSON.parse(init!.body as string);
       expect(body.model).toBe("mimo-v2-tts");
       expect(body.messages).toEqual([
@@ -172,6 +175,72 @@ describe("buildXiaomiSpeechProvider", () => {
       ]);
       expect(body.audio).toEqual({ format: "mp3", voice: "default_en" });
       expect(transcodeAudioBufferToOpusMock).not.toHaveBeenCalled();
+    });
+
+    it("inherits the Xiaomi model provider baseUrl when TTS baseUrl is not configured", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await provider.synthesize({
+        text: "Hello from Token Plan.",
+        cfg: {
+          models: {
+            providers: {
+              xiaomi: {
+                baseUrl: "https://token-plan-ams.xiaomimimo.com/v1/",
+              },
+            },
+          },
+        } as never,
+        providerConfig: { apiKey: "tp-test" },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [url, init] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://token-plan-ams.xiaomimimo.com/v1/chat/completions");
+      expect(init?.headers).toMatchObject({ Authorization: "Bearer tp-test" });
+    });
+
+    it("prefers the TTS provider baseUrl over the Xiaomi model provider baseUrl", async () => {
+      const audio = Buffer.from("fake-mp3-audio").toString("base64");
+      const mockFetch = vi.mocked(globalThis.fetch);
+      mockFetch.mockResolvedValueOnce(
+        new Response(JSON.stringify({ choices: [{ message: { audio: { data: audio } } }] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
+
+      await provider.synthesize({
+        text: "Hello from explicit TTS endpoint.",
+        cfg: {
+          models: {
+            providers: {
+              xiaomi: {
+                baseUrl: "https://token-plan-ams.xiaomimimo.com/v1",
+              },
+            },
+          },
+        } as never,
+        providerConfig: {
+          apiKey: "tp-test",
+          baseUrl: "https://token-plan-cn.xiaomimimo.com/v1/",
+        },
+        target: "audio-file",
+        timeoutMs: 30000,
+      });
+
+      expect(mockFetch).toHaveBeenCalledOnce();
+      const [url] = mockFetch.mock.calls[0];
+      expect(url).toBe("https://token-plan-cn.xiaomimimo.com/v1/chat/completions");
     });
 
     it("transcodes Xiaomi output to Opus for voice-note targets", async () => {

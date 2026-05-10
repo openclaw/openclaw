@@ -72,6 +72,13 @@ an `assistant` message and optional style guidance as a `user` message.
 | Default  | `mimo-v2.5-tts`, voice `mimo_default`    |
 | Output   | MP3 by default; WAV when configured      |
 
+Token Plan keys require the matching Xiaomi regional Token Plan endpoint, such
+as `https://token-plan-cn.xiaomimimo.com/v1` or
+`https://token-plan-ams.xiaomimimo.com/v1`. When
+`messages.tts.providers.xiaomi.baseUrl` is not set, Xiaomi TTS reuses
+`models.providers.xiaomi.baseUrl`; set the TTS base URL only when speech should
+use a different endpoint from chat completions.
+
 ```json5
 {
   messages: {
@@ -81,6 +88,8 @@ an `assistant` message and optional style guidance as a `user` message.
       providers: {
         xiaomi: {
           apiKey: "xiaomi_api_key",
+          // For Token Plan keys, set the matching regional endpoint here or in models.providers.xiaomi.baseUrl.
+          // baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
           model: "mimo-v2.5-tts",
           voice: "mimo_default",
           format: "mp3",
