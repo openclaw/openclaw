@@ -6,6 +6,10 @@ import { DatabaseSync } from "node:sqlite";
 const KV_SCOPE = "installed_plugin_index";
 const KV_KEY = "current";
 
+function allowLegacyPackageCompatFallback() {
+  return process.env.OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT === "1";
+}
+
 export function openclawStateDir() {
   return process.env.OPENCLAW_STATE_DIR?.trim() || path.join(os.homedir(), ".openclaw");
 }
@@ -54,7 +58,7 @@ export function readInstalledPluginIndex(options = {}) {
   } catch {
     // Fall through to optional legacy compatibility.
   }
-  if (options.allowLegacyFile) {
+  if (options.allowLegacyFile && allowLegacyPackageCompatFallback()) {
     return readJsonIfExists(path.join(openclawStateDir(), "plugins", "installs.json"));
   }
   return {};
@@ -73,6 +77,12 @@ export function writeInstalledPluginIndex(index) {
 
 export function readInstalledPluginRecords(options = {}) {
   const index = readInstalledPluginIndex(options);
+  if (index.installRecords) {
+    return index.installRecords;
+  }
+  if (!allowLegacyPackageCompatFallback()) {
+    return {};
+  }
   const config = readJsonIfExists(path.join(openclawStateDir(), "openclaw.json"));
-  return index.installRecords ?? index.records ?? config.plugins?.installs ?? {};
+  return index.records ?? config.plugins?.installs ?? {};
 }
