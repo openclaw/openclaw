@@ -589,13 +589,18 @@ export const dispatchTelegramMessage = async ({
   let streamToolProgressLines: string[] = [];
   let lastAnswerPartialText = "";
   let activeAnswerDraftIsToolProgressOnly = false;
-  const noteAnswerToolProgressDraft = () => {
-    activeAnswerDraftIsToolProgressOnly =
-      !answerLane.hasStreamedMessage || activeAnswerDraftIsToolProgressOnly;
-  };
-  const resetAnswerToolProgressDraft = () => {
+  function resetAnswerToolProgressDraft() {
     activeAnswerDraftIsToolProgressOnly = false;
-  };
+  }
+  async function prepareAnswerLaneForToolProgress() {
+    if (activeAnswerDraftIsToolProgressOnly) {
+      return;
+    }
+    if (answerLane.hasStreamedMessage) {
+      await rotateLaneForNewMessage(answerLane);
+    }
+    activeAnswerDraftIsToolProgressOnly = true;
+  }
   const renderProgressDraft = async (options?: { flush?: boolean }) => {
     if (!answerLane.stream || streamMode !== "progress") {
       return;
@@ -609,7 +614,7 @@ export const dispatchTelegramMessage = async ({
     if (!streamText || streamText === answerLane.lastPartialText) {
       return;
     }
-    noteAnswerToolProgressDraft();
+    await prepareAnswerLaneForToolProgress();
     answerLane.lastPartialText = streamText;
     answerLane.hasStreamedMessage = true;
     answerLane.finalized = false;
@@ -649,7 +654,7 @@ export const dispatchTelegramMessage = async ({
         seed: progressSeed,
         formatLine: formatProgressAsMarkdownCode,
       });
-      noteAnswerToolProgressDraft();
+      await prepareAnswerLaneForToolProgress();
       answerLane.lastPartialText = streamText;
       answerLane.hasStreamedMessage = true;
       answerLane.finalized = false;
@@ -1301,6 +1306,9 @@ export const dispatchTelegramMessage = async ({
                       }
                       if (segment.lane === "reasoning") {
                         reasoningStepState.noteReasoningHint();
+                      }
+                      if (segment.lane === "answer" && info.kind === "tool") {
+                        await prepareAnswerLaneForToolProgress();
                       }
                       const result =
                         segment.lane === "answer" && info.kind === "final"
