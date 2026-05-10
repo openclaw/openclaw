@@ -1,0 +1,58 @@
+# Polytropos Core Cutover (Gateway ExecStart)
+
+This document captures the one-time operational change required to switch the running gateway from the installed OpenClaw package to the Polytropos core release symlink.
+
+## Goal
+
+- Make a **single** update to the gateway systemd unit so it executes the core from:
+  - `~/polytropos/releases/current/index.js`
+- After cutover, core version changes are performed by updating the `current` symlink (see `docs/polytropos/CORE-RELEASES.md`).
+
+## Current state (reference)
+
+On this host, the gateway service currently runs the installed npm package:
+
+- `ExecStart=/usr/bin/node /home/ec2-user/.npm-global/lib/node_modules/openclaw/dist/index.js gateway --port 18789`
+
+Service file:
+
+- `~/.config/systemd/user/openclaw-gateway.service`
+
+## Target state
+
+Update `ExecStart` to:
+
+- `ExecStart=/usr/bin/node /home/ec2-user/polytropos/releases/current/index.js gateway --port 18789`
+
+## Preconditions
+
+- `~/polytropos/releases/current` exists and points at a valid release directory.
+- The release directory is a byte-for-byte copy of an OpenClaw `dist/` tree (see `docs/polytropos/CORE-RELEASES.md`).
+
+## Procedure (one-time)
+
+1) Stop gateway (brief downtime):
+
+   - `systemctl --user stop openclaw-gateway`
+
+2) Edit service file in place (single change to ExecStart).
+
+3) Reload systemd user units:
+
+   - `systemctl --user daemon-reload`
+
+4) Start gateway:
+
+   - `systemctl --user start openclaw-gateway`
+
+5) Verify:
+
+   - `openclaw gateway status`
+   - `openclaw doctor --non-interactive`
+
+## Rollback
+
+If there is a failure:
+
+- Either point `~/polytropos/releases/current` back to a known-good release and restart, **or**
+- Revert `ExecStart` to the prior installed-package path and restart.
