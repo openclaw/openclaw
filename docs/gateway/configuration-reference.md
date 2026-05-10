@@ -212,8 +212,9 @@ See [MCP](/cli/mcp#openclaw-as-an-mcp-client-registry) and
 ### Codex harness plugin config
 
 The bundled `codex` plugin owns native Codex app-server harness settings under
-`plugins.entries.codex.config`. See [Codex harness](/plugins/codex-harness) for
-the full runtime model.
+`plugins.entries.codex.config`. See
+[Codex harness reference](/plugins/codex-harness-reference) for the full config
+surface and [Codex harness](/plugins/codex-harness) for the runtime model.
 
 `codexPlugins` applies only to sessions that select the native Codex harness.
 It does not enable Codex plugins for Pi, normal OpenAI provider runs, ACP
