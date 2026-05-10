@@ -158,7 +158,14 @@ const legacyStoreMarkers = [
   { label: "Matrix storage metadata JSON", pattern: /\bstorage-meta\.json\b/u },
   { label: "Matrix inbound dedupe JSON", pattern: /\binbound-dedupe\.json\b/u },
   { label: "Matrix startup verification JSON", pattern: /\bstartup-verification\.json\b/u },
+  {
+    label: "Matrix credentials JSON",
+    pattern:
+      /\b(?:credentials[/\\]matrix[/\\]credentials(?:-[A-Za-z0-9._-]+)?|matrix[/\\][^\n"'`]*credentials(?:-[A-Za-z0-9._-]+)?)\.json\b/u,
+  },
+  { label: "Matrix recovery key JSON", pattern: /\brecovery-key\.json\b/u },
   { label: "Matrix IndexedDB snapshot JSON", pattern: /\bcrypto-idb-snapshot\.json\b/u },
+  { label: "GitHub Copilot token JSON", pattern: /\bgithub-copilot\.token\.json\b/u },
   {
     label: "Discord model-picker preferences JSON",
     pattern: /\bmodel-picker-preferences\.json\b/u,
