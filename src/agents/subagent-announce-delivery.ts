@@ -46,6 +46,7 @@ import {
   resolveExternalBestEffortDeliveryTarget,
   resolveQueueSettings,
   resolveStorePath,
+  sendMessage,
 } from "./subagent-announce-delivery.runtime.js";
 import {
   runSubagentAnnounceDispatch,
@@ -69,6 +70,7 @@ type SubagentAnnounceDeliveryDeps = {
     isActive: boolean;
   };
   queueEmbeddedPiMessageWithOutcome: typeof queueEmbeddedPiMessageWithOutcome;
+  sendMessage: typeof sendMessage;
 };
 
 const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
@@ -84,6 +86,7 @@ const defaultSubagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps = {
     };
   },
   queueEmbeddedPiMessageWithOutcome,
+  sendMessage,
 };
 
 let subagentAnnounceDeliveryDeps: SubagentAnnounceDeliveryDeps =
@@ -577,6 +580,54 @@ function getGatewayAgentCommandDeliveryFailure(response: unknown): string | unde
   return result ? getAgentCommandDeliveryFailure(result) : undefined;
 }
 
+function extractCompletionFailureFallback(params: { internalEvents?: AgentInternalEvent[] }): {
+  content: string;
+  mediaUrls?: string[];
+} {
+  const completion = params.internalEvents?.find((event) => event.type === "task_completion");
+  if (!completion) {
+    return {
+      content:
+        "The background task finished, but I couldn't deliver its completion through the normal reply path. Please check the task result or ask me to recover it.",
+    };
+  }
+  const result = completion.result.trim();
+  const header =
+    `${completion.announceType || "Background task"} ${completion.statusLabel || completion.status}`.trim();
+  const content = result ? `${header}\n\n${result}` : `${header}.`;
+  return {
+    content,
+    mediaUrls: completion.mediaUrls?.filter((value) => value.trim().length > 0),
+  };
+}
+
+async function sendCompletionDeliveryFallback(params: {
+  cfg: OpenClawConfig;
+  deliveryTarget: { channel?: string; to?: string; accountId?: string; threadId?: string | number };
+  requesterSessionKey: string;
+  bestEffortDeliver?: boolean;
+  directIdempotencyKey: string;
+  internalEvents?: AgentInternalEvent[];
+}): Promise<boolean> {
+  if (!params.deliveryTarget.channel || !params.deliveryTarget.to) {
+    return false;
+  }
+  const fallback = extractCompletionFailureFallback({ internalEvents: params.internalEvents });
+  await subagentAnnounceDeliveryDeps.sendMessage({
+    cfg: params.cfg,
+    channel: params.deliveryTarget.channel,
+    to: params.deliveryTarget.to,
+    accountId: params.deliveryTarget.accountId,
+    threadId: params.deliveryTarget.threadId,
+    content: fallback.content,
+    mediaUrls: fallback.mediaUrls,
+    requesterSessionKey: params.requesterSessionKey,
+    bestEffort: params.bestEffortDeliver,
+    idempotencyKey: `${params.directIdempotencyKey}:completion-delivery-fallback`,
+  });
+  return true;
+}
+
 function isGatewayAgentRunPending(response: unknown): boolean {
   if (!response || typeof response !== "object") {
     return false;
@@ -766,8 +817,37 @@ async function sendSubagentAnnounceDirectly(params: {
       }
       if (requesterActivity.isActive) {
         // Active requester sessions should receive completion data through their
-        // running agent turn. If wake fails, let the dispatch layer queue/retry;
-        // do not bypass the requester agent with raw child output.
+        // running agent turn. If wake fails for an agent-mediated generated-media
+        // completion, still surface a bounded fallback to the source channel so
+        // completed background work is not silently lost in group/channel contexts.
+        if (agentMediatedCompletion) {
+          try {
+            if (
+              await sendCompletionDeliveryFallback({
+                cfg,
+                deliveryTarget,
+                requesterSessionKey: canonicalRequesterSessionKey,
+                bestEffortDeliver: params.bestEffortDeliver,
+                directIdempotencyKey: params.directIdempotencyKey,
+                internalEvents: params.internalEvents,
+              })
+            ) {
+              return {
+                delivered: true,
+                path: "direct",
+              };
+            }
+          } catch (fallbackErr) {
+            return {
+              delivered: false,
+              path: "direct",
+              error: `${formatQueueWakeFailureError(
+                "active requester session could not be woken",
+                wakeOutcome,
+              )}; failure fallback send failed: ${summarizeDeliveryError(fallbackErr)}`,
+            };
+          }
+        }
         return {
           delivered: false,
           path: "direct",
@@ -833,8 +913,26 @@ async function sendSubagentAnnounceDirectly(params: {
         throw err;
       }
       // The requester-agent handoff is the delivery contract for background
-      // completions. A failed handoff should retry/queue/fail visibly instead
-      // of sending the child result directly to the external channel.
+      // completions. For agent-mediated generated-media completions, a failed
+      // handoff must still fail visibly in the source channel rather than leave
+      // the user with a finished-but-silent task.
+      if (agentMediatedCompletion) {
+        if (
+          await sendCompletionDeliveryFallback({
+            cfg,
+            deliveryTarget,
+            requesterSessionKey: canonicalRequesterSessionKey,
+            bestEffortDeliver: params.bestEffortDeliver,
+            directIdempotencyKey: params.directIdempotencyKey,
+            internalEvents: params.internalEvents,
+          })
+        ) {
+          return {
+            delivered: true,
+            path: "direct",
+          };
+        }
+      }
       throw err;
     }
 
@@ -850,6 +948,21 @@ async function sendSubagentAnnounceDirectly(params: {
       requiresMessageToolDelivery &&
       !hasGatewayAgentMessagingToolDelivery(directAnnounceResponse)
     ) {
+      if (
+        await sendCompletionDeliveryFallback({
+          cfg,
+          deliveryTarget,
+          requesterSessionKey: canonicalRequesterSessionKey,
+          bestEffortDeliver: params.bestEffortDeliver,
+          directIdempotencyKey: params.directIdempotencyKey,
+          internalEvents: params.internalEvents,
+        })
+      ) {
+        return {
+          delivered: true,
+          path: "direct",
+        };
+      }
       return {
         delivered: false,
         path: "direct",

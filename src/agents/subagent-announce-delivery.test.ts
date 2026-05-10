@@ -130,6 +130,7 @@ async function deliverSlackThreadAnnouncement(params: {
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -168,6 +169,7 @@ async function deliverDiscordDirectMessageCompletion(params: {
       isActive: false,
     }),
     getRuntimeConfig: () => ({}) as never,
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -210,6 +212,7 @@ async function deliverTelegramDirectMessageCompletion(params: {
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -262,6 +265,7 @@ async function deliverSlackChannelAnnouncement(params: {
     ...(params.queueEmbeddedPiMessageWithOutcome
       ? { queueEmbeddedPiMessageWithOutcome: params.queueEmbeddedPiMessageWithOutcome }
       : {}),
+    ...(params.sendMessage ? { sendMessage: params.sendMessage } : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -1227,9 +1231,8 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
 
     expectRecordFields(result, {
-      delivered: false,
+      delivered: true,
       path: "direct",
-      error: "completion agent did not deliver through the message tool",
     });
     expectGatewayAgentParams(callGateway, {
       deliver: false,
@@ -1238,7 +1241,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       to: "channel:C123",
       threadId: undefined,
     });
-    expect(sendMessage).not.toHaveBeenCalled();
+    expect(sendMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "slack",
+        to: "channel:C123",
+        accountId: "acct-1",
+        mediaUrls: ["/tmp/generated-night-drive.mp3"],
+        idempotencyKey: "announce-channel-media-message-tool:completion-delivery-fallback",
+      }),
+    );
   });
 
   it("does not fallback for generated media group completions when message tool evidence exists", async () => {

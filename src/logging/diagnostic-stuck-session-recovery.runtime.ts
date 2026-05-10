@@ -89,7 +89,7 @@ export async function recoverStuckDiagnosticSession(
       params.sessionId && isEmbeddedPiRunHandleActive(params.sessionId)
         ? params.sessionId
         : undefined;
-    const activeSessionId = params.sessionKey
+    let activeSessionId = params.sessionKey
       ? (resolveActiveEmbeddedRunHandleSessionId(params.sessionKey) ?? fallbackActiveSessionId)
       : fallbackActiveSessionId;
     const activeWorkSessionId = params.sessionKey
@@ -131,17 +131,33 @@ export async function recoverStuckDiagnosticSession(
     }
 
     if (!activeSessionId && activeWorkSessionId && isEmbeddedPiRunActive(activeWorkSessionId)) {
-      const outcome: StuckSessionRecoveryOutcome = {
-        status: "skipped",
-        action: "keep_lane",
-        reason: "active_reply_work",
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        activeSessionId: activeWorkSessionId,
-        activeWorkKind: "embedded_run",
-      };
-      diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
-      return outcome;
+      if (params.allowActiveAbort === true) {
+        const result = await abortAndDrainEmbeddedPiRun({
+          sessionId: activeWorkSessionId,
+          sessionKey: params.sessionKey,
+          settleMs: STUCK_SESSION_ABORT_SETTLE_MS,
+          forceClear: true,
+          reason: "stuck_recovery_active_reply_work",
+        });
+        aborted = result.aborted;
+        drained = result.drained;
+        forceCleared = result.forceCleared;
+        if (aborted) {
+          activeSessionId = activeWorkSessionId;
+        }
+      } else {
+        const outcome: StuckSessionRecoveryOutcome = {
+          status: "skipped",
+          action: "keep_lane",
+          reason: "active_reply_work",
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          activeSessionId: activeWorkSessionId,
+          activeWorkKind: "embedded_run",
+        };
+        diag.warn(`stuck session recovery outcome: ${formatRecoveryOutcome(outcome)}`);
+        return outcome;
+      }
     }
 
     if (!activeSessionId && sessionLane) {
