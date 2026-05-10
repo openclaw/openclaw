@@ -87,14 +87,18 @@ describe("cron protocol conformance", () => {
     const cwd = process.cwd();
     const uiTypes = await fs.readFile(path.join(cwd, "ui/src/ui/types.ts"), "utf-8");
     expect(uiTypes).toContain("export type CronStatus");
+    expect(uiTypes).toContain("storeKey:");
     expect(uiTypes).toContain("jobs:");
     expect(uiTypes).not.toContain("jobCount");
+    expect(uiTypes).not.toContain("storePath:");
 
     const [swiftRelPath] = await resolveSwiftFiles(cwd, SWIFT_STATUS_CANDIDATES);
     const swiftPath = path.join(cwd, swiftRelPath);
     const swift = await fs.readFile(swiftPath, "utf-8");
     expect(swift).toContain("struct CronSchedulerStatus");
+    expect(swift).toContain("let storeKey:");
     expect(swift).toContain("let jobs:");
+    expect(swift).not.toContain("let storePath:");
   });
 
   it("cron job state schema keeps the full failover reason set", () => {

@@ -11,6 +11,23 @@ struct OpenClawConfigFileTests {
             .path
     }
 
+    private func configSidecarURLs(in stateDir: URL) -> (audit: URL, health: URL) {
+        let logsDir = stateDir.appendingPathComponent("logs", isDirectory: true)
+        return (
+            logsDir.appendingPathComponent("config-audit.jsonl"),
+            logsDir.appendingPathComponent("config-health.json")
+        )
+    }
+
+    private func configRecoveryFile(
+        in directory: URL,
+        configName: String,
+        marker: String) throws -> URL?
+    {
+        try FileManager().contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .first { $0.lastPathComponent.hasPrefix("\(configName).\(marker).") }
+    }
+
     @Test
     func `config path respects env override`() async {
         let override = self.makeConfigOverridePath()
@@ -121,11 +138,11 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `save dict appends config audit log`() async throws {
+    func `save dict does not write config state sidecars`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let sidecars = self.configSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -140,25 +157,8 @@ struct OpenClawConfigFileTests {
             let configData = try Data(contentsOf: configPath)
             let configRoot = try JSONSerialization.jsonObject(with: configData) as? [String: Any]
             #expect((configRoot?["meta"] as? [String: Any]) != nil)
-
-            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-            let lines = rawAudit
-                .split(whereSeparator: \.isNewline)
-                .map(String.init)
-            #expect(!lines.isEmpty)
-            guard let last = lines.last else {
-                Issue.record("Missing config audit line")
-                return
-            }
-            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
-            #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
-            #expect(auditRoot?["event"] as? String == "config.write")
-            #expect(auditRoot?["result"] as? String == "success")
-            #expect(auditRoot?["configPath"] as? String == configPath.path)
-            #expect(auditRoot?["previousMode"] is NSNull)
-            #expect(auditRoot?["nextMode"] is NSNumber)
-            #expect(auditRoot?["previousIno"] is NSNull)
-            #expect(auditRoot?["nextIno"] as? String != nil)
+            #expect(!FileManager().fileExists(atPath: sidecars.audit.path))
+            #expect(!FileManager().fileExists(atPath: sidecars.health.path))
         }
     }
 
@@ -268,11 +268,11 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `load dict audits suspicious out-of-band clobbers`() async throws {
+    func `load dict preserves suspicious out-of-band clobbers without state sidecars`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let sidecars = self.configSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -306,31 +306,16 @@ struct OpenClawConfigFileTests {
                 let loaded = OpenClawConfigFile.loadDict()
                 #expect((loaded["gateway"] as? [String: Any]) == nil)
 
-                let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-                let lines = rawAudit
-                    .split(whereSeparator: \.isNewline)
-                    .map(String.init)
-                let observeLine = lines.reversed().first { $0.contains("\"event\":\"config.observe\"") }
-                #expect(observeLine != nil)
-                guard let observeLine else {
-                    Issue.record("Missing config.observe audit line")
-                    return
-                }
-                let auditRoot = try JSONSerialization.jsonObject(with: Data(observeLine.utf8)) as? [String: Any]
-                #expect(auditRoot?["source"] as? String == "macos-openclaw-config-file")
-                #expect(auditRoot?["configPath"] as? String == configPath.path)
-                #expect(auditRoot?["mode"] is NSNumber)
-                #expect(auditRoot?["ino"] as? String != nil)
-                #expect(auditRoot?["lastKnownGoodMode"] is NSNumber)
-                #expect(auditRoot?["backupMode"] is NSNull)
-                let suspicious = auditRoot?["suspicious"] as? [String] ?? []
-                #expect(suspicious.contains("gateway-mode-missing-vs-last-good"))
-                #expect(suspicious.contains("update-channel-only-root"))
+                #expect(!FileManager().fileExists(atPath: sidecars.audit.path))
+                #expect(!FileManager().fileExists(atPath: sidecars.health.path))
 
-                let clobberedPath = auditRoot?["clobberedPath"] as? String
-                #expect(clobberedPath != nil)
-                if let clobberedPath {
-                    let preserved = try String(contentsOfFile: clobberedPath, encoding: .utf8)
+                let clobberedURL = try self.configRecoveryFile(
+                    in: configPath.deletingLastPathComponent(),
+                    configName: configPath.lastPathComponent,
+                    marker: "clobbered")
+                #expect(clobberedURL != nil)
+                if let clobberedURL {
+                    let preserved = try String(contentsOf: clobberedURL, encoding: .utf8)
                     #expect(preserved == clobbered)
                 }
             }
@@ -339,11 +324,11 @@ struct OpenClawConfigFileTests {
 
     @MainActor
     @Test
-    func `save dict records preserved gateway auth in audit`() async throws {
+    func `save dict preserves gateway auth without audit sidecar`() async throws {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let sidecars = self.configSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -379,14 +364,8 @@ struct OpenClawConfigFileTests {
             #expect(auth?["mode"] as? String == "token")
             #expect(auth?["token"] as? String == "test-token") // pragma: allowlist secret
             #expect((root?["meta"] as? [String: Any]) != nil)
-
-            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-            let last = rawAudit.split(whereSeparator: \.isNewline).map(String.init).last
-            let auditRoot = try JSONSerialization.jsonObject(with: Data((last ?? "{}").utf8)) as? [String: Any]
-            #expect(auditRoot?["result"] as? String == "success")
-            #expect(auditRoot?["preservedGatewayAuth"] as? Bool == true)
-            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
-            #expect(suspicious.contains("gateway-auth-preserved"))
+            #expect(!FileManager().fileExists(atPath: sidecars.audit.path))
+            #expect(!FileManager().fileExists(atPath: sidecars.health.path))
         }
     }
 
@@ -396,7 +375,7 @@ struct OpenClawConfigFileTests {
         let stateDir = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-state-\(UUID().uuidString)", isDirectory: true)
         let configPath = stateDir.appendingPathComponent("openclaw.json")
-        let auditPath = stateDir.appendingPathComponent("logs/config-audit.jsonl")
+        let sidecars = self.configSidecarURLs(in: stateDir)
 
         defer { try? FileManager().removeItem(at: stateDir) }
 
@@ -428,21 +407,16 @@ struct OpenClawConfigFileTests {
             let after = try String(contentsOf: configPath, encoding: .utf8)
             #expect(after == before)
 
-            let rawAudit = try String(contentsOf: auditPath, encoding: .utf8)
-            let lines = rawAudit.split(whereSeparator: \.isNewline).map(String.init)
-            guard let last = lines.last else {
-                Issue.record("Missing rejected config audit line")
-                return
-            }
-            let auditRoot = try JSONSerialization.jsonObject(with: Data(last.utf8)) as? [String: Any]
-            #expect(auditRoot?["result"] as? String == "rejected")
-            let suspicious = auditRoot?["suspicious"] as? [String] ?? []
-            let blocking = auditRoot?["blocking"] as? [String] ?? []
-            #expect(suspicious.contains("gateway-mode-removed"))
-            #expect(blocking.contains("gateway-mode-removed"))
-            if let rejectedPath = auditRoot?["rejectedPath"] as? String {
-                #expect(FileManager().fileExists(atPath: rejectedPath))
-                let attributes = try FileManager().attributesOfItem(atPath: rejectedPath)
+            #expect(!FileManager().fileExists(atPath: sidecars.audit.path))
+            #expect(!FileManager().fileExists(atPath: sidecars.health.path))
+
+            let rejectedURL = try self.configRecoveryFile(
+                in: configPath.deletingLastPathComponent(),
+                configName: configPath.lastPathComponent,
+                marker: "rejected")
+            if let rejectedURL {
+                #expect(FileManager().fileExists(atPath: rejectedURL.path))
+                let attributes = try FileManager().attributesOfItem(atPath: rejectedURL.path)
                 let mode = attributes[.posixPermissions] as? NSNumber
                 #expect(mode?.intValue == 0o600)
             } else {

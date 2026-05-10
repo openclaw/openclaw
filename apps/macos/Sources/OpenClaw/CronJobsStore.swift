@@ -14,7 +14,7 @@ final class CronJobsStore {
     var runEntries: [CronRunLogEntry] = []
 
     var schedulerEnabled: Bool?
-    var schedulerStorePath: String?
+    var schedulerStoreKey: String?
     var schedulerNextWakeAtMs: Int?
 
     var isLoadingJobs = false
@@ -72,7 +72,7 @@ final class CronJobsStore {
         do {
             if let status = try? await GatewayConnection.shared.cronStatus() {
                 self.schedulerEnabled = status.enabled
-                self.schedulerStorePath = status.storePath
+                self.schedulerStoreKey = status.storeKey
                 self.schedulerNextWakeAtMs = status.nextWakeAtMs
             }
             self.jobs = try await GatewayConnection.shared.cronList(includeDisabled: true)

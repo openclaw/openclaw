@@ -541,6 +541,10 @@ sessionId}` and session key context.
 - Config write/observe audit entries now use core SQLite plugin state instead
   of `logs/config-audit.jsonl`. Doctor imports the legacy JSONL audit log and
   removes it after successful import.
+- The macOS companion no longer writes app-local `logs/config-audit.jsonl` or
+  `logs/config-health.json` sidecars while editing `openclaw.json`. The config
+  file remains file-backed, recovery snapshots stay next to the config file,
+  and durable config audit/health state belongs to the Gateway SQLite store.
 - Crestodian rescue pending approvals now use core SQLite plugin state instead
   of `crestodian/rescue-pending/*.json`. Doctor imports legacy pending approval
   files and removes them after successful import.
@@ -649,7 +653,8 @@ sessionId}` and session key context.
   databases during tests or shell handoffs.
 - Config health fingerprints now use shared SQLite KV instead of
   `logs/config-health.json`, keeping the normal config file as the only
-  non-credential configuration document.
+  non-credential configuration document. The macOS companion keeps only
+  process-local health state and does not recreate the old JSON sidecar.
 - Auth profile runtime no longer imports or writes credential JSON files. The
   canonical credential store is SQLite; `auth-profiles.json`, per-agent
   `auth.json`, and shared `credentials/oauth.json` are doctor migration inputs

@@ -392,7 +392,6 @@ export type SessionCompactionCheckpointReason =
 
 export type SessionCompactionTranscriptReference = {
   sessionId: string;
-  sessionFile?: string;
   leafId?: string;
   entryId?: string;
 };
@@ -610,6 +609,7 @@ export type CronJob = CronJobBase<
 
 export type CronStatus = {
   enabled: boolean;
+  storeKey: string;
   jobs: number;
   nextWakeAtMs?: number | null;
 };
