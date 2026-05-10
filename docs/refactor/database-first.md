@@ -216,6 +216,10 @@ The branch already has a real shared SQLite base:
   same split: runtime modules expose SQLite-backed operations and neutral
   snapshot helpers, while doctor imports/removes the old JSON files through
   `src/commands/doctor/legacy/*` modules.
+- Installed plugin records now live in the SQLite installed-plugin index.
+  Runtime config read/write no longer migrates or preserves old
+  `plugins.installs` authored-config data; doctor imports that legacy config
+  shape into SQLite before normal runtime use.
 - Matrix named-account credential upgrade no longer happens during runtime
   reads. Doctor owns the old top-level `credentials/matrix/credentials.json`
   rename when a single/default Matrix account can be resolved.
