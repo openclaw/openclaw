@@ -13,6 +13,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
+  collectImageModelKeys,
   prepareImageModelFallbacks,
   resolveModelSupportsVision,
 } from "../../auto-reply/reply/image-model-helpers.js";
@@ -2244,9 +2245,17 @@ export const chatHandlers: GatewayRequestHandlers = {
         const imageModelConfig = cfg.agents?.defaults?.imageModel;
         const imageModelPrimary = resolveAgentModelPrimaryValue(imageModelConfig);
         const imageModelFallbacks = resolveAgentModelFallbackValues(imageModelConfig);
+        // Derive the image model's provider context upfront so that providerless
+        // imageModel aliases resolve against the correct provider, not the session
+        // model's provider.
+        const { imageModelDefaultProvider } = collectImageModelKeys({
+          imageModelConfig,
+          aliasIndex,
+          defaultProvider: modelRef.provider,
+        });
+        const imageModelProvider = imageModelDefaultProvider || undefined;
         let parseProvider = modelRef.provider;
         let parseModel = modelRef.model;
-        let imageModelProvider: string | undefined;
 
         // First check if the session model already supports images — if so, skip
         // the override entirely and let the session model handle images natively.
@@ -2278,7 +2287,6 @@ export const chatHandlers: GatewayRequestHandlers = {
             if (overrideRef) {
               parseProvider = overrideRef.ref.provider;
               parseModel = overrideRef.ref.model;
-              imageModelProvider = overrideRef.ref.provider;
             } else {
               // Alias resolution failed; use the raw modelOverride string as parseModel
               // so that resolveModelSupportsVision can still match it against imageModelConfig.
