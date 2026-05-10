@@ -848,6 +848,7 @@ jobs:
             --output-dir ".artifacts/qa-e2e/runtime-parity"
 
       - name: Generate runtime parity report
+        if: always()
         run: |
           set -euo pipefail
           pnpm openclaw qa parity-report \
