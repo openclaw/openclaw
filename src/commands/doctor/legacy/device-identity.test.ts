@@ -1,13 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { loadOrCreateDeviceIdentity } from "../../../infra/device-identity.js";
+import {
+  loadOrCreateDeviceIdentity,
+  publicKeyRawBase64UrlFromPem,
+  signDevicePayload,
+  verifyDeviceSignature,
+} from "../../../infra/device-identity.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
 import { withStateDirEnv } from "../../../test-helpers/state-dir-env.js";
 import {
   importLegacyDeviceIdentityFileToSqlite,
   legacyDeviceIdentityFileExists,
 } from "./device-identity.js";
+
+const SWIFT_RAW_DEVICE_ID = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
+const SWIFT_RAW_PUBLIC_KEY = "A6EHv/POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg=";
+const SWIFT_RAW_PRIVATE_KEY = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="; // pragma: allowlist secret
+const MISMATCHED_SWIFT_RAW_PRIVATE_KEY = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE="; // pragma: allowlist secret
 
 function storedIdentityFrom(identity: ReturnType<typeof loadOrCreateDeviceIdentity>) {
   return {
@@ -54,6 +64,69 @@ describe("legacy device identity migration", () => {
       expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
 
       expect(loadOrCreateDeviceIdentity().deviceId).toBe(original.deviceId);
+    });
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("imports Swift raw-key identity files into SQLite", async () => {
+    await withStateDirEnv("openclaw-doctor-device-identity-", async ({ stateDir }) => {
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      await fs.mkdir(path.dirname(identityPath), { recursive: true });
+      await fs.writeFile(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: true });
+
+      const loaded = loadOrCreateDeviceIdentity();
+      expect(loaded.deviceId).toBe(SWIFT_RAW_DEVICE_ID);
+      expect(publicKeyRawBase64UrlFromPem(loaded.publicKeyPem)).toBe(
+        "A6EHv_POEL4dcN0Y50vAmWfk1jCbpQ1fHdyGZBJVMbg",
+      );
+      expect(
+        verifyDeviceSignature(
+          loaded.publicKeyPem,
+          "hello",
+          signDevicePayload(loaded.privateKeyPem, "hello"),
+        ),
+      ).toBe(true);
+      await expect(fs.stat(identityPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+    closeOpenClawStateDatabaseForTest();
+  });
+
+  it("leaves Swift raw-key identity files with mismatched key material", async () => {
+    await withStateDirEnv("openclaw-doctor-device-identity-", async ({ stateDir }) => {
+      const identityPath = path.join(stateDir, "identity", "device.json");
+      await fs.mkdir(path.dirname(identityPath), { recursive: true });
+      await fs.writeFile(
+        identityPath,
+        `${JSON.stringify(
+          {
+            deviceId: SWIFT_RAW_DEVICE_ID,
+            publicKey: SWIFT_RAW_PUBLIC_KEY,
+            privateKey: MISMATCHED_SWIFT_RAW_PRIVATE_KEY,
+            createdAtMs: 1_700_000_000_000,
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      expect(importLegacyDeviceIdentityFileToSqlite()).toEqual({ imported: false });
+      expect(legacyDeviceIdentityFileExists()).toBe(true);
     });
     closeOpenClawStateDatabaseForTest();
   });
