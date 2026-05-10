@@ -496,7 +496,7 @@ function ensureCodexRuntimePolicy(params: {
     models[params.modelRef] = entry;
   }
   const priorRuntime = asMutableRecord(entry.agentRuntime);
-  if (normalizeString(priorRuntime?.id) === "codex") {
+  if (normalizeString(priorRuntime?.id)) {
     return;
   }
   entry.agentRuntime = {

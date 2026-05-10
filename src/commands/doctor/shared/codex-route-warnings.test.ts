@@ -289,6 +289,41 @@ describe("collectCodexRouteWarnings", () => {
     ).toBe("codex");
   });
 
+  it("preserves explicit model-scoped runtime pins when repairing legacy model map keys", () => {
+    const result = maybeRepairCodexRoutes({
+      cfg: {
+        agents: {
+          defaults: {
+            models: {
+              "openai-codex/gpt-5.5": {
+                alias: "legacy-codex",
+                agentRuntime: { id: "pi" },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      shouldRepair: true,
+    });
+
+    expect(result.cfg.agents?.defaults?.models).toEqual({
+      "openai/gpt-5.5": {
+        alias: "legacy-codex",
+        agentRuntime: { id: "pi" },
+      },
+    });
+    expect(result.changes.join("\n")).not.toContain(
+      'Set agents.defaults.models.openai/gpt-5.5.agentRuntime.id to "codex"',
+    );
+    expect(
+      resolveAgentHarnessPolicy({
+        provider: "openai",
+        modelId: "gpt-5.5",
+        config: result.cfg,
+      }).runtime,
+    ).toBe("pi");
+  });
+
   it("repairs non-agent OpenAI Codex refs when canonical OpenAI already uses Codex runtime", () => {
     const result = maybeRepairCodexRoutes({
       cfg: {
