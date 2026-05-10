@@ -122,6 +122,23 @@ async function createCodexFixture(): Promise<{
   return { root, homeDir, codexHome, stateDir, workspaceDir };
 }
 
+async function createEmptyCodexFixture(): Promise<{
+  root: string;
+  homeDir: string;
+  codexHome: string;
+  stateDir: string;
+  workspaceDir: string;
+}> {
+  const root = await makeTempRoot();
+  const homeDir = path.join(root, "home");
+  const codexHome = path.join(root, ".codex");
+  const stateDir = path.join(root, "state");
+  const workspaceDir = path.join(root, "workspace");
+  vi.stubEnv("HOME", homeDir);
+  await fs.mkdir(codexHome, { recursive: true });
+  return { root, homeDir, codexHome, stateDir, workspaceDir };
+}
+
 afterEach(async () => {
   vi.unstubAllEnvs();
   appServerRequest.mockReset();
@@ -134,6 +151,39 @@ afterEach(async () => {
 describe("buildCodexMigrationProvider", () => {
   beforeEach(() => {
     appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
+  });
+
+  it("detects Codex state without starting app-server plugin inventory", async () => {
+    const fixture = await createCodexFixture();
+    const provider = buildCodexMigrationProvider();
+
+    const detection = await provider.detect!(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(detection.found).toBe(true);
+    expect(detection.source).toBe(fixture.codexHome);
+    expect(appServerRequest).not.toHaveBeenCalled();
+  });
+
+  it("ignores an empty Codex home during detection without starting app-server", async () => {
+    const fixture = await createEmptyCodexFixture();
+    const provider = buildCodexMigrationProvider();
+
+    const detection = await provider.detect!(
+      makeContext({
+        source: fixture.codexHome,
+        stateDir: fixture.stateDir,
+        workspaceDir: fixture.workspaceDir,
+      }),
+    );
+
+    expect(detection.found).toBe(false);
+    expect(appServerRequest).not.toHaveBeenCalled();
   });
 
   it("plans Codex skills while keeping plugins and native config explicit", async () => {

@@ -56,6 +56,10 @@ type CodexSource = {
   archivePaths: CodexArchiveSource[];
 };
 
+type DiscoverCodexSourceOptions = {
+  includeAppServerPluginInventory?: boolean;
+};
+
 function defaultCodexHome(): string {
   return resolveHomePath(process.env.CODEX_HOME?.trim() || "~/.codex");
 }
@@ -216,7 +220,10 @@ function pluginNameFromSummary(summary: v2.PluginSummary): string | undefined {
   return undefined;
 }
 
-export async function discoverCodexSource(input?: string): Promise<CodexSource> {
+export async function discoverCodexSource(
+  input?: string,
+  options: DiscoverCodexSourceOptions = {},
+): Promise<CodexSource> {
   const codexHome = resolveHomePath(input?.trim() || defaultCodexHome());
   const codexSkillsDir = path.join(codexHome, "skills");
   const agentsSkillsDir = personalAgentsSkillsDir();
@@ -231,7 +238,10 @@ export async function discoverCodexSource(input?: string): Promise<CodexSource> 
     root: agentsSkillsDir,
     sourceLabel: "personal AgentSkill",
   });
-  const sourcePluginDiscovery = await discoverInstalledCuratedPlugins(codexHome);
+  const sourcePluginDiscovery =
+    options.includeAppServerPluginInventory === false
+      ? { plugins: [] }
+      : await discoverInstalledCuratedPlugins(codexHome);
   const sourcePluginNames = new Set(
     sourcePluginDiscovery.plugins.flatMap((plugin) =>
       plugin.pluginName ? [plugin.pluginName] : [],
