@@ -12,7 +12,7 @@ let createOpenClawCodingTools: typeof import("./pi-tools.js").createOpenClawCodi
 
 const { mockExecApprovals, supervisorSpawnMock } = vi.hoisted(() => {
   const execApprovals = {
-    path: "/tmp/exec-approvals.json",
+    path: "/tmp/openclaw.sqlite#kv/exec.approvals/current",
     socketPath: "/tmp/exec-approvals.sock",
     token: "token",
     defaults: {

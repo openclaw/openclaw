@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { readExecApprovalsSnapshot, saveExecApprovals } from "../infra/exec-approvals.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
@@ -183,10 +184,8 @@ function buildPreparedSystemRunPayload(rawInvokeParams: unknown) {
   return buildSystemRunPreparePayload(params);
 }
 
-async function writeExecApprovalsConfig(config: Record<string, unknown>) {
-  const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
-  await fs.mkdir(path.dirname(approvalsPath), { recursive: true });
-  await fs.writeFile(approvalsPath, JSON.stringify(config, null, 2));
+async function writeExecApprovalsConfig(config: Parameters<typeof saveExecApprovals>[0]) {
+  saveExecApprovals(config);
 }
 
 function acceptedApprovalResponse(params: unknown) {
@@ -774,22 +773,14 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
     expect(calls).toContain("exec.approval.waitDecision");
 
-    const approvalsPath = path.join(process.env.HOME ?? "", ".openclaw", "exec-approvals.json");
     await expect
       .poll(
         async () => {
-          try {
-            const raw = await fs.readFile(approvalsPath, "utf8");
-            const parsed = JSON.parse(raw) as {
-              agents?: { main?: { allowlist?: Array<{ source?: string }> } };
-            };
-            return (
-              parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always") ===
-              true
-            );
-          } catch {
-            return false;
-          }
+          const parsed = readExecApprovalsSnapshot().file;
+          return (
+            parsed.agents?.main?.allowlist?.some((entry) => entry.source === "allow-always") ===
+            true
+          );
         },
         { timeout: 2000, interval: 1 },
       )

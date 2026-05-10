@@ -390,7 +390,7 @@ export async function handleInvoke(
     try {
       const params = decodeParams<SystemExecApprovalsSetParams>(frame.paramsJSON);
       if (!params.file || typeof params.file !== "object") {
-        throw new Error("INVALID_REQUEST: exec approvals file required");
+        throw new Error("INVALID_REQUEST: exec approvals document required");
       }
       ensureExecApprovals();
       const snapshot = readExecApprovalsSnapshot();

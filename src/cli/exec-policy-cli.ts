@@ -57,7 +57,7 @@ const EXEC_POLICY_PRESETS: Record<ExecPolicyPresetName, Required<ExecPolicyResol
 
 type ExecPolicyShowPayload = {
   configPath: string;
-  approvalsPath: string;
+  approvalsStore: string;
   approvalsExists: boolean;
   effectivePolicy: {
     note: string;
@@ -72,7 +72,7 @@ type ExecPolicyShowScope = Omit<
   ExecPolicyScopeSnapshot,
   "security" | "ask" | "askFallback" | "allowedDecisions"
 > & {
-  runtimeApprovalsSource: "local-file" | "node-runtime";
+  runtimeApprovalsSource: "local-state" | "node-runtime";
   security: {
     requested: ExecSecurity;
     requestedSource: string;
@@ -234,7 +234,7 @@ async function buildLocalExecPolicyShowPayload(): Promise<ExecPolicyShowPayload>
   );
   return {
     configPath: configSnapshot.path,
-    approvalsPath: approvalsSnapshot.path,
+    approvalsStore: approvalsSnapshot.path,
     approvalsExists: approvalsSnapshot.exists,
     effectivePolicy: {
       note: hasNodeRuntimeScope
@@ -250,7 +250,7 @@ function buildExecPolicyShowScope(snapshot: ExecPolicyScopeSnapshot): ExecPolicy
   if (snapshot.host.requested !== "node") {
     return {
       ...baseScope,
-      runtimeApprovalsSource: "local-file",
+      runtimeApprovalsSource: "local-state",
     };
   }
   return {
@@ -293,9 +293,9 @@ function renderExecPolicyShow(payload: ExecPolicyShowPayload): void {
       ],
       rows: [
         { Field: "Config", Value: sanitizeExecPolicyTableCell(payload.configPath) },
-        { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsPath) },
+        { Field: "Approvals", Value: sanitizeExecPolicyTableCell(payload.approvalsStore) },
         {
-          Field: "Approvals File",
+          Field: "Approvals State",
           Value: sanitizeExecPolicyTableCell(payload.approvalsExists ? "present" : "missing"),
         },
       ],
