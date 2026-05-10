@@ -761,6 +761,9 @@ sessionId}` and session key context.
   snapshots `*.sqlite` databases with `VACUUM INTO`, omits live WAL/SHM
   sidecars, records snapshot metadata in the archive manifest, and records
   completed backup runs in SQLite with the archive manifest.
+- The old backup volatile-path filter is deleted. Backup no longer needs a
+  live-tar skip list for legacy session or cron JSON/JSONL files because SQLite
+  snapshots are staged before archive creation.
 - Plain setup and onboarding workspace preparation no longer create
   `agents/<agentId>/sessions/` directories. They create config/workspace only;
   SQLite session rows and transcript rows are created on demand in the
@@ -768,6 +771,8 @@ sessionId}` and session key context.
 - Security permission repair now targets the global and per-agent SQLite
   databases plus WAL/SHM sidecars instead of `sessions.json` and transcript
   JSONL files.
+- Sandbox registry runtime names now describe SQLite registry kinds directly
+  instead of carrying legacy JSON registry terminology through the active store.
 - `openclaw reset --scope config+creds+sessions` removes per-agent
   `openclaw-agent.sqlite` databases plus WAL/SHM sidecars, not only legacy
   `sessions/` directories.

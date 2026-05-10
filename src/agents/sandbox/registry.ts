@@ -52,7 +52,7 @@ type RegistryEntry = {
 
 type RegistryEntryPayload = RegistryEntry & Record<string, unknown>;
 
-type LegacyRegistryKind = "containers" | "browsers";
+type SandboxRegistryKind = "containers" | "browsers";
 
 const RegistryEntrySchema = z
   .object({
@@ -108,7 +108,7 @@ function getSandboxRegistryKysely(database: OpenClawStateDatabase) {
 }
 
 function bindRegistryEntry(
-  kind: LegacyRegistryKind,
+  kind: SandboxRegistryKind,
   entry: RegistryEntryPayload,
 ): Insertable<SandboxRegistryEntriesTable> {
   return {
@@ -121,7 +121,7 @@ function bindRegistryEntry(
 
 function getRegistryEntry(
   database: OpenClawStateDatabase,
-  kind: LegacyRegistryKind,
+  kind: SandboxRegistryKind,
   containerName: string,
 ): RegistryEntry | null {
   const row = executeSqliteQueryTakeFirstSync(
@@ -136,7 +136,7 @@ function getRegistryEntry(
 }
 
 function readRegistryEntryByKind(
-  kind: LegacyRegistryKind,
+  kind: SandboxRegistryKind,
   containerName: string,
 ): RegistryEntry | null {
   return getRegistryEntry(
@@ -146,7 +146,7 @@ function readRegistryEntryByKind(
   );
 }
 
-function readRegistryEntries<T extends RegistryEntry>(kind: LegacyRegistryKind): T[] {
+function readRegistryEntries<T extends RegistryEntry>(kind: SandboxRegistryKind): T[] {
   const database = openOpenClawStateDatabase(sandboxRegistryDbOptions());
   const rows = executeSqliteQuerySync(
     database.db,
@@ -164,7 +164,7 @@ function readRegistryEntries<T extends RegistryEntry>(kind: LegacyRegistryKind):
 
 function upsertRegistryEntry(
   database: OpenClawStateDatabase,
-  kind: LegacyRegistryKind,
+  kind: SandboxRegistryKind,
   entry: RegistryEntryPayload,
 ): void {
   executeSqliteQuerySync(
