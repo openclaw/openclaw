@@ -206,7 +206,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireFirstCallArg<T>(mock: unknown, label: string, _type?: T): T {
+function requireFirstCallArg<T>(mock: unknown, label: string, _type?: (value: T) => T): T {
   const call = (mock as MockCallReader).mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label} to be called`);
@@ -238,8 +238,7 @@ function expectRequestInputTextContains(
   expect(
     input.some((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      const text = typeof item.text === "string" ? item.text : JSON.stringify(item.text ?? "");
-      return item.type === "text" && text.includes(expected);
+      return item.type === "text" && typeof item.text === "string" && item.text.includes(expected);
     }),
   ).toBe(true);
 }
@@ -298,11 +297,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.availableTools).toEqual(new Set());
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
-    const developerInstructions =
-      typeof threadStartParams.developerInstructions === "string"
-        ? threadStartParams.developerInstructions
-        : JSON.stringify(threadStartParams.developerInstructions ?? "");
-    expect(developerInstructions).toContain("context-engine system");
+    const developerInstructions = threadStartParams.developerInstructions;
+    expect(typeof developerInstructions === "string" ? developerInstructions : "").toContain(
+      "context-engine system",
+    );
     expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
 
     await harness.completeTurn();

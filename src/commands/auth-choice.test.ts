@@ -629,7 +629,7 @@ describe("applyAuthChoice", () => {
   function promptMessages(mock: { mock: { calls: unknown[][] } }): string[] {
     return mock.mock.calls.map((call) => {
       const message = (call[0] as { message?: unknown }).message;
-      return typeof message === "string" ? message : JSON.stringify(message ?? "");
+      return typeof message === "string" ? message : "";
     });
   }
   function expectPromptMessageContaining(mock: { mock: { calls: unknown[][] } }, expected: string) {
@@ -638,7 +638,7 @@ describe("applyAuthChoice", () => {
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);
   }
-  function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: T): T {
+  function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
     const call = mock.mock.calls[0];
     expect(call).toBeDefined();
     return call?.[0] as T;

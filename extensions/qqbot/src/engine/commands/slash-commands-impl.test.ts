@@ -5,8 +5,6 @@ import { getWrittenQQBotConfig, installCommandRuntime } from "./slash-command-te
 import { getFrameworkCommands, matchSlashCommand } from "./slash-commands-impl.js";
 import { SlashCommandRegistry, type SlashCommandContext } from "./slash-commands.js";
 
-type FrameworkCommand = ReturnType<typeof getFrameworkCommands>[number];
-
 function createStreamingContext(overrides: Partial<SlashCommandContext> = {}): SlashCommandContext {
   return {
     type: "c2c",

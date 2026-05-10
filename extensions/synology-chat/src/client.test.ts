@@ -333,11 +333,13 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       mutableWebhookUsername: "anyone",
     });
     const httpsGet = vi.mocked(https.get);
-    expect(httpsGet).toHaveBeenCalledWith(
-      expect.stringContaining("method=user_list"),
-      expect.any(Object),
-      expect.any(Function),
-    );
+    const call = httpsGet.mock.calls[0];
+    if (!call) {
+      throw new Error("expected Synology Chat user_list request");
+    }
+    expect(String(call[0])).toBe(`${baseUrl.replace("method=chatbot", "method=user_list")}`);
+    expect(call[1]).toEqual({ rejectUnauthorized: true });
+    expect(typeof call[2]).toBe("function");
   });
 
   it("keeps user cache scoped per incoming URL", async () => {

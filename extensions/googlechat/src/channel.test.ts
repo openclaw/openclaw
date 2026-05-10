@@ -219,7 +219,7 @@ function requireMockArg<T>(
   mock: ReturnType<typeof vi.fn>,
   callIndex = 0,
   argIndex = 0,
-  _type?: T,
+  _type?: (value: T) => T,
 ): T {
   const call = mock.mock.calls[callIndex];
   if (!call) {
@@ -231,7 +231,7 @@ function requireMockArg<T>(
 function requireMockArgs<T extends unknown[]>(
   mock: ReturnType<typeof vi.fn>,
   callIndex = 0,
-  _type?: T,
+  _type?: (value: T) => T,
 ): T {
   const call = mock.mock.calls[callIndex];
   if (!call) {

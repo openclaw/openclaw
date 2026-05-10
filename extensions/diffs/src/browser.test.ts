@@ -624,7 +624,7 @@ function createMockBrowser(
   options?: { boundingBox?: { x: number; y: number; width: number; height: number } },
 ) {
   const browser = {
-    newPage: vi.fn(async () => {
+    newPage: vi.fn(async (_options?: unknown) => {
       const page = createMockPage(options);
       pages.push(page);
       return page;

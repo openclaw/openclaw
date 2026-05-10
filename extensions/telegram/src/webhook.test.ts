@@ -137,7 +137,7 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
 
 function mockMessages(mock: unknown): string[] {
   return (mock as MockCallReader).mock.calls.map((call) =>
-    typeof call[0] === "string" ? call[0] : JSON.stringify(call[0] ?? ""),
+    typeof call[0] === "string" ? call[0] : "",
   );
 }
 

@@ -185,7 +185,9 @@ describe("irc inbound behavior", () => {
       sendReply: vi.fn(async () => {}),
     });
 
-    const assembledRequest = vi.mocked(coreRuntime.channel.turn.runAssembled).mock.calls[0]?.[0];
+    const assembledRequest = (
+      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
     expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

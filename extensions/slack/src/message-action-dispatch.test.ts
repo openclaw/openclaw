@@ -185,6 +185,66 @@ describe("handleSlackMessageAction", () => {
     );
   });
 
+  it("passes topLevel through so same-channel Slack sends can suppress thread inheritance", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "Visible in the parent channel",
+          topLevel: true,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        to: "channel:C1",
+        content: "Visible in the parent channel",
+        threadTs: undefined,
+        topLevel: true,
+      }),
+      cfg,
+      undefined,
+    );
+  });
+
+  it("treats threadId null as a Slack top-level send request", async () => {
+    const invoke = createInvokeSpy();
+    const cfg = slackConfig();
+
+    await handleSlackMessageAction({
+      providerId: "slack",
+      ctx: {
+        action: "send",
+        cfg,
+        params: {
+          to: "channel:C1",
+          message: "Visible in the parent channel",
+          threadId: null,
+        },
+      } as never,
+      invoke: invoke as never,
+    });
+
+    expect(invoke).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: "sendMessage",
+        threadTs: undefined,
+        topLevel: true,
+      }),
+      cfg,
+      undefined,
+    );
+  });
+
   it("maps upload-file to the internal uploadFile action", async () => {
     const invoke = createInvokeSpy();
     const cfg = slackConfig();

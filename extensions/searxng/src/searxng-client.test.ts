@@ -102,10 +102,10 @@ describe("searxng client", () => {
     expect(result.query).toBe("beijing hourly weather");
     expect(result.count).toBe(1);
     const results = result.results as Array<{
-      siteName?: string;
-      snippet?: string;
-      title?: string;
       url?: string;
+      siteName?: string;
+      title?: string;
+      snippet?: string;
     }>;
     expect(results).toHaveLength(1);
     expect(results[0]?.url).toBe("https://example.com/weather");

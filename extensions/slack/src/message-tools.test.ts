@@ -191,6 +191,25 @@ describe("Slack message tools", () => {
     expect(property.description).toContain("Not supported for media or upload-file");
   });
 
+  it("describes Slack top-level sends as a same-channel thread opt-out", () => {
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
+          },
+        },
+      },
+    });
+
+    const { schema, property } = requireSchemaProperty(discovery, "topLevel");
+
+    expect(schema.actions).toEqual(["send"]);
+    expect(property.description).toContain('action="send"');
+    expect(property.description).toContain("parent-channel");
+    expect(property.description).toContain("threadId: null");
+  });
+
   it("omits Slack file and message id schemas when those actions are disabled", () => {
     const discovery = describeSlackMessageTool({
       cfg: {

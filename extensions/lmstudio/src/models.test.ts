@@ -205,7 +205,7 @@ describe("lmstudio-models", () => {
   });
 
   it("discovers llm models and maps metadata", async () => {
-    const fetchMock = vi.fn(async (_url: string | URL) => ({
+    const fetchMock = vi.fn(async (_url: string | URL, _init?: RequestInit) => ({
       ok: true,
       json: async () => ({
         models: [
