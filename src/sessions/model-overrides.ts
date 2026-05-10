@@ -25,6 +25,7 @@ export function applyModelOverrideToSessionEntry(params: {
   selection: ModelOverrideSelection;
   profileOverride?: string;
   profileOverrideSource?: "auto" | "user";
+  preserveAuthProfileOverride?: boolean;
   selectionSource?: "auto" | "user";
   markLiveSwitchPending?: boolean;
 }): { updated: boolean } {
@@ -112,7 +113,7 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.authProfileOverrideCompactionCount;
       updated = true;
     }
-  } else {
+  } else if (!params.preserveAuthProfileOverride) {
     if (entry.authProfileOverride) {
       delete entry.authProfileOverride;
       updated = true;

@@ -82,6 +82,8 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
   storedOverride?: StoredModelOverride | null;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
 }): boolean {
   if (params.isHeartbeat !== true || params.hasResolvedHeartbeatModelOverride === true) {
     return false;
@@ -93,12 +95,12 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     return false;
   }
 
-  const defaultKey = resolveModelRefKey({
+  const primaryKey = resolveModelRefKey({
     defaultProvider: params.defaultProvider,
-    overrideProvider: params.defaultProvider,
-    overrideModel: params.defaultModel,
+    overrideProvider: params.primaryProvider ?? params.defaultProvider,
+    overrideModel: params.primaryModel ?? params.defaultModel,
   });
-  if (!defaultKey) {
+  if (!primaryKey) {
     return false;
   }
 
@@ -108,7 +110,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     overrideModel: params.sessionEntry.modelOverrideFallbackOriginModel,
   });
   if (originKey) {
-    return originKey !== defaultKey;
+    return originKey !== primaryKey;
   }
 
   const noticeSelectedKey = resolveModelRefKey({
@@ -116,7 +118,7 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     overrideModel: normalizeOptionalString(params.sessionEntry.fallbackNoticeSelectedModel),
   });
   if (noticeSelectedKey) {
-    return noticeSelectedKey !== defaultKey;
+    return noticeSelectedKey !== primaryKey;
   }
 
   const storedOverrideKey = resolveModelRefKey({
@@ -124,5 +126,5 @@ export function isStaleHeartbeatAutoFallbackOverride(params: {
     overrideProvider: params.storedOverride.provider,
     overrideModel: params.storedOverride.model,
   });
-  return storedOverrideKey !== null && storedOverrideKey !== defaultKey;
+  return storedOverrideKey !== null && storedOverrideKey !== primaryKey;
 }

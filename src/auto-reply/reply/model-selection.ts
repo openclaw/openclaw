@@ -98,6 +98,8 @@ export async function createModelSelectionState(params: {
   storePath?: string;
   defaultProvider: string;
   defaultModel: string;
+  primaryProvider?: string;
+  primaryModel?: string;
   provider: string;
   model: string;
   hasModelDirective: boolean;
@@ -131,6 +133,8 @@ export async function createModelSelectionState(params: {
 
   let provider = params.provider;
   let model = params.model;
+  const primaryProvider = params.primaryProvider ?? defaultProvider;
+  const primaryModel = params.primaryModel ?? defaultModel;
 
   const hasAllowlist = agentCfg?.models && Object.keys(agentCfg.models).length > 0;
   const visibility = parseConfiguredModelVisibilityEntries({ cfg });
@@ -172,6 +176,8 @@ export async function createModelSelectionState(params: {
     storedOverride: directStoredModelOverride,
     defaultProvider,
     defaultModel,
+    primaryProvider: params.primaryProvider,
+    primaryModel: params.primaryModel,
   });
 
   if (needsModelCatalog) {
@@ -217,7 +223,8 @@ export async function createModelSelectionState(params: {
     if (staleHeartbeatAutoFallbackOverride || !visibilityPolicy.allowsKey(key)) {
       const { updated } = applyModelOverrideToSessionEntry({
         entry: sessionEntry,
-        selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
+        selection: { provider: primaryProvider, model: primaryModel, isDefault: true },
+        preserveAuthProfileOverride: staleHeartbeatAutoFallbackOverride,
       });
       if (updated) {
         sessionStore[sessionKey] = sessionEntry;
@@ -248,8 +255,8 @@ export async function createModelSelectionState(params: {
       ? modelKey(normalizedDirectOverride.provider, normalizedDirectOverride.model)
       : undefined;
     if (currentSelectionKey === directStoredOverrideKey) {
-      provider = defaultProvider;
-      model = defaultModel;
+      provider = primaryProvider;
+      model = primaryModel;
     }
   }
 

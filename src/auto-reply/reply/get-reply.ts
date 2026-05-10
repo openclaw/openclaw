@@ -435,6 +435,16 @@ export async function getReplyFromConfig(
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
+  const resolvedChannelModelOverride =
+    channelModelOverride && !hasResolvedHeartbeatModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider,
+          aliasIndex,
+        })
+      : null;
+  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -456,6 +466,8 @@ export async function getReplyFromConfig(
     storedOverride: storedModelOverride,
     defaultProvider,
     defaultModel,
+    primaryProvider,
+    primaryModel,
   });
   if (
     storedModelOverride?.model &&
@@ -470,17 +482,10 @@ export async function getReplyFromConfig(
   if (
     !hasResolvedHeartbeatModelOverride &&
     !hasEffectiveSessionModelOverride &&
-    channelModelOverride
+    resolvedChannelModelOverride
   ) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
+    provider = resolvedChannelModelOverride.ref.provider;
+    model = resolvedChannelModelOverride.ref.model;
   }
 
   if (
@@ -581,6 +586,8 @@ export async function getReplyFromConfig(
       commandAuthorized,
       defaultProvider,
       defaultModel,
+      primaryProvider,
+      primaryModel,
       aliasIndex,
       provider,
       model,
