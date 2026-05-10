@@ -1325,6 +1325,30 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     expect(result.meta.error?.kind).toBe("context_overflow_exhausted");
   });
 
+  it("returns early with irreducible_overflow when preflightRecovery indicates irreducible overflow", async () => {
+    const irreducibleError = makeOverflowError(
+      "Context overflow: system prompt exceeds the model context window.",
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        promptError: irreducibleError,
+        preflightRecovery: { route: "irreducible_overflow" },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent(overflowBaseRunParams);
+
+    // Should not attempt compaction at all
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(mockedTruncateOversizedToolResultsInSession).not.toHaveBeenCalled();
+    // Should have only tried once before returning the terminal error
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(1);
+
+    expect(result.payloads[0]?.isError).toBe(true);
+    expect(result.payloads[0]?.text).toContain("system prompt exceeds the model context window");
+    expect(result.meta.error?.kind).toBe("irreducible_overflow");
+  });
+
   it("fires compaction hooks during overflow recovery for ownsCompaction engines", async () => {
     mockedContextEngine.info.ownsCompaction = true;
     mockedGlobalHookRunner.hasHooks.mockImplementation(
