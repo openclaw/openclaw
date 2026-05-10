@@ -1,0 +1,159 @@
+{
+  "info": {
+    "_postman_id": "7f54ee2e-92c0-4d23-9a9d-c696c29e8111",
+    "name": "Alphabet Harvester Shopify Webhooks",
+    "description": "Direct Shopify webhook tests for the local Alphabet Harvester backend. The pre-request script signs the raw JSON body with SHOPIFY_API_SECRET and sends the X-Shopify-Hmac-Sha256 header automatically.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "const secret = pm.environment.get('shopify_api_secret');",
+          "if (!secret) {",
+          "  throw new Error('Set shopify_api_secret in the Postman environment before sending the request.');",
+          "}",
+          "",
+          "const payload = pm.variables.replaceIn(pm.request.body?.raw || '');",
+          "if (!payload) {",
+          "  throw new Error('Request body is empty; Shopify HMAC must sign the raw JSON body.');",
+          "}",
+          "",
+          "const digest = CryptoJS.HmacSHA256(payload, secret);",
+          "const signature = CryptoJS.enc.Base64.stringify(digest);",
+          "pm.variables.set('shopify_hmac', signature);",
+          "pm.request.headers.upsert({ key: 'X-Shopify-Hmac-Sha256', value: signature });"
+        ]
+      }
+    },
+    {
+      "listen": "test",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "pm.test('Webhook accepted', function () {",
+          "  pm.response.to.have.status(202);",
+          "});",
+          "",
+          "pm.test('Alphabet queued or deduped the paid order', function () {",
+          "  const json = pm.response.json();",
+          "  pm.expect(json.success).to.eql(true);",
+          "  pm.expect(json.topic).to.eql(pm.environment.get('shopify_topic'));",
+          "  pm.expect(json.shop).to.eql(pm.environment.get('shop_domain'));",
+          "  pm.expect(json.orderName).to.eql(pm.environment.get('order_name'));",
+          "  pm.expect(json.queued === true || json.queued === false).to.eql(true);",
+          "});"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/health",
+          "host": ["{{base_url}}"],
+          "path": ["api", "health"]
+        },
+        "description": "Quick check that the local harvester backend is alive before sending the Shopify webhook."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Harvester is healthy', function () {",
+              "  pm.response.to.have.status(200);",
+              "  const json = pm.response.json();",
+              "  pm.expect(json.status).to.eql('ok');",
+              "});"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "Shopify orders/paid",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          },
+          {
+            "key": "X-Shopify-Topic",
+            "value": "{{shopify_topic}}"
+          },
+          {
+            "key": "X-Shopify-Shop-Domain",
+            "value": "{{shop_domain}}"
+          },
+          {
+            "key": "X-Shopify-Webhook-Id",
+            "value": "{{webhook_id}}"
+          },
+          {
+            "key": "X-Shopify-Hmac-Sha256",
+            "value": "{{shopify_hmac}}"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"id\": {{order_id}},\n  \"name\": \"{{order_name}}\",\n  \"financial_status\": \"paid\",\n  \"currency\": \"{{currency}}\",\n  \"current_total_price\": \"{{order_total}}\",\n  \"email\": \"{{customer_email}}\",\n  \"line_items\": [\n    {\n      \"title\": \"Alphabet Pro\",\n      \"quantity\": 1,\n      \"sku\": \"ALPHA-PRO\"\n    },\n    {\n      \"title\": \"VIP Setup\",\n      \"quantity\": 2,\n      \"sku\": \"VIP-SETUP\"\n    }\n  ]\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/webhooks/shopify",
+          "host": ["{{base_url}}"],
+          "path": ["api", "webhooks", "shopify"]
+        },
+        "description": "Sends a direct Shopify orders/paid webhook to the local harvester. The collection pre-request script computes the HMAC from the exact raw JSON body before sending."
+      },
+      "response": []
+    },
+    {
+      "name": "Targets Snapshot",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/targets",
+          "host": ["{{base_url}}"],
+          "path": ["api", "targets"]
+        },
+        "description": "Shows that the Shopify paid-order work item has been queued or completed."
+      },
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('Targets endpoint responds', function () {",
+              "  pm.response.to.have.status(200);",
+              "});",
+              "",
+              "pm.test('Shopify paid order is visible in targets', function () {",
+              "  const json = pm.response.json();",
+              "  const match = json.targets.find((target) => target.kind === 'shopify-paid-order' && target.shopifyOrder?.orderName === pm.environment.get('order_name'));",
+              "  pm.expect(match, 'Expected a Shopify paid-order target for this order').to.exist;",
+              "});"
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "variable": [
+    {
+      "key": "shopify_hmac",
+      "value": ""
+    }
+  ]
+}

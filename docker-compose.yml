@@ -118,3 +118,55 @@ services:
     entrypoint: ["node", "dist/index.js"]
     depends_on:
       - openclaw-gateway
+
+  alpacore:
+    image: node:18-alpine
+    container_name: alpa-engine
+    working_dir: /app
+    command: sh -c "cp harvester-package.json package.json && npm install --production && node harvester-server.mjs"
+    ports:
+      - "8080:8080"
+      - "5143:5143"
+    environment:
+      - HOST=0.0.0.0
+      - HARVESTER_WORKERS=15
+      - HARVESTER_PORT=8080
+      - REVOLUT_SIGNER_BASE_URL=${REVOLUT_SIGNER_BASE_URL:-}
+      - REVOLUT_SIGNER_SERVICE_TOKEN=${REVOLUT_SIGNER_SERVICE_TOKEN:-}
+      - REVOLUT_REFRESH_TOKEN=${REVOLUT_REFRESH_TOKEN:-}
+      - REVOLUT_BASE_URL=${REVOLUT_BASE_URL:-}
+      - REVOLUT_CLIENT_ID=${REVOLUT_CLIENT_ID:-}
+      - SHOPIFY_API_SECRET=${SHOPIFY_API_SECRET:-}
+      - HARVESTER_GITHUB_TOKEN=${HARVESTER_GITHUB_TOKEN:-}
+      - HARVESTER_HF_TOKEN=${HARVESTER_HF_TOKEN:-}
+      - HARVESTER_HUGGINGFACE_TOKEN=${HARVESTER_HUGGINGFACE_TOKEN:-}
+      - GITHUB_TOKEN=${GITHUB_TOKEN:-}
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      - HUGGING_FACE_HUB_TOKEN=${HUGGING_FACE_HUB_TOKEN:-}
+      - GH_TOKEN=${GH_TOKEN:-}
+      - HF_TOKEN=${HF_TOKEN:-}
+      - OPENCLAW_GH_TOKEN=${OPENCLAW_GH_TOKEN:-}
+    volumes:
+      - ./harvester-server.mjs:/app/harvester-server.mjs:ro
+      - ./harvester-package.json:/app/harvester-package.json:ro
+      - harvester-node-modules:/app/node_modules
+    restart: unless-stopped
+
+  control-ui:
+    image: node:18-alpine
+    container_name: alpa-control-ui
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    environment:
+      - HOST=0.0.0.0
+      - VITE_API_URL=http://alpacore:8080
+    volumes:
+      - ./control-ui:/app
+    depends_on:
+      - alpacore
+    restart: unless-stopped
+
+volumes:
+  harvester-node-modules:

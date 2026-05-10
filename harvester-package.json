@@ -1,0 +1,22 @@
+{
+  "name": "alphabet-harvester",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Web scraping harvester with real-time log feed",
+  "main": "harvester-server.mjs",
+  "scripts": {
+    "start": "node harvester-server.mjs",
+    "dev": "node --watch harvester-server.mjs"
+  },
+  "dependencies": {
+    "@azure/identity": "^4.13.0",
+    "@azure/keyvault-secrets": "^4.10.0",
+    "express": "^4.18.2",
+    "ws": "^8.14.2",
+    "node-fetch": "^3.3.2",
+    "pg": "^8.16.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

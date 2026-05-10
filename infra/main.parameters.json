@@ -23,6 +23,9 @@
     "openClawImage": {
       "value": ""
     },
+    "harvesterImage": {
+      "value": ""
+    },
     "alpaEngineImage": {
       "value": "${ALPA_ENGINE_IMAGE}"
     },
@@ -43,6 +46,12 @@
     },
     "openAiApiKey": {
       "value": "${OPENAI_API_KEY}"
+    },
+    "shopifyApiSecret": {
+      "value": "${SHOPIFY_API_SECRET}"
+    },
+    "stripeSecretKey": {
+      "value": "${STRIPE_SECRET_KEY}"
     },
     "revolutClientId": {
       "value": "${REVOLUT_CLIENT_ID}"
