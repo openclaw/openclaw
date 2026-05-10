@@ -17,7 +17,12 @@ function mockRuntime(events: AcpRuntimeEvent[]): AcpRuntime {
   } as unknown as AcpRuntime;
 }
 
-const turn = { handle: {} as AcpRuntimeHandle, text: "test" };
+const turn = {
+  handle: {} as AcpRuntimeHandle,
+  text: "test",
+  mode: "prompt" as const,
+  requestId: "req-test",
+};
 
 describe("consumeAcpTurnStream", () => {
   it("delivers all events when gate stays open", async () => {
