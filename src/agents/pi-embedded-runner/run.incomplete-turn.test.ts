@@ -1099,7 +1099,7 @@ describe("runEmbeddedPiAgent incomplete-turn safety", () => {
     // When the model successfully produces post-tool text, lastAssistant has
     // stopReason=end_turn. The incomplete-turn guard should not fire.
     const incompleteTurnText = resolveIncompleteTurnPayloadText({
-      payloadCount: 2,
+      payloadCount: 1,
       aborted: false,
       timedOut: false,
       attempt: makeAttemptResult({

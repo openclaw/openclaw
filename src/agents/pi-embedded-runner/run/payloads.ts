@@ -108,6 +108,10 @@ function resolveRawAssistantAnswerText(lastAssistant: AssistantMessage | undefin
   );
 }
 
+function normalizeReplyTextForComparison(text: string): string {
+  return normalizeTextForComparison(parseReplyDirectives(text).text ?? "");
+}
+
 function shouldIncludeToolErrorDetails(params: {
   lastToolError: ToolErrorSummary;
   isCronTrigger?: boolean;
@@ -357,16 +361,27 @@ export function buildEmbeddedRunPayloads(params: {
       (!assistantTextsHaveMedia &&
         normalizedAssistantTexts.length > 0 &&
         normalizedAssistantTexts === normalizedRawAnswerText));
+  const fallbackAnswerSourceText =
+    shouldPreferRawAnswerText && fallbackRawAnswerText ? fallbackRawAnswerText : fallbackAnswerText;
+  const normalizedFallbackAnswerSourceText = fallbackAnswerSourceText
+    ? normalizeReplyTextForComparison(fallbackAnswerSourceText)
+    : "";
+  const shouldUseCanonicalFinalAnswer =
+    nonEmptyAssistantTexts.length > 1 &&
+    fallbackAnswerSourceText.length > 0 &&
+    normalizedFallbackAnswerSourceText.length > 0;
   const hasAssistantTextPayload = nonEmptyAssistantTexts.length > 0;
   const answerTexts = suppressAssistantArtifacts
     ? []
-    : (shouldPreferRawAnswerText && fallbackRawAnswerText
-        ? [fallbackRawAnswerText]
-        : hasAssistantTextPayload
-          ? nonEmptyAssistantTexts
-          : fallbackAnswerText
-            ? [fallbackAnswerText]
-            : []
+    : (shouldUseCanonicalFinalAnswer
+        ? [fallbackAnswerSourceText]
+        : shouldPreferRawAnswerText && fallbackRawAnswerText
+          ? [fallbackRawAnswerText]
+          : hasAssistantTextPayload
+            ? nonEmptyAssistantTexts
+            : fallbackAnswerText
+              ? [fallbackAnswerText]
+              : []
       ).filter((text) => !shouldSuppressRawErrorText(text));
 
   let hasUserFacingAssistantReply = false;
