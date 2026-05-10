@@ -22,6 +22,7 @@ openclaw doctor
 openclaw doctor --repair
 openclaw doctor --deep
 openclaw doctor --repair --non-interactive
+openclaw doctor --fix --dry-run
 openclaw doctor --generate-gateway-token
 ```
 
@@ -40,7 +41,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--yes`: accept defaults without prompting
 - `--repair`: apply recommended non-service repairs without prompting; gateway service installs and rewrites still require interactive confirmation or explicit gateway commands
 - `--fix`: alias for `--repair`
-- `--dry-run`: preview what `--fix` would change without applying; outputs a diff of proposed config changes and exits
+- `--dry-run`: preview what `--fix` would change without applying. Outputs a diff of proposed config changes (normalization, legacy migration, auto-enable) collected before the repair sequence runs, then exits without writing. The full repair sequence is skipped — no plugin installs, no plugin index state writes, and no config persistence — even if downstream health contributions mutate the in-memory config during the run. `--dry-run` takes precedence over `--fix`/`--repair` when both are specified, and it works in Nix mode (where `--fix` itself is blocked) because it does not attempt to write.
 - `--force`: apply aggressive repairs, including overwriting custom service config when needed
 - `--non-interactive`: run without prompts; safe migrations and non-service repairs only
 - `--generate-gateway-token`: generate and configure a gateway token
@@ -49,6 +50,7 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 Notes:
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
+- `doctor --fix --dry-run` is a strict preview. The repair sequence — including plugin installs (npm and ClawHub) and plugin index state writes — is skipped entirely. Config persistence is blocked by two layers: the config flow returns `shouldWriteConfig: false` in dry-run, and the write step has an authoritative early-return guard as a backstop so late health-contribution mutations cannot trigger a write. The diff you see is still meaningful: it reflects config-level mutations collected before the repair sequence (normalization, legacy migration, auto-enable). Dry-run also works in Nix mode because the config-write guard that blocks `--fix` there is correctly bypassed when nothing will be written.
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
 - Performance: non-interactive `doctor` runs skip eager plugin loading so headless health checks stay fast. Interactive sessions still fully load plugins when a check needs their contribution.
 - `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
