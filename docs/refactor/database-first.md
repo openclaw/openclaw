@@ -140,6 +140,9 @@ No additional product questions are blocking implementation.
 
 The branch already has a real shared SQLite base:
 
+- The runtime floor is now Node 24+: `package.json`, the CLI runtime guard,
+  installer defaults, macOS runtime locator, CI, and public install docs all
+  agree. The old Node 22 compatibility lane is removed.
 - `src/state/openclaw-state-db.ts` opens `openclaw.sqlite`, sets WAL,
   `synchronous=NORMAL`, `busy_timeout=30000`, `foreign_keys=ON`, and applies
   the generated schema module derived from
