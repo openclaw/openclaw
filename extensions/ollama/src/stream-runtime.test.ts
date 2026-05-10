@@ -235,8 +235,8 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           think?: boolean;
           options?: { think?: boolean; num_ctx?: number };
         };
-        expect(requestBody.think).toBe(false);
-        expect(requestBody.options?.think).toBeUndefined();
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBe(false);
         expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
@@ -285,8 +285,12 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
         if (typeof requestInit.body !== "string") {
           throw new Error("Expected string request body");
         }
-        const requestBody = JSON.parse(requestInit.body) as { think?: string };
-        expect(requestBody.think).toBe("medium");
+        const requestBody = JSON.parse(requestInit.body) as {
+          think?: string;
+          options?: { think?: string };
+        };
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBe("medium");
       },
     );
   });
@@ -337,8 +341,8 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           think?: boolean | string;
           options?: { think?: boolean | string; num_ctx?: number };
         };
-        expect(requestBody.think).toBe("low");
-        expect(requestBody.options?.think).toBeUndefined();
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBe("low");
         expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
@@ -432,8 +436,8 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
           think?: boolean | string;
           options?: { think?: boolean | string; num_ctx?: number };
         };
-        expect(requestBody.think).toBe("high");
-        expect(requestBody.options?.think).toBeUndefined();
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBe("high");
         expect(requestBody.options?.num_ctx).toBeUndefined();
       },
     );
@@ -1664,6 +1668,7 @@ describe("createOllamaStreamFn", () => {
             temperature?: number;
             top_p?: number;
             streaming?: boolean;
+            think?: boolean;
           };
         };
         expect(requestBody.options.num_ctx).toBe(32768);
@@ -1671,7 +1676,8 @@ describe("createOllamaStreamFn", () => {
         expect(requestBody.options.temperature).toBe(0.7);
         expect(requestBody.options.top_p).toBe(0.9);
         expect(requestBody.options.streaming).toBeUndefined();
-        expect(requestBody.think).toBe(false);
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options.think).toBe(false);
       },
     );
   });
@@ -1759,7 +1765,7 @@ describe("createOllamaStreamFn", () => {
     );
   });
 
-  it("maps configured native Ollama params.thinking=max to the stable top-level think value", async () => {
+  it("maps configured native Ollama params.thinking=max to options.think=high", async () => {
     await withMockNdjsonFetch(
       [
         '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
@@ -1782,8 +1788,8 @@ describe("createOllamaStreamFn", () => {
           think?: string;
           options?: { think?: string };
         };
-        expect(requestBody.think).toBe("high");
-        expect(requestBody.options?.think).toBeUndefined();
+        expect(requestBody.think).toBeUndefined();
+        expect(requestBody.options?.think).toBe("high");
       },
     );
   });

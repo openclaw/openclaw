@@ -236,7 +236,10 @@ function createOllamaThinkingWrapper(
   const streamFn = baseFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(streamFn, model, context, options, (payloadRecord) => {
-      payloadRecord.think = think;
+      if (!payloadRecord.options || typeof payloadRecord.options !== "object") {
+        payloadRecord.options = {};
+      }
+      (payloadRecord.options as Record<string, unknown>).think = think;
     });
 }
 
@@ -325,6 +328,10 @@ function resolveOllamaModelOptions(model: ProviderRuntimeModel): Record<string, 
   if (numCtx !== undefined) {
     options.num_ctx = numCtx;
   }
+  const think = resolveOllamaThinkParamValue(params);
+  if (think !== undefined) {
+    options.think = think;
+  }
   return options;
 }
 
@@ -339,10 +346,6 @@ function resolveOllamaTopLevelParams(
         requestParams[key] = value;
       }
     }
-  }
-  const think = resolveOllamaThinkParamValue(params);
-  if (think !== undefined) {
-    requestParams.think = think;
   }
   return Object.keys(requestParams).length > 0 ? requestParams : undefined;
 }
