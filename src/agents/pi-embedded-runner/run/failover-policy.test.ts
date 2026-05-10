@@ -127,6 +127,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "format",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -148,6 +149,7 @@ describe("resolveRunFailoverDecision", () => {
         failoverFailure: true,
         failoverReason: "format",
         timedOut: false,
+        idleTimedOut: false,
         timedOutDuringCompaction: false,
         timedOutDuringToolExecution: false,
         profileRotated: false,
@@ -297,7 +299,6 @@ describe("resolveRunFailoverDecision", () => {
       reason: null,
     });
   });
-});
 
   it("rotates profile on LLM idle timeout before falling back", () => {
     // idleTimedOut = model produced no tokens; no provider API error was classified.
