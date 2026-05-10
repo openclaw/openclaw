@@ -1519,8 +1519,11 @@ async function processOpenAICompletionsStream(
         output.errorMessage = finishReasonResult.errorMessage;
       }
     }
-    const choiceDelta =
-      choice.delta ?? (choice as unknown as { message?: ChatCompletionChunk["delta"] }).message;
+    const choiceDeltaFields = choice as unknown as {
+      delta?: ChatCompletionChunk.Choice.Delta;
+      message?: ChatCompletionChunk.Choice.Delta;
+    };
+    const choiceDelta = choiceDeltaFields.delta ?? choiceDeltaFields.message;
     if (!choiceDelta) {
       continue;
     }
