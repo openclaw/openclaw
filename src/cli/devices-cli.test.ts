@@ -483,6 +483,28 @@ describe("devices cli local fallback", () => {
     expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
   });
 
+  it("falls back to local approve when gateway returns missing scope on loopback", async () => {
+    rejectGatewayForLocalFallback("GatewayClientRequestError: missing scope: operator.admin");
+    approveDevicePairing.mockResolvedValueOnce({
+      requestId: "req-latest",
+      device: {
+        deviceId: "device-1",
+        publicKey: "pk",
+        approvedAtMs: 1,
+        createdAtMs: 1,
+      },
+    });
+    summarizeDeviceTokens.mockReturnValue(undefined);
+
+    await runDevicesApprove(["req-latest"]);
+
+    expect(approveDevicePairing).toHaveBeenCalledWith("req-latest", {
+      callerScopes: ["operator.admin"],
+    });
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining(fallbackNotice));
+    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
+  });
+
   it("falls back to local pairing list when gateway returns a scope upgrade message on loopback", async () => {
     mockLocalPairingFallback("scope upgrade pending approval (requestId: req-123)");
 

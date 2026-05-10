@@ -120,11 +120,7 @@ function normalizeErrorMessage(error: unknown): string {
   return String(error);
 }
 
-function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
-  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
-  if (!readConnectPairingRequiredMessage(message)) {
-    return false;
-  }
+function canUseLocalPairingFallback(opts: DevicesRpcOpts): boolean {
   if (typeof opts.url === "string" && opts.url.trim().length > 0) {
     // Explicit --url might point at a remote/tunneled gateway; never silently
     // switch to local pairing files in that case.
@@ -139,6 +135,19 @@ function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): bo
   } catch {
     return false;
   }
+}
+
+function shouldUseLocalPairingFallback(opts: DevicesRpcOpts, error: unknown): boolean {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  return canUseLocalPairingFallback(opts) && Boolean(readConnectPairingRequiredMessage(message));
+}
+
+function shouldUseLocalApproveFallback(opts: DevicesRpcOpts, error: unknown): boolean {
+  const message = normalizeLowercaseStringOrEmpty(normalizeErrorMessage(error));
+  return (
+    canUseLocalPairingFallback(opts) &&
+    (Boolean(readConnectPairingRequiredMessage(message)) || message.includes("missing scope:"))
+  );
 }
 
 function redactLocalPairedDevice(device: InfraPairedDevice): PairedDevice {
@@ -174,7 +183,7 @@ async function approvePairingWithFallback(
   try {
     return await callGatewayCli("device.pair.approve", opts, { requestId });
   } catch (error) {
-    if (!shouldUseLocalPairingFallback(opts, error)) {
+    if (!shouldUseLocalApproveFallback(opts, error)) {
       throw error;
     }
     if (opts.json !== true) {
