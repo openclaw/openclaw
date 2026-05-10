@@ -179,26 +179,22 @@ export async function resolveCliAuthEpoch(params: {
   const authProfileId = normalizeOptionalString(params.authProfileId);
   const parts: string[] = [];
 
-  let profileCredential: AuthProfileCredential | undefined;
-  if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
-      readOnly: true,
-      allowKeychainPrompt: false,
-    });
-    profileCredential = getAuthProfileCredential(store, authProfileId);
-  }
-
-  const profileOwnsIdentity =
-    profileCredential != null && hasOAuthAccountIdentity(profileCredential);
-  if (params.skipLocalCredential !== true && !profileOwnsIdentity) {
+  if (params.skipLocalCredential !== true) {
     const localFingerprint = getLocalCliCredentialFingerprint(provider);
     if (localFingerprint) {
       parts.push(`local:${provider}:${localFingerprint}`);
     }
   }
 
-  if (profileCredential) {
-    parts.push(encodeAuthProfileEpochPart(authProfileId!, profileCredential));
+  if (authProfileId) {
+    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
+      readOnly: true,
+      allowKeychainPrompt: false,
+    });
+    const credential = getAuthProfileCredential(store, authProfileId);
+    if (credential) {
+      parts.push(encodeAuthProfileEpochPart(authProfileId, credential));
+    }
   }
 
   if (parts.length === 0) {
