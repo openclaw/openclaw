@@ -104,11 +104,6 @@ export async function createWorkerFilesystem(
     agentId: preparedRun.agentId,
     runId: preparedRun.runId,
   });
-  for (const entry of preparedRun.initialVfsEntries ?? []) {
-    scratch.writeFile(entry.path, Buffer.from(entry.contentBase64, "base64"), {
-      metadata: entry.metadata,
-    });
-  }
   return {
     scratch,
     artifacts,
