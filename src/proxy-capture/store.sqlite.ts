@@ -53,10 +53,6 @@ function getCaptureKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
 }
 
-function assertNeverCaptureQueryPreset(preset: never): never {
-  throw new Error(`Unhandled capture query preset: ${String(preset)}`);
-}
-
 function captureBlobRecordFromEncoded(
   encoded: ReturnType<typeof encodeCaptureBlob>,
 ): CaptureBlobRecord {
