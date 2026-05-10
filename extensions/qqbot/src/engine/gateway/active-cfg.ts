@@ -10,7 +10,7 @@
  * Issue #69546.
  */
 
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
 
 export type GatewayCfg = OpenClawConfig;

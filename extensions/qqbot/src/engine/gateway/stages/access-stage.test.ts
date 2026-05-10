@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi } from "vitest";
+import type { QQBotInboundAccess } from "../../adapter/index.js";
 import type { InboundPipelineDeps } from "../inbound-context.js";
 import type { QueuedMessage } from "../message-queue.js";
 import type { GatewayAccount, GatewayPluginRuntime } from "../types.js";
@@ -61,10 +62,21 @@ function buildRuntime(
         formatInboundEnvelope: vi.fn(() => ""),
         resolveEnvelopeFormatOptions: vi.fn(() => ({})),
       },
+      session: {
+        resolveStorePath: vi.fn(() => ""),
+        recordInboundSession: vi.fn(async () => undefined),
+      },
+      turn: { run: vi.fn(async () => undefined) },
       text: { chunkMarkdownText: vi.fn(() => []) },
     },
     tts: { textToSpeech: vi.fn() },
   };
+}
+
+function buildAllowAccess(): QQBotInboundAccess {
+  return {
+    senderAccess: { decision: "allow" },
+  } as unknown as QQBotInboundAccess;
 }
 
 function buildDeps(
@@ -77,12 +89,17 @@ function buildDeps(
     cfg,
     runtime,
     startTyping: vi.fn(),
-    adapters: {} as InboundPipelineDeps["adapters"],
+    adapters: {
+      access: {
+        resolveInboundAccess: vi.fn(() => buildAllowAccess()),
+        resolveSlashCommandAuthorization: vi.fn(() => true),
+      },
+    } as unknown as InboundPipelineDeps["adapters"],
   };
 }
 
 describe("runAccessStage — dynamic cfg routing (#69546)", () => {
-  it("re-evaluates resolveAgentRoute against the cfg supplied on each call", () => {
+  it("re-evaluates resolveAgentRoute against the cfg supplied on each call", async () => {
     const account = buildAccount();
     const peerId = "480562E9913A985D4A79822A643E27B6";
 
@@ -111,13 +128,13 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
 
     const event = buildEvent(peerId);
 
-    const first = runAccessStage(event, buildDeps(accountOnly, runtime, account));
+    const first = await runAccessStage(event, buildDeps(accountOnly, runtime, account));
     expect(first.kind).toBe("allow");
     if (first.kind === "allow") {
       expect(first.route.agentId).toBe("study");
     }
 
-    const second = runAccessStage(event, buildDeps(withPeer, runtime, account));
+    const second = await runAccessStage(event, buildDeps(withPeer, runtime, account));
     expect(second.kind).toBe("allow");
     if (second.kind === "allow") {
       expect(second.route.agentId).toBe("tutor");
@@ -128,7 +145,7 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     expect(captured[1]?.cfg).toBe(withPeer);
   });
 
-  it("never reads bindings from a previous cfg reference", () => {
+  it("never reads bindings from a previous cfg reference", async () => {
     const account = buildAccount();
     const seenCfgs = new Set<unknown>();
     const runtime = buildRuntime((params) => {
@@ -140,9 +157,9 @@ describe("runAccessStage — dynamic cfg routing (#69546)", () => {
     const cfgB: StubCfg = { bindings: [] };
     const cfgC: StubCfg = { bindings: [] };
 
-    runAccessStage(buildEvent("a"), buildDeps(cfgA, runtime, account));
-    runAccessStage(buildEvent("b"), buildDeps(cfgB, runtime, account));
-    runAccessStage(buildEvent("c"), buildDeps(cfgC, runtime, account));
+    await runAccessStage(buildEvent("a"), buildDeps(cfgA, runtime, account));
+    await runAccessStage(buildEvent("b"), buildDeps(cfgB, runtime, account));
+    await runAccessStage(buildEvent("c"), buildDeps(cfgC, runtime, account));
 
     expect(seenCfgs.size).toBe(3);
     expect(seenCfgs.has(cfgA)).toBe(true);
