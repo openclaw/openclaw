@@ -42,6 +42,7 @@ async function* parseSSEStream(
 ): AsyncGenerator<OpenRouterMusicSSEDelta> {
   const decoder = new TextDecoder();
   let buffer = "";
+  let dataLines: string[] = [];
 
   while (true) {
     const { done, value } = await reader.read();
@@ -52,7 +53,6 @@ async function* parseSSEStream(
     const lines = buffer.split("\n");
     buffer = lines.pop() ?? "";
 
-    let dataLines: string[] = [];
     for (const line of lines) {
       const trimmed = line.trim();
       if (trimmed === "") {
@@ -101,6 +101,7 @@ async function streamOpenRouterMusic(params: {
   body: Record<string, unknown>;
   timeoutMs: number;
   allowPrivateNetwork: boolean;
+  dispatcherPolicy?: unknown;
 }): Promise<{ audioBuffer: Buffer; transcriptPieces: string[] }> {
   const url = `${params.baseUrl}/chat/completions`;
 
@@ -115,44 +116,45 @@ async function streamOpenRouterMusic(params: {
     fetch,
     {
       ...(params.allowPrivateNetwork ? { ssrfPolicy: { allowPrivateNetwork: true } } : {}),
+      ...(params.dispatcherPolicy ? { dispatcherPolicy: params.dispatcherPolicy } : {}),
       auditContext: "openrouter-music",
     },
   );
 
-  await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
-
-  if (!response.body) {
-    release();
-    throw new Error("OpenRouter music generation response has no body");
-  }
-
-  const reader = response.body.getReader();
-  const audioChunks: Buffer[] = [];
-  const transcriptPieces: string[] = [];
-
   try {
-    for await (const event of parseSSEStream(reader)) {
-      const delta = event.choices?.[0]?.delta?.audio;
-      if (delta?.data) {
-        audioChunks.push(Buffer.from(delta.data, "base64"));
-      }
-      if (delta?.transcript) {
-        transcriptPieces.push(delta.transcript);
-      }
+    await assertOkOrThrowHttpError(response, "OpenRouter music generation failed");
+
+    if (!response.body) {
+      throw new Error("OpenRouter music generation response has no body");
     }
-  } catch (error) {
-    await reader.cancel().catch(() => {});
-    release();
-    throw error;
-  }
 
-  if (audioChunks.length === 0) {
-    release();
-    throw new Error("OpenRouter music generation response missing audio data");
-  }
+    const reader = response.body.getReader();
+    const audioChunks: Buffer[] = [];
+    const transcriptPieces: string[] = [];
 
-  release();
-  return { audioBuffer: Buffer.concat(audioChunks), transcriptPieces };
+    try {
+      for await (const event of parseSSEStream(reader)) {
+        const delta = event.choices?.[0]?.delta?.audio;
+        if (delta?.data) {
+          audioChunks.push(Buffer.from(delta.data, "base64"));
+        }
+        if (delta?.transcript) {
+          transcriptPieces.push(delta.transcript);
+        }
+      }
+    } catch (error) {
+      await reader.cancel().catch(() => {});
+      throw error;
+    }
+
+    if (audioChunks.length === 0) {
+      throw new Error("OpenRouter music generation response missing audio data");
+    }
+
+    return { audioBuffer: Buffer.concat(audioChunks), transcriptPieces };
+  } finally {
+    release();
+  }
 }
 
 function buildMusicRequestBody(
@@ -237,31 +239,29 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
       }
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
-      const { baseUrl, headers } = resolveProviderHttpRequestConfig({
-        baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-        defaultBaseUrl: OPENROUTER_BASE_URL,
-        allowPrivateNetwork: false,
-        defaultHeaders: {
-          Authorization: `Bearer ${auth.apiKey}`,
-          "Content-Type": "application/json",
-          "HTTP-Referer": "https://openclaw.ai",
-          "X-OpenRouter-Title": "OpenClaw",
-        },
-        request: sanitizeConfiguredModelProviderRequest(
-          req.cfg?.models?.providers?.openrouter?.request,
-        ),
-        provider: "openrouter",
-        capability: "audio",
-        transport: "http",
-      });
+      const { baseUrl, headers, allowPrivateNetwork, dispatcherPolicy } =
+        resolveProviderHttpRequestConfig({
+          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
+          defaultBaseUrl: OPENROUTER_BASE_URL,
+          allowPrivateNetwork: false,
+          defaultHeaders: {
+            Authorization: `Bearer ${auth.apiKey}`,
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://openclaw.ai",
+            "X-OpenRouter-Title": "OpenClaw",
+          },
+          request: sanitizeConfiguredModelProviderRequest(
+            req.cfg?.models?.providers?.openrouter?.request,
+          ),
+          provider: "openrouter",
+          capability: "audio",
+          transport: "http",
+        });
 
       const deadline = createProviderOperationDeadline({
         timeoutMs: req.timeoutMs,
         label: "OpenRouter music generation",
       });
-
-      const allowPrivateNetwork =
-        req.cfg?.models?.providers?.openrouter?.allowPrivateNetwork === true;
 
       const { audioBuffer, transcriptPieces } = await streamOpenRouterMusic({
         baseUrl,
@@ -272,6 +272,7 @@ export function buildOpenRouterMusicGenerationProvider(): MusicGenerationProvide
           defaultTimeoutMs: DEFAULT_TIMEOUT_MS,
         }),
         allowPrivateNetwork,
+        dispatcherPolicy,
       });
 
       const { mimeType, ext } = detectAudioFormat(audioBuffer);
