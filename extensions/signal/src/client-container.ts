@@ -666,7 +666,8 @@ export async function containerRpcRequest<T = unknown>(
 
     case "sendTyping": {
       const recipient = stripUuidPrefix(
-        (p.recipient as string[] | undefined)?.[0] ?? (p.groupId as string | undefined) ?? "",
+        (p.recipient as string[] | undefined)?.[0] ??
+          ((p.groupId as string | undefined) ? formatGroupIdForContainer(p.groupId as string) : ""),
       );
       await containerSendTyping({
         baseUrl: opts.baseUrl,

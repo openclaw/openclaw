@@ -450,6 +450,32 @@ describe("containerSendTyping", () => {
   });
 });
 
+describe("containerRpcRequest typing", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("formats group ids for typing indicators", async () => {
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 204,
+    });
+
+    await containerRpcRequest(
+      "sendTyping",
+      {
+        account: "+14259798283",
+        groupId: "group-123",
+      },
+      { baseUrl: "http://localhost:8080" },
+    );
+
+    const callArgs = mockFetch.mock.calls[0];
+    const body = JSON.parse(callArgs[1].body);
+    expect(body.recipient).toBe("group.Z3JvdXAtMTIz");
+  });
+});
+
 describe("containerSendReceipt", () => {
   beforeEach(() => {
     vi.clearAllMocks();
