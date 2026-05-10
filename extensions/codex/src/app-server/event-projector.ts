@@ -1041,6 +1041,7 @@ export class CodexAppServerEventProjector {
   }
 
   private createToolCallMessage(params: ToolTranscriptCallInput): AgentMessage {
+    const args = normalizeToolTranscriptArguments(params.arguments);
     return {
       role: "assistant",
       content: [
@@ -1048,7 +1049,8 @@ export class CodexAppServerEventProjector {
           type: "toolCall",
           id: params.id,
           name: params.name,
-          arguments: normalizeToolTranscriptArguments(params.arguments),
+          arguments: args,
+          input: args,
         },
       ],
       api: this.params.model.api ?? "openai-codex-responses",
@@ -1070,6 +1072,9 @@ export class CodexAppServerEventProjector {
       content: [
         {
           type: "toolResult",
+          id: params.id,
+          name: params.name,
+          toolName: params.name,
           toolCallId: params.id,
           toolUseId: params.id,
           tool_use_id: params.id,

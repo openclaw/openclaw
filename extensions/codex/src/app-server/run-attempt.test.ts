@@ -734,6 +734,89 @@ describe("runCodexAppServerAttempt", () => {
     expect(heartbeat?.deferLoading).toBe(true);
   });
 
+  it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
+    __testing.setOpenClawCodingToolsFactoryForTests(() => [
+      createRuntimeDynamicTool("wiki_status"),
+    ]);
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.disableTools = false;
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.toolsAllow = ["wiki_status"];
+
+    const run = runCodexAppServerAttempt(params, {
+      pluginConfig: {
+        codexDynamicToolsLoading: "searchable",
+        appServer: { mode: "yolo" },
+      },
+    });
+    await harness.waitForMethod("turn/start", 120_000);
+
+    const toolResult = (await harness.handleServerRequest({
+      id: "request-tool-wiki-status",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-wiki-status-1",
+        namespace: CODEX_OPENCLAW_DYNAMIC_TOOL_NAMESPACE,
+        tool: "wiki_status",
+        arguments: { topic: "README.md" },
+      },
+    })) as {
+      contentItems?: Array<{ text?: string; type?: string }>;
+      success?: boolean;
+    };
+    expect(toolResult).toEqual({
+      success: true,
+      contentItems: [{ type: "inputText", text: "wiki_status done" }],
+    });
+
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    const result = await run;
+
+    expect(result.messagesSnapshot.map((message) => message.role)).toEqual([
+      "user",
+      "assistant",
+      "toolResult",
+    ]);
+    expect(result.messagesSnapshot[1]).toMatchObject({
+      role: "assistant",
+      content: [
+        {
+          type: "toolCall",
+          id: "call-wiki-status-1",
+          name: "wiki_status",
+          arguments: { topic: "README.md" },
+          input: { topic: "README.md" },
+        },
+      ],
+    });
+    expect(result.messagesSnapshot[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call-wiki-status-1",
+      toolName: "wiki_status",
+      isError: false,
+      content: [
+        expect.objectContaining({
+          type: "toolResult",
+          id: "call-wiki-status-1",
+          name: "wiki_status",
+          toolName: "wiki_status",
+          toolCallId: "call-wiki-status-1",
+          toolUseId: "call-wiki-status-1",
+          tool_use_id: "call-wiki-status-1",
+          content: "wiki_status done",
+        }),
+      ],
+    });
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("tool_search");
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("function_call_output");
+  });
+
   it("passes the live run session key to Codex dynamic tools when sandbox policy uses another key", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
