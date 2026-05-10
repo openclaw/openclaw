@@ -57,6 +57,7 @@ type AssistantDecisionParams = {
   failoverFailure: boolean;
   failoverReason: FailoverReason | null;
   timedOut: boolean;
+  idleTimedOut: boolean;
   timedOutDuringCompaction: boolean;
   timedOutDuringToolExecution: boolean;
   profileRotated: boolean;
@@ -98,7 +99,8 @@ function shouldRotateAssistant(params: AssistantDecisionParams): boolean {
   }
   return (
     (!params.aborted && (params.failoverFailure || params.failoverReason !== null)) ||
-    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution)
+    (params.timedOut && !params.timedOutDuringCompaction && !params.timedOutDuringToolExecution) ||
+    params.idleTimedOut
   );
 }
 
@@ -178,7 +180,8 @@ export function resolveRunFailoverDecision(params: RunFailoverDecisionParams): R
   if (assistantShouldRotate && params.fallbackConfigured) {
     return {
       action: "fallback_model",
-      reason: params.timedOut ? "timeout" : (params.failoverReason ?? "unknown"),
+      reason:
+        params.timedOut || params.idleTimedOut ? "timeout" : (params.failoverReason ?? "unknown"),
     };
   }
   if (!assistantShouldRotate) {

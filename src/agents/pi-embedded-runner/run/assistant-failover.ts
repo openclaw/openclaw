@@ -190,6 +190,7 @@ export async function handleAssistantFailover(params: {
       failoverFailure: params.failoverFailure,
       failoverReason: params.failoverReason,
       timedOut: params.timedOut,
+      idleTimedOut: params.idleTimedOut,
       timedOutDuringCompaction: params.timedOutDuringCompaction,
       timedOutDuringToolExecution: params.timedOutDuringToolExecution,
       profileRotated: true,
