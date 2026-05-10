@@ -775,6 +775,39 @@ describe("runCodexAppServerAttempt", () => {
     expect(report?.tools.schemaChars).toBe(message?.schemaChars);
   });
 
+  it("reports model-call start when the app-server dispatches the turn", async () => {
+    let resolveTurnStart: ((value: unknown) => void) | undefined;
+    const turnStartResponse = new Promise<unknown>((resolve) => {
+      resolveTurnStart = resolve;
+    });
+    const harness = createStartedThreadHarness((method) => {
+      if (method === "turn/start") {
+        return turnStartResponse;
+      }
+      return undefined;
+    });
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.onExecutionPhase = vi.fn();
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start", 120_000);
+    await vi.waitFor(() => {
+      expect(params.onExecutionPhase).toHaveBeenCalledWith({
+        phase: "model_call_started",
+        provider: "codex",
+        model: "gpt-5.4-codex",
+        firstModelCallStarted: true,
+      });
+    });
+
+    resolveTurnStart?.(turnStartResult());
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+    await run;
+  });
+
   it("keeps searchable Codex dynamic tools canonical in mirrored transcript snapshots", async () => {
     __testing.setOpenClawCodingToolsFactoryForTests(() => [
       createRuntimeDynamicTool("wiki_status"),

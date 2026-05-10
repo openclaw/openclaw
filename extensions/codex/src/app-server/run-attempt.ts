@@ -1287,18 +1287,23 @@ export async function runCodexAppServerAttempt(
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
-    turn = assertCodexTurnStartResponse(
-      await client.request(
-        "turn/start",
-        buildTurnStartParams(params, {
-          threadId: thread.threadId,
-          cwd: effectiveWorkspace,
-          appServer: pluginAppServer,
-          promptText: promptBuild.prompt,
-        }),
-        { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
-      ),
+    const turnStartRequest = client.request(
+      "turn/start",
+      buildTurnStartParams(params, {
+        threadId: thread.threadId,
+        cwd: effectiveWorkspace,
+        appServer: pluginAppServer,
+        promptText: promptBuild.prompt,
+      }),
+      { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
     );
+    params.onExecutionPhase?.({
+      phase: "model_call_started",
+      provider: params.provider,
+      model: params.modelId,
+      firstModelCallStarted: true,
+    });
+    turn = assertCodexTurnStartResponse(await turnStartRequest);
   } catch (error) {
     const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
     const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
