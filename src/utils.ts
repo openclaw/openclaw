@@ -49,11 +49,8 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
 
 export function normalizeE164(number: string): string {
   const withoutPrefix = number.replace(/^[a-z][a-z0-9-]*:/i, "").trim();
-  const digits = withoutPrefix.replace(/[^\d+]/g, "");
-  if (digits.startsWith("+")) {
-    return `+${digits.slice(1)}`;
-  }
-  return `+${digits}`;
+  const digitsOnly = withoutPrefix.replace(/[^\d]/g, "");
+  return `+${digitsOnly}`;
 }
 
 export function sleep(ms: number) {

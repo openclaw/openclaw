@@ -217,6 +217,7 @@ export function runOpenClawCompileCacheRespawnPlan(
     clearSignalExitTimer();
     if (signal) {
       runtime.exit(1);
+      return;
     }
     runtime.exit(code ?? 1);
   });

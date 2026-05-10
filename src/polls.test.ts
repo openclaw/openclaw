@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { normalizePollDurationHours, normalizePollInput } from "./polls.js";
+import { normalizePollDurationHours, normalizePollInput, resolvePollMaxSelections } from "./polls.js";
 
 describe("polls", () => {
   it("normalizes question/options and validates maxSelections", () => {
@@ -43,5 +43,23 @@ describe("polls", () => {
         durationHours: 1,
       }),
     ).toThrow(/mutually exclusive/);
+  });
+
+  describe("resolvePollMaxSelections", () => {
+    it("returns 1 when multiselect is disabled", () => {
+      expect(resolvePollMaxSelections(5, false)).toBe(1);
+      expect(resolvePollMaxSelections(2, undefined)).toBe(1);
+    });
+
+    it("returns optionCount when multiselect is enabled and options >= 2", () => {
+      expect(resolvePollMaxSelections(2, true)).toBe(2);
+      expect(resolvePollMaxSelections(5, true)).toBe(5);
+      expect(resolvePollMaxSelections(10, true)).toBe(10);
+    });
+
+    it("never returns more than optionCount", () => {
+      // If somehow called with fewer than 2 options, must not exceed optionCount.
+      expect(resolvePollMaxSelections(1, true)).toBeLessThanOrEqual(1);
+    });
   });
 });

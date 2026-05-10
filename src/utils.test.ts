@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { withTempDir } from "./test-helpers/temp-dir.js";
 import {
   ensureDir,
+  normalizeE164,
   resolveConfigDir,
   resolveHomeDir,
   resolveUserPath,
@@ -148,5 +149,22 @@ describe("resolveUserPath", () => {
   it("returns empty string for undefined/null input", () => {
     expect(resolveUserPath(undefined as unknown as string)).toBe("");
     expect(resolveUserPath(null as unknown as string)).toBe("");
+  });
+});
+
+describe("normalizeE164", () => {
+  it("normalizes standard E.164 numbers", () => {
+    expect(normalizeE164("+12345678900")).toBe("+12345678900");
+    expect(normalizeE164("12345678900")).toBe("+12345678900");
+    expect(normalizeE164("+1 (234) 567-8900")).toBe("+12345678900");
+  });
+
+  it("strips protocol prefixes", () => {
+    expect(normalizeE164("tel:+12345678900")).toBe("+12345678900");
+    expect(normalizeE164("sip:12345678900")).toBe("+12345678900");
+  });
+
+  it("produces a single leading plus even for malformed double-plus input", () => {
+    expect(normalizeE164("++12345678900")).toBe("+12345678900");
   });
 });
