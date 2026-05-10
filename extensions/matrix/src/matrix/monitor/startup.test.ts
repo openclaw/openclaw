@@ -180,7 +180,11 @@ describe("runMatrixStartupMaintenance", () => {
       { avatarUrl: "mxc://avatar" },
     );
     expect(params.replaceConfigFile).toHaveBeenCalledWith(updatedCfg as never);
-    expect(params.logVerboseMessage).toHaveBeenCalledWith(
+    const logVerboseMessage = params.logVerboseMessage;
+    if (!logVerboseMessage) {
+      throw new Error("expected logVerboseMessage");
+    }
+    expect(logVerboseMessage).toHaveBeenCalledWith(
       "matrix: persisted converted avatar URL for account ops (mxc://avatar)",
     );
   });
