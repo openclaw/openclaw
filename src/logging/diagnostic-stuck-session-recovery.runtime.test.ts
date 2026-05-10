@@ -74,7 +74,7 @@ function resetMocks() {
   mocks.getCommandLaneSnapshot.mockReset();
   mocks.getCommandLaneSnapshot.mockReturnValue({
     lane: "session:agent:main:main",
-    queuedCount: 1,
+    queuedCount: 0,
     activeCount: 0,
     maxConcurrent: 1,
     draining: false,
@@ -307,6 +307,38 @@ describe("stuck session recovery", () => {
 
     expect(mocks.resetCommandLane).toHaveBeenCalledWith("session:agent:main:main");
     expect(mocks.diag.warn).toHaveBeenCalledWith(expect.stringContaining("reason=no_active_work"));
+  });
+
+  it("releases a recoverable stale lane when diagnostics still show queued work", async () => {
+    mocks.resolveActiveEmbeddedRunHandleSessionId.mockReturnValue(undefined);
+    mocks.resolveActiveEmbeddedRunSessionId.mockReturnValue(undefined);
+    mocks.isEmbeddedPiRunActive.mockReturnValue(false);
+    mocks.resetCommandLane.mockReturnValue(0);
+
+    const outcome = await recoverStuckDiagnosticSession({
+      sessionId: "stale-session",
+      sessionKey: "agent:main:telegram:direct:123",
+      ageMs: 9_907_000,
+      queueDepth: 2,
+    });
+
+    expect(mocks.abortEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.forceClearEmbeddedPiRun).not.toHaveBeenCalled();
+    expect(mocks.resetCommandLane).toHaveBeenCalledWith(
+      "session:agent:main:telegram:direct:123",
+    );
+    expect(outcome).toMatchObject({
+      status: "released",
+      action: "release_lane",
+      reason: "recoverable_stale_lane",
+      released: 2,
+    });
+    expect(mocks.diag.warn).toHaveBeenCalledWith(
+      expect.stringContaining("reason=recoverable_stale_lane"),
+    );
+    expect(mocks.diag.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining("reason=no_active_work"),
+    );
   });
 
   it("releases a stale session-id lane when no session key is available", async () => {

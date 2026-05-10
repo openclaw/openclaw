@@ -51,6 +51,8 @@ Before building a package, reviewers should confirm:
 - `/new` remains a clean break and does not implicitly generate or load a handoff.
 - `/handoff` does not require gateway diagnostics, task audit, channel status, or a
   high-token threshold before saving a packet.
+- Diagnostic recovery treats a stale processing lane with queued work but no active
+  command task as recoverable (`recoverable_stale_lane`) rather than a no-op.
 - Failure notices are short and do not expose provider secrets or stack traces.
 - Tests cover completion, failure notification, long-input guard, startup interrupted
   notice, and the explicit handoff boundary.
