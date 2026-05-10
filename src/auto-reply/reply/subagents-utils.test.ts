@@ -152,6 +152,16 @@ describe("subagents utils", () => {
     expectResolvedRunId(runs, "copy_", "run-review-2");
   });
 
+  it("preserves exact label targets before taskName prefix aliases", () => {
+    const runs = [
+      makeRun({ runId: "run-review-label", label: "review" }),
+      makeRun({ runId: "run-review-docs", label: "docs", taskName: "review_docs" }),
+    ];
+
+    expectResolvedRunId(runs, "review", "run-review-label");
+    expectResolvedRunId(runs, "review_", "run-review-docs");
+  });
+
   it("ignores stale duplicate taskName aliases when a current run reuses the handle", () => {
     vi.spyOn(Date, "now").mockReturnValue(NOW_MS);
     const runs = [

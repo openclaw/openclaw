@@ -107,15 +107,6 @@ export function resolveSubagentTargetFromRuns(params: {
   if (byExactAlias.length > 1) {
     return { error: params.errors.ambiguousLabel(trimmed) };
   }
-  const byAliasPrefix = numericOrder.filter((entry) =>
-    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lowered)),
-  );
-  if (byAliasPrefix.length === 1) {
-    return { entry: byAliasPrefix[0] };
-  }
-  if (byAliasPrefix.length > 1) {
-    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
-  }
   const byExactLabel = deduped.filter(
     (entry) => normalizeLowercaseStringOrEmpty(params.label(entry)) === lowered,
   );
@@ -124,6 +115,15 @@ export function resolveSubagentTargetFromRuns(params: {
   }
   if (byExactLabel.length > 1) {
     return { error: params.errors.ambiguousLabel(trimmed) };
+  }
+  const byAliasPrefix = numericOrder.filter((entry) =>
+    aliases(entry).some((alias) => normalizeLowercaseStringOrEmpty(alias).startsWith(lowered)),
+  );
+  if (byAliasPrefix.length === 1) {
+    return { entry: byAliasPrefix[0] };
+  }
+  if (byAliasPrefix.length > 1) {
+    return { error: params.errors.ambiguousLabelPrefix(trimmed) };
   }
   const byLabelPrefix = deduped.filter((entry) =>
     normalizeLowercaseStringOrEmpty(params.label(entry)).startsWith(lowered),
