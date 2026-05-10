@@ -37,7 +37,7 @@ vi.mock("./embeddings.js", () => ({
   createEmbeddingProvider: vi.fn(),
 }));
 
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryManagerSyncOps, type MemoryIndexFileFailureAction } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -121,6 +121,12 @@ class SessionSyncYieldHarness extends MemoryManagerSyncOps {
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
+
+  protected resolveIndexFileFailureAction(): MemoryIndexFileFailureAction {
+    return "throw";
+  }
+
+  protected clearIndexedFileData(): void {}
 
   protected async indexFile(
     entry: MemoryIndexEntry,

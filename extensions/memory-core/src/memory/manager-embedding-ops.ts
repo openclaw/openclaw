@@ -3,6 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   enforceEmbeddingMaxInputTokens,
   hasNonTextEmbeddingParts,
+  resolveEmbeddingMaxInputTokens,
   type EmbeddingInput,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
@@ -29,12 +30,13 @@ import {
   buildMemoryEmbeddingBatches,
   buildTextEmbeddingInputs,
   filterNonEmptyMemoryChunks,
+  isEmbeddingBatchTooLargeError,
   isRetryableMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
   runMemoryEmbeddingRetryLoop,
 } from "./manager-embedding-policy.js";
 import { deleteMemoryFtsRows } from "./manager-fts-state.js";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryManagerSyncOps, type MemoryIndexFileFailureAction } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
@@ -63,6 +65,14 @@ type MemoryIndexEntry = {
   contentText?: string;
   lineMap?: number[];
 };
+
+function splitMemoryEmbeddingBatch<T>(batch: T[]): [T[], T[]] | null {
+  if (batch.length <= 1) {
+    return null;
+  }
+  const midpoint = Math.ceil(batch.length / 2);
+  return [batch.slice(0, midpoint), batch.slice(midpoint)];
+}
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -156,7 +166,10 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
 
     const missingChunks = missing.map((m) => m.chunk);
-    const batches = buildMemoryEmbeddingBatches(missingChunks, EMBEDDING_BATCH_MAX_TOKENS);
+    const batches = buildMemoryEmbeddingBatches(
+      missingChunks,
+      this.resolveInlineEmbeddingBatchMaxTokens(),
+    );
     const toCache: Array<{ hash: string; embedding: number[] }> = [];
     const provider = this.provider;
     if (!provider) {
@@ -164,16 +177,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     }
     let cursor = 0;
     for (const batch of batches) {
-      const inputs = buildTextEmbeddingInputs(batch);
-      const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
-      if (hasStructuredInputs && !provider.embedBatchInputs) {
-        throw new Error(
-          `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
-        );
-      }
-      const batchEmbeddings = hasStructuredInputs
-        ? await this.embedBatchInputsWithRetry(inputs)
-        : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
+      const batchEmbeddings = await this.embedMemoryChunkBatchWithAdaptiveSplit(batch);
       for (let i = 0; i < batch.length; i += 1) {
         const item = missing[cursor + i];
         const embedding = batchEmbeddings[i] ?? [];
@@ -193,6 +197,60 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       tableName: EMBEDDING_CACHE_TABLE,
     });
     return embeddings;
+  }
+
+  private resolveInlineEmbeddingBatchMaxTokens(): number {
+    if (!this.provider) {
+      return EMBEDDING_BATCH_MAX_TOKENS;
+    }
+    return Math.min(resolveEmbeddingMaxInputTokens(this.provider), EMBEDDING_BATCH_MAX_TOKENS);
+  }
+
+  private async embedMemoryChunkBatchWithAdaptiveSplit(batch: MemoryChunk[]): Promise<number[][]> {
+    if (batch.length === 0) {
+      return [];
+    }
+
+    try {
+      return await this.embedMemoryChunkBatch(batch);
+    } catch (err) {
+      const message = formatErrorMessage(err);
+      const split = splitMemoryEmbeddingBatch(batch);
+      if (!split || !isEmbeddingBatchTooLargeError(message)) {
+        throw err;
+      }
+
+      log.warn("memory embeddings: provider rejected embedding batch as too large; splitting", {
+        provider: this.provider?.id,
+        model: this.provider?.model,
+        items: batch.length,
+        error: message,
+      });
+      const [left, right] = split;
+      return [
+        ...(await this.embedMemoryChunkBatchWithAdaptiveSplit(left)),
+        ...(await this.embedMemoryChunkBatchWithAdaptiveSplit(right)),
+      ];
+    }
+  }
+
+  private async embedMemoryChunkBatch(batch: MemoryChunk[]): Promise<number[][]> {
+    const provider = this.provider;
+    if (!provider) {
+      throw new Error("Cannot embed batch in FTS-only mode (no embedding provider)");
+    }
+
+    const inputs = buildTextEmbeddingInputs(batch);
+    const hasStructuredInputs = inputs.some((input) => hasNonTextEmbeddingParts(input));
+    if (hasStructuredInputs && !provider.embedBatchInputs) {
+      throw new Error(
+        `Embedding provider "${provider.id}" does not support multimodal memory inputs.`,
+      );
+    }
+
+    return hasStructuredInputs
+      ? await this.embedBatchInputsWithRetry(inputs)
+      : await this.embedBatchWithRetry(batch.map((chunk) => chunk.text));
   }
 
   protected computeProviderKey(): string {
@@ -529,7 +587,11 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private clearIndexedFileData(pathname: string, source: MemorySource): void {
+  protected resolveIndexFileFailureAction(message: string): MemoryIndexFileFailureAction {
+    return isEmbeddingBatchTooLargeError(message) ? "skip-file" : "throw";
+  }
+
+  protected clearIndexedFileData(pathname: string, source: MemorySource): void {
     if (this.vector.enabled) {
       try {
         this.db

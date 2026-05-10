@@ -60,6 +60,8 @@ import {
 } from "./manager-source-state.js";
 import { runMemoryTargetedSessionSync } from "./manager-targeted-sync.js";
 
+export type MemoryIndexFileFailureAction = "skip-file" | "throw";
+
 type MemorySyncProgressState = {
   completed: number;
   total: number;
@@ -223,6 +225,8 @@ export abstract class MemoryManagerSyncOps {
     entry: MemoryIndexEntry,
     options: { source: MemorySource; content?: string },
   ): Promise<void>;
+  protected abstract resolveIndexFileFailureAction(message: string): MemoryIndexFileFailureAction;
+  protected abstract clearIndexedFileData(pathname: string, source: MemorySource): void;
 
   protected resetVectorState(): void {
     this.vectorReady = null;
@@ -794,7 +798,19 @@ export abstract class MemoryManagerSyncOps {
         }
         return;
       }
-      await this.indexFile(entry, { source: "memory" });
+      try {
+        await this.indexFile(entry, { source: "memory" });
+      } catch (err) {
+        const message = formatErrorMessage(err);
+        if (this.resolveIndexFileFailureAction(message) !== "skip-file") {
+          throw err;
+        }
+        this.clearIndexedFileData(entry.path, "memory");
+        log.warn(`memory embeddings: skipping file after embedding failure: ${entry.path}`, {
+          source: "memory",
+          error: message,
+        });
+      }
       if (params.progress) {
         params.progress.completed += 1;
         params.progress.report({
@@ -924,7 +940,19 @@ export abstract class MemoryManagerSyncOps {
           this.resetSessionDelta(absPath, entry.size);
           return;
         }
-        await this.indexFile(entry, { source: "sessions", content: entry.content });
+        try {
+          await this.indexFile(entry, { source: "sessions", content: entry.content });
+        } catch (err) {
+          const message = formatErrorMessage(err);
+          if (this.resolveIndexFileFailureAction(message) !== "skip-file") {
+            throw err;
+          }
+          this.clearIndexedFileData(entry.path, "sessions");
+          log.warn(`memory embeddings: skipping file after embedding failure: ${entry.path}`, {
+            source: "sessions",
+            error: message,
+          });
+        }
         this.resetSessionDelta(absPath, entry.size);
         if (params.progress) {
           params.progress.completed += 1;

@@ -30,6 +30,8 @@ let embedBatchCalls = 0;
 let embedBatchInputCalls = 0;
 let providerCalls: Array<{ provider?: string; model?: string; outputDimensionality?: number }> = [];
 let forceNoProvider = false;
+let maxBatchTextBytes: number | null = null;
+let rejectTextIncludes: string | null = null;
 
 vi.mock("./embeddings.js", () => {
   const embedText = (text: string) => {
@@ -68,6 +70,15 @@ vi.mock("./embeddings.js", () => {
           embedQuery: async (text: string) => embedText(text),
           embedBatch: async (texts: string[]) => {
             embedBatchCalls += 1;
+            if (rejectTextIncludes && texts.some((text) => text.includes(rejectTextIncludes!))) {
+              throw new Error("openai embeddings failed: 400 document rejected");
+            }
+            const totalBytes = texts.reduce((sum, text) => sum + Buffer.byteLength(text), 0);
+            if (maxBatchTextBytes !== null && totalBytes > maxBatchTextBytes) {
+              throw new Error(
+                `openai embeddings failed: 400 {"error":{"code":"invalid_argument","message":"embeddings max length per batch size is ${maxBatchTextBytes}","type":"invalid_request_error"}}`,
+              );
+            }
             return texts.map(embedText);
           },
           ...(providerId === "gemini"
@@ -191,6 +202,8 @@ describe("memory index", () => {
     embedBatchInputCalls = 0;
     providerCalls = [];
     forceNoProvider = false;
+    maxBatchTextBytes = null;
+    rejectTextIncludes = null;
 
     rmSync(workspaceDir, { recursive: true, force: true });
     mkdirSync(memoryDir, { recursive: true });
@@ -355,6 +368,65 @@ describe("memory index", () => {
     } finally {
       await manager.close?.();
     }
+  });
+
+  it("splits inline embedding batches when the provider rejects the combined batch length", async () => {
+    maxBatchTextBytes = 2000;
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "Beta ".repeat(300), "utf8");
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "Gamma ".repeat(300), "utf8");
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-batch-limit.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await manager.sync({ reason: "test", force: true });
+
+    expect(embedBatchCalls).toBeGreaterThan(1);
+    const results = await manager.search("Beta", { minScore: 0, maxResults: 5 });
+    expect(results.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/2026-01-13\.md$/),
+    );
+  });
+
+  it("skips one file after an embedding input-size failure and keeps indexing other files", async () => {
+    maxBatchTextBytes = 20;
+    await fs.writeFile(
+      path.join(memoryDir, "2026-01-13.md"),
+      "UNEMBEDDABLE content too large",
+      "utf8",
+    );
+    await fs.writeFile(path.join(memoryDir, "2026-01-14.md"), "Beta", "utf8");
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-file-skip.sqlite"),
+      hybrid: { enabled: true, vectorWeight: 0, textWeight: 1 },
+    });
+    const manager = await getPersistentManager(cfg);
+    await expect(manager.sync({ reason: "test", force: true })).resolves.toBeUndefined();
+
+    const results = await manager.search("Beta", { minScore: 0, maxResults: 5 });
+    expect(results.map((result) => result.path)).toContainEqual(
+      expect.stringMatching(/2026-01-14\.md$/),
+    );
+    const skippedResults = await manager.search("UNEMBEDDABLE", { minScore: 0, maxResults: 5 });
+    expect(skippedResults.map((result) => result.path)).not.toContainEqual(
+      expect.stringMatching(/2026-01-13\.md$/),
+    );
+  });
+
+  it("does not skip files for provider-level embedding failures", async () => {
+    rejectTextIncludes = "UNEMBEDDABLE";
+    await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "UNEMBEDDABLE content", "utf8");
+
+    const cfg = createCfg({
+      storePath: path.join(workspaceDir, "index-provider-failure.sqlite"),
+    });
+    const manager = await getPersistentManager(cfg);
+
+    await expect(manager.sync({ reason: "test", force: true })).rejects.toThrow(
+      "openai embeddings failed: 400 document rejected",
+    );
   });
 
   it("indexes multimodal image and audio files from extra paths with Gemini structured inputs", async () => {

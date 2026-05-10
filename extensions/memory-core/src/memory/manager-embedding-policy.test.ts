@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildMemoryEmbeddingBatches,
   filterNonEmptyMemoryChunks,
+  isEmbeddingBatchTooLargeError,
   isRetryableMemoryEmbeddingError,
   isStructuredInputTooLargeMemoryEmbeddingError,
   resolveMemoryEmbeddingRetryDelay,
@@ -118,6 +119,18 @@ describe("memory embedding policy", () => {
       ),
     ).toBe(true);
     expect(isStructuredInputTooLargeMemoryEmbeddingError("connection reset by peer")).toBe(false);
+  });
+
+  it("classifies provider batch length errors as split candidates", () => {
+    expect(
+      isEmbeddingBatchTooLargeError(
+        'openai embeddings failed: 400 {"error":{"code":"invalid_argument","message":"embeddings max length per batch size is 2000","type":"invalid_request_error"}}',
+      ),
+    ).toBe(true);
+    expect(isEmbeddingBatchTooLargeError("openai embeddings failed: 400 document rejected")).toBe(
+      false,
+    );
+    expect(isEmbeddingBatchTooLargeError("openai embeddings failed: 429 rate limit")).toBe(false);
   });
 
   it("caps retry jittered delays", () => {

@@ -211,6 +211,8 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
 
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
+    OpenClaw splits inline embedding batches again if the endpoint returns a batch-length error. This keeps providers with low limits, such as `bge-large-zh` endpoints that reject batches above roughly 2,000 characters, from failing an entire `openclaw memory index --force` run. Files that still cannot be embedded after input-size retries are skipped with a warning so other memory files continue indexing.
+
   </Accordion>
   <Accordion title="Bedrock">
     ### Bedrock embedding config

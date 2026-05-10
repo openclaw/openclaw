@@ -25,6 +25,7 @@ export {
   postJsonWithRetry,
   resolveBatchCompletionFromStatus,
   resolveCompletedBatchResult,
+  resolveEmbeddingMaxInputTokens,
   resolveRemoteEmbeddingBearerClient,
   resolveRemoteEmbeddingClient,
   runEmbeddingBatchGroups,

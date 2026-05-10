@@ -103,4 +103,24 @@ describe("OpenAI embedding provider", () => {
       }),
     );
   });
+
+  it("declares max input tokens for known native OpenAI embedding models", async () => {
+    const { provider } = await createOpenAiEmbeddingProvider(createOptions());
+
+    expect(provider.maxInputTokens).toBe(8192);
+  });
+
+  it("leaves unknown OpenAI-compatible embedding limits to host fallback policy", async () => {
+    mocks.resolveRemoteEmbeddingClient.mockResolvedValueOnce({
+      baseUrl: "https://embeddings.example/v1",
+      headers: { Authorization: "Bearer test" },
+      model: "bge-large-zh",
+    });
+
+    const { provider } = await createOpenAiEmbeddingProvider(
+      createOptions({ model: "bge-large-zh" }),
+    );
+
+    expect(provider.maxInputTokens).toBeUndefined();
+  });
 });

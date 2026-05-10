@@ -92,6 +92,12 @@ export function isStructuredInputTooLargeMemoryEmbeddingError(message: string): 
   );
 }
 
+export function isEmbeddingBatchTooLargeError(message: string): boolean {
+  return /(413|payload too large|request too large|input too large|too many tokens|max(?:imum)? length|exceed(?:s|ed)?(?: .*limit)?|input limit|batch size|request size)/i.test(
+    message,
+  );
+}
+
 export function resolveMemoryEmbeddingRetryDelay(
   delayMs: number,
   randomValue: number,

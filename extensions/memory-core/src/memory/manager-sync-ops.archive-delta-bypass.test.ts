@@ -11,7 +11,7 @@ import type {
   MemorySyncProgressUpdate,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
+import { MemoryManagerSyncOps, type MemoryIndexFileFailureAction } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = {
   path: string;
@@ -97,6 +97,12 @@ class SessionDeltaHarness extends MemoryManagerSyncOps {
   }
 
   protected pruneEmbeddingCacheIfNeeded(): void {}
+
+  protected resolveIndexFileFailureAction(): MemoryIndexFileFailureAction {
+    return "throw";
+  }
+
+  protected clearIndexedFileData(): void {}
 
   protected async indexFile(
     _entry: MemoryIndexEntry,
