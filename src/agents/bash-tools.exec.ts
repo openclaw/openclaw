@@ -68,7 +68,12 @@ import {
   runExecProcess,
   execSchema,
 } from "./bash-tools.exec-runtime.js";
-import type { ExecToolDefaults, ExecToolDetails } from "./bash-tools.exec-types.js";
+import { resolveTrustedExecAllowlist } from "./bash-tools.exec-trusted-env.js";
+import type {
+  ExecElevatedDefaults,
+  ExecToolDefaults,
+  ExecToolDetails,
+} from "./bash-tools.exec-types.js";
 import {
   buildSandboxEnv,
   clampWithDefault,
@@ -1685,6 +1690,7 @@ export function createExecTool(
               baseEnv: inheritedBaseEnv,
               overrides: requestedEnv,
               blockPathOverrides: true,
+              allowInheritedKeys: resolveTrustedExecAllowlist({ host, security, ask }),
             });
       if (
         hostEnvResult &&
