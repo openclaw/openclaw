@@ -9,6 +9,13 @@ OpenClaw already has a powerful plugin system; the problem we kept hitting in pr
 
 This repository is the *core fork* (the runtime + loader). Plugins live in a separate repo (see below).
 
+## Canonical Polytropos README
+
+For Polytropos-specific documentation, treat **this file** as the canonical readme.
+
+- `README.md` is retained primarily as the upstream OpenClaw README (with a small Polytropos header).
+- Polytropos docs live under `docs/polytropos/`.
+
 ---
 
 ## Repos
