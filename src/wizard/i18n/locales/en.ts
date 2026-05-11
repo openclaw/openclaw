@@ -432,11 +432,15 @@ export const en = {
       scanDenied: "User denied authorization. Falling back to manual input.",
       scanError: "Registration error: {error}. Falling back to manual input.",
       scanExpired: "Session expired. Falling back to manual input.",
-      scanQr: "Scan the QR with Lark/Feishu on your phone.",
+      scanQr:
+        "Scan the QR with Lark/Feishu on your phone. If the mobile app does not react, rerun setup and choose manual input.",
       scanTimedOut: "Scan timed out. Falling back to manual input.",
       scanTitle: "Feishu scan-to-create",
       scanUnavailable:
         "Scan-to-create is not available in this environment. Falling back to manual input.",
+      setupMethodManual: "Enter App ID and App Secret manually",
+      setupMethodPrompt: "How do you want to connect Feishu?",
+      setupMethodScan: "Scan a QR code to create a bot automatically",
       setupTitle: "Feishu setup",
     },
     telegram: {

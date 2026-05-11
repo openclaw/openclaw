@@ -1,4 +1,5 @@
 import {
+  t,
   type ChannelSetupWizard,
   type OpenClawConfig,
   type WizardPrompter,
@@ -55,20 +56,20 @@ async function promptDiscordAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: resolveDefaultDiscordSetupAccountId(params.cfg),
     resolveAccount: (cfg, accountId) => resolveDiscordSetupAccountConfig({ cfg, accountId }),
-    noteTitle: "Discord allowlist",
+    noteTitle: t("wizard.discord.allowlistTitle"),
     noteLines: [
-      "Allowlist Discord DMs by username (we resolve to user ids).",
-      "Examples:",
+      t("wizard.discord.allowlistIntro"),
+      t("wizard.discord.examples"),
       "- 123456789012345678",
       "- @alice",
       "- alice#1234",
-      "Multiple entries: comma-separated.",
-      `Docs: ${formatDocsLink("/discord", "discord")}`,
+      t("wizard.discord.multipleEntries"),
+      t("wizard.channels.docs", { link: formatDocsLink("/discord", "discord") }),
     ],
-    message: "Discord allowFrom (usernames or ids)",
+    message: t("wizard.discord.allowFromPrompt"),
     placeholder: "@alice, 123456789012345678",
     parseId: parseDiscordAllowFromId,
-    invalidWithoutTokenNote: "Bot token missing; use numeric user ids (or mention form) only.",
+    invalidWithoutTokenNote: t("wizard.discord.allowFromInvalidWithoutToken"),
     resolveExisting: (account, cfg) =>
       resolveDiscordAccountAllowFrom({ cfg, accountId: account.accountId }) ?? [],
     resolveToken: (account) =>

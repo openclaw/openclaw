@@ -14,6 +14,7 @@ import {
   promptParsedAllowFromForAccount,
   setAccountAllowFromForChannel,
   setSetupChannelEnabled,
+  t,
   type OpenClawConfig,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -195,10 +196,10 @@ export const imessageSetupAdapter: ChannelSetupAdapter = createPatchedAccountSet
 });
 
 export const imessageSetupStatusBase = {
-  configuredLabel: "configured",
-  unconfiguredLabel: "needs setup",
-  configuredHint: "imsg found",
-  unconfiguredHint: "imsg missing",
+  configuredLabel: t("wizard.channels.statusConfigured"),
+  unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+  configuredHint: t("wizard.imessage.imsgFound"),
+  unconfiguredHint: t("wizard.imessage.imsgMissing"),
   configuredScore: 1,
   unconfiguredScore: 0,
   resolveConfigured: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string }) =>

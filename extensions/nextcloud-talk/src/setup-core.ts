@@ -10,6 +10,7 @@ import {
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
+  t,
   type ChannelSetupDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -116,14 +117,16 @@ async function promptNextcloudTalkAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: params.accountId,
     prompter: params.prompter,
-    noteTitle: "Nextcloud Talk user id",
+    noteTitle: t("wizard.nextcloudTalk.userIdTitle"),
     noteLines: [
-      "1) Check the Nextcloud admin panel for user IDs",
-      "2) Or look at the webhook payload logs when someone messages",
-      "3) User IDs are typically lowercase usernames in Nextcloud",
-      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "nextcloud-talk")}`,
+      t("wizard.nextcloudTalk.userIdHelpAdmin"),
+      t("wizard.nextcloudTalk.userIdHelpLogs"),
+      t("wizard.nextcloudTalk.userIdHelpLowercase"),
+      t("wizard.channels.docs", {
+        link: formatDocsLink("/channels/nextcloud-talk", "nextcloud-talk"),
+      }),
     ],
-    message: "Nextcloud Talk allowFrom (user id)",
+    message: t("wizard.nextcloudTalk.allowFromPrompt"),
     placeholder: "username",
     parseEntries: (raw) => ({
       entries: raw

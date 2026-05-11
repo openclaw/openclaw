@@ -3,6 +3,7 @@ import {
   setSetupChannelEnabled,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
+import { t } from "openclaw/plugin-sdk/setup-runtime";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { listSignalAccountIds, resolveSignalAccount } from "./accounts.js";
 import { installSignalCli } from "./install-signal-cli.js";
@@ -20,10 +21,10 @@ export const signalSetupWizard: ChannelSetupWizard = {
   status: createDetectedBinaryStatus({
     channelLabel: "Signal",
     binaryLabel: "signal-cli",
-    configuredLabel: "configured",
-    unconfiguredLabel: "needs setup",
-    configuredHint: "signal-cli found",
-    unconfiguredHint: "signal-cli missing",
+    configuredLabel: t("wizard.channels.statusConfigured"),
+    unconfiguredLabel: t("wizard.channels.statusNeedsSetup"),
+    configuredHint: t("wizard.channels.statusSignalCliFound"),
+    unconfiguredHint: t("wizard.channels.statusSignalCliMissing"),
     configuredScore: 1,
     unconfiguredScore: 0,
     resolveConfigured: ({ cfg, accountId }) =>
@@ -47,9 +48,7 @@ export const signalSetupWizard: ChannelSetupWizard = {
       "signal-cli";
     const cliDetected = await detectBinary(currentCliPath);
     const wantsInstall = await prompter.confirm({
-      message: cliDetected
-        ? "signal-cli detected. Reinstall/update now?"
-        : "signal-cli not found. Install now?",
+      message: cliDetected ? t("wizard.signal.reinstallPrompt") : t("wizard.signal.installPrompt"),
       initialValue: !cliDetected,
     });
     if (!wantsInstall) {

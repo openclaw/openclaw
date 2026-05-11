@@ -1,3 +1,4 @@
+import { t } from "openclaw/plugin-sdk/setup-runtime";
 import {
   applyTlonSetupConfig,
   createTlonSetupWizardBase,
@@ -30,8 +31,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
     let dangerouslyAllowPrivateNetwork = resolved.dangerouslyAllowPrivateNetwork ?? false;
     if (isBlockedUrbitHostname(validatedUrl.hostname)) {
       dangerouslyAllowPrivateNetwork = await prompter.confirm({
-        message:
-          "Ship URL looks like a private/internal host. Allow private network access? (SSRF risk)",
+        message: t("wizard.tlon.privateNetworkPrompt"),
         initialValue: dangerouslyAllowPrivateNetwork,
       });
       if (!dangerouslyAllowPrivateNetwork) {
@@ -46,12 +46,12 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
 
     const currentGroups = resolved.groupChannels;
     const wantsGroupChannels = await prompter.confirm({
-      message: "Add group channels manually? (optional)",
+      message: t("wizard.tlon.addGroupsPrompt"),
       initialValue: currentGroups.length > 0,
     });
     if (wantsGroupChannels) {
       const entry = await prompter.text({
-        message: "Group channels (comma-separated)",
+        message: t("wizard.tlon.groupChannelsPrompt"),
         placeholder: "chat/~host-ship/general, chat/~host-ship/support",
         initialValue: currentGroups.join(", ") || undefined,
       });
@@ -64,12 +64,12 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
 
     const currentAllowlist = resolved.dmAllowlist;
     const wantsAllowlist = await prompter.confirm({
-      message: "Restrict DMs with an allowlist?",
+      message: t("wizard.tlon.restrictDmsPrompt"),
       initialValue: currentAllowlist.length > 0,
     });
     if (wantsAllowlist) {
       const entry = await prompter.text({
-        message: "DM allowlist (comma-separated ship names)",
+        message: t("wizard.tlon.dmAllowlistPrompt"),
         placeholder: "~zod, ~nec",
         initialValue: currentAllowlist.join(", ") || undefined,
       });
@@ -83,7 +83,7 @@ export const tlonSetupWizard = createTlonSetupWizardBase({
     }
 
     const autoDiscoverChannels = await prompter.confirm({
-      message: "Enable auto-discovery of group channels?",
+      message: t("wizard.tlon.autoDiscoveryPrompt"),
       initialValue: resolved.autoDiscoverChannels ?? true,
     });
     next = applyTlonSetupConfig({
