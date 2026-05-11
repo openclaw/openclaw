@@ -217,7 +217,7 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     ).toBe(false);
   });
 
-  it("skips local cli auth for identity-less OAuth profiles when execution is prepared", () => {
+  it("skips local cli auth for identity-less OAuth profiles", () => {
     expect(
       shouldSkipLocalCliCredentialEpoch({
         authProfileId: "anthropic:claude-cli",
@@ -228,7 +228,22 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
         },
-        preparedExecution: { env: {} },
+        preparedExecution: undefined,
+      }),
+    ).toBe(true);
+  });
+
+  it("skips local cli auth for identity-less OAuth even without preparedExecution", () => {
+    expect(
+      shouldSkipLocalCliCredentialEpoch({
+        authProfileId: "anthropic:claude-cli",
+        authCredential: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "access-token",
+          refresh: "refresh-token",
+          expires: Date.now() + 60_000,
+        },
       }),
     ).toBe(true);
   });
@@ -245,15 +260,14 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           expires: Date.now() + 60_000,
           email: "user@example.com",
         },
-        preparedExecution: { env: {} },
+        preparedExecution: undefined,
       }),
     ).toBe(false);
   });
 
-  it("keeps local cli auth for identity-less OAuth when no execution is prepared", () => {
+  it("keeps local cli auth when no auth profile is selected", () => {
     expect(
       shouldSkipLocalCliCredentialEpoch({
-        authProfileId: "anthropic:claude-cli",
         authCredential: {
           type: "oauth",
           provider: "claude-cli",
@@ -261,7 +275,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
           refresh: "refresh-token",
           expires: Date.now() + 60_000,
         },
-        preparedExecution: null,
       }),
     ).toBe(false);
   });

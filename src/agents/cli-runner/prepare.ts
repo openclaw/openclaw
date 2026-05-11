@@ -91,12 +91,13 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
   // stable account identity (no email, no accountId), local credential file
   // presence should not flip the epoch. Both sides encode the same
   // identity-less constant, so the only observable change is file existence.
+  // Unlike profile-only mode, this does not require preparedExecution because
+  // the bundled claude-cli backend does not register prepareExecution.
   if (
     params.authProfileId &&
     params.authCredential?.type === "oauth" &&
     !params.authCredential.email &&
-    !params.authCredential.accountId &&
-    params.preparedExecution
+    !params.authCredential.accountId
   ) {
     return true;
   }
