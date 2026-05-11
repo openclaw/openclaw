@@ -34,7 +34,7 @@ describe("Slack message tools", () => {
       },
     });
 
-    expect(Object.keys(discovery).sort()).toEqual(["actions", "capabilities", "schema"]);
+    expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
     expect(discovery.actions).toEqual([
       "send",
       "react",
