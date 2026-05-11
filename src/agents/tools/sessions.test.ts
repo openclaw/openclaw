@@ -4,9 +4,19 @@ import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { extractAssistantText, sanitizeTextContent } from "./sessions-helpers.js";
 
 const callGatewayMock = vi.fn();
+const readSqliteSessionRoutingInfoMock = vi.fn();
 vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
+vi.mock("../../config/sessions/session-entries.sqlite.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-entries.sqlite.js")
+  >("../../config/sessions/session-entries.sqlite.js");
+  return {
+    ...actual,
+    readSqliteSessionRoutingInfo: (opts: unknown) => readSqliteSessionRoutingInfoMock(opts),
+  };
+});
 
 type SessionsToolTestConfig = {
   session: { scope: "per-sender"; mainKey: string };
@@ -116,7 +126,6 @@ const installRegistry = async () => {
             selectionLabel: "WhatsApp",
             docsPath: "/channels/whatsapp",
             blurb: "WhatsApp test stub.",
-            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
           messaging: {
@@ -140,7 +149,6 @@ const installRegistry = async () => {
             selectionLabel: "Slack",
             docsPath: "/channels/slack",
             blurb: "Slack test stub.",
-            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
@@ -199,6 +207,7 @@ describe("sanitizeTextContent", () => {
 
 beforeEach(() => {
   loadConfigMock.mockReset();
+  readSqliteSessionRoutingInfoMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },
     tools: { agentToAgent: { enabled: false } },
@@ -276,16 +285,31 @@ describe("extractAssistantText", () => {
 describe("resolveAnnounceTarget", () => {
   beforeEach(async () => {
     callGatewayMock.mockClear();
+    readSqliteSessionRoutingInfoMock.mockReset();
     await installRegistry();
   });
 
-  it("derives non-WhatsApp announce targets from the session key", async () => {
+  it("prefers typed sessions.list delivery context for announce targets", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:discord:group:dev",
+          deliveryContext: {
+            channel: "discord",
+            to: "group:dev",
+            accountId: "default",
+          },
+        },
+      ],
+    });
+
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "group:dev" });
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(target).toEqual({ channel: "discord", to: "group:dev", accountId: "default" });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
   it("hydrates WhatsApp accountId from sessions.list when available", async () => {
@@ -317,7 +341,7 @@ describe("resolveAnnounceTarget", () => {
     expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
-  it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
+  it("does not hydrate announce targets from legacy sessions.list route shadows", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
@@ -336,12 +360,7 @@ describe("resolveAnnounceTarget", () => {
       sessionKey: "agent:main:whatsapp:group:123@g.us",
       displayKey: "agent:main:whatsapp:group:123@g.us",
     });
-    expect(target).toEqual({
-      channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
-      threadId: "271",
-    });
+    expect(target).toBeNull();
   });
 
   it("keeps threadId from sessions.list delivery context for announce delivery", async () => {
@@ -371,7 +390,7 @@ describe("resolveAnnounceTarget", () => {
     });
   });
 
-  it("preserves threaded Slack session keys when sessions.list lacks stored thread metadata", async () => {
+  it("does not derive missing thread metadata from session keys", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
@@ -393,7 +412,7 @@ describe("resolveAnnounceTarget", () => {
       channel: "slack",
       to: "channel:C123",
       accountId: "workspace",
-      threadId: "1710000000.000100",
+      threadId: undefined,
     });
   });
 });
@@ -401,6 +420,7 @@ describe("resolveAnnounceTarget", () => {
 describe("sessions_list gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    readSqliteSessionRoutingInfoMock.mockReset();
     callGatewayMock.mockImplementation(
       (request: { method?: string; params?: { spawnedBy?: string } }) => {
         if (request.method === "sessions.list" && request.params?.spawnedBy) {
@@ -501,41 +521,10 @@ describe("sessions_list gating", () => {
   });
 });
 
-describe("sessions_list channel derivation", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-  });
-
-  it("falls back to origin.provider when the legacy top-level channel field is missing", async () => {
-    callGatewayMock.mockResolvedValueOnce({
-      databasePath: "/tmp/openclaw-agent.sqlite",
-      sessions: [
-        {
-          key: "agent:main:discord:group:ops",
-          kind: "group",
-          origin: { provider: "discord" },
-        },
-      ],
-    });
-    const result = await executeMainSessionsList();
-
-    const details = requireDetails(result);
-    const session = requireSessions(details)[0];
-    expect(session?.key).toBe("agent:main:discord:group:ops");
-    expect(session?.channel).toBe("discord");
-  });
-});
-
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();
+    readSqliteSessionRoutingInfoMock.mockReset();
   });
 
   it("returns an error when neither sessionKey nor label is provided", async () => {
@@ -585,7 +574,7 @@ describe("sessions_send gating", () => {
     expect(requireDetails(result).status).toBe("forbidden");
   });
 
-  it("rejects direct thread session targets before dispatching an agent run", async () => {
+  it("rejects typed thread session targets before dispatching an agent run", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -594,6 +583,9 @@ describe("sessions_send gating", () => {
       },
     });
     const threadSessionKey = "agent:main:slack:channel:C123:thread:1710000000.000100";
+    readSqliteSessionRoutingInfoMock.mockReturnValueOnce({
+      conversationThreadId: "1710000000.000100",
+    });
     const tool = createMainSessionsSendTool();
 
     const result = await tool.execute("call-thread-target", {
@@ -611,7 +603,7 @@ describe("sessions_send gating", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
-  it("rejects label targets that resolve to canonical thread sessions", async () => {
+  it("rejects label targets that resolve to typed thread sessions", async () => {
     loadConfigMock.mockReturnValue({
       session: { scope: "per-sender", mainKey: "main" },
       tools: {
@@ -620,6 +612,9 @@ describe("sessions_send gating", () => {
       },
     });
     const threadSessionKey = "agent:main:discord:channel:123456:thread:987654";
+    readSqliteSessionRoutingInfoMock.mockReturnValueOnce({
+      conversationThreadId: "987654",
+    });
     callGatewayMock.mockResolvedValueOnce({ key: threadSessionKey });
     const tool = createMainSessionsSendTool();
 
