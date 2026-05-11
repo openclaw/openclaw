@@ -93,6 +93,42 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("skips explicit cacheRetention for OpenRouter provider on a non-OpenRouter baseUrl", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+        "https://my-custom-proxy.example.com/v1",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("honours explicit cacheRetention for OpenRouter provider on the default (unset) baseUrl", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+        undefined,
+      ),
+    ).toBe("long");
+  });
+
+  it("honours explicit cacheRetention for OpenRouter provider with openrouter.ai baseUrl", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "openrouter",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+        "https://openrouter.ai/api/v1",
+      ),
+    ).toBe("long");
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({

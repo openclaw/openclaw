@@ -1,4 +1,5 @@
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import {
   isAnthropicModelRef,
   resolveAnthropicCacheRetentionFamily,
@@ -22,6 +23,7 @@ export function resolveCacheRetention(
   provider: string,
   modelApi?: string,
   modelId?: string,
+  baseUrl?: string,
 ): CacheRetention | undefined {
   const hasExplicitCacheConfig =
     extraParams?.cacheRetention !== undefined || extraParams?.cacheControlTtl !== undefined;
@@ -34,12 +36,22 @@ export function resolveCacheRetention(
   });
   const googleEligible = isGooglePromptCacheEligible({ modelApi, modelId });
 
-  // Determine if this is a verified OpenRouter→Anthropic route.
-  // OpenRouter uses the "openai-completions" API and the model ref
-  // starts with "anthropic/". This mirrors the endpoint-class +
-  // model-ref check in createOpenRouterSystemCacheWrapper.
+  // Determine if this is a verified OpenRouter→Anthropic route using
+  // the same endpoint-class gate as createOpenRouterSystemCacheWrapper.
+  // This prevents cacheRetention from leaking to arbitrary OpenAI proxies
+  // when the OpenRouter provider is repointed at a custom baseUrl.
+  const endpointClass = resolveProviderRequestPolicy({
+    provider,
+    api: modelApi,
+    baseUrl,
+    capability: "llm",
+    transport: "stream",
+  }).endpointClass;
   const isOpenRouterAnthropicRoute =
-    provider === "openrouter" && modelId != null && isAnthropicModelRef(modelId);
+    (endpointClass === "openrouter" ||
+      (endpointClass === "default" && provider === "openrouter")) &&
+    modelId != null &&
+    isAnthropicModelRef(modelId);
 
   const isEligible = !!family || googleEligible || isOpenRouterAnthropicRoute;
 
