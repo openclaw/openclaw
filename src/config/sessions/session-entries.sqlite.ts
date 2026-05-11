@@ -57,9 +57,10 @@ type SessionEntriesTable = OpenClawAgentKyselyDatabase["session_entries"];
 type SessionsTable = OpenClawAgentKyselyDatabase["sessions"];
 type ConversationsTable = OpenClawAgentKyselyDatabase["conversations"];
 type SessionConversationsTable = OpenClawAgentKyselyDatabase["session_conversations"];
+type SessionRoutesTable = OpenClawAgentKyselyDatabase["session_routes"];
 type SessionEntriesDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "conversations" | "session_conversations" | "session_entries" | "sessions"
+  "conversations" | "session_conversations" | "session_entries" | "session_routes" | "sessions"
 >;
 
 type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "session_key"> &
@@ -86,6 +87,7 @@ type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "ses
   };
 type BoundSessionEntryRow = {
   entry: Insertable<SessionEntriesTable>;
+  route: Insertable<SessionRoutesTable>;
   session: Insertable<SessionsTable>;
   conversations: readonly ConversationIdentity[];
 };
@@ -220,11 +222,12 @@ function selectSessionEntryRows(
   db: ReturnType<typeof getNodeSqliteKysely<SessionEntriesDatabase>>,
 ) {
   return db
-    .selectFrom("session_entries as se")
+    .selectFrom("session_routes as sr")
+    .innerJoin("session_entries as se", "se.session_id", "sr.session_id")
     .innerJoin("sessions as s", "s.session_id", "se.session_id")
     .leftJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
     .select([
-      "se.session_key as session_key",
+      "sr.session_key as session_key",
       "se.entry_json as entry_json",
       "se.updated_at as updated_at",
       "s.session_id as typed_session_id",
@@ -372,9 +375,14 @@ function bindSessionEntry(params: {
     session,
     conversations: uniqueConversations,
     entry: {
+      session_id: session.session_id,
+      session_key: params.sessionKey,
+      entry_json: serializeSessionEntry(params.sessionKey, params.entry),
+      updated_at: session.updated_at,
+    },
+    route: {
       session_key: params.sessionKey,
       session_id: session.session_id,
-      entry_json: serializeSessionEntry(params.sessionKey, params.entry),
       updated_at: session.updated_at,
     },
   };
@@ -568,11 +576,23 @@ function upsertSessionEntries(
   executeSqliteQuerySync(
     database.db,
     db
-      .insertInto("session_entries")
-      .values(rows.map((row) => row.entry))
+      .insertInto("session_routes")
+      .values(rows.map((row) => row.route))
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
           session_id: (eb) => eb.ref("excluded.session_id"),
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+        }),
+      ),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .insertInto("session_entries")
+      .values(rows.map((row) => row.entry))
+      .onConflict((conflict) =>
+        conflict.column("session_id").doUpdateSet({
+          session_key: (eb) => eb.ref("excluded.session_key"),
           entry_json: (eb) => eb.ref("excluded.entry_json"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
         }),
@@ -584,7 +604,7 @@ function countSessionEntryRows(database: OpenClawAgentDatabase): number {
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_entries").select((eb) => eb.fn.countAll<number | bigint>().as("count")),
+    db.selectFrom("session_routes").select((eb) => eb.fn.countAll<number | bigint>().as("count")),
   );
   const count = row?.count ?? 0;
   return typeof count === "bigint" ? Number(count) : count;
@@ -597,7 +617,7 @@ function readProjectedSqliteSessionEntry(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    selectSessionEntryRows(db).where("se.session_key", "=", sessionKey),
+    selectSessionEntryRows(db).where("sr.session_key", "=", sessionKey),
   );
   return row ? projectTypedSessionColumns(row) : null;
 }
@@ -660,7 +680,7 @@ export function readSqliteSessionEntry(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    selectSessionEntryRows(db).where("se.session_key", "=", options.sessionKey),
+    selectSessionEntryRows(db).where("sr.session_key", "=", options.sessionKey),
   );
   return row ? (projectTypedSessionColumns(row) ?? undefined) : undefined;
 }
@@ -687,7 +707,8 @@ export function readSqliteSessionDeliveryContext(
   const primaryRow = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions as s")
+      .selectFrom("session_routes as sr")
+      .innerJoin("sessions as s", "s.session_id", "sr.session_id")
       .innerJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
       .select([
         "c.channel as channel",
@@ -695,7 +716,7 @@ export function readSqliteSessionDeliveryContext(
         "c.peer_id as peer_id",
         "c.thread_id as thread_id",
       ])
-      .where("s.session_key", "=", options.sessionKey),
+      .where("sr.session_key", "=", options.sessionKey),
   );
   if (primaryRow) {
     return deliveryContextFromTypedRow(primaryRow);
@@ -703,7 +724,8 @@ export function readSqliteSessionDeliveryContext(
   const linkedRow = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions as s")
+      .selectFrom("session_routes as sr")
+      .innerJoin("sessions as s", "s.session_id", "sr.session_id")
       .innerJoin("session_conversations as sc", "sc.session_id", "s.session_id")
       .innerJoin("conversations as c", "c.conversation_id", "sc.conversation_id")
       .select([
@@ -712,7 +734,7 @@ export function readSqliteSessionDeliveryContext(
         "c.peer_id as peer_id",
         "c.thread_id as thread_id",
       ])
-      .where("s.session_key", "=", options.sessionKey)
+      .where("sr.session_key", "=", options.sessionKey)
       .orderBy("sc.role", "asc")
       .orderBy("sc.last_seen_at", "desc"),
   );
@@ -730,7 +752,8 @@ export function readSqliteSessionRoutingInfo(
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
     db
-      .selectFrom("sessions as s")
+      .selectFrom("session_routes as sr")
+      .innerJoin("sessions as s", "s.session_id", "sr.session_id")
       .leftJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
       .select([
         "s.session_scope as session_scope",
@@ -742,7 +765,7 @@ export function readSqliteSessionRoutingInfo(
         "c.peer_id as conversation_peer_id",
         "c.thread_id as conversation_thread_id",
       ])
-      .where("s.session_key", "=", options.sessionKey),
+      .where("sr.session_key", "=", options.sessionKey),
   );
   return row
     ? {
@@ -766,7 +789,7 @@ export function deleteSqliteSessionEntry(
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("session_entries")
+        .selectFrom("session_routes")
         .select("session_id")
         .where("session_key", "=", options.sessionKey),
     );
@@ -788,7 +811,7 @@ export function listSqliteSessionEntries(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    selectSessionEntryRows(db).orderBy("s.updated_at", "desc").orderBy("se.session_key", "asc"),
+    selectSessionEntryRows(db).orderBy("s.updated_at", "desc").orderBy("sr.session_key", "asc"),
   ).rows;
   return rows.flatMap((row) => {
     const entry = projectTypedSessionColumns(row);
@@ -803,7 +826,7 @@ export function loadSqliteSessionEntries(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    selectSessionEntryRows(db).orderBy("se.session_key", "asc"),
+    selectSessionEntryRows(db).orderBy("sr.session_key", "asc"),
   ).rows;
   const entries: Record<string, SessionEntry> = {};
   for (const row of rows) {

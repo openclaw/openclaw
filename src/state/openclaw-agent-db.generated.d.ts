@@ -52,7 +52,7 @@ export interface MemoryEmbeddingCache {
 }
 
 export interface MemoryIndexChunks {
-  embedding: Uint8Array;
+  embedding: Uint8Array | null;
   embedding_dims: number | null;
   end_line: number;
   hash: string;
@@ -122,6 +122,12 @@ export interface SessionConversations {
 
 export interface SessionEntries {
   entry_json: string;
+  session_id: string;
+  session_key: string;
+  updated_at: number;
+}
+
+export interface SessionRoutes {
   session_id: string;
   session_key: string;
   updated_at: number;
@@ -214,6 +220,7 @@ export interface DB {
   schema_meta: SchemaMeta;
   session_conversations: SessionConversations;
   session_entries: SessionEntries;
+  session_routes: SessionRoutes;
   sessions: Sessions;
   tool_artifacts: ToolArtifacts;
   trajectory_runtime_events: TrajectoryRuntimeEvents;

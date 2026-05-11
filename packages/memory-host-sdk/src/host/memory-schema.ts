@@ -83,7 +83,7 @@ export function ensureMemoryIndexSchema(params: {
         hash TEXT NOT NULL,
         model TEXT NOT NULL,
         text TEXT NOT NULL,
-        embedding BLOB NOT NULL,
+        embedding BLOB,
         embedding_dims INTEGER,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY (source_kind, source_key)

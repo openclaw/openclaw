@@ -352,7 +352,7 @@ export abstract class MemoryManagerSyncOps {
 
   protected openDatabase(): DatabaseSync {
     const dbPath = resolveUserPath(this.settings.store.databasePath);
-    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled);
+    return openMemoryDatabaseAtPath(dbPath, this.settings.store.vector.enabled, this.agentId);
   }
 
   protected ensureSchema() {

@@ -28,7 +28,10 @@ vi.mock("../config.js", async () => ({
 }));
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-skills-strip-" });
-type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
+type SessionEntriesTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_entries" | "session_routes" | "sessions"
+>;
 
 function makeFixtureSkill(name: string, bodySize = 3000): Skill {
   // 3KB body simulates a realistic SKILL.md.
@@ -93,7 +96,11 @@ describe("session entry persistence strips resolvedSkills", () => {
     const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
-      db.selectFrom("session_entries").select("entry_json").where("session_key", "=", sessionKey),
+      db
+        .selectFrom("session_routes as sr")
+        .innerJoin("session_entries as se", "se.session_id", "sr.session_id")
+        .select("se.entry_json as entry_json")
+        .where("sr.session_key", "=", sessionKey),
     );
     return row?.entry_json;
   }
@@ -122,9 +129,17 @@ describe("session entry persistence strips resolvedSkills", () => {
     executeSqliteQuerySync(
       database.db,
       db.insertInto("session_entries").values({
+        session_id: entry.sessionId,
+        session_key: sessionKey,
+        entry_json: JSON.stringify(entry),
+        updated_at: updatedAt,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_routes").values({
         session_key: sessionKey,
         session_id: entry.sessionId,
-        entry_json: JSON.stringify(entry),
         updated_at: updatedAt,
       }),
     );

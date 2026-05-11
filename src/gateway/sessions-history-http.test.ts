@@ -22,7 +22,10 @@ installGatewayTestHooks();
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const AGENT_ID = "main";
-type SessionHistoryTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
+type SessionHistoryTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_entries" | "session_routes" | "sessions"
+>;
 
 async function configureSessionRowTarget(): Promise<void> {
   await seedGatewaySessionEntries({ entries: {} });
@@ -365,10 +368,26 @@ describe("session history HTTP endpoints", () => {
           executeSqliteQuerySync(
             database.db,
             db
-              .insertInto("session_entries")
+              .insertInto("session_routes")
               .values({
                 session_key: row.sessionKey,
                 session_id: row.sessionId,
+                updated_at: row.updatedAt,
+              })
+              .onConflict((conflict) =>
+                conflict.column("session_key").doUpdateSet({
+                  session_id: (eb) => eb.ref("excluded.session_id"),
+                  updated_at: (eb) => eb.ref("excluded.updated_at"),
+                }),
+              ),
+          );
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .insertInto("session_entries")
+              .values({
+                session_id: row.sessionId,
+                session_key: row.sessionKey,
                 entry_json: JSON.stringify({
                   sessionId: row.sessionId,
                   updatedAt: row.updatedAt,
@@ -376,8 +395,8 @@ describe("session history HTTP endpoints", () => {
                 updated_at: row.updatedAt,
               })
               .onConflict((conflict) =>
-                conflict.column("session_key").doUpdateSet({
-                  session_id: (eb) => eb.ref("excluded.session_id"),
+                conflict.column("session_id").doUpdateSet({
+                  session_key: (eb) => eb.ref("excluded.session_key"),
                   entry_json: (eb) => eb.ref("excluded.entry_json"),
                   updated_at: (eb) => eb.ref("excluded.updated_at"),
                 }),

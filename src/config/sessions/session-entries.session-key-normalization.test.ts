@@ -13,7 +13,10 @@ import type { SessionEntry } from "./types.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
-type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
+type SessionEntriesTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "session_entries" | "session_routes" | "sessions"
+>;
 
 function createInboundContext(): MsgContext {
   return {
@@ -87,9 +90,17 @@ describe("SQLite session row key normalization", () => {
     executeSqliteQuerySync(
       database.db,
       db.insertInto("session_entries").values({
+        session_id: entry.sessionId,
+        session_key: sessionKey,
+        entry_json: JSON.stringify(entry),
+        updated_at: updatedAt,
+      }),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_routes").values({
         session_key: sessionKey,
         session_id: entry.sessionId,
-        entry_json: JSON.stringify(entry),
         updated_at: updatedAt,
       }),
     );

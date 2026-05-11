@@ -277,7 +277,7 @@ describe("memory index", () => {
     missingMessage = "manager missing",
   ): MemoryIndexManager {
     if (!result.manager) {
-      throw new Error(missingMessage);
+      throw new Error(result.error ? `${missingMessage}: ${result.error}` : missingMessage);
     }
     return result.manager as unknown as MemoryIndexManager;
   }
@@ -372,8 +372,18 @@ describe("memory index", () => {
     const agentDbPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
     const agentDb = openOpenClawAgentDatabase({ agentId: "main" });
     agentDb.db
-      .prepare("INSERT INTO session_entries (session_key, entry_json, updated_at) VALUES (?, ?, ?)")
-      .run("agent:main:test", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
+      .prepare(
+        "INSERT INTO sessions (session_id, session_key, created_at, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("keep-me", "agent:main:test", 1, 1);
+    agentDb.db
+      .prepare("INSERT INTO session_routes (session_key, session_id, updated_at) VALUES (?, ?, ?)")
+      .run("agent:main:test", "keep-me", 1);
+    agentDb.db
+      .prepare(
+        "INSERT INTO session_entries (session_id, session_key, entry_json, updated_at) VALUES (?, ?, ?, ?)",
+      )
+      .run("keep-me", "agent:main:test", JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }), 1);
     closeOpenClawAgentDatabasesForTest();
 
     const cfg: TestCfg = {

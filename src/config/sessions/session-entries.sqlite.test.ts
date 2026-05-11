@@ -41,6 +41,7 @@ type SessionEntriesTestDatabase = Pick<
   | "memory_index_sources"
   | "session_conversations"
   | "session_entries"
+  | "session_routes"
   | "sessions"
 >;
 
@@ -631,7 +632,7 @@ describe("SQLite session row backend", () => {
     });
   });
 
-  it("allows one durable route key to rotate across session ids", () => {
+  it("keeps one active route while preserving rotated session roots", () => {
     const stateDir = createTempDir();
     const env = { OPENCLAW_STATE_DIR: stateDir };
 
@@ -659,6 +660,27 @@ describe("SQLite session row backend", () => {
         database.db,
         db
           .selectFrom("sessions")
+          .select(["session_id", "session_key"])
+          .orderBy("updated_at", "asc"),
+      ).rows,
+    ).toEqual([
+      { session_id: "first-session", session_key: "discord:ops" },
+      { session_id: "second-session", session_key: "discord:ops" },
+    ]);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_routes")
+          .select(["session_key", "session_id"])
+          .orderBy("session_key", "asc"),
+      ).rows,
+    ).toEqual([{ session_key: "discord:ops", session_id: "second-session" }]);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("session_entries")
           .select(["session_id", "session_key"])
           .orderBy("updated_at", "asc"),
       ).rows,

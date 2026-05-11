@@ -236,10 +236,13 @@ The branch already has a real shared SQLite base:
 - Per-agent session identity now has a canonical `sessions` root table keyed by
   `session_id`, with `session_key`, `session_scope`, `account_id`,
   `primary_conversation_id`, timestamps, display fields, model metadata,
-  harness id, and parent/spawn linkage as queryable columns. The old
-  `session_entries.entry_json` compatibility-shaped payload hangs off that root
-  by foreign key; it is no longer the only schema-level representation of a
-  session.
+  harness id, and parent/spawn linkage as queryable columns. `session_routes`
+  is the unique active route index from `session_key` to the current
+  `session_id`, so a route key can move to a fresh durable session without
+  making hot reads pick between duplicate `sessions.session_key` rows. The old
+  `session_entries.entry_json` compatibility-shaped payload hangs off the
+  durable `session_id` root by foreign key; it is no longer the only
+  schema-level representation of a session.
 - Per-agent external conversation identity is relational too:
   `conversations` stores normalized provider/account/conversation identity, and
   `session_conversations` links one OpenClaw session to one or more external
@@ -1345,7 +1348,8 @@ schema_meta(meta_key, role, schema_version, agent_id, app_version, created_at, u
 sessions(session_id, session_key, session_scope, created_at, updated_at, started_at, ended_at, status, chat_type, channel, account_id, primary_conversation_id, model_provider, model, agent_harness_id, parent_session_key, spawned_by, display_name)
 conversations(conversation_id, channel, account_id, kind, peer_id, parent_conversation_id, thread_id, native_channel_id, native_direct_user_id, label, metadata_json, created_at, updated_at)
 session_conversations(session_id, conversation_id, role, first_seen_at, last_seen_at)
-session_entries(session_key, session_id, entry_json, updated_at)
+session_routes(session_key, session_id, updated_at)
+session_entries(session_id, session_key, entry_json, updated_at)
 transcript_events(session_id, seq, event_json, created_at)
 transcript_event_identities(session_id, event_id, seq, event_type, has_parent, parent_id, message_idempotency_key, created_at)
 transcript_snapshots(session_id, snapshot_id, reason, event_count, created_at, metadata_json)
@@ -1605,7 +1609,8 @@ the agent DB instead of deriving file paths directly.
 The agent DB owns:
 
 - `sessions` as the canonical session root, with `session_entries` as the
-  compatibility-shaped payload table attached to that root
+  compatibility-shaped payload table attached to that root, and
+  `session_routes` as the unique active `session_key` lookup
 - `conversations` and `session_conversations` as the normalized provider
   routing identity attached to sessions
 - `transcript_events`
