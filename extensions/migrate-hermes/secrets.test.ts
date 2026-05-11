@@ -25,6 +25,16 @@ async function expectMissingPath(filePath: string): Promise<void> {
   throw new Error(`expected missing path: ${filePath}`);
 }
 
+async function expectMissingPath(filePath: string): Promise<void> {
+  try {
+    await fs.access(filePath);
+  } catch (error) {
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`expected missing path: ${filePath}`);
+}
+
 describe("Hermes migration secret items", () => {
   afterEach(async () => {
     await cleanupTempRoots();
