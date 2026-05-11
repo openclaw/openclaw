@@ -283,6 +283,47 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
+  it("reports browser security errors from WebSocket construction without retrying", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    class ThrowingWebSocket {
+      static OPEN = 1;
+
+      constructor(_url: string) {
+        const err = new Error("Cannot connect due to a security error.");
+        err.name = "SecurityError";
+        throw err;
+      }
+    }
+    vi.stubGlobal("WebSocket", ThrowingWebSocket);
+
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+
+    expect(() => client.start()).not.toThrow();
+    expect(onClose).toHaveBeenCalledWith({
+      code: 1006,
+      reason: "security error",
+      error: expect.objectContaining({
+        code: "BROWSER_WEBSOCKET_SECURITY_ERROR",
+        message: expect.stringContaining("Use wss://"),
+        details: expect.objectContaining({
+          code: "BROWSER_WEBSOCKET_SECURITY_ERROR",
+          browserErrorName: "SecurityError",
+        }),
+      }),
+    });
+    expect(wsInstances).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
   it("reports request timing for attributed RPC latency", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
