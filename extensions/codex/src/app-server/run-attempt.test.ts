@@ -2895,6 +2895,18 @@ describe("runCodexAppServerAttempt", () => {
     });
 
     await harness.waitForMethod("turn/start");
+    await harness.handleServerRequest({
+      id: "request-tool-1",
+      method: "item/tool/call",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        callId: "call-1",
+        namespace: null,
+        tool: "message",
+        arguments: { action: "send", text: "already sent" },
+      },
+    });
     await harness.notify({
       method: "rawResponseItem/completed",
       params: {
@@ -2920,6 +2932,58 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.timedOut).toBe(false);
     expect(result.promptError).toBeNull();
     expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+  });
+
+  it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
+    const harness = createStartedThreadHarness();
+    const run = runCodexAppServerAttempt(
+      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
+      { turnTerminalIdleTimeoutMs: 60_000 },
+    );
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "rawResponseItem/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "user-prompt-1",
+          type: "message",
+          role: "user",
+          content: [
+            {
+              type: "input_text",
+              text: "What does <turn_aborted> mean?",
+            },
+          ],
+        },
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(resolved).toBe(false);
+
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-1", text: "It marks an interrupted turn." }],
+        },
+      },
+    });
+
+    const result = await run;
+    expect(resolved).toBe(true);
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.assistantTexts).toEqual(["It marks an interrupted turn."]);
   });
 
   it("releases completion when a projector callback throws during turn/completed", async () => {
