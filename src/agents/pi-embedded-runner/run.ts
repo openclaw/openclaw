@@ -2500,15 +2500,6 @@ export async function runEmbeddedPiAgent(
           });
           const timedOutDuringPrompt =
             timedOut && !timedOutDuringCompaction && !timedOutDuringToolExecution;
-          const hasPartialAssistantTextAfterPromptTimeout =
-            timedOutDuringPrompt &&
-            (attempt.assistantTexts ?? []).some((text) => text.trim().length > 0) &&
-            !attempt.clientToolCalls &&
-            !attempt.yieldDetected &&
-            !attempt.didSendViaMessagingTool &&
-            !attempt.didSendDeterministicApprovalPrompt &&
-            !attempt.lastToolError &&
-            (attempt.toolMetas?.length ?? 0) === 0;
           const attemptToolSummary = buildTraceToolSummary({
             toolMetas: attempt.toolMetas,
             hadFailure: Boolean(attempt.lastToolError),
@@ -2519,12 +2510,12 @@ export async function runEmbeddedPiAgent(
           });
 
           // Timeout aborts can leave the run without payloads or with only a
-          // partial assistant fragment. Emit an explicit timeout error instead.
+          // partial assistant fragment. Emit an explicit timeout error instead,
+          // preserving any tool payloads that succeeded before the timeout.
           if (
-            timedOutDuringPrompt &&
-            !hasMessagingToolDeliveryEvidence(attempt) &&
-            (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
-          ) {
+              timedOutDuringPrompt &&
+              !hasMessagingToolDeliveryEvidence(attempt)
+            ) {
             const timeoutText = idleTimedOut
               ? "The model did not produce a response before the model idle timeout. " +
                 "Please try again, or increase `models.providers.<id>.timeoutSeconds` for slow local or self-hosted providers."
@@ -2532,7 +2523,7 @@ export async function runEmbeddedPiAgent(
                 "Please try again, or increase `agents.defaults.timeoutSeconds` in your config.";
             const replayInvalid = resolveReplayInvalidForAttempt(null);
             const livenessState = resolveRunLivenessState({
-              payloadCount: hasPartialAssistantTextAfterPromptTimeout ? 0 : payloads.length,
+              payloadCount: payloads.length,
               aborted,
               timedOut,
               attempt,
@@ -2544,6 +2535,7 @@ export async function runEmbeddedPiAgent(
             });
             return {
               payloads: [
+                ...(payloadsWithToolMedia || []),
                 {
                   text: timeoutText,
                   isError: true,
