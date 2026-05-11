@@ -111,6 +111,21 @@ function requireFirstMockCallArg(mock: unknown, label: string) {
   return requireRecord(call[0], `${label} argument`);
 }
 
+function loggerMessages(spy: unknown): string[] {
+  const calls = (spy as { mock?: { calls?: unknown[][] } }).mock?.calls ?? [];
+  return calls
+    .map((call) => call[0])
+    .filter((message): message is string => typeof message === "string");
+}
+
+function expectLoggerMessageContaining(spy: unknown, text: string): void {
+  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(true);
+}
+
+function expectNoLoggerMessageContaining(spy: unknown, text: string): void {
+  expect(loggerMessages(spy).some((message) => message.includes(text))).toBe(false);
+}
+
 function expectRecoveryCall(
   recoverStuckSession: unknown,
   fields: Record<string, unknown>,
@@ -434,10 +449,8 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work_without_progress",
       activeWorkKind: "embedded_run",
     });
-    expect(warnSpy).toHaveBeenCalledWith(
-      expect.stringContaining("lastProgress=embedded_run:started"),
-    );
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("lastProgressAge=60s"));
+    expectLoggerMessageContaining(warnSpy, "lastProgress=embedded_run:started");
+    expectLoggerMessageContaining(warnSpy, "lastProgressAge=60s");
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
@@ -467,7 +480,7 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("terminalProgressStale=true"));
+    expectLoggerMessageContaining(warnSpy, "terminalProgressStale=true");
     expectRecordFields(
       requireRecord(
         events.findLast((event) => event.type === "session.stalled"),
@@ -554,13 +567,19 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(recoverStuckSession).not.toHaveBeenCalled();
-    expect(events.findLast((event) => event.type === "session.stalled")).toMatchObject({
-      classification: "blocked_tool_call",
-      reason: "blocked_tool_call",
-      activeWorkKind: "tool_call",
-      activeToolName: "bash",
-      activeToolCallId: "cmd-1",
-    });
+    expectRecordFields(
+      requireRecord(
+        events.findLast((event) => event.type === "session.stalled"),
+        "stalled event",
+      ),
+      {
+        classification: "blocked_tool_call",
+        reason: "blocked_tool_call",
+        activeWorkKind: "tool_call",
+        activeToolName: "bash",
+        activeToolCallId: "cmd-1",
+      },
+    );
   });
 
   it("uses diagnostics.stuckSessionAbortMs for stalled active-work recovery", () => {
@@ -773,7 +792,7 @@ describe("stuck session diagnostics threshold", () => {
       reason: "active_work",
       activeWorkKind: "embedded_run",
     });
-    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("long-running session:"));
+    expectNoLoggerMessageContaining(warnSpy, "long-running session:");
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
@@ -950,7 +969,7 @@ describe("stuck session diagnostics threshold", () => {
     }
 
     expect(events).toContain("diagnostic.liveness.warning");
-    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
     expect(emitMemorySample).toHaveBeenLastCalledWith({ emitSample: true });
     requireMatchingRecord(
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
@@ -995,7 +1014,7 @@ describe("stuck session diagnostics threshold", () => {
     logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
     vi.advanceTimersByTime(30_000);
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expectLoggerMessageContaining(warnSpy, "liveness warning:");
     requireMatchingRecord(
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {
@@ -1052,8 +1071,8 @@ describe("stuck session diagnostics threshold", () => {
       unsubscribe();
     }
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("phase=startup.plugins.load"));
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("work=[queued=main("));
+    expectLoggerMessageContaining(warnSpy, "phase=startup.plugins.load");
+    expectLoggerMessageContaining(warnSpy, "work=[queued=main(");
     const warning = requireRecord(
       events.findLast((event) => event.type === "diagnostic.liveness.warning"),
       "liveness warning event",
@@ -1092,7 +1111,7 @@ describe("stuck session diagnostics threshold", () => {
     logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
     vi.advanceTimersByTime(30_000);
 
-    expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expectNoLoggerMessageContaining(warnSpy, "liveness warning:");
     requireMatchingRecord(
       getDiagnosticStabilitySnapshot({ limit: 10 }).events,
       {
@@ -1132,7 +1151,7 @@ describe("stuck session diagnostics threshold", () => {
     logMessageQueued({ sessionId: "s1", sessionKey: "main", source: "test" });
     vi.advanceTimersByTime(30_000);
 
-    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining("liveness warning:"));
+    expectLoggerMessageContaining(warnSpy, "liveness warning:");
   });
 
   it("throttles repeated liveness warnings", () => {

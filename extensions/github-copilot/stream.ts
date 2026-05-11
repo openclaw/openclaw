@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context } from "@earendil-works/pi-ai";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildCopilotIdeHeaders, COPILOT_INTEGRATION_ID } from "openclaw/plugin-sdk/provider-auth";
 import {
@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 
-type _StreamContext = Parameters<StreamFn>[1];
 type StreamOptions = Parameters<StreamFn>[2];
 
 function containsCopilotContentType(value: unknown, type: string): boolean {

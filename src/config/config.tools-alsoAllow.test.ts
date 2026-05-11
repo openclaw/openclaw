@@ -49,4 +49,26 @@ describe("config: tools.alsoAllow", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("allows per-agent message tool cross-context policy", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "sandbox",
+            tools: {
+              message: {
+                crossContext: {
+                  allowWithinProvider: false,
+                  allowAcrossProviders: false,
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });

@@ -200,7 +200,7 @@ The store is safe to edit, but the Gateway is the authority: it may rewrite or r
 
 ## Transcript structure (`*.jsonl`)
 
-Transcripts are managed by `@mariozechner/pi-coding-agent`'s `SessionManager`.
+Transcripts are managed by `@earendil-works/pi-coding-agent`'s `SessionManager`.
 
 The file is JSONL:
 

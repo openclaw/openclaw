@@ -15,10 +15,10 @@ import { dispatchDiscordComponentEvent } from "./agent-components.dispatch.js";
 import { dispatchPluginDiscordInteractiveEvent } from "./agent-components.plugin-interactive.js";
 
 export class DiscordComponentModal extends Modal {
-  title = "OpenClaw form";
-  customId = "__openclaw_discord_component_modal_wildcard__";
-  components = [];
-  customIdParser = parseDiscordModalCustomIdForInteraction;
+  override title = "OpenClaw form";
+  override customId = "__openclaw_discord_component_modal_wildcard__";
+  override components = [];
+  override customIdParser = parseDiscordModalCustomIdForInteraction;
   private ctx: AgentComponentContext;
 
   constructor(ctx: AgentComponentContext) {

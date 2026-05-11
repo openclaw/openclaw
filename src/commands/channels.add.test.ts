@@ -458,6 +458,22 @@ describe("channelsAddCommand", () => {
     expect(channelWizardMocks.prompter.outro).toHaveBeenCalledWith("No channel changes made.");
   });
 
+  it("exits quietly when guided channel setup is cancelled", async () => {
+    const { WizardCancelledError } = await import("../wizard/prompts.js");
+    configMocks.readConfigFileSnapshot.mockResolvedValue({
+      ...baseConfigSnapshot,
+      sourceConfig: { channels: {} },
+      config: { channels: {} },
+    });
+    channelWizardMocks.setupChannels.mockRejectedValue(new WizardCancelledError());
+
+    await channelsAddCommand({}, runtime, { hasFlags: false });
+
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(configMocks.writeConfigFile).not.toHaveBeenCalled();
+  });
+
   it("runs channel lifecycle hooks only when account config changes", async () => {
     configMocks.readConfigFileSnapshot.mockResolvedValue({
       ...baseConfigSnapshot,

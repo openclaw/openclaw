@@ -443,7 +443,7 @@ class DiscordModelPickerFallbackButton extends Button {
     super();
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData) {
+  override async run(interaction: ButtonInteraction, data: ComponentData) {
     await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }
@@ -456,7 +456,7 @@ class DiscordModelPickerFallbackSelect extends StringSelectMenu {
     super();
   }
 
-  async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
+  override async run(interaction: StringSelectMenuInteraction, data: ComponentData) {
     await runDiscordModelPickerFallback({ ...this.params, interaction, data });
   }
 }

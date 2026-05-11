@@ -1,4 +1,4 @@
-import type { ModelRegistry } from "@mariozechner/pi-coding-agent";
+import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it } from "vitest";
 import { cloneFirstTemplateModel, matchesExactOrPrefix } from "./provider-model-helpers.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";

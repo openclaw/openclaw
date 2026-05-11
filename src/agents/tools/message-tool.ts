@@ -483,6 +483,24 @@ function buildMessageToolSchemaProps(options: {
   };
 }
 
+function isSendOnlyActions(actions: readonly string[]): boolean {
+  const uniqueActions = new Set(actions);
+  return uniqueActions.size === 1 && uniqueActions.has("send");
+}
+
+function buildSendOnlyMessageToolSchemaProps(options: {
+  includePresentation: boolean;
+  includeDeliveryPin: boolean;
+  extraProperties?: Record<string, TSchema>;
+}) {
+  return {
+    ...buildRoutingSchema(),
+    ...buildSendSchema(options),
+    ...buildGatewaySchema(),
+    ...options.extraProperties,
+  };
+}
+
 function buildMessageToolSchemaFromActions(
   actions: readonly string[],
   options: {
@@ -491,7 +509,9 @@ function buildMessageToolSchemaFromActions(
     extraProperties?: Record<string, TSchema>;
   },
 ) {
-  const props = buildMessageToolSchemaProps(options);
+  const props = isSendOnlyActions(actions)
+    ? buildSendOnlyMessageToolSchemaProps(options)
+    : buildMessageToolSchemaProps(options);
   return Type.Object({
     action: stringEnum(actions),
     ...props,

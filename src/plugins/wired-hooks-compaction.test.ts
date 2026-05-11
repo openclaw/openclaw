@@ -99,12 +99,12 @@ describe("compaction hook wiring", () => {
     expectedEvent: Record<string, unknown>;
     expectedSessionKey?: string;
   }) {
-    expect(params.call.event).toEqual(expect.objectContaining(params.expectedEvent));
+    expect(params.call.event).toEqual(params.expectedEvent);
     if (params.expectedSessionKey !== undefined) {
       if (!params.call.hookCtx) {
         throw new Error("Expected compaction hook context");
       }
-      expect(params.call.hookCtx.sessionKey).toBe(params.expectedSessionKey);
+      expect(params.call.hookCtx).toEqual({ sessionKey: params.expectedSessionKey });
     }
   }
 

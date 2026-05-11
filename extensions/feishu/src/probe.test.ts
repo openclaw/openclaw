@@ -138,14 +138,12 @@ describe("probeFeishu", () => {
 
     await probeFeishu(DEFAULT_CREDS);
 
-    expect(requestFn).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        url: "/open-apis/bot/v1/openclaw_bot/ping",
-        data: { needBotInfo: true },
-        timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
-      }),
-    );
+    expect(requestFn).toHaveBeenCalledWith({
+      method: "POST",
+      url: "/open-apis/bot/v1/openclaw_bot/ping",
+      data: { needBotInfo: true },
+      timeout: FEISHU_PROBE_REQUEST_TIMEOUT_MS,
+    });
   });
 
   it("returns timeout error when request exceeds timeout", async () => {

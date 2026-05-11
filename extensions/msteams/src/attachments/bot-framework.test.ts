@@ -142,7 +142,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       fetchFn,
     });
 
-    expect(media).toMatchObject({ path: runtime.savePath });
+    expect(media?.path).toBe(runtime.savePath);
+    expect(media?.contentType).toBe(runtime.savedContentType);
     expect(runtime.saveCalls).toHaveLength(1);
     expect(runtime.saveCalls[0].buffer.toString("utf-8")).toBe("PDFBYTES");
   });
@@ -267,7 +268,8 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         fetchFn,
       });
 
-      expect(media).toMatchObject({ path: runtime.savePath });
+      expect(media?.path).toBe(runtime.savePath);
+      expect(media?.contentType).toBe(runtime.savedContentType);
       // Both the attachment info call and the view call should be observed,
       // confirming the direct fetch path was taken (no dispatcher interception).
       expect(fetchCalls).toHaveLength(2);
@@ -298,12 +300,11 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       });
 
       expect(media).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]).toStrictEqual([
         "msteams botFramework attachmentInfo fetch failed",
-        expect.objectContaining({
-          error: expect.stringContaining("invalid onRequestStart method"),
-        }),
-      );
+        { error: "fetch failed | invalid onRequestStart method" },
+      ]);
     });
 
     it("logs a warning when the attachmentView fetch throws", async () => {
@@ -335,12 +336,11 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       });
 
       expect(media).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]).toStrictEqual([
         "msteams botFramework attachmentView fetch failed",
-        expect.objectContaining({
-          error: expect.stringContaining("fetch failed"),
-        }),
-      );
+        { error: "fetch failed" },
+      ]);
     });
 
     it("logs a warning on non-ok attachmentInfo response", async () => {
@@ -362,10 +362,11 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       });
 
       expect(media).toBeUndefined();
-      expect(warn).toHaveBeenCalledWith(
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0]).toStrictEqual([
         "msteams botFramework attachmentInfo non-ok",
-        expect.objectContaining({ status: 500 }),
-      );
+        { status: 500 },
+      ]);
     });
   });
 });

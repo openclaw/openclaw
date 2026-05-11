@@ -26,17 +26,25 @@ describe("msteamsPlugin", () => {
       cfg: createConfiguredMSTeamsCfg(),
     })?.actions;
 
-    expect(actions).toEqual(
-      expect.arrayContaining([
-        "upload-file",
-        "member-info",
-        "channel-list",
-        "channel-info",
-        "addParticipant",
-        "removeParticipant",
-        "renameGroup",
-      ]),
-    );
+    expect(actions).toEqual([
+      "upload-file",
+      "poll",
+      "edit",
+      "delete",
+      "pin",
+      "unpin",
+      "list-pins",
+      "read",
+      "react",
+      "reactions",
+      "search",
+      "member-info",
+      "channel-list",
+      "channel-info",
+      "addParticipant",
+      "removeParticipant",
+      "renameGroup",
+    ]);
   });
 
   it("reuses the shared Teams target-id matcher for explicit targets", () => {

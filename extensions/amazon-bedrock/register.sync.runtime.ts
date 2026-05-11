@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
@@ -122,7 +122,7 @@ function createGuardrailWrapStreamFn(
 
 /**
  * Mirrors the shipped pi-ai Bedrock `supportsPromptCaching` matcher.
- * Keep this in sync with node_modules/@mariozechner/pi-ai/dist/providers/amazon-bedrock.js.
+ * Keep this in sync with node_modules/@earendil-works/pi-ai/dist/providers/amazon-bedrock.js.
  */
 function matchesPiAiPromptCachingModelId(modelId: string): boolean {
   const id = modelId.toLowerCase();
