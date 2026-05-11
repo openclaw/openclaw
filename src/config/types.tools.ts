@@ -227,7 +227,7 @@ export type GroupToolPolicyConfig = {
   deny?: string[];
 };
 
-export const TOOLS_BY_SENDER_KEY_TYPES = ["id", "e164", "username", "name"] as const;
+export const TOOLS_BY_SENDER_KEY_TYPES = ["channel", "id", "e164", "username", "name"] as const;
 export type ToolsBySenderKeyType = (typeof TOOLS_BY_SENDER_KEY_TYPES)[number];
 
 export function parseToolsBySenderTypedKey(
@@ -255,6 +255,7 @@ export function parseToolsBySenderTypedKey(
  * Per-sender overrides.
  *
  * Prefer explicit key prefixes:
+ * - channel:<channelId>:<senderId>
  * - id:<senderId>
  * - e164:<phone>
  * - username:<handle>
@@ -336,6 +337,8 @@ export type AgentToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   /** Per-agent elevated exec gate (can only further restrict global tools.elevated). */
   elevated?: {
     /** Enable or disable elevated mode for this agent (default: true). */
@@ -530,6 +533,8 @@ export type ToolsConfig = {
   deny?: string[];
   /** Optional tool policy overrides keyed by provider id or "provider/model". */
   byProvider?: Record<string, ToolPolicyConfig>;
+  /** Per-sender tool policy overrides keyed by sender identity. */
+  toolsBySender?: GroupToolPolicyBySenderConfig;
   web?: {
     search?: {
       /** Enable managed web_search and optional Codex-native web search. */
