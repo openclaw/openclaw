@@ -1,6 +1,8 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  LAUNCH_AGENT_PROCESS_TYPE,
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
@@ -54,6 +56,16 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
   vi.fn<(port?: number) => number[]>(() => []),
 );
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
 
 function createDefaultLaunchdEnv(): Record<string, string | undefined> {
   return {
@@ -417,9 +429,11 @@ describe("launchd bootstrap repair", () => {
 
     const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     expect(repair).toEqual({ ok: true, status: "already-loaded" });
-    expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual([
-      ["kickstart", serviceId],
+    expect(state.launchctlCalls.find((call) => call[0] === "kickstart")).toEqual([
+      "kickstart",
+      serviceId,
     ]);
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "kickstart")).toBe(1);
   });
 
   it("skips kickstart when already-loaded service is actively running", async () => {
@@ -443,9 +457,11 @@ describe("launchd bootstrap repair", () => {
 
     const { serviceId } = expectLaunchctlEnableBootstrapOrder(env);
     expect(repair).toEqual({ ok: true, status: "already-loaded" });
-    expect(state.launchctlCalls.filter((call) => call[0] === "kickstart")).toEqual([
-      ["kickstart", serviceId],
+    expect(state.launchctlCalls.find((call) => call[0] === "kickstart")).toEqual([
+      "kickstart",
+      serviceId,
     ]);
+    expect(countMatching(state.launchctlCalls, (call) => call[0] === "kickstart")).toBe(1);
   });
 
   it("keeps genuine bootstrap failures as failures", async () => {
@@ -548,7 +564,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with restrictive umask", async () => {
+  it("writes KeepAlive=true policy with shutdown and throttle limits", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -561,6 +577,10 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>ExitTimeOut</key>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
+    expect(plist).toContain("<key>ProcessType</key>");
+    expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
     expect(plist).toContain("<key>Umask</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
@@ -948,7 +968,7 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
-    expect(state.launchctlCalls).toEqual([]);
+    expect(state.launchctlCalls).toStrictEqual([]);
   });
 
   it("surfaces detached handoff failures", async () => {

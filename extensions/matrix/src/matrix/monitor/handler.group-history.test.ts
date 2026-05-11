@@ -90,10 +90,13 @@ beforeEach(() => {
 });
 
 function deferred<T>() {
-  let resolve!: (value: T | PromiseLike<T>) => void;
+  let resolve: ((value: T | PromiseLike<T>) => void) | undefined;
   const promise = new Promise<T>((res) => {
     resolve = res;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -135,6 +138,20 @@ function createFinalDeliveryFailureHandler(finalizeInboundContext: (ctx: unknown
       return result;
     },
   });
+}
+
+function inboundHistoryBodies(finalizeInboundContext: ReturnType<typeof vi.fn>, callIndex: number) {
+  const ctx = finalizeInboundContext.mock.calls[callIndex]?.[0] as Record<string, unknown>;
+  const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
+  return history?.map((entry) => entry.body) ?? [];
+}
+
+function expectSomeBodyContaining(bodies: readonly string[], fragment: string) {
+  expect(bodies.some((body) => body.includes(fragment))).toBe(true);
+}
+
+function expectNoBodyContaining(bodies: readonly string[], fragment: string) {
+  expect(bodies.some((body) => body.includes(fragment))).toBe(false);
 }
 
 describe("matrix group chat history — scenario 1: basic accumulation", () => {
@@ -196,11 +213,10 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
     currentAgentId = "agent_b";
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$c", body: "msg C", ts: 3000 }));
     {
-      const ctx = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-      const history = ctx["InboundHistory"] as Array<{ body: string }>;
-      expect(history).toHaveLength(2);
-      expect(history.map((h) => h.body).some((b) => b.includes("msg A"))).toBe(true);
-      expect(history.map((h) => h.body).some((b) => b.includes("msg B"))).toBe(true);
+      const bodies = inboundHistoryBodies(finalizeInboundContext, 1);
+      expect(bodies).toHaveLength(2);
+      expectSomeBodyContaining(bodies, "msg A");
+      expectSomeBodyContaining(bodies, "msg B");
     }
 
     // @agent_b trigger D — A/B/C consumed; history is empty
@@ -391,9 +407,10 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
       makeRoomTriggerEvent({ eventId: "$trigger-media", body: "trigger", ts: 2000 }),
     );
     expect(finalizeInboundContext).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.some((entry) => entry.body.includes("[matrix image attachment]"))).toBe(true);
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "[matrix image attachment]",
+    );
   });
 
   it("includes skipped poll updates in next trigger history", async () => {
@@ -456,9 +473,7 @@ describe("matrix group chat history — scenario 1: basic accumulation", () => {
 
     expect(getEvent).toHaveBeenCalledOnce();
     expect(getRelations).toHaveBeenCalledOnce();
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.some((entry) => entry.body.includes("Lunch?"))).toBe(true);
+    expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 0), "Lunch?");
   });
 });
 
@@ -509,10 +524,9 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     await handler(DEFAULT_ROOM, makeRoomTriggerEvent({ eventId: "$c", body: "msg C", ts: 3000 }));
 
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
-    const ctxForC = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-    const history = ctxForC["InboundHistory"] as Array<{ body: string }>;
-    expect(history.some((h) => h.body.includes("msg B"))).toBe(true);
-    expect(history.every((h) => !h.body.includes("msg A"))).toBe(true);
+    const bodies = inboundHistoryBodies(finalizeInboundContext, 1);
+    expectSomeBodyContaining(bodies, "msg B");
+    expectNoBodyContaining(bodies, "msg A");
   });
 
   it("watermark does not advance when final reply delivery fails (retry sees same history)", async () => {
@@ -544,9 +558,7 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     );
     expect(finalizeInboundContext).toHaveBeenCalledTimes(2);
     {
-      const ctx = finalizeInboundContext.mock.calls[1]?.[0] as Record<string, unknown>;
-      const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-      expect(history?.some((h) => h.body.includes("pending msg"))).toBe(true);
+      expectSomeBodyContaining(inboundHistoryBodies(finalizeInboundContext, 1), "pending msg");
     }
   });
 
@@ -622,9 +634,10 @@ describe("matrix group chat history — scenario 2: race condition safety", () =
     resolveFirstName?.();
     await triggerDone;
 
-    const ctx = finalizeInboundContext.mock.calls[0]?.[0] as Record<string, unknown>;
-    const history = ctx["InboundHistory"] as Array<{ body: string }> | undefined;
-    expect(history?.some((entry) => entry.body.includes("plain before trigger"))).toBe(true);
+    expectSomeBodyContaining(
+      inboundHistoryBodies(finalizeInboundContext, 0),
+      "plain before trigger",
+    );
   });
 
   it("preserves arrival order when a plain message starts before a later trigger", async () => {

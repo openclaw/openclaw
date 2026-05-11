@@ -44,6 +44,7 @@ import {
   type ConnectParams,
   type EventFrame,
   type HelloOk,
+  MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   type RequestFrame,
   validateEventFrame,
@@ -545,7 +546,7 @@ export class GatewayClient {
       };
     })();
     const params: ConnectParams = {
-      minProtocol: this.opts.minProtocol ?? PROTOCOL_VERSION,
+      minProtocol: this.opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: this.opts.maxProtocol ?? PROTOCOL_VERSION,
       client: {
         id: this.opts.clientName ?? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
@@ -648,7 +649,11 @@ export class GatewayClient {
     storedScopes?: string[];
   }): string[] {
     // Reuse cached scopes only when the client is reusing the cached device token.
-    // Explicit device tokens should keep the caller-requested scope set.
+    // Callers that ask for explicit scopes should keep that request so the
+    // server can authorize it or drive the normal scope-upgrade flow.
+    if (Array.isArray(this.opts.scopes)) {
+      return this.opts.scopes;
+    }
     if (
       params.usingStoredDeviceToken &&
       Array.isArray(params.storedScopes) &&

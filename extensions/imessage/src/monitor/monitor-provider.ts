@@ -32,7 +32,7 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-runtime";
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
 import { markIMessageChatRead, sendIMessageTyping } from "../chat.js";
@@ -50,6 +50,8 @@ import {
 import { sendMessageIMessage } from "../send.js";
 import { normalizeIMessageHandle } from "../targets.js";
 import { attachIMessageMonitorAbortHandler } from "./abort-handler.js";
+import { runIMessageCatchup } from "./catchup-bridge.js";
+import { resolveCatchupConfig } from "./catchup.js";
 import { combineIMessagePayloads } from "./coalesce.js";
 import { createIMessageEchoCachingSend, deliverReplies } from "./deliver.js";
 import { createSentMessageCache } from "./echo-cache.js";
@@ -71,34 +73,21 @@ import { sanitizeIMessageWatchErrorPayload } from "./watch-error-log.js";
 const WATCH_SUBSCRIBE_MAX_ATTEMPTS = 3;
 const WATCH_SUBSCRIBE_RETRY_DELAY_MS = 1_000;
 
-/**
- * Try to detect remote host from an SSH wrapper script like:
- *   exec ssh -T openclaw@192.168.64.3 /opt/homebrew/bin/imsg "$@"
- *   exec ssh -T mac-mini imsg "$@"
- * Returns the user@host or host portion if found, undefined otherwise.
- */
 async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | undefined> {
   try {
-    // Expand ~ to home directory
     const expanded = cliPath.startsWith("~")
       ? cliPath.replace(/^~/, process.env.HOME ?? "")
       : cliPath;
     const content = await fs.readFile(expanded, "utf8");
 
-    // Match user@host pattern first (e.g., openclaw@192.168.64.3)
     const userHostMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+)/);
     if (userHostMatch) {
       return userHostMatch[1];
     }
 
-    // Fallback: match host-only before imsg command (e.g., ssh -T mac-mini imsg)
     const hostOnlyMatch = content.match(/\bssh\b[^\n]*?\s+([a-zA-Z][a-zA-Z0-9._-]*)\s+\S*\bimsg\b/);
     return hostOnlyMatch?.[1];
   } catch (err) {
-    // ENOENT / ENOTDIR are expected for non-script cliPaths (just an
-    // executable on disk). Anything else (EACCES, broken symlink) is
-    // worth flagging — silent failure means attachments will fail to find
-    // remote media because remoteHost stays undefined.
     const code = (err as NodeJS.ErrnoException)?.code;
     if (code !== "ENOENT" && code !== "ENOTDIR") {
       logVerbose(
@@ -109,7 +98,6 @@ async function detectRemoteHostFromCliPath(cliPath: string): Promise<string | un
   }
 }
 
-/** One-shot warning when typing/read are gated off due to old imsg build. */
 const warnIfImsgUpgradeNeeded = (() => {
   let fired = false;
   return {
@@ -254,7 +242,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   // explicit inbound debounce for this channel, widen the window to 2500 ms.
   // Apple's split-send for `<command> <URL>` arrives ~0.8-2.0 s apart on most
   // setups, so the legacy 0 ms default would flush the command alone before
-  // the URL row reaches the debouncer. Mirrors the BlueBubbles policy.
+  // the URL row reaches the debouncer.
   const coalesceSameSenderDms = imessageCfg.coalesceSameSenderDms === true;
   const inboundCfg = cfg.messages?.inbound;
   const hasExplicitInboundDebounce =
@@ -383,7 +371,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       process.env,
       accountInfo.accountId,
     ).catch(() => []);
-    const decision = resolveIMessageInboundDecision({
+    const decision = await resolveIMessageInboundDecision({
       cfg,
       accountId: accountInfo.accountId,
       message,
@@ -421,9 +409,9 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
         loopRateLimiter.record(rateLimitKey);
       }
       // Surface the silent-allowlist drop once per chat. Without this, operators
-      // who migrate from BlueBubbles and copy groupPolicy="allowlist" without
-      // populating channels.imessage.groups see every group message vanish at
-      // default log level. See issue #78749.
+      // who set groupPolicy="allowlist" without populating
+      // channels.imessage.groups see every group message vanish at default log
+      // level. See issue #78749.
       if (decision.reason === "group id not in allowlist") {
         warnGroupAllowlistDropPerChatOnce({
           accountId: accountInfo.accountId,
@@ -863,6 +851,34 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
   const activeClient = client;
   if (!activeClient) {
     return;
+  }
+
+  // Catchup runs once between watch.subscribe and the live dispatch loop.
+  // Anything that arrives during the catchup pass itself flows through
+  // `handleMessage` -> `handleMessageNow`; the inbound-dedupe cache absorbs
+  // any overlap with replayed rows. Disabled by default — opt-in via
+  // `channels.imessage.catchup.enabled`. See issue #78649.
+  const catchupCfg = resolveCatchupConfig(imessageCfg.catchup);
+  if (catchupCfg.enabled && !abort?.aborted) {
+    try {
+      await runIMessageCatchup({
+        client: activeClient,
+        accountId: accountInfo.accountId,
+        config: catchupCfg,
+        includeAttachments,
+        // Catchup bypasses the inbound debouncer so each row is awaited
+        // serially and dispatch failure can hold the cursor. Split-sends
+        // from before the gateway gap therefore arrive as separate turns
+        // rather than coalesced. Live notifications continue to flow through
+        // the debouncer.
+        dispatchPayload: (message) => handleMessageNow(message),
+        runtime,
+      });
+    } catch (err) {
+      // Catchup is opt-in recovery — surface the error but do not block the
+      // monitor. The live dispatch loop is already up and running.
+      runtime.error?.(`imessage catchup: pass failed: ${String(err)}`);
+    }
   }
 
   try {

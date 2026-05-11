@@ -101,6 +101,89 @@ describe("applyProviderAuthConfigPatch", () => {
       },
     });
   });
+
+  it("normalizes retired Google Gemini model refs from provider config patches", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "google/gemini-3-pro-preview",
+            fallbacks: ["google/gemini-3-pro-preview", "openai/gpt-5.5"],
+          },
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "gemini",
+              params: { thinking: "high" },
+            },
+            "google/gemini-3.1-pro-preview": {
+              params: { maxTokens: 12_000 },
+            },
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.agents?.defaults?.model).toEqual({
+      primary: "google/gemini-3.1-pro-preview",
+      fallbacks: ["google/gemini-3.1-pro-preview", "openai/gpt-5.5"],
+    });
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "gemini",
+        params: { thinking: "high", maxTokens: 12_000 },
+      },
+    });
+  });
+
+  it("normalizes retired Google Gemini keys when replacing provider model maps", () => {
+    const patch = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {},
+          },
+        },
+      },
+    };
+
+    const next = applyProviderAuthConfigPatch(base, patch, { replaceDefaultModels: true });
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("normalizes retired Google Gemini provider catalog rows from provider config patches", () => {
+    const patch = {
+      models: {
+        providers: {
+          google: {
+            baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+            api: "openai-completions",
+            apiKey: "GOOGLE_API_KEY",
+            models: [
+              {
+                id: "google/gemini-3-pro-preview",
+                name: "Gemini 3 Pro Preview",
+                input: ["text", "image"],
+                reasoning: true,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                contextWindow: 1_048_576,
+                maxTokens: 65_536,
+              },
+            ],
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const next = applyProviderAuthConfigPatch({}, patch);
+
+    expect(next.models?.providers?.google?.models?.[0]?.id).toBe("google/gemini-3.1-pro-preview");
+    expect(next.models?.providers?.google?.api).toBe("openai-completions");
+  });
 });
 
 describe("applyDefaultModel", () => {
@@ -200,6 +283,30 @@ describe("applyDefaultModel", () => {
     expect(next.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": {},
       "google/gemini-3.1-pro-preview": {},
+    });
+  });
+
+  it("normalizes existing retired Google Gemini model keys before writing defaults", () => {
+    const config = {
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3-pro-preview": {
+              alias: "gemini",
+              params: { thinking: "high" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = applyDefaultModel(config, "google/gemini-3.1-pro-preview");
+
+    expect(next.agents?.defaults?.models).toEqual({
+      "google/gemini-3.1-pro-preview": {
+        alias: "gemini",
+        params: { thinking: "high" },
+      },
     });
   });
 

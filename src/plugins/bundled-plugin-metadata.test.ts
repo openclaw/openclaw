@@ -35,6 +35,7 @@ const EXPECTED_BUNDLED_STARTUP_PLUGIN_IDS = [
   "device-pair",
   "diagnostics-otel",
   "diagnostics-prometheus",
+  "diffs",
   "file-transfer",
   "google-meet",
   "llm-task",
@@ -454,7 +455,9 @@ describe("bundled plugin metadata", () => {
 
   it("keeps config schemas on all bundled plugin manifests", () => {
     for (const entry of listRepoBundledPluginMetadata()) {
-      expect(entry.manifest.configSchema).toEqual(expect.any(Object));
+      expect(entry.manifest.configSchema).not.toBeNull();
+      expect(typeof entry.manifest.configSchema).toBe("object");
+      expect(Array.isArray(entry.manifest.configSchema)).toBe(false);
     }
   });
 

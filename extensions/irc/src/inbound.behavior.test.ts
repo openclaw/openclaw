@@ -1,3 +1,4 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedIrcAccount } from "./accounts.js";
 import { handleIrcInbound } from "./inbound.js";
@@ -101,7 +102,9 @@ describe("irc inbound behavior", () => {
   });
 
   it("issues a DM pairing challenge and sends the reply to the sender nick", async () => {
-    const sendReply = vi.fn(async () => {});
+    const sendReply = vi.fn<(target: string, text: string, replyToId?: string) => Promise<void>>(
+      async () => {},
+    );
 
     await handleIrcInbound({
       message: createMessage(),
@@ -128,7 +131,8 @@ describe("irc inbound behavior", () => {
       expect.stringContaining("Your IRC id: alice!ident@example.com"),
       undefined,
     );
-    expect(sendReply).toHaveBeenCalledWith("alice", expect.stringContaining("CODE"), undefined);
+    const replyMessages = sendReply.mock.calls.map((call) => call[1]);
+    expect(replyMessages.some((message) => message.includes("CODE"))).toBe(true);
   });
 
   it("drops unauthorized group control commands before dispatch", async () => {
@@ -162,5 +166,30 @@ describe("irc inbound behavior", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "irc: drop control command (unauthorized) target=alice!ident@example.com",
     );
+  });
+
+  it("passes the shared reply pipeline for dispatched replies", async () => {
+    const coreRuntime = createPluginRuntimeMock();
+    setIrcRuntime(coreRuntime as never);
+
+    await handleIrcInbound({
+      message: createMessage(),
+      account: createAccount({
+        config: {
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          groupPolicy: "allowlist",
+          groupAllowFrom: [],
+        },
+      }),
+      config: { channels: { irc: {} } } as CoreConfig,
+      runtime: createRuntimeEnv(),
+      sendReply: vi.fn(async () => {}),
+    });
+
+    const assembledRequest = (
+      coreRuntime.channel.turn.runAssembled as unknown as { mock: { calls: unknown[][] } }
+    ).mock.calls[0]?.[0] as { replyPipeline?: unknown } | undefined;
+    expect(assembledRequest?.replyPipeline).toEqual({});
   });
 });

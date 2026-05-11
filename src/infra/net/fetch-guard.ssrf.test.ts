@@ -65,6 +65,26 @@ function okResponse(body = "ok"): Response {
   return new Response(body, { status: 200 });
 }
 
+async function raceWithTimeoutResult<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+  timeoutResult: T,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(timeoutResult), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer) {
+      clearTimeout(timer);
+    }
+  }
+}
+
 function getDispatcherClassName(value: unknown): string | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -74,7 +94,7 @@ function getDispatcherClassName(value: unknown): string | null {
 }
 
 function expectDispatcherAttached(value: unknown): void {
-  expect(value).toEqual(expect.any(Object));
+  expect(getDispatcherClassName(value)).toMatch(/^(Agent|Mock)$/u);
 }
 
 function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
@@ -673,7 +693,7 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(result.response.status).toBe(200);
     const firstHeaders = fetchImpl.mock.calls[0]?.[1]?.headers;
     expect(firstHeaders).not.toBe(headers);
-    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toEqual([]);
+    expect(Object.getOwnPropertySymbols(firstHeaders as object)).toStrictEqual([]);
     const secondHeaders = getSecondRequestHeaders(fetchImpl);
     expect(secondHeaders.get("authorization")).toBeNull();
     expect(secondHeaders.get("accept")).toBe("application/json");
@@ -1201,13 +1221,14 @@ describe("fetchWithSsrFGuard hardening", () => {
       timeoutMs: 1,
     });
 
-    const outcome = await Promise.race([
+    const outcome = await raceWithTimeoutResult(
       fetchPromise.then(
         () => "resolved",
         (error: unknown) => (error instanceof Error ? error.name : "rejected"),
       ),
-      new Promise<string>((resolve) => setTimeout(() => resolve("hung"), 250)),
-    ]);
+      250,
+      "hung",
+    );
 
     expect(outcome).toBe("TimeoutError");
   });

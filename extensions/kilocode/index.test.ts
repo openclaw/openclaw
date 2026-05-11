@@ -1,5 +1,5 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import type { Context, Model } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import type { Context, Model } from "@earendil-works/pi-ai";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expectPassthroughReplayPolicy } from "openclaw/plugin-sdk/provider-test-contracts";
 import { describe, expect, it } from "vitest";
@@ -95,7 +95,7 @@ describe("kilocode provider plugin", () => {
     ).toEqual([
       {
         provider: "kilocode",
-        id: "google/gemini-3-pro-preview",
+        id: "google/gemini-3.1-pro-preview",
         name: "Gemini 3 Pro Preview",
         input: ["text", "image"],
         reasoning: true,

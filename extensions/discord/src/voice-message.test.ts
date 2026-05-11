@@ -50,6 +50,26 @@ describe("ensureOggOpus", () => {
     runFfprobeMock.mockReset();
     runFfmpegMock.mockReset();
   });
+
+  function expectStagedFfmpegOutput(ffmpegOutputPath: string | undefined, finalPath: string) {
+    expect(ffmpegOutputPath).toBeTypeOf("string");
+    if (typeof ffmpegOutputPath !== "string") {
+      throw new Error("missing ffmpeg output path");
+    }
+    expect(ffmpegOutputPath).not.toBe(finalPath);
+    const stagedBase = path.basename(ffmpegOutputPath);
+    expect(stagedBase.startsWith(".fs-safe-output-")).toBe(true);
+    expect(stagedBase.endsWith(`-${path.basename(finalPath)}.part`)).toBe(true);
+  }
+
+  function readSingleCommandArgs(mock: typeof runFfprobeMock | typeof runFfmpegMock): string[] {
+    const args = mock.mock.calls[0]?.[0];
+    if (!Array.isArray(args) || !args.every((arg): arg is string => typeof arg === "string")) {
+      throw new Error("missing command args");
+    }
+    return args;
+  }
+
   it("rejects URL/protocol input paths", async () => {
     await expect(ensureOggOpus("https://example.com/audio.ogg")).rejects.toThrow(
       /local file path/i,
@@ -64,9 +84,18 @@ describe("ensureOggOpus", () => {
     const result = await ensureOggOpus("/tmp/input.ogg");
 
     expect(result).toEqual({ path: "/tmp/input.ogg", cleanup: false });
-    expect(runFfprobeMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-show_entries", "stream=codec_name,sample_rate", "/tmp/input.ogg"]),
-    );
+    expect(runFfprobeMock).toHaveBeenCalledTimes(1);
+    expect(readSingleCommandArgs(runFfprobeMock)).toEqual([
+      "-v",
+      "error",
+      "-select_streams",
+      "a:0",
+      "-show_entries",
+      "stream=codec_name,sample_rate",
+      "-of",
+      "csv=p=0",
+      "/tmp/input.ogg",
+    ]);
     expect(runFfmpegMock).not.toHaveBeenCalled();
   });
 
@@ -86,12 +115,26 @@ describe("ensureOggOpus", () => {
     expect(result.cleanup).toBe(true);
     expect(path.dirname(result.path)).toBe(path.normalize("/tmp"));
     expect(path.basename(result.path)).toMatch(/^voice-.*\.ogg$/);
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-t", "1200", "-ar", "48000", "/tmp/input.ogg"]),
-    );
-    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+    expect(ffmpegArgs.slice(0, -1)).toEqual([
+      "-y",
+      "-i",
+      "/tmp/input.ogg",
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      "1200",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+    ]);
+    const ffmpegOutputPath = ffmpegArgs.at(-1);
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 
@@ -109,12 +152,26 @@ describe("ensureOggOpus", () => {
 
     expect(result.cleanup).toBe(true);
     expect(runFfprobeMock).not.toHaveBeenCalled();
-    expect(runFfmpegMock).toHaveBeenCalledWith(
-      expect.arrayContaining(["-vn", "-sn", "-dn", "/tmp/input.mp3"]),
-    );
-    const ffmpegOutputPath = (runFfmpegMock.mock.calls[0]?.[0] as string[] | undefined)?.at(-1);
-    expect(ffmpegOutputPath).not.toBe(result.path);
-    expect(path.basename(ffmpegOutputPath ?? "")).toBe(path.basename(result.path));
+    expect(runFfmpegMock).toHaveBeenCalledTimes(1);
+    const ffmpegArgs = readSingleCommandArgs(runFfmpegMock);
+    expect(ffmpegArgs.slice(0, -1)).toEqual([
+      "-y",
+      "-i",
+      "/tmp/input.mp3",
+      "-vn",
+      "-sn",
+      "-dn",
+      "-t",
+      "1200",
+      "-ar",
+      "48000",
+      "-c:a",
+      "libopus",
+      "-b:a",
+      "64k",
+    ]);
+    const ffmpegOutputPath = ffmpegArgs.at(-1);
+    expectStagedFfmpegOutput(ffmpegOutputPath, result.path);
     await expect(fs.readFile(result.path, "utf8")).resolves.toBe("ogg");
   });
 });
@@ -205,13 +262,18 @@ describe("sendDiscordVoiceMessage", () => {
     expect(uploadUrlRequests).toBe(2);
     expect(fetchMock).toHaveBeenCalledTimes(4);
     expect(post).toHaveBeenCalledWith("/channels/channel-1/messages", {
-      body: expect.objectContaining({
+      body: {
+        flags: 8192,
         attachments: [
-          expect.objectContaining({
+          {
+            id: "0",
+            filename: "voice-message.ogg",
             uploaded_filename: "uploaded-2.ogg",
-          }),
+            duration_secs: 1,
+            waveform: "waveform",
+          },
         ],
-      }),
+      },
     });
   });
 

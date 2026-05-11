@@ -222,8 +222,31 @@ describe("normalizeRegisteredProvider", () => {
         if (!provider) {
           throw new Error("expected provider");
         }
-        expect(provider).toMatchObject({ catalog: { run: expect.any(Function) } });
+        expect(typeof provider.catalog?.run).toBe("function");
         expect(provider.discovery).toBeUndefined();
+      },
+    },
+    {
+      name: "warns for legacy discovery-only providers",
+      provider: makeProvider({
+        id: "legacy-discovery-only",
+        discovery: {
+          run: async () => ({
+            provider: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              models: [],
+            },
+          }),
+        },
+      }),
+      expectedDiagnosticText: [
+        'provider "legacy-discovery-only" uses deprecated discovery; use catalog',
+      ],
+      assert: (provider: ReturnType<typeof normalizeRegisteredProvider>) => {
+        if (!provider) {
+          throw new Error("expected provider");
+        }
+        expect(provider).toMatchObject({ discovery: { run: expect.any(Function) } });
       },
     },
   ] as const)(

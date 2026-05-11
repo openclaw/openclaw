@@ -263,7 +263,8 @@ describe("buildAuthChoiceOptions", () => {
     ]);
     const options = getOptions();
 
-    for (const value of [
+    const optionValues = options.map((option) => option.value);
+    for (const expectedValue of [
       "github-copilot",
       "zai-api-key",
       "xiaomi-api-key",
@@ -280,7 +281,7 @@ describe("buildAuthChoiceOptions", () => {
       "ollama",
       "sglang",
     ]) {
-      expect(options.some((opt) => opt.value === value)).toBe(true);
+      expect(optionValues).toContain(expectedValue);
     }
   });
 
@@ -328,7 +329,7 @@ describe("buildAuthChoiceOptions", () => {
     expect(cliChoices).toContain("litellm-api-key");
     expect(cliChoices).toContain("custom-api-key");
     expect(cliChoices).toContain("skip");
-    expect(options.some((option) => option.value === "ollama")).toBe(true);
+    expect(options.map((option) => option.value)).toContain("ollama");
     expect(cliChoices).toContain("ollama");
   });
 
@@ -415,9 +416,9 @@ describe("buildAuthChoiceOptions", () => {
     const litellmGroup = requireChoiceGroup(groups, "litellm");
     const ollamaGroup = requireChoiceGroup(groups, "ollama");
 
-    expect(chutesGroup.options.some((opt) => opt.value === "chutes")).toBe(true);
-    expect(litellmGroup.options.some((opt) => opt.value === "litellm-api-key")).toBe(true);
-    expect(ollamaGroup.options.some((opt) => opt.value === "ollama")).toBe(true);
+    expect(chutesGroup.options.map((option) => option.value)).toContain("chutes");
+    expect(litellmGroup.options.map((option) => option.value)).toContain("litellm-api-key");
+    expect(ollamaGroup.options.map((option) => option.value)).toContain("ollama");
   });
 
   it("prefers Anthropic Claude CLI over API key in grouped selection", () => {
@@ -519,8 +520,9 @@ describe("buildAuthChoiceOptions", () => {
     });
     const openCodeGroup = requireChoiceGroup(groups, "opencode");
 
-    expect(openCodeGroup.options.some((opt) => opt.value === "opencode-zen")).toBe(true);
-    expect(openCodeGroup.options.some((opt) => opt.value === "opencode-go")).toBe(true);
+    const openCodeValues = openCodeGroup.options.map((option) => option.value);
+    expect(openCodeValues).toContain("opencode-zen");
+    expect(openCodeValues).toContain("opencode-go");
   });
 
   it("hides image-generation-only providers from the interactive auth picker", () => {
@@ -562,10 +564,11 @@ describe("buildAuthChoiceOptions", () => {
     ]);
 
     const options = getOptions();
+    const optionValues = options.map((option) => option.value);
 
-    expect(options.some((option) => option.value === "openai-api-key")).toBe(true);
-    expect(options.some((option) => option.value === "ollama")).toBe(true);
-    expect(options.some((option) => option.value === "fal-api-key")).toBe(false);
-    expect(options.some((option) => option.value === "local-image-runtime")).toBe(false);
+    expect(optionValues).toContain("openai-api-key");
+    expect(optionValues).toContain("ollama");
+    expect(optionValues).not.toContain("fal-api-key");
+    expect(optionValues).not.toContain("local-image-runtime");
   });
 });

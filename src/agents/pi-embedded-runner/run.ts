@@ -32,10 +32,10 @@ import {
   type AuthProfileFailureReason,
   type AuthProfileStore,
   markAuthProfileFailure,
+  markAuthProfileSuccess,
   resolveAuthProfileEligibility,
-  markAuthProfileGood,
-  markAuthProfileUsed,
 } from "../auth-profiles.js";
+import { listActiveProcessSessionReferences } from "../bash-process-references.js";
 import {
   resolveSessionKeyForRequest,
   resolveStoredSessionKeyForSessionId,
@@ -81,6 +81,7 @@ import {
   parseImageSizeError,
   pickFallbackThinkingLevel,
 } from "../pi-embedded-helpers.js";
+import { resolveProcessToolScopeKey } from "../pi-tools.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
 import { runAgentCleanupStep } from "../run-cleanup-timeout.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -260,6 +261,23 @@ function createEmptyAuthProfileStore(): AuthProfileStore {
   };
 }
 
+function createScopedAuthProfileStore(
+  store: AuthProfileStore,
+  profileId: string | undefined,
+): AuthProfileStore {
+  const normalizedProfileId = profileId?.trim();
+  const profiles = store.profiles ?? {};
+  const credential = normalizedProfileId ? profiles[normalizedProfileId] : undefined;
+  return credential && normalizedProfileId
+    ? {
+        version: store.version,
+        profiles: {
+          [normalizedProfileId]: credential,
+        },
+      }
+    : createEmptyAuthProfileStore();
+}
+
 function buildTraceToolSummary(params: {
   toolMetas?: Array<{ toolName: string; meta?: string }>;
   hadFailure: boolean;
@@ -399,6 +417,15 @@ export async function runEmbeddedPiAgent(
       const started = Date.now();
       const startupStages = createEmbeddedRunStageTracker();
       let startupStagesEmitted = false;
+      const notifyExecutionPhase = (
+        phase: Parameters<NonNullable<RunEmbeddedPiAgentParams["onExecutionPhase"]>>[0]["phase"],
+        extra?: Omit<
+          Parameters<NonNullable<RunEmbeddedPiAgentParams["onExecutionPhase"]>>[0],
+          "phase"
+        >,
+      ) => {
+        params.onExecutionPhase?.({ phase, ...extra });
+      };
       const emitStartupStageSummary = (phase: string) => {
         const summary = startupStages.snapshot();
         const shouldWarn = shouldWarnEmbeddedRunStageSummary(summary);
@@ -416,6 +443,7 @@ export async function runEmbeddedPiAgent(
         }
       };
       params.onExecutionStarted?.();
+      notifyExecutionPhase("runner_entered");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
@@ -436,12 +464,14 @@ export async function runEmbeddedPiAgent(
         );
       }
       startupStages.mark("workspace");
+      notifyExecutionPhase("workspace");
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
       startupStages.mark("runtime-plugins");
+      notifyExecutionPhase("runtime_plugins");
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -567,12 +597,18 @@ export async function runEmbeddedPiAgent(
       const ctxInfo = resolvedRuntimeModel.ctxInfo;
       let effectiveModel = resolvedRuntimeModel.effectiveModel;
       startupStages.mark("model-resolution");
+      notifyExecutionPhase("model_resolution", { provider, model: modelId });
 
       const authStore = pluginHarnessOwnsTransport
         ? createEmptyAuthProfileStore()
         : ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
             allowKeychainPrompt: false,
           });
+      const attemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
+            allowKeychainPrompt: false,
+          })
+        : authStore;
       const requestedProfileId = params.authProfileId?.trim();
       const resolvePluginHarnessPreferredProfileId = (): string | undefined => {
         if (requestedProfileId) {
@@ -593,12 +629,9 @@ export async function runEmbeddedPiAgent(
         if (!harnessAuthProvider) {
           return undefined;
         }
-        const harnessAuthStore = ensureAuthProfileStoreWithoutExternalProfiles(agentDir, {
-          allowKeychainPrompt: false,
-        });
         return resolveAuthProfileOrder({
           cfg: params.config,
-          store: harnessAuthStore,
+          store: attemptAuthProfileStore,
           provider: harnessAuthProvider,
         })[0]?.trim();
       };
@@ -775,6 +808,10 @@ export async function runEmbeddedPiAgent(
         lastProfileId = forwardedPluginHarnessProfileId;
       }
       startupStages.mark("auth");
+      notifyExecutionPhase("auth", { provider, model: modelId });
+      const runAttemptAuthProfileStore = pluginHarnessOwnsTransport
+        ? createScopedAuthProfileStore(attemptAuthProfileStore, lastProfileId)
+        : attemptAuthProfileStore;
       const { sessionAgentId } = resolveSessionAgentIds({
         sessionKey: params.sessionKey,
         config: params.config,
@@ -963,6 +1000,7 @@ export async function runEmbeddedPiAgent(
       });
       const contextEnginePluginId = resolveContextEngineOwnerPluginId(contextEngine);
       startupStages.mark("context-engine");
+      notifyExecutionPhase("context_engine", { provider, model: modelId });
       try {
         const resolveActiveHookContext = () => ({
           ...hookCtx,
@@ -1131,6 +1169,7 @@ export async function runEmbeddedPiAgent(
           });
           if (!startupStagesEmitted) {
             startupStages.mark("attempt-dispatch");
+            notifyExecutionPhase("attempt_dispatch", { provider, model: modelId });
             emitStartupStageSummary("attempt-dispatch");
             startupStagesEmitted = true;
           }
@@ -1209,7 +1248,7 @@ export async function runEmbeddedPiAgent(
             authProfileIdSource: lockedProfileId ? "user" : "auto",
             initialReplayState: accumulatedReplayState,
             authStorage,
-            authProfileStore: authStore,
+            authProfileStore: runAttemptAuthProfileStore,
             modelRegistry,
             agentId: workspaceResolution.agentId,
             legacyBeforeAgentStartResult,
@@ -1495,6 +1534,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -1660,6 +1706,13 @@ export async function runEmbeddedPiAgent(
                     extraSystemPrompt: params.extraSystemPrompt,
                     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
                     ownerNumbers: params.ownerNumbers,
+                    activeProcessSessions: listActiveProcessSessionReferences({
+                      scopeKey: resolveProcessToolScopeKey({
+                        sessionKey: params.sandboxSessionKey?.trim() || params.sessionKey,
+                        sessionId: activeSessionId,
+                        agentId: sessionAgentId,
+                      }),
+                    }),
                   }),
                   ...resolveContextEngineCapabilities({
                     config: params.config,
@@ -2003,11 +2056,6 @@ export async function runEmbeddedPiAgent(
               promptErrorDetails.reason ?? classifyFailoverReason(errorText, { provider });
             const promptProfileFailureReason =
               resolveRunAuthProfileFailureReason(promptFailoverReason);
-            await maybeMarkAuthProfileFailure({
-              profileId: lastProfileId,
-              reason: promptProfileFailureReason,
-              modelId,
-            });
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
@@ -2046,6 +2094,15 @@ export async function runEmbeddedPiAgent(
               promptFailoverDecision.action === "rotate_profile" &&
               (await advanceAuthProfile())
             ) {
+              if (failedPromptProfileId && promptProfileFailureReason) {
+                void maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                }).catch((err) => {
+                  log.warn(`prompt profile failure mark failed: ${String(err)}`);
+                });
+              }
               traceAttempts.push({
                 provider,
                 model: modelId,
@@ -2071,6 +2128,17 @@ export async function runEmbeddedPiAgent(
                 failoverReason: promptFailoverReason,
                 profileRotated: true,
               });
+            }
+            if (failedPromptProfileId && promptProfileFailureReason) {
+              try {
+                await maybeMarkAuthProfileFailure({
+                  profileId: failedPromptProfileId,
+                  reason: promptProfileFailureReason,
+                  modelId,
+                });
+              } catch (err) {
+                log.warn(`prompt profile failure mark failed: ${String(err)}`);
+              }
             }
             const fallbackThinking = pickFallbackThinkingLevel({
               message: errorText,
@@ -2203,6 +2271,7 @@ export async function runEmbeddedPiAgent(
 
           const assistantFailoverDecision = resolveRunFailoverDecision({
             stage: "assistant",
+            allowFormatRetry: cloudCodeAssistFormatError,
             aborted,
             externalAbort,
             fallbackConfigured,
@@ -2378,6 +2447,7 @@ export async function runEmbeddedPiAgent(
           // partial assistant fragment. Emit an explicit timeout error instead.
           if (
             timedOutDuringPrompt &&
+            !hasMessagingToolDeliveryEvidence(attempt) &&
             (!payloadsWithToolMedia?.length || hasPartialAssistantTextAfterPromptTimeout)
           ) {
             const timeoutText = idleTimedOut
@@ -2810,14 +2880,9 @@ export async function runEmbeddedPiAgent(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
           if (lastProfileId) {
-            await markAuthProfileGood({
+            await markAuthProfileSuccess({
               store: authStore,
               provider,
-              profileId: lastProfileId,
-              agentDir: params.agentDir,
-            });
-            await markAuthProfileUsed({
-              store: authStore,
               profileId: lastProfileId,
               agentDir: params.agentDir,
             });

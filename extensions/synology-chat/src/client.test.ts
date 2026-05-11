@@ -121,7 +121,11 @@ describe("Synology Chat TLS verification defaults", () => {
     mockSuccessResponse();
     await settleTimers(invoke());
     const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+    const firstCall = httpsRequest.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("expected Synology Chat HTTPS request");
+    }
+    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });
 
@@ -153,7 +157,11 @@ describe("sendMessage", () => {
     mockSuccessResponse();
     await settleTimers(sendMessage("https://nas.example.com/incoming", "Hello", undefined, true));
     const httpsRequest = vi.mocked(https.request);
-    expect(httpsRequest.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: false });
+    const firstCall = httpsRequest.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("expected Synology Chat HTTPS request");
+    }
+    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: false });
   });
 });
 
@@ -325,11 +333,13 @@ describe("resolveLegacyWebhookNameToChatUserId", () => {
       mutableWebhookUsername: "anyone",
     });
     const httpsGet = vi.mocked(https.get);
-    expect(httpsGet).toHaveBeenCalledWith(
-      expect.stringContaining("method=user_list"),
-      expect.any(Object),
-      expect.any(Function),
-    );
+    const call = httpsGet.mock.calls[0];
+    if (!call) {
+      throw new Error("expected Synology Chat user_list request");
+    }
+    expect(String(call[0])).toBe(baseUrl.replace("method=chatbot", "method=user_list"));
+    expect(call[1]).toEqual({ rejectUnauthorized: true });
+    expect(typeof call[2]).toBe("function");
   });
 
   it("keeps user cache scoped per incoming URL", async () => {
@@ -376,6 +386,10 @@ describe("fetchChatUsers", () => {
     await fetchChatUsers(freshUrl);
 
     const httpsGet = vi.mocked(https.get);
-    expect(httpsGet.mock.calls[0]?.[1]).toMatchObject({ rejectUnauthorized: true });
+    const firstCall = httpsGet.mock.calls[0];
+    if (!firstCall) {
+      throw new Error("expected Synology Chat HTTPS get");
+    }
+    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
   });
 });

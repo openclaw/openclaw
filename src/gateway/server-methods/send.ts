@@ -1,4 +1,5 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
+import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
 import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
@@ -6,7 +7,6 @@ import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -19,6 +19,7 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
 import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
+import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import { normalizePollInput } from "../../polls.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import {
@@ -352,6 +353,10 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           agentId: normalizeOptionalString(request.agentId) ?? undefined,
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(
+            cfg,
+            normalizeOptionalString(request.agentId) ?? undefined,
+          ),
           toolContext: request.toolContext,
           dryRun: false,
         });
@@ -397,6 +402,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       replyToId?: string;
       threadId?: string;
+      forceDocument?: boolean;
+      silent?: boolean;
+      parseMode?: "HTML";
       sessionKey?: string;
       idempotencyKey: string;
     };
@@ -538,7 +546,7 @@ export const sendHandlers: GatewayRequestHandlers = {
           sessionKey: outboundSessionKey,
           conversationType: outboundRoute?.chatType,
         });
-        const results = await deliverOutboundPayloads({
+        const send = await sendDurableMessageBatch({
           cfg,
           channel: outboundChannel,
           to: deliveryTarget,
@@ -547,9 +555,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
+          forceDocument: request.forceDocument,
           threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
+          silent: request.silent,
+          formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,
@@ -560,6 +571,10 @@ export const sendHandlers: GatewayRequestHandlers = {
               }
             : undefined,
         });
+        if (send.status === "failed" || send.status === "partial_failed") {
+          throw send.error;
+        }
+        const results = send.status === "sent" ? send.results : [];
 
         const result = results.at(-1);
         if (!result) {

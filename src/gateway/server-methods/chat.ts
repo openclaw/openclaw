@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { CURRENT_SESSION_VERSION } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { CURRENT_SESSION_VERSION } from "@earendil-works/pi-coding-agent";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentWorkspaceDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { rewriteTranscriptEntriesInSessionFile } from "../../agents/pi-embedded-runner/transcript-rewrite.js";
@@ -51,6 +51,7 @@ import {
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isGatewayCliClient,
+  isOperatorUiClient,
   isWebchatClient,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
@@ -1903,6 +1904,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       sessionId?: string;
       message: string;
       thinking?: string;
+      fastMode?: boolean;
       deliver?: boolean;
       originatingChannel?: string;
       originatingTo?: string;
@@ -2266,9 +2268,13 @@ export const chatHandlers: GatewayRequestHandlers = {
         ...(commandSource ? { CommandSource: commandSource } : {}),
         CommandAuthorized: true,
         MessageSid: clientRunId,
-        SenderId: clientInfo?.id,
-        SenderName: clientInfo?.displayName,
-        SenderUsername: clientInfo?.displayName,
+        ...(!isOperatorUiClient(clientInfo)
+          ? {
+              SenderId: clientInfo?.id,
+              SenderName: clientInfo?.displayName,
+              SenderUsername: clientInfo?.displayName,
+            }
+          : {}),
         GatewayClientScopes: client?.connect?.scopes ?? [],
         ...pluginBoundMediaFields,
       };
@@ -2498,6 +2504,8 @@ export const chatHandlers: GatewayRequestHandlers = {
               abortSignal: activeRunAbort.controller.signal,
               images: parsedImages.length > 0 ? parsedImages : undefined,
               imageOrder: imageOrder.length > 0 ? imageOrder : undefined,
+              thinkingLevelOverride: p.thinking,
+              fastModeOverride: p.fastMode,
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 if (!hasBeforeAgentRunGate) {

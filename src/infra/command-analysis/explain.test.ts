@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { explainShellCommand } from "../command-explainer/index.js";
 import {
+  explainCommandForDisplay,
   resolveCommandAnalysisSummaryForDisplay,
   summarizeCommandExplanation,
   summarizeCommandSegmentsForDisplay,
@@ -16,6 +17,17 @@ describe("command-analysis explanation summary", () => {
     expect(summary.riskKinds).toContain("inline-eval");
     expect(summary.warningLines).toEqual(
       expect.arrayContaining([expect.stringContaining("inline-eval")]),
+    );
+  });
+
+  it("loads the rich command explainer for rich display summaries", async () => {
+    const result = await explainCommandForDisplay(`bash -lc 'python3 -c "print(1)"'`);
+
+    expect(result?.summary).toEqual(
+      expect.objectContaining({
+        commandCount: 1,
+        riskKinds: expect.arrayContaining(["shell-wrapper", "inline-eval"]),
+      }),
     );
   });
 
@@ -75,7 +87,7 @@ describe("command-analysis explanation summary", () => {
         commandText: "echo ok",
         commandArgv: ["python3", "-c", "print(1)"],
       })?.riskKinds,
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(
       resolveCommandAnalysisSummaryForDisplay({
         host: "gateway",

@@ -85,6 +85,7 @@ describe("tsdown config", () => {
 
     expect(entryKeys(distGraph)).toEqual(
       expect.arrayContaining([
+        "acp/control-plane/manager",
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
@@ -101,6 +102,7 @@ describe("tsdown config", () => {
         "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
+        "web-fetch/runtime",
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("active-memory"),
@@ -142,7 +144,7 @@ describe("tsdown config", () => {
       (config) => typeof config.outDir === "string" && config.outDir.startsWith("dist/extensions/"),
     );
 
-    expect(extensionGraphs).toEqual([]);
+    expect(extensionGraphs).toStrictEqual([]);
   });
 
   it("does not emit plugin-sdk or hooks from a separate dist graph", () => {
@@ -154,7 +156,7 @@ describe("tsdown config", () => {
     );
 
     expect(configs.map((config) => config.outDir)).not.toContain("dist/plugin-sdk");
-    expect(hookEntries).toEqual([]);
+    expect(hookEntries).toStrictEqual([]);
   });
 
   it("externalizes known heavy native dependencies", () => {
@@ -163,19 +165,27 @@ describe("tsdown config", () => {
     const external = unifiedGraph?.inputOptions?.({})?.external;
 
     if (typeof neverBundle === "function") {
+      expect(neverBundle("@discordjs/voice")).toBe(true);
       expect(neverBundle("@lancedb/lancedb")).toBe(true);
       expect(neverBundle("@larksuiteoapi/node-sdk")).toBe(true);
       expect(neverBundle("@matrix-org/matrix-sdk-crypto-nodejs")).toBe(true);
+      expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
+      expect(neverBundle("prism-media")).toBe(true);
       expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
+      expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
     } else {
       expect(neverBundle).toEqual(
         expect.arrayContaining([
+          "@discordjs/voice",
           "@lancedb/lancedb",
           "@larksuiteoapi/node-sdk",
+          "@vitest/expect",
           "matrix-js-sdk",
+          "prism-media",
           "qrcode-terminal",
+          "vitest",
         ]),
       );
     }
@@ -199,7 +209,7 @@ describe("tsdown config", () => {
       (_level, log) => handled.push(log),
     );
 
-    expect(handled).toEqual([]);
+    expect(handled).toStrictEqual([]);
   });
 
   it("keeps unresolved imports outside extension source visible", () => {

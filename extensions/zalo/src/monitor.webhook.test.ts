@@ -426,7 +426,7 @@ describe("handleZaloWebhookRequest", () => {
     }
   });
 
-  it("does not throw when replay metadata is partially missing", async () => {
+  it("accepts replay metadata when optional fields are missing", async () => {
     const sink = vi.fn();
     const unregister = registerTarget({ path: "/hook-replay-partial", statusSink: sink });
     const payload = {
@@ -789,18 +789,17 @@ describe("handleZaloWebhookRequest", () => {
       unregister();
     }
 
-    expect(readAllowFromStore).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        accountId: "work",
-      }),
-    );
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalo",
-        id: "123",
-        accountId: "work",
-      }),
-    );
+    expect(readAllowFromStore).toHaveBeenCalledTimes(1);
+    expect(readAllowFromStore).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+    });
+    expect(upsertPairingRequest).toHaveBeenCalledTimes(1);
+    expect(upsertPairingRequest).toHaveBeenCalledWith({
+      channel: "zalo",
+      accountId: "work",
+      id: "123",
+      meta: { name: "Attacker" },
+    });
   });
 });

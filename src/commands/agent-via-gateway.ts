@@ -7,6 +7,7 @@ import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway, isGatewayTransportError, randomIdempotencyKey } from "../gateway/call.js";
+import { ADMIN_SCOPE } from "../gateway/operator-scopes.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import { routeLogsToStderr } from "../logging/console.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -22,6 +23,7 @@ type AgentGatewayResult = {
     mediaUrl?: string | null;
     mediaUrls?: string[];
   }>;
+  deliveryStatus?: unknown;
   meta?: unknown;
 };
 
@@ -30,6 +32,7 @@ type GatewayAgentResponse = {
   status?: string;
   summary?: string;
   result?: AgentGatewayResult;
+  deliveryStatus?: unknown;
 };
 
 const NO_GATEWAY_TIMEOUT_MS = 2_147_000_000;
@@ -73,7 +76,9 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
       ? Number.parseInt(opts.timeout, 10)
       : (opts.cfg.agents?.defaults?.timeoutSeconds ?? 600);
   if (Number.isNaN(raw) || raw < 0) {
-    throw new Error("--timeout must be a non-negative integer (seconds; 0 means no timeout)");
+    throw new Error(
+      `Invalid --timeout. Use seconds as a non-negative integer, for example --timeout 600. Use --timeout 0 to disable the timeout.`,
+    );
   }
   return raw;
 }
@@ -124,14 +129,29 @@ function createGatewayTimeoutFallbackSession(agentId?: string): {
   };
 }
 
+function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentResponse {
+  const deliveryStatus = response.result?.deliveryStatus;
+  if (deliveryStatus === undefined) {
+    return response;
+  }
+  return {
+    ...response,
+    deliveryStatus,
+  };
+}
+
 async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
   protectJsonStdout(opts);
   const body = (opts.message ?? "").trim();
   if (!body) {
-    throw new Error("Message (--message) is required");
+    throw new Error(
+      `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or pass --to/--session-id for an existing conversation.`,
+    );
   }
   if (!opts.to && !opts.sessionId && !opts.agent) {
-    throw new Error("Pass --to <E.164>, --session-id, or --agent to choose a session");
+    throw new Error(
+      `No target session selected. Use --agent <id>, --session-id <id>, or --to <E.164>. Run ${formatCliCommand("openclaw agents list")} to see agents.`,
+    );
   }
 
   const cfg = getRuntimeConfig();
@@ -160,6 +180,8 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
 
   const channel = normalizeMessageChannel(opts.channel);
   const idempotencyKey = normalizeOptionalString(opts.runId) || randomIdempotencyKey();
+  const modelOverride = normalizeOptionalString(opts.model);
+  const hasModelOverride = Boolean(modelOverride);
 
   const response: GatewayAgentResponse = await withProgress(
     {
@@ -173,7 +195,7 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         params: {
           message: body,
           agentId,
-          model: opts.model,
+          model: modelOverride,
           to: opts.to,
           replyTo: opts.replyTo,
           sessionId: opts.sessionId,
@@ -191,13 +213,16 @@ async function agentViaGatewayCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
         },
         expectFinal: true,
         timeoutMs: gatewayTimeoutMs,
-        clientName: GATEWAY_CLIENT_NAMES.CLI,
-        mode: GATEWAY_CLIENT_MODES.CLI,
+        clientName: hasModelOverride
+          ? GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT
+          : GATEWAY_CLIENT_NAMES.CLI,
+        mode: hasModelOverride ? GATEWAY_CLIENT_MODES.BACKEND : GATEWAY_CLIENT_MODES.CLI,
+        ...(hasModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
       }),
   );
 
   if (opts.json) {
-    writeRuntimeJson(runtime, response);
+    writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
     return response;
   }
 
