@@ -42,6 +42,7 @@ describe("active-sessions-shutdown-tracker", () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].sessionId).toBe("session-A");
     expect(entries[0].agentId).toBe("main");
+    expect(entries[0].sessionKey).toBe("agent:main:main");
   });
 
   it("ignores empty sessionId notes", () => {
