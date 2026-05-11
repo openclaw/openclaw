@@ -1,6 +1,7 @@
 // Discord plugin module implements rest behavior.
 import { randomBytes } from "node:crypto";
 import { inspect } from "node:util";
+import { gunzipSync } from "node:zlib";
 import {
   clampTimerTimeoutMs,
   parseFiniteNumber,
@@ -105,7 +106,7 @@ async function readResponseBodyText(response: Response, idleTimeoutMs: number): 
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
-  return buffer.toString("utf8");
+  return decodeResponseBody(buffer);
 }
 
 function coerceResponseBody(raw: string): unknown {
@@ -117,6 +118,16 @@ function coerceResponseBody(raw: string): unknown {
   } catch {
     return raw;
   }
+}
+
+function decodeResponseBody(buffer: Buffer): string {
+  if (!buffer.byteLength) {
+    return "";
+  }
+  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+    return gunzipSync(buffer).toString("utf8");
+  }
+  return buffer.toString("utf8");
 }
 
 function escapeMultipartQuotedValue(value: string): string {
