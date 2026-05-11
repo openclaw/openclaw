@@ -486,7 +486,7 @@ openclaw doctor
 
 ## Related
 
-- [Automation & Tasks](/automation) — all automation mechanisms at a glance
+- [Automation](/automation) — all automation mechanisms at a glance
 - [Background Tasks](/automation/tasks) — task ledger for cron executions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
 - [Timezone](/concepts/timezone) — timezone configuration

@@ -229,6 +229,13 @@ describe("active-memory plugin", () => {
     expect(params.messageChannel).toBe(messageChannel);
     expect(params.messageProvider).toBe(messageProvider);
   };
+  const firstHookRegistration = () => {
+    const [call] = api.on.mock.calls as Array<[string, Function, Record<string, unknown>?]>;
+    if (!call) {
+      throw new Error("expected before_prompt_build hook registration");
+    }
+    return call;
+  };
 
   beforeEach(async () => {
     vi.clearAllMocks();
@@ -294,9 +301,10 @@ describe("active-memory plugin", () => {
   });
 
   it("registers a before_prompt_build hook", () => {
-    expect(api.on.mock.calls[0]?.[0]).toBe("before_prompt_build");
-    expect(typeof api.on.mock.calls[0]?.[1]).toBe("function");
-    expect(api.on.mock.calls[0]?.[2]).toEqual({ timeoutMs: 15_000 });
+    const [hookName, handler, options] = firstHookRegistration();
+    expect(hookName).toBe("before_prompt_build");
+    expect(typeof handler).toBe("function");
+    expect(options).toEqual({ timeoutMs: 15_000 });
     expect(hookOptions.before_prompt_build?.timeoutMs).toBe(15_000);
   });
 

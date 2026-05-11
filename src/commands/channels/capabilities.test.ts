@@ -63,6 +63,24 @@ function resetOutput() {
   errors.length = 0;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstMockArg(
+  mock: { mock: { calls: unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  return requireRecord(call[0], `${label} request`);
+}
+
 function buildPlugin(params: {
   id: string;
   capabilities?: ChannelPlugin["capabilities"];
@@ -227,15 +245,18 @@ describe("channelsCapabilitiesCommand", () => {
 
     await channelsCapabilitiesCommand({ channel: "whatsapp" }, runtime);
 
-    const resolveParams = mocks.resolveInstallableChannelPlugin.mock.calls[0]?.[0];
-    expect(resolveParams?.rawChannel).toBe("whatsapp");
-    expect(resolveParams?.allowInstall).toBe(true);
+    const resolveParams = requireFirstMockArg(
+      mocks.resolveInstallableChannelPlugin,
+      "installable channel resolution",
+    );
+    expect(resolveParams.rawChannel).toBe("whatsapp");
+    expect(resolveParams.allowInstall).toBe(true);
 
-    const replaceParams = mocks.replaceConfigFile.mock.calls[0]?.[0];
-    expect(replaceParams?.nextConfig.plugins).toStrictEqual({
+    const replaceParams = requireFirstMockArg(mocks.replaceConfigFile, "config replace");
+    expect(requireRecord(replaceParams.nextConfig, "replace next config").plugins).toStrictEqual({
       entries: { whatsapp: { enabled: true } },
     });
-    expect(replaceParams?.baseHash).toBe("config-1");
+    expect(replaceParams.baseHash).toBe("config-1");
 
     const refreshCalls = mocks.refreshPluginRegistryAfterConfigMutation.mock
       .calls as unknown as Array<[{ reason?: string }]>;

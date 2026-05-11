@@ -107,12 +107,8 @@ describe("Codex app-server approval bridge", () => {
     expect(requestPayload.turnSourceChannel).toBe("telegram");
     expect(requestPayload.turnSourceTo).toBe("chat-1");
     expect(gatewayCallOptions()).toEqual({ expectFinal: false });
-    expect(
-      findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" }),
-    ).toBeDefined();
-    expect(
-      findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" }),
-    ).toBeDefined();
+    findApprovalEvent(params, { status: "pending", approvalId: "plugin:approval-1" });
+    findApprovalEvent(params, { status: "approved", approvalId: "plugin:approval-1" });
   });
 
   it("describes command approvals from parsed command actions when available", async () => {
@@ -240,12 +236,10 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayRequestPayload().description).toBe(
       "Command: pnpm test --watch extensions/codex/src/app-server\nSession: agent:main:session-1",
     );
-    expect(
-      findApprovalEvent(params, {
-        status: "pending",
-        command: "pnpm test --watch extensions/codex/src/app-server",
-      }),
-    ).toBeDefined();
+    findApprovalEvent(params, {
+      status: "pending",
+      command: "pnpm test --watch extensions/codex/src/app-server",
+    });
   });
 
   it("escapes command approval previews before forwarding approval text and events", async () => {
@@ -275,12 +269,9 @@ describe("Codex app-server approval bridge", () => {
     expect(description).not.toContain("<@U123>");
     expect(description).not.toContain("[trusted](https://evil)");
     expect(description).not.toContain("@here");
-    expect(
-      findApprovalEvent(params, {
-        command:
-          "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
-      }),
-    ).toBeDefined();
+    findApprovalEvent(params, {
+      command: "printf '&lt;\uff20U123&gt; \uff3btrusted\uff3d\uff08https://evil\uff09 \uff20here'",
+    });
   });
 
   it("preserves visible OSC-8 link labels in command previews", async () => {
@@ -416,12 +407,10 @@ describe("Codex app-server approval bridge", () => {
       "plugin.approval.request",
       "plugin.approval.waitDecision",
     ]);
-    expect(
-      findApprovalEvent(params, {
-        status: "denied",
-        approvalId: "plugin:approval-untrusted",
-      }),
-    ).toBeDefined();
+    findApprovalEvent(params, {
+      status: "denied",
+      approvalId: "plugin:approval-untrusted",
+    });
   });
 
   it("only treats own null data-property request decisions as no-route", async () => {
@@ -538,9 +527,7 @@ describe("Codex app-server approval bridge", () => {
 
     expect(result).toEqual({ decision: "decline" });
     expect(mockCallGatewayTool).toHaveBeenCalledTimes(1);
-    expect(
-      findApprovalEvent(params, { status: "unavailable", reason: "needs write access" }),
-    ).toBeDefined();
+    findApprovalEvent(params, { status: "unavailable", reason: "needs write access" });
   });
 
   it("sanitizes reason previews before forwarding approval text and events", async () => {
@@ -566,12 +553,10 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayRequestPayload().description).toBe(
       "Reason: needs write access for /tmp please\nSession: agent:main:session-1",
     );
-    expect(
-      findApprovalEvent(params, {
-        status: "unavailable",
-        reason: "needs write access for /tmp please",
-      }),
-    ).toBeDefined();
+    findApprovalEvent(params, {
+      status: "unavailable",
+      reason: "needs write access for /tmp please",
+    });
   });
 
   it("fails closed for unsupported native approval methods without requesting plugin approval", async () => {

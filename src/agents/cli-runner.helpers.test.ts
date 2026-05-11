@@ -4,6 +4,7 @@ import type { ImageContent } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
+import { escapeRegExp } from "../shared/regexp.js";
 import {
   buildCliArgs,
   loadPromptRefImages,
@@ -224,10 +225,14 @@ describe("writeCliImages", () => {
     });
 
     try {
-      expect(first.paths).toHaveLength(1);
+      expect(first.paths).toStrictEqual([
+        expect.stringMatching(
+          new RegExp(
+            `^${escapeRegExp(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`)}.*\\.png$`,
+          ),
+        ),
+      ]);
       expect(second.paths).toEqual(first.paths);
-      expect(first.paths[0]).toContain(`${resolvePreferredOpenClawTmpDir()}/openclaw-cli-images/`);
-      expect(first.paths[0]).toMatch(/\.png$/);
       await expect(fs.readFile(first.paths[0])).resolves.toEqual(Buffer.from(image.data, "base64"));
     } finally {
       await fs.rm(first.paths[0], { force: true });

@@ -362,8 +362,9 @@ describe("DiscordVoiceManager", () => {
   };
 
   const requireRecord = (value: unknown, label: string): Record<string, unknown> => {
-    expect(value, label).toBeTypeOf("object");
-    expect(value, label).not.toBeNull();
+    if (!value || typeof value !== "object") {
+      throw new Error(`expected ${label}`);
+    }
     return value as Record<string, unknown>;
   };
 
@@ -2783,9 +2784,13 @@ describe("DiscordVoiceManager", () => {
     expect(lastTtsStreamArgs().disableFallback).toBe(true);
     expect(lastTtsStreamArgs().text).toBe("hello back");
     expect(textToSpeechMock).not.toHaveBeenCalled();
-    expect(
-      lastMockCall(createAudioResourceMock as unknown as MockCallSource, "audio resource")[0],
-    ).toBeDefined();
+    const audioResourceInput = lastMockCall(
+      createAudioResourceMock as unknown as MockCallSource,
+      "audio resource",
+    )[0];
+    if (audioResourceInput === undefined) {
+      throw new Error("expected Discord audio resource input");
+    }
     await vi.waitFor(() => expect(release).toHaveBeenCalledTimes(1));
   });
 

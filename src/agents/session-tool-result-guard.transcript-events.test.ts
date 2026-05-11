@@ -42,15 +42,17 @@ describe("guardSessionManager transcript updates", () => {
     } as AgentMessage);
 
     expect(updates).toStrictEqual([
-      expect.objectContaining({
+      {
         message: {
           content: [{ text: "hello from subagent", type: "text" }],
           role: "assistant",
           timestamp,
         },
+        messageId: expect.any(String),
         sessionFile,
         sessionKey: "agent:main:worker",
-      }),
+      },
     ]);
+    expect(updates[0]?.messageId).not.toBe("");
   });
 });

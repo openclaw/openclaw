@@ -331,7 +331,11 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
       agent.handleGatewayReconnect();
-      await vi.waitFor(() => expect(resolveAgentWait).toBeDefined());
+      await vi.waitFor(() => {
+        if (resolveAgentWait === undefined) {
+          throw new Error("expected agent.wait resolver");
+        }
+      });
       const resolveWait = requireValue(resolveAgentWait, "agent.wait resolver");
 
       agent.handleGatewayDisconnect("1006: second disconnect");

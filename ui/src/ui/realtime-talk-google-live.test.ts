@@ -171,6 +171,18 @@ function latestWebSocket(): MockGoogleLiveWebSocket {
   return ws;
 }
 
+function requireFirstTalkEvent(onTalkEvent: ReturnType<typeof vi.fn>): Record<string, unknown> {
+  const [call] = onTalkEvent.mock.calls;
+  if (!call) {
+    throw new Error("expected talk event");
+  }
+  const [event] = call;
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    throw new Error("expected talk event record");
+  }
+  return event as Record<string, unknown>;
+}
+
 describe("GoogleLiveRealtimeTalkTransport", () => {
   beforeEach(() => {
     wsInstances.length = 0;
@@ -201,10 +213,10 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
 
     expect(ws.binaryType).toBe("arraybuffer");
     await vi.waitFor(() => expect(onStatus).toHaveBeenCalledWith("listening"));
-    const readyEvent = onTalkEvent.mock.calls[0]?.[0];
-    expect(readyEvent?.type).toBe("session.ready");
-    expect(readyEvent?.sessionId).toBe("main:google:provider-websocket");
-    expect(readyEvent?.transport).toBe("provider-websocket");
+    const readyEvent = requireFirstTalkEvent(onTalkEvent);
+    expect(readyEvent.type).toBe("session.ready");
+    expect(readyEvent.sessionId).toBe("main:google:provider-websocket");
+    expect(readyEvent.transport).toBe("provider-websocket");
   });
 
   it("decodes Blob setup messages", async () => {

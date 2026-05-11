@@ -35,6 +35,10 @@ import {
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
 import { createVpsAwareOAuthHandlers } from "../../plugins/provider-oauth-flow.js";
 import { resolvePluginProviders } from "../../plugins/providers.runtime.js";
+import {
+  resolvePluginSetupProvider,
+  resolvePluginSetupRegistry,
+} from "../../plugins/setup-registry.js";
 import type {
   ProviderAuthMethod,
   ProviderAuthResult,
@@ -108,6 +112,51 @@ function listProvidersWithTokenMethods(providers: ProviderPlugin[]): ProviderPlu
   return providers.filter((provider) => listTokenAuthMethods(provider).length > 0);
 }
 
+function mergeSetupProviders(
+  providers: readonly ProviderPlugin[],
+  setupProviders: readonly ProviderPlugin[],
+): ProviderPlugin[] {
+  if (setupProviders.length === 0) {
+    return [...providers];
+  }
+  const setupById = new Map(
+    setupProviders.map((provider) => [normalizeProviderId(provider.id), provider] as const),
+  );
+  const merged = providers.map(
+    (provider) => setupById.get(normalizeProviderId(provider.id)) ?? provider,
+  );
+  const existing = new Set(merged.map((provider) => normalizeProviderId(provider.id)));
+  for (const provider of setupProviders) {
+    if (!existing.has(normalizeProviderId(provider.id))) {
+      merged.push(provider);
+    }
+  }
+  return merged;
+}
+
+function preferSetupAuthProviders(params: {
+  providers: readonly ProviderPlugin[];
+  config: OpenClawConfig;
+  workspaceDir: string;
+  requestedProvider?: string;
+}): ProviderPlugin[] {
+  const requestedProvider = params.requestedProvider?.trim();
+  if (requestedProvider) {
+    const setupProvider = resolvePluginSetupProvider({
+      provider: requestedProvider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+    });
+    return setupProvider ? [setupProvider] : [...params.providers];
+  }
+
+  const setupProviders = resolvePluginSetupRegistry({
+    config: params.config,
+    workspaceDir: params.workspaceDir,
+  }).providers.map((entry) => entry.provider);
+  return mergeSetupProviders(params.providers, setupProviders);
+}
+
 async function resolveModelsAuthContext(params?: {
   requestedProvider?: string;
   rawAgentId?: string | null;
@@ -130,11 +179,17 @@ async function resolveModelsAuthContext(params?: {
       ? { providerRefs: [params.requestedProvider], activate: true }
       : {}),
   });
+  const authProviders = preferSetupAuthProviders({
+    providers,
+    config,
+    workspaceDir,
+    requestedProvider: params?.requestedProvider,
+  });
   return {
     config,
     agentDir,
     workspaceDir,
-    providers,
+    providers: authProviders,
   };
 }
 
@@ -189,9 +244,13 @@ async function pickProviderAuthMethod(params: {
   requestedMethod?: string;
   prompter: ReturnType<typeof createClackPrompter>;
 }) {
-  const requestedMethod = pickAuthMethod(params.provider, params.requestedMethod);
-  if (requestedMethod) {
-    return requestedMethod;
+  const rawRequestedMethod = params.requestedMethod?.trim();
+  if (rawRequestedMethod) {
+    return pickAuthMethod(params.provider, rawRequestedMethod);
+  }
+  const oauthMethod = params.provider.auth.find((method) => method.kind === "oauth");
+  if (oauthMethod) {
+    return oauthMethod;
   }
   if (params.provider.auth.length === 1) {
     return params.provider.auth[0] ?? null;
@@ -323,7 +382,8 @@ async function runProviderAuthMethod(params: {
   prompter: ReturnType<typeof createClackPrompter>;
   setDefault?: boolean;
 }) {
-  await clearStaleProfileLockouts(params.provider.id, params.agentDir);
+  const selectedProviderId = normalizeProviderId(params.provider.id);
+  await clearStaleProfileLockouts(selectedProviderId, params.agentDir);
 
   const result = await params.method.run({
     config: params.config,
@@ -342,6 +402,14 @@ async function runProviderAuthMethod(params: {
       createVpsAwareHandlers: (runtimeParams) => createVpsAwareOAuthHandlers(runtimeParams),
     },
   });
+  const resultProviderIds = new Set(
+    result.profiles.map((profile) => normalizeProviderId(profile.credential.provider)),
+  );
+  for (const providerId of resultProviderIds) {
+    if (providerId && providerId !== selectedProviderId) {
+      await clearStaleProfileLockouts(providerId, params.agentDir);
+    }
+  }
 
   await persistProviderAuthResult({
     result,

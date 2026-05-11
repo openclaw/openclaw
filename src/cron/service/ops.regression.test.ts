@@ -326,10 +326,11 @@ describe("cron service ops regressions", () => {
     const result = await run(state, "stale-running", "force");
     expect(result).toEqual({ ok: true, ran: true });
     expect(enqueueSystemEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueSystemEvent.mock.calls[0]?.[0]).toBe("stale-running");
-    expect(
-      (enqueueSystemEvent.mock.calls[0]?.[1] as { agentId?: unknown } | undefined)?.agentId,
-    ).toBeUndefined();
+    const enqueueCall = enqueueSystemEvent.mock.calls[0];
+    expect(enqueueCall).toBeDefined();
+    const [text, options] = enqueueCall as [string, { agentId?: unknown }?];
+    expect(text).toBe("stale-running");
+    expect(options?.agentId).toBeUndefined();
   });
 
   it("queues manual cron.run requests behind the cron execution lane", async () => {

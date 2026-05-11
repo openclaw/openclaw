@@ -71,6 +71,14 @@ function setPlatform(platform: NodeJS.Platform): void {
   });
 }
 
+function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
+  const [call] = spawnSyncMock.mock.calls;
+  if (!call) {
+    throw new Error("expected spawnSync call");
+  }
+  return call as [unknown, unknown, unknown];
+}
+
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {
     const gatewayPidA = process.pid + 1000;
@@ -168,7 +176,7 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
     expect(killed).toEqual([stalePid]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
     expect(spawnSyncMock).toHaveBeenCalledTimes(2);
-    const [command, args, options] = spawnSyncMock.mock.calls[0] ?? [];
+    const [command, args, options] = requireFirstSpawnSyncCall();
     expect(command).toBe("/usr/sbin/lsof");
     expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);
     expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(

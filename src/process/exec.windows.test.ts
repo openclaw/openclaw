@@ -48,6 +48,14 @@ type MockChild = EventEmitter & {
   killed?: boolean;
 };
 
+function spawnCallAt(callIndex: number): unknown[] {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  return call;
+}
+
 function createMockChild(params?: {
   closeCode?: number | null;
   closeSignal?: NodeJS.Signals | null;
@@ -478,9 +486,10 @@ describe("windows command wrapper behavior", () => {
       await vi.advanceTimersByTimeAsync(81);
       expect(child.kill).not.toHaveBeenCalled();
       expect(spawnMock).toHaveBeenCalledTimes(2);
-      expect(spawnMock.mock.calls[1]?.[0]).toBe("taskkill");
-      expect(spawnMock.mock.calls[1]?.[1]).toEqual(["/PID", "1234", "/T", "/F"]);
-      expect(spawnMock.mock.calls[1]?.[2]).toEqual({
+      const taskkillCall = spawnCallAt(1);
+      expect(taskkillCall[0]).toBe("taskkill");
+      expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(taskkillCall[2]).toEqual({
         stdio: "ignore",
         windowsHide: true,
       });

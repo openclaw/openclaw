@@ -68,8 +68,9 @@ describe("startHeartbeatRunner", () => {
       throw new Error(`Expected heartbeat run call ${callIndex}`);
     }
     const options = call[0];
-    expect(typeof options).toBe("object");
-    expect(options).not.toBeNull();
+    if (!options || typeof options !== "object") {
+      throw new Error(`expected heartbeat run options ${callIndex}`);
+    }
     return options as Record<string, unknown>;
   }
 

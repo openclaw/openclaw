@@ -78,6 +78,7 @@ describe("provider replay helpers", () => {
       applyAssistantFirstOrderingFix: false,
       validateGeminiTurns: false,
       validateAnthropicTurns: false,
+      allowSyntheticToolResults: true,
     });
     expect(policy).not.toHaveProperty("sanitizeToolCallIds");
     expect(policy).not.toHaveProperty("toolCallIdMode");

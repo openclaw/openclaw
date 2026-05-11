@@ -1371,7 +1371,6 @@ async function compactEmbeddedPiSessionDirectOnce(
             await flushPendingToolResultsAfterIdle({
               agent: session?.agent,
               sessionManager,
-              clearPendingOnTimeout: true,
             });
           } catch {
             /* best-effort */

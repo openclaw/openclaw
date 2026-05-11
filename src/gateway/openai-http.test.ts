@@ -1446,7 +1446,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
               | string
               | undefined) === "get_weather",
         );
-        expect(withIdentity).toBeTruthy();
+        if (!withIdentity) {
+          throw new Error("expected tool call delta with identity");
+        }
         const argsJoined = toolCallDeltaRecords
           .filter((record) => record.index === 0)
           .map(
@@ -1460,7 +1462,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const finishChunk = toolCallChunks
           .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "tool_calls");
-        expect(finishChunk).toBeTruthy();
+        if (!finishChunk) {
+          throw new Error("expected tool_calls finish chunk");
+        }
       }
 
       {
@@ -1499,9 +1503,11 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
           .filter((d) => d !== "[DONE]")
           .map((d) => JSON.parse(d) as Record<string, unknown>);
         const usageChunk = jsonChunks.find((chunk) => "usage" in chunk);
-        expect(usageChunk).toBeTruthy();
-        expect(usageChunk?.choices).toEqual([]);
-        expect(usageChunk?.usage).toEqual({
+        if (!usageChunk) {
+          throw new Error("expected streamed usage chunk");
+        }
+        expect(usageChunk.choices).toEqual([]);
+        expect(usageChunk.usage).toEqual({
           prompt_tokens: 12,
           completion_tokens: 3,
           total_tokens: 15,
@@ -1566,7 +1572,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         const finishChunk = lateToolCallChunks
           .flatMap((chunk) => (chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "tool_calls");
-        expect(finishChunk).toBeTruthy();
+        if (!finishChunk) {
+          throw new Error("expected late tool_calls finish chunk");
+        }
         const anyToolCalls = lateToolCallChunks.some((chunk) => {
           const choice = ((chunk.choices as Array<Record<string, unknown>> | undefined) ?? [])[0];
           const delta = (choice?.delta as Record<string, unknown> | undefined) ?? {};
@@ -1608,7 +1616,9 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
             ((chunk.error as { type?: unknown }).type ?? "") === "invalid_request_error" &&
             ((chunk.error as { message?: unknown }).message ?? "") === "invalid tool configuration",
         );
-        expect(protocolError).toBeTruthy();
+        if (!protocolError) {
+          throw new Error("expected invalid tool configuration protocol error");
+        }
         const stopChoice = toolConflictChunks
           .flatMap((c) => (c.choices as Array<Record<string, unknown>> | undefined) ?? [])
           .find((choice) => choice.finish_reason === "stop");

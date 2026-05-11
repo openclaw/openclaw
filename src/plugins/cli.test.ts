@@ -103,8 +103,9 @@ function createAutoEnabledCliFixture() {
 
 function getMockCallObject(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0) {
   const value = mock.mock.calls[callIndex]?.[argIndex];
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected mock call ${callIndex} arg ${argIndex} object`);
+  }
   return value as Record<string, unknown>;
 }
 

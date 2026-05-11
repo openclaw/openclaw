@@ -219,56 +219,60 @@ describe("gateway status output", () => {
 
     expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
     expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
-    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1] as
-      | {
-          ok?: unknown;
-          degraded?: unknown;
-          primaryTargetId?: unknown;
-          targets?: unknown;
-          warnings?: unknown;
-        }
-      | undefined;
-    expect(payload).toStrictEqual(
-      expect.objectContaining({
-        degraded: true,
-        ok: true,
-        primaryTargetId: "detail-timeout",
-        targets: [
-          expect.objectContaining({
-            active: true,
-            auth: {
-              capability: "read_only",
-              role: "operator",
-              scopes: ["operator.read"],
-            },
-            config: null,
-            connect: {
-              close: null,
-              error: "timeout",
-              latencyMs: 40,
-              ok: true,
-              rpcOk: false,
-              scopeLimited: false,
-            },
-            health: null,
-            id: "detail-timeout",
-            kind: "explicit",
-            presence: null,
-            self: null,
-            summary: null,
-            tunnel: null,
-            url: "ws://127.0.0.1:18789",
-          }),
-        ],
-        warnings: [
-          {
-            code: "probe_detail_failed",
-            message:
-              "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
-            targetIds: ["detail-timeout"],
+    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1];
+    expect(payload).toStrictEqual({
+      ok: true,
+      degraded: true,
+      capability: "read_only",
+      ts: expect.any(Number),
+      durationMs: expect.any(Number),
+      timeoutMs: 5_000,
+      primaryTargetId: "detail-timeout",
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["detail-timeout"],
+        },
+      ],
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: null,
+        tailnetIPv4: null,
+      },
+      discovery: {
+        timeoutMs: 500,
+        count: 0,
+        beacons: [],
+      },
+      targets: [
+        {
+          id: "detail-timeout",
+          kind: "explicit",
+          url: "ws://127.0.0.1:18789",
+          active: true,
+          tunnel: null,
+          connect: {
+            ok: true,
+            rpcOk: false,
+            scopeLimited: false,
+            latencyMs: 40,
+            error: "timeout",
+            close: null,
           },
-        ],
-      }),
-    );
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
+          self: null,
+          config: null,
+          health: null,
+          summary: null,
+          presence: null,
+        },
+      ],
+    });
   });
 });

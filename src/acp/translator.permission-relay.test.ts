@@ -149,7 +149,9 @@ function hasApprovalRelay(agent: AcpGatewayAgent, approvalId: string): boolean {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
+  if (!value) {
+    throw new Error("expected record");
+  }
   expect(typeof value).toBe("object");
   expect(Array.isArray(value)).toBe(false);
   return value as Record<string, unknown>;

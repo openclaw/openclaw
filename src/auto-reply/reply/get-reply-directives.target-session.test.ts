@@ -119,8 +119,9 @@ function mockCallInput(mock: { mock: { calls: unknown[][] } }, index = 0): Recor
     throw new Error(`Expected mock call ${index}`);
   }
   const input = call[0];
-  expect(typeof input).toBe("object");
-  expect(input).not.toBeNull();
+  if (!input || typeof input !== "object") {
+    throw new Error(`expected mock input ${index}`);
+  }
   return input as Record<string, unknown>;
 }
 
