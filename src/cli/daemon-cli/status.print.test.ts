@@ -79,6 +79,36 @@ describe("printDaemonStatus", () => {
     resolveControlUiLinksMock.mockClear();
   });
 
+  it("does not warn that the port is not listening when the probe is ok", () => {
+    printDaemonStatus(
+      {
+        service: {
+          label: "LaunchAgent",
+          loaded: true,
+          loadedText: "loaded",
+          notLoadedText: "not loaded",
+          runtime: { status: "running", pid: 8000 },
+        },
+        port: {
+          port: 18789,
+          status: "free",
+          listeners: [],
+          hints: [],
+        },
+        rpc: {
+          ok: true,
+          url: "ws://127.0.0.1:18789",
+        },
+        extraServices: [],
+      },
+      { json: false },
+    );
+
+    expect(runtime.error).not.toHaveBeenCalledWith(
+      expect.stringContaining("is not listening (service appears running)"),
+    );
+  });
+
   it("prints stale gateway pid guidance when runtime does not own the listener", () => {
     printDaemonStatus(
       {

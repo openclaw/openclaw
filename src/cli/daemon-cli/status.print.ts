@@ -315,27 +315,31 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean })
     status.port &&
     status.port.status !== "busy"
   ) {
-    defaultRuntime.error(
-      errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
-    );
-    const serviceEnv = { ...process.env, ...service.command?.environment };
-    if (status.lastError) {
-      defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
-    }
-    if (process.platform === "linux") {
-      const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
+    const hasListenerAddrs = resolvePortListeningAddresses(status).length > 0;
+    const rpcOk = status.rpc?.ok === true;
+    if (!rpcOk && !hasListenerAddrs) {
       defaultRuntime.error(
-        errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
+        errorText(`Gateway port ${status.port.port} is not listening (service appears running).`),
       );
-    } else if (process.platform === "darwin") {
-      const logs = resolveGatewayLogPaths(serviceEnv);
-      defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
-      defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
+      const serviceEnv = { ...process.env, ...service.command?.environment };
+      if (status.lastError) {
+        defaultRuntime.error(`${errorText("Last gateway error:")} ${status.lastError}`);
+      }
+      if (process.platform === "linux") {
+        const unit = resolveGatewaySystemdServiceName(serviceEnv.OPENCLAW_PROFILE);
+        defaultRuntime.error(
+          errorText(`Logs: journalctl --user -u ${unit}.service -n 200 --no-pager`),
+        );
+      } else if (process.platform === "darwin") {
+        const logs = resolveGatewayLogPaths(serviceEnv);
+        defaultRuntime.error(`${errorText("Logs:")} ${shortenHomePath(logs.stdoutPath)}`);
+        defaultRuntime.error(`${errorText("Errors:")} ${shortenHomePath(logs.stderrPath)}`);
+      }
+      defaultRuntime.error(
+        `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
+      );
+      spacer();
     }
-    defaultRuntime.error(
-      `${errorText("Restart log:")} ${shortenHomePath(resolveGatewayRestartLogPath(serviceEnv))}`,
-    );
-    spacer();
   }
 
   if (extraServices.length > 0) {

@@ -349,6 +349,28 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       normalizeLowercaseStringOrEmpty(userAgent).includes("swiftpm-testing-helper") &&
       isLoopbackAddress(remote);
 
+    const isBenignLoopbackPreauthClose = (params: {
+      remoteAddr?: string;
+      handshakeState: "pending" | "connected" | "failed";
+      durationMs: number;
+      origin?: string;
+      userAgent?: string;
+    }) => {
+      if (!isLoopbackAddress(params.remoteAddr)) {
+        return false;
+      }
+      if (params.handshakeState !== "pending") {
+        return false;
+      }
+      if (params.durationMs > 300) {
+        return false;
+      }
+      if (params.origin || params.userAgent) {
+        return false;
+      }
+      return true;
+    };
+
     socket.once("close", (code, reason) => {
       const durationMs = Date.now() - openedAt;
       const logForwardedFor = sanitizeLogValue(forwardedFor);
@@ -375,9 +397,17 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
         ...closeMeta,
       };
       if (!client) {
-        const logFn = isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr)
-          ? logWsControl.debug
-          : logWsControl.warn;
+        const logFn =
+          isNoisySwiftPmHelperClose(requestUserAgent, remoteAddr) ||
+          isBenignLoopbackPreauthClose({
+            remoteAddr,
+            handshakeState,
+            durationMs,
+            origin: logOrigin,
+            userAgent: logUserAgent,
+          })
+            ? logWsControl.debug
+            : logWsControl.warn;
         logFn(
           `closed before connect conn=${connId} peer=${endpoint ?? "n/a"} remote=${remoteAddr ?? "?"} fwd=${logForwardedFor || "n/a"} origin=${logOrigin || "n/a"} host=${logHost || "n/a"} ua=${logUserAgent || "n/a"} code=${code ?? "n/a"} reason=${logReason || "n/a"}`,
           closeContext,
