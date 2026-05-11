@@ -323,16 +323,26 @@ describe("runDaemonInstall", () => {
 
     await runDaemonInstall({ json: true });
 
-    expect(service.install).toHaveBeenCalledWith(
-      expect.objectContaining({
-        environment: {
-          OPENROUTER_API_KEY: "or-operator-key",
+    const installCalls = service.install.mock.calls as unknown as Array<
+      [
+        {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
         },
-        environmentValueSources: {
-          OPENROUTER_API_KEY: "file",
-        },
-      }),
-    );
+      ]
+    >;
+    const installOptions = installCalls[0]?.[0] as
+      | {
+          environment?: Record<string, string>;
+          environmentValueSources?: Record<string, string>;
+        }
+      | undefined;
+    expect(installOptions?.environment).toEqual({
+      OPENROUTER_API_KEY: "or-operator-key",
+    });
+    expect(installOptions?.environmentValueSources).toEqual({
+      OPENROUTER_API_KEY: "file",
+    });
   });
 
   it("does not treat env-template gateway.auth.token as plaintext during install", async () => {

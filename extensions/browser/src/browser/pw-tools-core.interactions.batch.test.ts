@@ -56,13 +56,10 @@ describe("batchViaPlaywright", () => {
     });
 
     expect(result).toEqual({ results: [{ ok: true }] });
-    expect(page?.evaluate).toHaveBeenCalledWith(
-      expect.any(Function),
-      expect.objectContaining({
-        fnBody: "() => 1",
-        timeoutMs: 4500,
-      }),
-    );
+    const [evaluateFn, evaluateOptions] = page?.evaluate.mock.calls[0] ?? [];
+    expect(evaluateFn).toEqual(expect.any(Function));
+    expect(evaluateOptions?.fnBody).toBe("() => 1");
+    expect(evaluateOptions?.timeoutMs).toBe(4500);
   });
 
   it("supports resize and close inside a batch", async () => {

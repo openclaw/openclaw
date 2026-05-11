@@ -200,15 +200,17 @@ describe("tool-loop-detection", () => {
     });
 
     it("hashes non-object params with the same digest shape", () => {
-      expect([
+      const hashes = [
         hashToolCall("tool", "string-param"),
         hashToolCall("tool", 123),
         hashToolCall("tool", null),
-      ]).toEqual([
-        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
-        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
-        expect.stringMatching(/^tool:[a-f0-9]{64}$/),
-      ]);
+      ];
+      expect(hashes).toHaveLength(3);
+      for (const hash of hashes) {
+        expect(hash.startsWith("tool:")).toBe(true);
+        expect(hash.length).toBe("tool:".length + 64);
+        expect([...hash.slice("tool:".length)].every((char) => /[a-f0-9]/.test(char))).toBe(true);
+      }
     });
 
     it("produces deterministic hashes regardless of key order", () => {

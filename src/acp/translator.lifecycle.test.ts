@@ -336,16 +336,10 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "adaptive",
-        }),
-      ]),
-    );
+    const thoughtLevelOption = result.configOptions.find((option) => option.id === "thought_level");
+    expect(thoughtLevelOption?.currentValue).toBe("adaptive");
     expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
-    expect(request).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    expect(request.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "agent:main:work",
       update: {

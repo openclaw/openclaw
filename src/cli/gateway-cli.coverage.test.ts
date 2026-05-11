@@ -166,15 +166,14 @@ describe("gateway-cli coverage", () => {
       "--json",
     ]);
 
-    expect(callGateway).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "diagnostics.stability",
-        params: {
-          limit: 5,
-          type: "payload.large",
-        },
-      }),
-    );
+    const stabilityCall = callGateway.mock.calls[0]?.[0] as
+      | { method?: string; params?: unknown }
+      | undefined;
+    expect(stabilityCall?.method).toBe("diagnostics.stability");
+    expect(stabilityCall?.params).toEqual({
+      limit: 5,
+      type: "payload.large",
+    });
   });
 
   it("prints the latest stability bundle without calling Gateway", async () => {
@@ -266,12 +265,11 @@ describe("gateway-cli coverage", () => {
       );
 
       expect(callGateway).toHaveBeenCalledTimes(1);
-      expect(callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "health",
-          timeoutMs: 3000,
-        }),
-      );
+      const healthCall = callGateway.mock.calls[0]?.[0] as
+        | { method?: string; timeoutMs?: number }
+        | undefined;
+      expect(healthCall?.method).toBe("health");
+      expect(healthCall?.timeoutMs).toBe(3000);
       expect(fs.existsSync(outputPath)).toBe(true);
       const output = runtimeLogs.join("\n");
       expect(output).toContain('"path"');

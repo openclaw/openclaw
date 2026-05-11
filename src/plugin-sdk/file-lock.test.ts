@@ -44,10 +44,9 @@ describe("acquireFileLock", () => {
     );
 
     await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
-      expect(error).toMatchObject({
-        code: FILE_LOCK_TIMEOUT_ERROR_CODE,
-      });
-      expect((error as { lockPath?: string }).lockPath).toMatch(/oauth-refresh\.lock$/);
+      const lockError = error as { code?: string; lockPath?: string };
+      expect(lockError.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
+      expect(lockError.lockPath).toMatch(/oauth-refresh\.lock$/);
       return true;
     });
   }, 5_000);

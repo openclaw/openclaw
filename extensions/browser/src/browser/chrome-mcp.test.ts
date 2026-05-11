@@ -17,6 +17,11 @@ type ToolCall = {
   name: string;
   arguments?: Record<string, unknown>;
 };
+type ToolCallMock = {
+  mock: {
+    calls: Array<[ToolCall]>;
+  };
+};
 
 type ChromeMcpSessionFactory = Exclude<
   Parameters<typeof setChromeMcpSessionFactoryForTest>[0],
@@ -256,9 +261,9 @@ describe("chrome MCP page parsing", () => {
       name: "new_page",
       arguments: { url: "about:blank", timeout: 5000 },
     });
-    expect(session.client.callTool).not.toHaveBeenCalledWith(
-      expect.objectContaining({ name: "navigate_page" }),
-    );
+    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const callNames = callToolMock.mock.calls.map(([call]) => call.name);
+    expect(callNames).not.toContain("navigate_page");
   });
 
   it("parses evaluate_script text responses when structuredContent is missing", async () => {
@@ -654,12 +659,11 @@ describe("chrome MCP page parsing", () => {
       // intentionally no timeoutMs
     });
 
-    expect(session.client.callTool).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "navigate_page",
-        arguments: expect.objectContaining({ timeout: 20_000 }),
-      }),
-    );
+    const callToolMock = session.client.callTool as unknown as ToolCallMock;
+    const navigateCall = callToolMock.mock.calls.find(
+      ([call]) => call.name === "navigate_page",
+    )?.[0];
+    expect(navigateCall?.arguments?.timeout).toBe(20_000);
   });
 
   it("resets the Chrome MCP session when a navigate_page call hangs past the safety-net timeout", async () => {

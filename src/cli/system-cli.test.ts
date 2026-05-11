@@ -44,12 +44,11 @@ describe("system-cli", () => {
   it("runs system event with default wake mode and text output", async () => {
     await runCli(["system", "event", "--text", "  hello world  "]);
 
-    expect(callGatewayFromCli).toHaveBeenCalledWith(
-      "wake",
-      expect.objectContaining({ text: "  hello world  " }),
-      { mode: "next-heartbeat", text: "hello world" },
-      { expectFinal: false },
-    );
+    const [method, payload, options, requestOptions] = callGatewayFromCli.mock.calls[0] ?? [];
+    expect(method).toBe("wake");
+    expect((payload as { text?: string } | undefined)?.text).toBe("  hello world  ");
+    expect(options).toEqual({ mode: "next-heartbeat", text: "hello world" });
+    expect(requestOptions).toEqual({ expectFinal: false });
     expect(runtimeLogs).toEqual(["ok"]);
   });
 

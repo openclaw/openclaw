@@ -225,15 +225,10 @@ describe("pairing cli", () => {
         channel: "telegram",
         code: "ABCDEFGH",
       });
-      expect(replaceConfigFile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          nextConfig: {
-            commands: {
-              ownerAllowFrom: ["telegram:123"],
-            },
-          },
-        }),
-      );
+      const replaceCall = replaceConfigFile.mock.calls[0]?.[0] as
+        | { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } }
+        | undefined;
+      expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
       expect(log).toHaveBeenCalledWith(expect.stringContaining("Command owner configured"));
     } finally {

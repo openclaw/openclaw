@@ -86,7 +86,10 @@ describe("withTempDownloadPath", () => {
       expect(capturedPath).toContain(path.join(resolvePreferredOpenClawTmpDir(), "line-media-"));
     }
     if (expectCleanup) {
-      await expect(fs.stat(capturedPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(capturedPath)).rejects.toSatisfy((error) => {
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        return true;
+      });
     }
   });
 });

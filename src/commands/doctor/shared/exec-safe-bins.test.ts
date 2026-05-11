@@ -56,9 +56,9 @@ describe("doctor exec safe bin helpers", () => {
     });
 
     expect(warnings).toEqual([
-      expect.stringContaining("tools.exec.safeBins includes interpreter/runtime 'node'"),
-      expect.stringContaining("agents.list.runner.tools.exec.safeBins includes 'jq'"),
-      expect.stringContaining('Run "openclaw doctor --fix"'),
+      "- tools.exec.safeBins includes interpreter/runtime 'node' without profile.",
+      "- agents.list.runner.tools.exec.safeBins includes 'jq': jq supports broad jq programs and builtins (for example `env`), so prefer explicit allowlist entries or approval-gated runs instead of safeBins.",
+      '- Run "openclaw doctor --fix" to scaffold missing custom safeBinProfiles entries.',
     ]);
   });
 

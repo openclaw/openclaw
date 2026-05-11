@@ -132,12 +132,11 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
 
     expect(result.status).toBe("error");
     expect(result.error).toBe("SYSTEM_RUN_DENIED: approval required");
-    expect(dispatchCronDeliveryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        skipHeartbeatDelivery: false,
-        deliveryPayloads: [{ text: "SYSTEM_RUN_DENIED: approval required", isError: true }],
-      }),
-    );
+    const deliveryRequest = dispatchCronDeliveryMock.mock.calls[0]?.[0];
+    expect(deliveryRequest?.skipHeartbeatDelivery).toBe(false);
+    expect(deliveryRequest?.deliveryPayloads).toEqual([
+      { text: "SYSTEM_RUN_DENIED: approval required", isError: true },
+    ]);
   });
 
   it("does not retry when descendants were spawned in this run even if they already settled", async () => {
