@@ -106,6 +106,34 @@ type ConnectFrame = {
   };
 };
 
+type RequestTimingPayload = {
+  id?: string;
+  method?: string;
+  ok?: boolean;
+  durationMs?: number;
+  startedAtMs?: number;
+  endedAtMs?: number;
+  errorCode?: string;
+};
+
+function expectLatestRequestTiming(
+  onRequestTiming: ReturnType<typeof vi.fn>,
+  expected: Partial<RequestTimingPayload>,
+) {
+  const timing = onRequestTiming.mock.calls.at(-1)?.[0] as RequestTimingPayload | undefined;
+  expect(timing).toMatchObject(expected);
+  expect(timing?.startedAtMs).toBeTypeOf("number");
+  expect(timing?.endedAtMs).toBeTypeOf("number");
+  expect(timing?.durationMs).toBeTypeOf("number");
+  if (
+    typeof timing?.startedAtMs === "number" &&
+    typeof timing.endedAtMs === "number" &&
+    typeof timing.durationMs === "number"
+  ) {
+    expect(timing.durationMs).toBe(Math.max(0, timing.endedAtMs - timing.startedAtMs));
+  }
+}
+
 function stubWindowGlobals(storage?: ReturnType<typeof createStorageMock>) {
   vi.stubGlobal("window", {
     location: { href: "http://127.0.0.1:18789/" },
@@ -130,6 +158,12 @@ function getLatestWebSocket(): MockWebSocket {
 function stubInsecureCrypto() {
   vi.stubGlobal("crypto", {
     randomUUID: () => "req-insecure",
+  });
+}
+
+function useNodeFakeTimers() {
+  vi.useFakeTimers({
+    toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
   });
 }
 
@@ -282,14 +316,11 @@ describe("GatewayBrowserClient", () => {
     });
 
     await expect(request).resolves.toEqual({ sessions: [] });
-    expect(onRequestTiming).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: frame.id,
-        method: "sessions.list",
-        ok: true,
-        durationMs: expect.any(Number),
-      }),
-    );
+    expectLatestRequestTiming(onRequestTiming, {
+      id: frame.id,
+      method: "sessions.list",
+      ok: true,
+    });
   });
 
   it("reports failed request timing without including request params", async () => {
@@ -330,15 +361,12 @@ describe("GatewayBrowserClient", () => {
         params: expect.anything(),
       }),
     );
-    expect(onRequestTiming).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: frame.id,
-        method: "config.get",
-        ok: false,
-        errorCode: "CONFIG_ERROR",
-        durationMs: expect.any(Number),
-      }),
-    );
+    expectLatestRequestTiming(onRequestTiming, {
+      id: frame.id,
+      method: "config.get",
+      ok: false,
+      errorCode: "CONFIG_ERROR",
+    });
   });
 
   it("prefers explicit shared auth over cached device tokens", async () => {
@@ -352,8 +380,10 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("shared-auth-token");
-    expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
-    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    const signCall = signDevicePayloadMock.mock.calls[0];
+    expect(signCall?.[0]).toBe("private-key");
+    expect(signCall?.[1]).toBeTypeOf("string");
+    const signedPayload = signCall?.[1];
     expect(signedPayload).toContain("|shared-auth-token|nonce-1");
     expect(signedPayload).not.toContain("stored-device-token");
   });
@@ -408,8 +438,10 @@ describe("GatewayBrowserClient", () => {
     expect(typeof connectFrame.id).toBe("string");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
-    expect(signDevicePayloadMock).toHaveBeenCalledWith("private-key", expect.any(String));
-    const signedPayload = signDevicePayloadMock.mock.calls[0]?.[1];
+    const signCall = signDevicePayloadMock.mock.calls[0];
+    expect(signCall?.[0]).toBe("private-key");
+    expect(signCall?.[1]).toBeTypeOf("string");
+    const signedPayload = signCall?.[1];
     expect(signedPayload).toContain("|stored-device-token|nonce-1");
   });
 
@@ -435,7 +467,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("retries once with device token after token mismatch when shared token is explicit", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     const { secondWs, secondConnect } = await expectRetriedDeviceTokenConnect({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -463,7 +495,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("retries startup-unavailable connect responses without terminal callbacks", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     const onClose = vi.fn();
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -504,7 +536,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("treats IPv6 loopback as trusted for bounded device-token retry", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     const { client } = await expectRetriedDeviceTokenConnect({
       url: "ws://[::1]:18789",
       token: "shared-auth-token",
@@ -515,7 +547,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("continues reconnecting on first token mismatch when no retry was attempted", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
@@ -546,7 +578,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("cancels a queued connect send when stopped before the timeout fires", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -611,7 +643,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("cancels a scheduled reconnect when stopped before the retry fires", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -631,7 +663,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("does not auto-reconnect on AUTH_TOKEN_MISSING", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
     localStorage.clear();
 
     const client = new GatewayBrowserClient({
@@ -660,7 +692,7 @@ describe("GatewayBrowserClient", () => {
   });
 
   it("clears stale stored device tokens and does not reconnect on AUTH_DEVICE_TOKEN_MISMATCH", async () => {
-    vi.useFakeTimers();
+    useNodeFakeTimers();
 
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",

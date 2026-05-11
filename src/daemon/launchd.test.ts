@@ -1,6 +1,8 @@
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
+  LAUNCH_AGENT_PROCESS_TYPE,
   LAUNCH_AGENT_THROTTLE_INTERVAL_SECONDS,
   LAUNCH_AGENT_UMASK_DECIMAL,
 } from "./launchd-plist.js";
@@ -371,21 +373,19 @@ describe("launchd runtime state", () => {
     state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
     state.serviceLoaded = false;
 
-    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
-      status: "unknown",
-      missingSupervision: true,
-      detail: "Could not find service",
-    });
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingSupervision).toBe(true);
+    expect(runtime.detail).toBe("Could not find service");
   });
 
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
     const env = createDefaultLaunchdEnv();
     state.serviceLoaded = false;
 
-    await expect(readLaunchAgentRuntime(env)).resolves.toMatchObject({
-      status: "unknown",
-      missingUnit: true,
-    });
+    const runtime = await readLaunchAgentRuntime(env);
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingUnit).toBe(true);
   });
 });
 
@@ -468,11 +468,12 @@ describe("launchd bootstrap repair", () => {
 
     const repair = await repairLaunchAgentBootstrap({ env });
 
-    expect(repair).toMatchObject({
-      ok: false,
-      status: "bootstrap-failed",
-      detail: expect.stringContaining("Could not find specified service"),
-    });
+    expect(repair.ok).toBe(false);
+    if (repair.ok) {
+      throw new Error("expected bootstrap repair to fail");
+    }
+    expect(repair.status).toBe("bootstrap-failed");
+    expect(repair.detail).toContain("Could not find specified service");
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
@@ -538,14 +539,10 @@ describe("launchd install", () => {
 
     const command = await readLaunchAgentProgramArguments(env);
     expect(command?.programArguments).toEqual(defaultProgramArguments);
-    expect(command?.environment).toMatchObject({
-      TMPDIR: tmpDir,
-      OPENAI_API_KEY: apiKey,
-    });
-    expect(command?.environmentValueSources).toMatchObject({
-      TMPDIR: "file",
-      OPENAI_API_KEY: "file",
-    });
+    expect(command?.environment?.TMPDIR).toBe(tmpDir);
+    expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
+    expect(command?.environmentValueSources?.TMPDIR).toBe("file");
+    expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
   });
 
   it("creates the LaunchAgent TMPDIR before bootstrap", async () => {
@@ -562,7 +559,7 @@ describe("launchd install", () => {
     expect(state.dirModes.get(tmpDir)).toBe(0o700);
   });
 
-  it("writes KeepAlive=true policy with restrictive umask", async () => {
+  it("writes KeepAlive=true policy with shutdown and throttle limits", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
       env,
@@ -575,6 +572,10 @@ describe("launchd install", () => {
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<true/>");
     expect(plist).not.toContain("<key>SuccessfulExit</key>");
+    expect(plist).toContain("<key>ExitTimeOut</key>");
+    expect(plist).toContain(`<integer>${LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS}</integer>`);
+    expect(plist).toContain("<key>ProcessType</key>");
+    expect(plist).toContain(`<string>${LAUNCH_AGENT_PROCESS_TYPE}</string>`);
     expect(plist).toContain("<key>Umask</key>");
     expect(plist).toContain(`<integer>${LAUNCH_AGENT_UMASK_DECIMAL}</integer>`);
     expect(plist).toContain("<key>ThrottleInterval</key>");
@@ -962,7 +963,7 @@ describe("launchd install", () => {
       mode: "kickstart",
       waitForPid: process.pid,
     });
-    expect(state.launchctlCalls).toEqual([]);
+    expect(state.launchctlCalls).toStrictEqual([]);
   });
 
   it("surfaces detached handoff failures", async () => {

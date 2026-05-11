@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
+import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 import { appendSessionTranscriptMessage } from "./transcript-append.js";
@@ -106,19 +107,23 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     });
 
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    expect(emitSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionFile,
-        sessionKey,
-        messageId: expect.any(String),
-        message: expect.objectContaining({
-          role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
-          content: [{ type: "text", text: "Hello from delivery mirror!" }],
-        }),
-      }),
-    );
+    expect(emitSpy).toHaveBeenCalledTimes(1);
+    const [event] = emitSpy.mock.calls[0] as [SessionTranscriptUpdate];
+    const message = event.message as
+      | {
+          role?: string;
+          provider?: string;
+          model?: string;
+          content?: unknown;
+        }
+      | undefined;
+    expect(event?.sessionFile).toBe(sessionFile);
+    expect(event?.sessionKey).toBe(sessionKey);
+    expect(event?.messageId).toBeTypeOf("string");
+    expect(message?.role).toBe("assistant");
+    expect(message?.provider).toBe("openclaw");
+    expect(message?.model).toBe("delivery-mirror");
+    expect(message?.content).toEqual([{ type: "text", text: "Hello from delivery mirror!" }]);
     emitSpy.mockRestore();
   });
 
@@ -474,11 +479,11 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       "legacy second",
       "new reply",
     ]);
-    expect(messages[0]).toMatchObject({ id: "legacy-first", parentId: null });
-    expect(messages[1]).toMatchObject({ id: "legacy-second", parentId: "legacy-first" });
-    expect(messages[2]).toMatchObject({
-      id: appended.messageId,
-      parentId: "legacy-second",
-    });
+    expect(messages[0]?.id).toBe("legacy-first");
+    expect(messages[0]?.parentId).toBeNull();
+    expect(messages[1]?.id).toBe("legacy-second");
+    expect(messages[1]?.parentId).toBe("legacy-first");
+    expect(messages[2]?.id).toBe(appended.messageId);
+    expect(messages[2]?.parentId).toBe("legacy-second");
   });
 });

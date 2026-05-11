@@ -40,7 +40,7 @@ export type NormalizedTurnInput = {
 };
 
 export type SenderFacts = {
-  id: string;
+  id?: string;
   name?: string;
   username?: string;
   tag?: string;
@@ -84,34 +84,91 @@ export type ReplyPlanFacts = {
   deliveryTarget?: string;
   replyToId?: string;
   replyToIdFull?: string;
-  messageThreadId?: string;
+  messageThreadId?: string | number;
   threadParentId?: string;
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
+};
+
+export type ProjectedAllowlistAccessFacts = {
+  configured: boolean;
+  matched: boolean;
+  reasonCode?: string;
+  matchedEntryIds: string[];
+  invalidEntryCount: number;
+  disabledEntryCount: number;
+  accessGroups: {
+    referenced: string[];
+    matched: string[];
+    missing: string[];
+    unsupported: string[];
+    failed: string[];
+  };
+};
+
+export type ProjectedEventAccessFacts = {
+  kind:
+    | "message"
+    | "reaction"
+    | "button"
+    | "postback"
+    | "native-command"
+    | "slash-command"
+    | "system";
+  authMode: "inbound" | "command" | "origin-subject" | "route-only" | "none";
+  mayPair: boolean;
+  authorized: boolean;
+  reasonCode?: string;
+  hasOriginSubject: boolean;
+  originSubjectMatched: boolean;
 };
 
 export type AccessFacts = {
   dm?: {
     decision: "allow" | "pairing" | "deny";
     reason?: string;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   group?: {
     policy: "open" | "allowlist" | "disabled";
     routeAllowed: boolean;
     senderAllowed: boolean;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
     requireMention: boolean;
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   commands?: {
+    authorized?: boolean;
+    shouldBlockControlCommand?: boolean;
+    reasonCode?: string;
     useAccessGroups: boolean;
     allowTextCommands: boolean;
+    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
+    /**
+     * @deprecated Shared ingress projections do not expose raw authorizer lists.
+     * Use authorized and reasonCode instead.
+     */
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   };
+  event?: ProjectedEventAccessFacts;
   mentions?: {
     canDetectMention: boolean;
     wasMentioned: boolean;
     hasAnyMention?: boolean;
-    implicitMentionKinds?: Array<"reply_to_bot" | "bot_thread_participant" | "native">;
+    implicitMentionKinds?: Array<
+      "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
+    >;
+    requireMention?: boolean;
+    effectiveWasMentioned?: boolean;
+    shouldSkip?: boolean;
   };
 };
 
@@ -152,7 +209,7 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: unknown[];
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
 };
 

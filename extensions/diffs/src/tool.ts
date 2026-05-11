@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { stringEnum } from "openclaw/plugin-sdk/channel-actions";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { Static, Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginApi, OpenClawPluginToolContext } from "../api.js";
 import { PlaywrightDiffScreenshotter, type DiffScreenshotter } from "./browser.js";
@@ -175,7 +175,7 @@ export function createDiffsTool(params: {
       const theme = normalizeTheme(toolParams.theme, params.defaults.theme);
       const layout = normalizeLayout(toolParams.layout, params.defaults.layout);
       const expandUnchanged = toolParams.expandUnchanged === true;
-      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds);
+      const ttlMs = normalizeTtlMs(toolParams.ttlSeconds ?? params.defaults.ttlSeconds);
       const image = resolveDiffImageRenderOptions({
         defaults: params.defaults,
         fileFormat: normalizeOutputFormat(

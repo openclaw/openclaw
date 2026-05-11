@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { ImageContent } from "@mariozechner/pi-ai";
+import type { ImageContent } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
@@ -31,7 +31,7 @@ describe("loadPromptRefImages", () => {
         prompt: "just text",
         workspaceDir: "/workspace",
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
 
     expect(loadImageFromRefSpy).not.toHaveBeenCalled();
     expect(sanitizeImageBlocksSpy).not.toHaveBeenCalled();
@@ -68,7 +68,8 @@ describe("loadPromptRefImages", () => {
     });
 
     const [ref, workspaceDir, options] = loadImageFromRefSpy.mock.calls[0] ?? [];
-    expect(ref).toMatchObject({ resolved: "/tmp/photo.png", type: "path" });
+    expect(ref?.resolved).toBe("/tmp/photo.png");
+    expect(ref?.type).toBe("path");
     expect(workspaceDir).toBe("/workspace");
     expect(options).toEqual({
       maxBytes: MAX_IMAGE_BYTES,
@@ -468,7 +469,14 @@ describe("writeCliSystemPromptFile", () => {
     } finally {
       await written.cleanup();
     }
-    await expect(fs.access(written.filePath ?? "")).rejects.toMatchObject({ code: "ENOENT" });
+    let err: unknown;
+    try {
+      await fs.access(written.filePath ?? "");
+    } catch (caught) {
+      err = caught;
+    }
+    expect(err).toBeInstanceOf(Error);
+    expect((err as NodeJS.ErrnoException).code).toBe("ENOENT");
   });
 });
 

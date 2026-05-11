@@ -539,7 +539,7 @@ describe("resolveSessionOptionGroups", () => {
   it("does not synthesize active grouped sessions without a listed row", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toEqual([]);
+    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
     expect(
       labelsForSessionOptions({
         sessionKey,
@@ -739,6 +739,7 @@ describe("createChatSession", () => {
         includeGlobal: true,
         includeUnknown: true,
         showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -747,7 +748,7 @@ describe("createChatSession", () => {
     expect(state.chatAttachments).toEqual([
       { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
     ]);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
@@ -918,7 +919,7 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
     expect(state.chatQueueBySession.main).toEqual([
       { id: "queued", text: "message B", createdAt: 1 },
     ]);
@@ -940,6 +941,7 @@ describe("switchChatSession", () => {
       includeGlobal: true,
       includeUnknown: true,
       showArchived: false,
+      agentId: "main",
     });
     expect(
       (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
@@ -986,7 +988,7 @@ describe("switchChatSession", () => {
     loadSessionsMock.mockResolvedValue(undefined);
 
     switchChatSession(state, "agent:main:other");
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
 
     switchChatSession(state, "main");
 

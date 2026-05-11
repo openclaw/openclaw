@@ -1,4 +1,4 @@
-import type { AgentEvent } from "@mariozechner/pi-agent-core";
+import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
@@ -658,6 +658,13 @@ export function handleToolExecutionStart(
     const toolCallId = evt.toolCallId;
     const args = evt.args;
     const runId = ctx.params.runId;
+    ctx.state.toolExecutionSinceLastBlockReply = true;
+    ctx.params.onExecutionPhase?.({
+      phase: "tool_execution_started",
+      tool: toolName,
+      toolCallId,
+      source: "pi-embedded",
+    });
 
     // Track start time and args for after_tool_call hook.
     const startedAt = Date.now();

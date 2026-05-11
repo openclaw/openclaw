@@ -91,12 +91,34 @@ function requirePersistedJob(jobs: Array<Record<string, unknown>>, index: number
   return job;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectNoteContaining(message: string, title: string): void {
+  expect(
+    noteMock.mock.calls.some(
+      (call) => typeof call[0] === "string" && call[0].includes(message) && call[1] === title,
+    ),
+  ).toBe(true);
+}
+
+function expectNoNoteContaining(message: string, title: string): void {
+  expect(
+    noteMock.mock.calls.some(
+      (call) => typeof call[0] === "string" && call[0].includes(message) && call[1] === title,
+    ),
+  ).toBe(false);
+}
+
 describe("maybeRepairLegacyCronStore", () => {
   it("repairs legacy cron store fields and migrates notify fallback to webhook delivery", async () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [createLegacyCronJob()]);
 
-    const noteSpy = noteMock;
     const cfg = createCronConfig(storePath);
 
     await maybeRepairLegacyCronStore({
@@ -110,28 +132,19 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(job.jobId).toBeUndefined();
     expect(job.id).toBe("legacy-job");
     expect(job.notify).toBeUndefined();
-    expect(job.schedule).toMatchObject({
-      kind: "cron",
-      expr: "0 7 * * *",
-      tz: "UTC",
-    });
-    expect(job.delivery).toMatchObject({
-      mode: "webhook",
-      to: "https://example.invalid/cron-finished",
-    });
-    expect(job.payload).toMatchObject({
-      kind: "systemEvent",
-      text: "Morning brief",
-    });
+    const schedule = requireRecord(job.schedule, "cron schedule");
+    expect(schedule.kind).toBe("cron");
+    expect(schedule.expr).toBe("0 7 * * *");
+    expect(schedule.tz).toBe("UTC");
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("systemEvent");
+    expect(payload.text).toBe("Morning brief");
 
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Legacy cron job storage detected"),
-      "Cron",
-    );
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Cron store normalized"),
-      "Doctor changes",
-    );
+    expectNoteContaining("Legacy cron job storage detected", "Cron");
+    expectNoteContaining("Cron store normalized", "Doctor changes");
   });
 
   it("repairs malformed persisted cron ids before list rendering sees them", async () => {
@@ -162,14 +175,8 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(firstJob.id).toBe("42");
     expect(typeof secondJob.id).toBe("string");
     expect(String(secondJob.id)).toMatch(/^cron-/);
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("stores `id` as a non-string value"),
-      "Cron",
-    );
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("missing a canonical string `id`"),
-      "Cron",
-    );
+    expectNoteContaining("stores `id` as a non-string value", "Cron");
+    expectNoteContaining("missing a canonical string `id`", "Cron");
   });
 
   it("warns instead of replacing announce delivery for notify fallback jobs", async () => {
@@ -202,8 +209,6 @@ describe("maybeRepairLegacyCronStore", () => {
       "utf-8",
     );
 
-    const noteSpy = noteMock;
-
     await maybeRepairLegacyCronStore({
       cfg: {
         cron: {
@@ -218,8 +223,8 @@ describe("maybeRepairLegacyCronStore", () => {
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
     expect(job.notify).toBe(true);
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining('uses legacy notify fallback alongside delivery mode "announce"'),
+    expectNoteContaining(
+      'uses legacy notify fallback alongside delivery mode "announce"',
       "Doctor warnings",
     );
   });
@@ -228,7 +233,6 @@ describe("maybeRepairLegacyCronStore", () => {
     const storePath = await makeTempStorePath();
     await writeCronStore(storePath, [createLegacyCronJob()]);
 
-    const noteSpy = noteMock;
     const prompter = makePrompter(false);
 
     await maybeRepairLegacyCronStore({
@@ -245,10 +249,7 @@ describe("maybeRepairLegacyCronStore", () => {
     });
     expect(job.jobId).toBe("legacy-job");
     expect(job.notify).toBe(true);
-    expect(noteSpy).not.toHaveBeenCalledWith(
-      expect.stringContaining("Cron store normalized"),
-      "Doctor changes",
-    );
+    expectNoNoteContaining("Cron store normalized", "Doctor changes");
   });
 
   it("migrates notify fallback none delivery jobs to cron.webhook", async () => {
@@ -296,10 +297,9 @@ describe("maybeRepairLegacyCronStore", () => {
     const jobs = await readPersistedJobs(storePath);
     const job = requirePersistedJob(jobs, 0);
     expect(job.notify).toBeUndefined();
-    expect(job.delivery).toMatchObject({
-      mode: "webhook",
-      to: "https://example.invalid/cron-finished",
-    });
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("webhook");
+    expect(delivery.to).toBe("https://example.invalid/cron-finished");
   });
 
   it("repairs legacy root delivery threadId hints into delivery", async () => {
@@ -336,12 +336,11 @@ describe("maybeRepairLegacyCronStore", () => {
     expect(job.channel).toBeUndefined();
     expect(job.to).toBeUndefined();
     expect(job.threadId).toBeUndefined();
-    expect(job.delivery).toMatchObject({
-      mode: "announce",
-      channel: "telegram",
-      to: "-1001234567890",
-      threadId: "99",
-    });
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("announce");
+    expect(delivery.channel).toBe("telegram");
+    expect(delivery.to).toBe("-1001234567890");
+    expect(delivery.threadId).toBe("99");
   });
 
   it("rewrites stale managed dreaming jobs to the isolated agentTurn shape", async () => {
@@ -366,8 +365,6 @@ describe("maybeRepairLegacyCronStore", () => {
       },
     ]);
 
-    const noteSpy = noteMock;
-
     await maybeRepairLegacyCronStore({
       cfg: createCronConfig(storePath),
       options: {},
@@ -377,21 +374,16 @@ describe("maybeRepairLegacyCronStore", () => {
     const persisted = JSON.parse(await fs.readFile(storePath, "utf-8")) as {
       jobs: Array<Record<string, unknown>>;
     };
-    const [job] = persisted.jobs;
-    expect(job).toMatchObject({
-      sessionTarget: "isolated",
-      payload: {
-        kind: "agentTurn",
-        message: "__openclaw_memory_core_short_term_promotion_dream__",
-        lightContext: true,
-      },
-      delivery: { mode: "none" },
-    });
-    expect(noteSpy).toHaveBeenCalledWith(expect.stringContaining("managed dreaming job"), "Cron");
-    expect(noteSpy).toHaveBeenCalledWith(
-      expect.stringContaining("Rewrote 1 managed dreaming job"),
-      "Doctor changes",
-    );
+    const job = requirePersistedJob(persisted.jobs, 0);
+    expect(job.sessionTarget).toBe("isolated");
+    const payload = requireRecord(job.payload, "cron payload");
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.message).toBe("__openclaw_memory_core_short_term_promotion_dream__");
+    expect(payload.lightContext).toBe(true);
+    const delivery = requireRecord(job.delivery, "cron delivery");
+    expect(delivery.mode).toBe("none");
+    expectNoteContaining("managed dreaming job", "Cron");
+    expectNoteContaining("Rewrote 1 managed dreaming job", "Doctor changes");
   });
 });
 
@@ -409,15 +401,9 @@ describe("noteLegacyWhatsAppCrontabHealthCheck", () => {
       }),
     });
 
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("Legacy WhatsApp crontab health check detected"),
-      "Cron",
-    );
-    expect(noteMock).toHaveBeenCalledWith(
-      expect.stringContaining("systemd user bus environment is missing"),
-      "Cron",
-    );
-    expect(noteMock).toHaveBeenCalledWith(expect.stringContaining("Matched 1 entry"), "Cron");
+    expectNoteContaining("Legacy WhatsApp crontab health check detected", "Cron");
+    expectNoteContaining("systemd user bus environment is missing", "Cron");
+    expectNoteContaining("Matched 1 entry", "Cron");
   });
 
   it("ignores missing crontab support and non-Linux hosts", async () => {

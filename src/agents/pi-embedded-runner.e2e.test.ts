@@ -31,8 +31,9 @@ const ensureOpenClawModelsJsonMock = vi.fn(async () => ({ wrote: false }));
 const loggerWarnMock = vi.fn();
 let refreshRuntimeAuthOnFirstPromptError = false;
 
-vi.mock("@mariozechner/pi-ai", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+vi.mock("@earendil-works/pi-ai", async () => {
+  const actual =
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
 
   const buildAssistantMessage = (model: { api: string; provider: string; id: string }) => ({
     role: "assistant" as const,
@@ -153,7 +154,7 @@ const installRunEmbeddedMocks = () => {
 };
 
 let runEmbeddedPiAgent: typeof import("./pi-embedded-runner/run.js").runEmbeddedPiAgent;
-let SessionManager: typeof import("@mariozechner/pi-coding-agent").SessionManager;
+let SessionManager: typeof import("@earendil-works/pi-coding-agent").SessionManager;
 let e2eWorkspace: EmbeddedPiRunnerTestWorkspace | undefined;
 let agentDir: string;
 let workspaceDir: string;
@@ -165,7 +166,7 @@ beforeAll(async () => {
   vi.resetModules();
   installRunEmbeddedMocks();
   ({ runEmbeddedPiAgent } = await import("./pi-embedded-runner/run.js"));
-  ({ SessionManager } = await import("@mariozechner/pi-coding-agent"));
+  ({ SessionManager } = await import("@earendil-works/pi-coding-agent"));
   e2eWorkspace = await createEmbeddedPiRunnerTestWorkspace("openclaw-embedded-agent-");
   ({ agentDir, workspaceDir } = e2eWorkspace);
 }, 180_000);
@@ -319,13 +320,15 @@ describe("runEmbeddedPiAgent", () => {
       enqueue: immediateEnqueue,
     });
 
-    expect(resolveModelAsyncMock).toHaveBeenCalledWith(
-      "openrouter",
-      "openrouter/auto",
-      agentDir,
-      cfg,
-      expect.objectContaining({ skipPiDiscovery: true }),
-    );
+    const resolveModelCall = (resolveModelAsyncMock as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls[0];
+    expect(resolveModelCall?.[0]).toBe("openrouter");
+    expect(resolveModelCall?.[1]).toBe("openrouter/auto");
+    expect(resolveModelCall?.[2]).toBe(agentDir);
+    expect(resolveModelCall?.[3]).toBe(cfg);
+    expect(
+      (resolveModelCall?.[4] as { skipPiDiscovery?: boolean } | undefined)?.skipPiDiscovery,
+    ).toBe(true);
     expect(ensureOpenClawModelsJsonMock).not.toHaveBeenCalled();
   });
 
@@ -561,7 +564,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "ok" });
+    expect(result.payloads?.[0]?.text).toBe("ok");
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledTimes(1);
     expect(disposeSessionMcpRuntimeMock).toHaveBeenCalledWith("session:test");
   });
@@ -616,7 +619,7 @@ describe("runEmbeddedPiAgent", () => {
     });
 
     expect(runEmbeddedAttemptMock).toHaveBeenCalledTimes(2);
-    expect(result.payloads?.[0]).toMatchObject({ text: "done" });
+    expect(result.payloads?.[0]?.text).toBe("done");
   });
 
   it("handles prompt error paths without dropping user state", async () => {

@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -9,6 +9,10 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import {
+  ensureModelProviderLocalService,
+  type ProviderLocalServiceLease,
+} from "./provider-local-service.js";
 import {
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestTransport,
@@ -46,9 +50,58 @@ function findSseEventBoundary(buffer: string): { index: number; length: number }
   return best;
 }
 
-function sanitizeOpenAISdkSseResponse(response: Response): Response {
+function sanitizeOpenAISdkSseResponse(
+  response: Response,
+  options?: { synthesizeJsonAsSse?: boolean },
+): Response {
   const contentType = response.headers.get("content-type") ?? "";
-  if (!response.ok || !response.body || !/\btext\/event-stream\b/i.test(contentType)) {
+  if (!response.ok || !response.body) {
+    return response;
+  }
+  if (
+    options?.synthesizeJsonAsSse === true &&
+    (/\bapplication\/json\b/i.test(contentType) || /\+json\b/i.test(contentType))
+  ) {
+    const source = response.body;
+    const decoder = new TextDecoder();
+    const encoder = new TextEncoder();
+    let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    let buffer = "";
+    const sseBody = new ReadableStream<Uint8Array>({
+      start() {
+        reader = source.getReader();
+      },
+      async pull(controller) {
+        try {
+          const chunk = await reader?.read();
+          if (!chunk || chunk.done) {
+            buffer += decoder.decode();
+            const data = buffer.trim();
+            if (data) {
+              controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+            }
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+            return;
+          }
+          buffer += decoder.decode(chunk.value, { stream: true });
+        } catch (error) {
+          controller.error(error);
+        }
+      },
+      async cancel(reason) {
+        await reader?.cancel(reason);
+      },
+    });
+    const headers = new Headers(response.headers);
+    headers.set("content-type", "text/event-stream; charset=utf-8");
+    return new Response(sseBody, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  }
+  if (!/\btext\/event-stream\b/i.test(contentType)) {
     return response;
   }
 
@@ -113,6 +166,39 @@ function sanitizeOpenAISdkSseResponse(response: Response): Response {
     statusText: response.statusText,
     headers: response.headers,
   });
+}
+
+async function requestBodyHasStreamTrue(
+  request: Request | undefined,
+  init: RequestInit | undefined,
+): Promise<boolean> {
+  const method = request?.method ?? init?.method;
+  if (method && method.toUpperCase() !== "POST") {
+    return false;
+  }
+  const headers = request?.headers ?? new Headers(init?.headers);
+  const contentType = headers.get("content-type") ?? "";
+  if (contentType && !/\bapplication\/json\b/i.test(contentType)) {
+    return false;
+  }
+
+  let text: string | undefined;
+  if (request) {
+    text = await request
+      .clone()
+      .text()
+      .catch(() => undefined);
+  } else if (typeof init?.body === "string") {
+    text = init.body;
+  }
+  if (!text) {
+    return false;
+  }
+  try {
+    return (JSON.parse(text) as { stream?: unknown }).stream === true;
+  } catch {
+    return false;
+  }
 }
 
 function parseRetryAfterSeconds(headers: Headers): number | undefined {
@@ -184,9 +270,13 @@ function buildManagedResponse(
   response: Response,
   release: () => Promise<void>,
   refreshTimeout?: () => void,
+  localServiceLease?: ProviderLocalServiceLease,
 ): Response {
+  const finalizeLocalServiceLease = () => {
+    localServiceLease?.release();
+  };
   if (!response.body) {
-    void release();
+    void release().finally(finalizeLocalServiceLease);
     return response;
   }
   const source = response.body;
@@ -197,7 +287,11 @@ function buildManagedResponse(
       return;
     }
     released = true;
-    await release().catch(() => undefined);
+    try {
+      await release().catch(() => undefined);
+    } finally {
+      finalizeLocalServiceLease();
+    }
   };
   const wrappedBody = new ReadableStream<Uint8Array>({
     start() {
@@ -314,11 +408,16 @@ function resolveModelTransportSsrFPolicy(params: {
   return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
-export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
+export function buildGuardedModelFetch(
+  model: Model<Api>,
+  timeoutMs?: number,
+  options?: { sanitizeSse?: boolean },
+): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
   return async (input, init) => {
+    let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
     const url =
       request?.url ??
@@ -344,6 +443,7 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         signal: request.signal,
         ...(request.body ? ({ duplex: "half" } as const) : {}),
       } satisfies RequestInit & { duplex?: "half" });
+    const synthesizeJsonAsSse = await requestBodyHasStreamTrue(request, requestInit ?? init);
     const guardedFetchOptions = {
       url,
       init: requestInit ?? init,
@@ -361,11 +461,22 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       allowCrossOriginUnsafeRedirectReplay: false,
       ...(policy ? { policy } : {}),
     };
-    const result = await fetchWithSsrFGuard(
-      !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
-        ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
-        : guardedFetchOptions,
-    );
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    try {
+      localServiceLease = await ensureModelProviderLocalService(
+        model,
+        (requestInit ?? init)?.headers,
+        (requestInit ?? init)?.signal,
+      );
+      result = await fetchWithSsrFGuard(
+        !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+          ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
+          : guardedFetchOptions,
+      );
+    } catch (error) {
+      localServiceLease?.release();
+      throw error;
+    }
     let response = result.response;
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
@@ -376,7 +487,14 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         headers,
       });
     }
-    response = buildManagedResponse(response, result.release, result.refreshTimeout);
-    return sanitizeOpenAISdkSseResponse(response);
+    response = buildManagedResponse(
+      response,
+      result.release,
+      result.refreshTimeout,
+      localServiceLease,
+    );
+    return options?.sanitizeSse === false
+      ? response
+      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

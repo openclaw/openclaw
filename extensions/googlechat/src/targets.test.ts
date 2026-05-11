@@ -2,7 +2,6 @@ import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { downloadGoogleChatMedia, sendGoogleChatMessage } from "./api.js";
 import { resolveGoogleChatGroupRequireMention } from "./group-policy.js";
-import { isSenderAllowed } from "./sender-allow.js";
 import {
   isGoogleChatSpaceTarget,
   isGoogleChatUserTarget,
@@ -158,29 +157,6 @@ describe("googlechat group policy", () => {
   });
 });
 
-describe("isSenderAllowed", () => {
-  it("matches raw email entries only when dangerous name matching is enabled", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"])).toBe(false);
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["jane@example.com"], true)).toBe(true);
-  });
-
-  it("does not treat users/<email> entries as email allowlist (deprecated form)", () => {
-    expect(isSenderAllowed("users/123", "Jane@Example.com", ["users/jane@example.com"])).toBe(
-      false,
-    );
-  });
-
-  it("still matches user id entries", () => {
-    expect(isSenderAllowed("users/abc", "jane@example.com", ["users/abc"])).toBe(true);
-  });
-
-  it("rejects non-matching raw email entries", () => {
-    expect(isSenderAllowed("users/123", "jane@example.com", ["other@example.com"], true)).toBe(
-      false,
-    );
-  });
-});
-
 describe("downloadGoogleChatMedia", () => {
   afterEach(() => {
     authTesting.resetGoogleChatAuthForTests();
@@ -299,18 +275,14 @@ describe("verifyGoogleChatRequest", () => {
 
     expect(mocks.gaxiosCtor).toHaveBeenCalledOnce();
     expect(googleAuthOptions).toMatchObject({
-      clientOptions: {
-        transporter: {
-          defaults: {
-            fetchImplementation: expect.any(Function),
-          },
-        },
-      },
       credentials: {
         client_email: "bot@example.iam.gserviceaccount.com",
         token_uri: "https://oauth2.googleapis.com/token",
       },
     });
+    expect(typeof googleAuthOptions.clientOptions?.transporter?.defaults?.fetchImplementation).toBe(
+      "function",
+    );
     expect(mocks.getAccessToken).toHaveBeenCalledOnce();
     expect("window" in globalThis).toBe(false);
   });
@@ -333,13 +305,7 @@ describe("verifyGoogleChatRequest", () => {
     const oauthOptions = mocks.oauthCtor.mock.calls[0]?.[0] as {
       transporter?: { defaults?: { fetchImplementation?: unknown } };
     };
-    expect(oauthOptions).toMatchObject({
-      transporter: {
-        defaults: {
-          fetchImplementation: expect.any(Function),
-        },
-      },
-    });
+    expect(typeof oauthOptions.transporter?.defaults?.fetchImplementation).toBe("function");
   });
 
   it("rejects add-on tokens when no principal binding is configured", async () => {

@@ -229,10 +229,24 @@ describe("createOllamaStreamFn thinking events", () => {
   it("uses generic stream timeout for Ollama request timeout", async () => {
     await streamOllamaEvents([makeOllamaResponse({ content: "ok" })], { timeoutMs: 2500 });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: 2500,
-      }),
-    );
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith({
+      url: "http://localhost:11434/api/chat",
+      init: {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "qwen3.5",
+          messages: [{ role: "user", content: "test" }],
+          stream: true,
+          options: {},
+        }),
+      },
+      policy: {
+        allowPrivateNetwork: true,
+        hostnameAllowlist: ["localhost"],
+      },
+      timeoutMs: 2500,
+      auditContext: "ollama-stream.chat",
+    });
   });
 });

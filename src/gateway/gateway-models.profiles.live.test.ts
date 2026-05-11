@@ -12,7 +12,7 @@ import {
   type KnownProvider,
   type Model,
   type ModelThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
 import {
@@ -797,7 +797,7 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
       resolveGatewayLiveModelThinkingLevel({
         cfg: {},
         model: {
-          ...createGatewayLiveTestModel("xai", "grok-4.3"),
+          ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
           thinkingLevelMap: {
             off: null,

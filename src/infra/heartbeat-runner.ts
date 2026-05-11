@@ -38,6 +38,7 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
   ChannelHeartbeatDeps,
@@ -105,12 +106,7 @@ import {
   resolveNextHeartbeatDueMs,
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
-import {
-  isHeartbeatEnabledForAgent,
-  resolveHeartbeatIntervalMs,
-  resolveHeartbeatSummaryForAgent,
-  type HeartbeatSummary,
-} from "./heartbeat-summary.js";
+import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -129,7 +125,6 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
-import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -1235,8 +1230,16 @@ export async function runHeartbeatOnce(opts: {
     opts.sessionKey,
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
+  const pendingFinalDeliveryIsHeartbeatAck =
+    typeof pendingFinalDeliveryText === "string" &&
+    stripHeartbeatToken(pendingFinalDeliveryText, {
+      mode: "heartbeat",
+      maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+    }).shouldSkip;
   if (
     recentSessionEntry?.pendingFinalDelivery === true &&
+    !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
@@ -1594,7 +1597,7 @@ export async function runHeartbeatOnce(opts: {
         return false;
       }
     }
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1604,6 +1607,9 @@ export async function runHeartbeatOnce(opts: {
       session: outboundSession,
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     return true;
   };
 
@@ -1863,7 +1869,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1883,6 +1889,9 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     await markCommitmentsStatus({
       cfg,
       ids: dueCommitmentIds,

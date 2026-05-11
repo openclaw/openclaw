@@ -76,6 +76,7 @@ function createFakeClient(options?: {
   completeWithItems?: boolean;
   notifyError?: string;
   approvalRequestMethod?: string;
+  responseText?: string;
 }) {
   const notifications = new Set<(notification: CodexServerNotification) => void>();
   const requestHandlers = new Set<(request: { method: string }) => JsonValue | undefined>();
@@ -125,7 +126,7 @@ function createFakeClient(options?: {
               threadId: "thread-1",
               turnId: "turn-1",
               itemId: "msg-1",
-              delta: "A red square.",
+              delta: options?.responseText ?? "A red square.",
             },
           });
           notify({
@@ -145,7 +146,7 @@ function createFakeClient(options?: {
               {
                 id: "msg-1",
                 type: "agentMessage",
-                text: "A blue circle.",
+                text: options?.responseText ?? "A blue circle.",
                 phase: null,
                 memoryCitation: null,
               },
@@ -297,5 +298,162 @@ describe("codex media understanding provider", () => {
         agentDir: "/tmp/openclaw-agent",
       }),
     ).rejects.toThrow("vision unavailable");
+  });
+
+  it("runs structured extraction through the same bounded Codex app-server path", async () => {
+    const { client, requests } = createFakeClient({
+      responseText: '{"summary":"red square","tags":["shape"]}',
+    });
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    const result = await provider.extractStructured?.({
+      input: [
+        { type: "text", text: "Extract searchable evidence." },
+        {
+          type: "image",
+          buffer: Buffer.from("image-bytes"),
+          fileName: "image.png",
+          mime: "image/png",
+        },
+      ],
+      instructions: "Return a compact evidence object.",
+      schemaName: "example.media",
+      jsonSchema: {
+        type: "object",
+        properties: {
+          summary: { type: "string" },
+          tags: { type: "array", items: { type: "string" } },
+        },
+        required: ["summary"],
+      },
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(result).toEqual({
+      text: '{"summary":"red square","tags":["shape"]}',
+      parsed: { summary: "red square", tags: ["shape"] },
+      model: "gpt-5.4",
+      provider: "codex",
+      contentType: "json",
+    });
+    expect(requests.map((entry) => entry.method)).toEqual([
+      "model/list",
+      "thread/start",
+      "turn/start",
+    ]);
+    expect(requests[1]?.params).toMatchObject({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+      approvalPolicy: "on-request",
+      sandbox: "read-only",
+      dynamicTools: [],
+      ephemeral: true,
+      persistExtendedHistory: false,
+    });
+    expect(requests[2]?.params).toMatchObject({
+      threadId: "thread-1",
+      approvalPolicy: "on-request",
+      model: "gpt-5.4",
+      input: [
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining("Return valid JSON only"),
+        }),
+        { type: "text", text: "Extract searchable evidence.", text_elements: [] },
+        { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
+      ],
+    });
+  });
+
+  it("rejects text-only structured extraction before starting a turn", async () => {
+    const { client, requests } = createFakeClient({
+      inputModalities: ["text"],
+      responseText: '{"summary":"only text"}',
+    });
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    await expect(
+      provider.extractStructured?.({
+        input: [{ type: "text", text: "The answer is only text." }],
+        instructions: "Return summary JSON.",
+        provider: "codex",
+        model: "gpt-5.4",
+        timeoutMs: 30_000,
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    ).rejects.toThrow("Codex structured extraction requires at least one image input.");
+    expect(requests).toEqual([]);
+  });
+
+  it("returns a controlled error when structured JSON parsing fails", async () => {
+    const { client } = createFakeClient({ responseText: "not json" });
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    await expect(
+      provider.extractStructured?.({
+        input: [
+          { type: "text", text: "Extract JSON." },
+          {
+            type: "image",
+            buffer: Buffer.from("image-bytes"),
+            fileName: "image.png",
+            mime: "image/png",
+          },
+        ],
+        instructions: "Return summary JSON.",
+        provider: "codex",
+        model: "gpt-5.4",
+        timeoutMs: 30_000,
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    ).rejects.toThrow("Codex structured extraction returned invalid JSON.");
+  });
+
+  it("validates structured extraction JSON against the requested schema", async () => {
+    const { client } = createFakeClient({
+      responseText: '{"summary":123,"tags":["shape"]}',
+    });
+    const provider = buildCodexMediaUnderstandingProvider({
+      clientFactory: async () => client,
+    });
+
+    await expect(
+      provider.extractStructured?.({
+        input: [
+          { type: "text", text: "Extract JSON." },
+          {
+            type: "image",
+            buffer: Buffer.from("image-bytes"),
+            fileName: "image.png",
+            mime: "image/png",
+          },
+        ],
+        instructions: "Return summary JSON.",
+        jsonSchema: {
+          type: "object",
+          properties: {
+            summary: { type: "string" },
+          },
+          required: ["summary"],
+        },
+        provider: "codex",
+        model: "gpt-5.4",
+        timeoutMs: 30_000,
+        cfg: {},
+        agentDir: "/tmp/openclaw-agent",
+      }),
+    ).rejects.toThrow("Codex structured extraction JSON did not match schema");
   });
 });

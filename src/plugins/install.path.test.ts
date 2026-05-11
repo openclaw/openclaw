@@ -187,7 +187,7 @@ describe("installPluginFromPath", () => {
 
     expect(result.ok).toBe(true);
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(handler.mock.calls[0]?.[0]).toMatchObject({
+    expect(handler.mock.calls[0]?.[0]).toEqual({
       targetName: "payload",
       targetType: "plugin",
       origin: "plugin-file",
@@ -200,6 +200,11 @@ describe("installPluginFromPath", () => {
       },
       builtinScan: {
         status: "ok",
+        scannedFiles: 1,
+        critical: 0,
+        warn: 0,
+        info: 0,
+        findings: [],
       },
       plugin: {
         contentType: "file",

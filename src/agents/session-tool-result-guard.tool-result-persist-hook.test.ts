@@ -1,8 +1,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, afterEach, vi } from "vitest";
 import {
   initializeGlobalHookRunner,
@@ -121,14 +121,10 @@ describe("tool_result_persist hook", () => {
     });
     appendToolCallAndResult(sm);
     const toolResult = requirePersistedToolResult(sm);
-    expect(toolResult).toMatchObject({
-      role: "toolResult",
-      details: {
-        persistedDetailsTruncated: true,
-        originalDetailKeys: ["big"],
-        originalDetailsBytesAtLeast: expect.any(Number),
-      },
-    });
+    expect(toolResult.role).toBe("toolResult");
+    expect(toolResult.details.persistedDetailsTruncated).toBe(true);
+    expect(toolResult.details.originalDetailKeys).toEqual(["big"]);
+    expect(typeof toolResult.details.originalDetailsBytesAtLeast).toBe("number");
     expect(toolResult.details.originalDetailsBytesAtLeast).toBeGreaterThan(8_192);
   });
 
@@ -265,9 +261,9 @@ describe("tool_result_persist hook", () => {
     const toolResult = getPersistedToolResult(sm);
     const details = toolResult.details as Record<string, unknown>;
     expect(details.persistedDetailsTruncated).toBe(true);
-    expect(details.originalDetailKeys).toEqual(
-      expect.arrayContaining(["status", "sessionId", "debug_0"]),
-    );
+    expect(details.originalDetailKeys).toContain("status");
+    expect(details.originalDetailKeys).toContain("sessionId");
+    expect(details.originalDetailKeys).toContain("debug_0");
   });
 
   it("falls back to a compact summary when sanitized details still exceed the cap", () => {

@@ -52,8 +52,8 @@ vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/text-runtime", async () => {
-  const original = (await vi.importActual("openclaw/plugin-sdk/text-runtime")) as Record<
+vi.mock("openclaw/plugin-sdk/text-chunking", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/text-chunking")) as Record<
     string,
     unknown
   >;
@@ -84,7 +84,7 @@ afterAll(() => {
   vi.doUnmock("./connect-options.js");
   vi.doUnmock("./protocol.js");
   vi.doUnmock("openclaw/plugin-sdk/plugin-config-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/text-runtime");
+  vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.resetModules();
 });
 
@@ -243,54 +243,47 @@ describe("sendMessageIrc cfg threading", () => {
     } as unknown as IrcClient & { quit: ReturnType<typeof vi.fn> };
     hoisted.connectIrcClient.mockResolvedValue(client);
 
-    await expect(
-      verifyChannelMessageAdapterCapabilityProofs({
-        adapterName: "irc",
-        adapter: ircMessageAdapter,
-        proofs: {
-          text: async () => {
-            const result = await ircMessageAdapter.send?.text?.({
-              cfg: providedCfg,
-              to: "#room",
-              text: "hello",
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
-            expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
-          },
-          media: async () => {
-            const result = await ircMessageAdapter.send?.media?.({
-              cfg: providedCfg,
-              to: "#room",
-              text: "image",
-              mediaUrl: "https://example.com/image.png",
-            });
-            expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
-            expect(client.sendPrivmsg).toHaveBeenCalledWith(
-              "#room",
-              "image\n\nAttachment: https://example.com/image.png",
-            );
-          },
-          replyTo: async () => {
-            const result = await ircMessageAdapter.send?.text?.({
-              cfg: providedCfg,
-              to: "#room",
-              text: "threaded",
-              replyToId: "parent-1",
-            });
-            expect(result?.receipt.replyToId).toBe("parent-1");
-            expect(client.sendPrivmsg).toHaveBeenCalledWith(
-              "#room",
-              "threaded\n\n[reply:parent-1]",
-            );
-          },
+    const proofResults = await verifyChannelMessageAdapterCapabilityProofs({
+      adapterName: "irc",
+      adapter: ircMessageAdapter,
+      proofs: {
+        text: async () => {
+          const result = await ircMessageAdapter.send?.text?.({
+            cfg: providedCfg,
+            to: "#room",
+            text: "hello",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "hello");
         },
-      }),
-    ).resolves.toEqual(
-      expect.arrayContaining([
-        { capability: "text", status: "verified" },
-        { capability: "media", status: "verified" },
-        { capability: "replyTo", status: "verified" },
-      ]),
-    );
+        media: async () => {
+          const result = await ircMessageAdapter.send?.media?.({
+            cfg: providedCfg,
+            to: "#room",
+            text: "image",
+            mediaUrl: "https://example.com/image.png",
+          });
+          expect(result?.receipt.platformMessageIds).toEqual(["irc-msg-1"]);
+          expect(client.sendPrivmsg).toHaveBeenCalledWith(
+            "#room",
+            "image\n\nAttachment: https://example.com/image.png",
+          );
+        },
+        replyTo: async () => {
+          const result = await ircMessageAdapter.send?.text?.({
+            cfg: providedCfg,
+            to: "#room",
+            text: "threaded",
+            replyToId: "parent-1",
+          });
+          expect(result?.receipt.replyToId).toBe("parent-1");
+          expect(client.sendPrivmsg).toHaveBeenCalledWith("#room", "threaded\n\n[reply:parent-1]");
+        },
+      },
+    });
+
+    expect(proofResults.find((result) => result.capability === "text")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "media")?.status).toBe("verified");
+    expect(proofResults.find((result) => result.capability === "replyTo")?.status).toBe("verified");
   });
 });

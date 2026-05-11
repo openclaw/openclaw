@@ -11,7 +11,8 @@ import type {
   ChannelMessageActionName,
 } from "openclaw/plugin-sdk/channel-contract";
 import { createLazyRuntimeNamedExport } from "openclaw/plugin-sdk/lazy-runtime";
-import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/text-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { extractToolSend } from "openclaw/plugin-sdk/tool-send";
 import { resolveIMessageAccount } from "./accounts.js";
 import { IMESSAGE_ACTION_NAMES, IMESSAGE_ACTIONS } from "./actions-contract.js";
@@ -25,6 +26,8 @@ const loadIMessageActionsRuntime = createLazyRuntimeNamedExport(
   () => import("./actions.runtime.js"),
   "imessageActionsRuntime",
 );
+
+const log = createSubsystemLogger("channels/imessage");
 
 const providerId = "imessage";
 
@@ -240,6 +243,51 @@ function decodeBase64Buffer(params: Record<string, unknown>, action: string): Ui
   return Uint8Array.from(Buffer.from(base64Buffer, "base64"));
 }
 
+// Path-shaped attachment params the message-tool schema declares. We only
+// look at these to detect an unhydrated bypass attempt — the resolver in
+// hydrateAttachmentParamsForAction is responsible for loading them into
+// `buffer`/`filename` after enforcing localRoots, sandbox, and size limits.
+const REPLY_ATTACHMENT_PATH_PARAM_NAMES: readonly string[] = [
+  "filePath",
+  "path",
+  "media",
+  "mediaUrl",
+  "fileUrl",
+] as const;
+
+type ReplyAttachmentSpec = { kind: "buffer"; buffer: Uint8Array; filename: string };
+
+// Reply attachments must arrive hydrated: the core message-action runner
+// loads `path`/`media`/`mediaUrl`/`filePath`/`fileUrl` through the outbound
+// media resolver (mediaLocalRoots / sandbox / size limits / SSRF) and writes
+// the result into `buffer` + `filename`. We deliberately do not consume raw
+// path params here — accepting them would let an agent send any host file
+// imsg can read, bypassing the resolver. If a path-shaped param is present
+// without a corresponding `buffer`, the caller skipped hydration (most
+// likely calling handleAction directly in a test); fail loudly instead.
+function extractReplyAttachment(
+  params: Record<string, unknown>,
+): { spec: ReplyAttachmentSpec; sourceParam: string } | { spec: null; bypassParam: string } | null {
+  const buffer = readStringParam(params, "buffer");
+  if (buffer) {
+    const filename = readStringParam(params, "filename") ?? "attachment.bin";
+    return {
+      spec: {
+        kind: "buffer",
+        buffer: Uint8Array.from(Buffer.from(buffer, "base64")),
+        filename,
+      },
+      sourceParam: "buffer",
+    };
+  }
+  for (const name of REPLY_ATTACHMENT_PATH_PARAM_NAMES) {
+    if (readStringParam(params, name)) {
+      return { spec: null, bypassParam: name };
+    }
+  }
+  return null;
+}
+
 // Whitelist of expressive-send effect IDs the bridge accepts. Restricting
 // to a fixed set lets us return a clear error for typos ("invisible_ink"
 // vs "invisibleink") instead of silently forwarding gibberish to the
@@ -353,6 +401,15 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         );
       }
       if (!privateApiStatus?.available) {
+        // Surface the silent-drop case: the throw becomes a tool-result
+        // `success:false`, which the model may or may not relay clearly to the
+        // user. Without a log line, an operator has no signal that a reply
+        // disappeared — they only see "channel: running" in `channels status`.
+        // Common cause: gateway restart un-injects the imsg-bridge-helper.dylib
+        // from Messages.app while imsg rpc keeps running.
+        log.warn(
+          `iMessage ${action} blocked: private API bridge unavailable (accountId=${account.accountId}, cliPath=${cliPathForProbe}). Run \`imsg launch\` to re-inject the dylib, then \`openclaw channels status\` to refresh.`,
+        );
         throw new Error(
           `iMessage ${action} requires the imsg private API bridge. Run imsg launch, then openclaw channels status to refresh capability detection.`,
         );
@@ -468,6 +525,28 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
       if (!text) {
         throw new Error("iMessage reply requires text or message.");
       }
+      const attachment = extractReplyAttachment(params);
+      if (attachment) {
+        if (attachment.spec === null) {
+          throw new Error(
+            `iMessage reply rejected \`${attachment.bypassParam}\` because it did not pass through the outbound media resolver. ` +
+              'Pass a base64 `buffer` + `filename` directly, or invoke message(action: "reply") through the runner so the resolver ' +
+              "can validate the path against mediaLocalRoots/sandbox/size before sending.",
+          );
+        }
+        // Reply-with-attachment requires the `imsg send-rich --file` flag
+        // (openclaw/imsg#114). Older imsg builds reject the option, so
+        // refuse loudly here rather than letting send-rich ship the text
+        // alone and silently drop the attachment — the original symptom
+        // of openclaw/openclaw#79822.
+        if (privateApiStatus?.cliCapabilities?.sendRichSupportsAttachment !== true) {
+          throw new Error(
+            "iMessage reply with an attachment needs an imsg build that exposes `send-rich --file` " +
+              "(openclaw/imsg#114). Upgrade imsg, or use action 'upload-file' (with filePath/filename) " +
+              "or action 'send' (with media) to deliver the file plus a separate 'reply' for any text.",
+          );
+        }
+      }
       const partIndex = readNumberParam(params, "partIndex", { integer: true });
       const resolvedChatGuid = await chatGuid();
       const result = await runtime.sendRichMessage({
@@ -475,6 +554,7 @@ export const imessageMessageActions: ChannelMessageActionAdapter = {
         text,
         replyToMessageId: resolvedMessageId,
         partIndex: typeof partIndex === "number" ? partIndex : undefined,
+        attachment: attachment?.spec ?? undefined,
         options: { ...opts, chatGuid: resolvedChatGuid },
       });
       return jsonResult({ ok: true, messageId: result.messageId, repliedTo: resolvedMessageId });
