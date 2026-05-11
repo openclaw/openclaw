@@ -1,7 +1,6 @@
 import { loadModelCatalog } from "../../agents/model-catalog.js";
 import {
-  buildConfiguredModelCatalog,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
   type ModelAliasIndex,
 } from "../../agents/model-selection.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -53,34 +52,11 @@ async function resolveNativeSlashDefaultThinkingLevel(params: {
   provider: string;
   model: string;
 }): Promise<ThinkLevel> {
-  const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
-  const configuredSelectedEntry = configuredCatalog.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const shouldHydrateRuntimeCatalog =
-    configuredCatalog.length === 0 ||
-    !configuredSelectedEntry ||
-    configuredSelectedEntry.reasoning === undefined;
-  let runtimeCatalog: Awaited<ReturnType<typeof loadModelCatalog>> | undefined;
-  if (shouldHydrateRuntimeCatalog) {
-    try {
-      runtimeCatalog = await loadModelCatalog({ config: params.cfg });
-    } catch {
-      runtimeCatalog = undefined;
-    }
-  }
-  const runtimeSelectedEntry = runtimeCatalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  const catalog =
-    runtimeSelectedEntry || configuredCatalog.length === 0
-      ? (runtimeCatalog ?? configuredCatalog)
-      : configuredCatalog;
-  return resolveThinkingDefault({
+  return resolveThinkingDefaultWithRuntimeCatalog({
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    catalog,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
   });
 }
 
