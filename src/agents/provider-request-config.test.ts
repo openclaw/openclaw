@@ -571,4 +571,33 @@ describe("provider request config", () => {
     expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
+
+  it.each([
+    {
+      provider: "lmstudio",
+      baseUrl: "http://127.0.0.1:1234/v1",
+      expectedEndpointClass: "local",
+    },
+    {
+      provider: "vllm",
+      baseUrl: "http://192.168.1.20:8000/v1",
+      expectedEndpointClass: "custom",
+    },
+    {
+      provider: "ollama",
+      baseUrl: "http://ollama-host:11434",
+      expectedEndpointClass: "custom",
+    },
+  ])("classifies $provider configured baseUrl as exact-origin trusted endpoint class", (entry) => {
+    const resolved = resolveProviderRequestPolicyConfig({
+      provider: entry.provider,
+      api: entry.provider === "ollama" ? "ollama" : "openai-completions",
+      baseUrl: entry.baseUrl,
+      capability: "llm",
+      transport: "stream",
+    });
+
+    expect(resolved.policy.endpointClass).toBe(entry.expectedEndpointClass);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
+  });
 });
