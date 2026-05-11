@@ -47,6 +47,7 @@ function isNonRetryableWebCloseStatus(statusCode: unknown): boolean {
 }
 
 type ReplyResolver = typeof import("./reply-resolver.runtime.js").getReplyFromConfig;
+type WhatsAppRuntimeConfig = ReturnType<typeof getRuntimeConfig>;
 
 let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime.js")> | null =
   null;
@@ -54,6 +55,39 @@ let replyResolverRuntimePromise: Promise<typeof import("./reply-resolver.runtime
 function loadReplyResolverRuntime() {
   replyResolverRuntimePromise ??= import("./reply-resolver.runtime.js");
   return replyResolverRuntimePromise;
+}
+
+function resolveWebMonitorConfigSnapshot(params: {
+  cfg: WhatsAppRuntimeConfig;
+  accountId?: string | null;
+}): {
+  cfg: WhatsAppRuntimeConfig;
+  account: ReturnType<typeof resolveWhatsAppAccount>;
+} {
+  const account = resolveWhatsAppAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const cfg = {
+    ...params.cfg,
+    channels: {
+      ...params.cfg.channels,
+      whatsapp: {
+        ...params.cfg.channels?.whatsapp,
+        ackReaction: account.ackReaction,
+        messagePrefix: account.messagePrefix,
+        allowFrom: account.allowFrom,
+        groupAllowFrom: account.groupAllowFrom,
+        groupPolicy: account.groupPolicy,
+        textChunkLimit: account.textChunkLimit,
+        chunkMode: account.chunkMode,
+        mediaMaxMb: account.mediaMaxMb,
+        blockStreaming: account.blockStreaming,
+        groups: account.groups,
+      },
+    },
+  } satisfies WhatsAppRuntimeConfig;
+  return { cfg, account };
 }
 
 function normalizeReconnectAccountId(accountId?: string | null): string {
@@ -158,29 +192,15 @@ export async function monitorWebChannel(
 
   const baseCfg = getRuntimeConfig();
   const sourceCfg = getRuntimeConfigSourceSnapshot();
-  const account = resolveWhatsAppAccount({
+  const { cfg, account } = resolveWebMonitorConfigSnapshot({
     cfg: baseCfg,
     accountId: tuning.accountId,
   });
-  const cfg = {
-    ...baseCfg,
-    channels: {
-      ...baseCfg.channels,
-      whatsapp: {
-        ...baseCfg.channels?.whatsapp,
-        ackReaction: account.ackReaction,
-        messagePrefix: account.messagePrefix,
-        allowFrom: account.allowFrom,
-        groupAllowFrom: account.groupAllowFrom,
-        groupPolicy: account.groupPolicy,
-        textChunkLimit: account.textChunkLimit,
-        chunkMode: account.chunkMode,
-        mediaMaxMb: account.mediaMaxMb,
-        blockStreaming: account.blockStreaming,
-        groups: account.groups,
-      },
-    },
-  } satisfies ReturnType<typeof getRuntimeConfig>;
+  const loadCurrentMonitorConfig = () =>
+    resolveWebMonitorConfigSnapshot({
+      cfg: getRuntimeConfig(),
+      accountId: account.accountId,
+    }).cfg;
 
   const maxMediaBytes = resolveWhatsAppMediaMaxBytes(account);
   const heartbeatSeconds = resolveHeartbeatSeconds(cfg, tuning.heartbeatSeconds);
@@ -279,6 +299,7 @@ export async function monitorWebChannel(
           createListener: async ({ sock, connection }) => {
             const onMessage = createWebOnMessageHandler({
               cfg,
+              loadConfig: loadCurrentMonitorConfig,
               verbose,
               connectionId,
               maxMediaBytes,
@@ -295,6 +316,7 @@ export async function monitorWebChannel(
 
             return (await (listenerFactory ?? attachWebInboxToSocket)({
               cfg,
+              loadConfig: loadCurrentMonitorConfig,
               verbose,
               accountId: account.accountId,
               authDir: account.authDir,

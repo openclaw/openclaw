@@ -78,6 +78,10 @@ const RUNTIME_PLUGIN_INSTALL_CANDIDATES: readonly DownloadableInstallCandidate[]
 
 const MISSING_CHANNEL_CONFIG_DESCRIPTOR_DIAGNOSTIC = "without channelConfigs metadata";
 const UPDATE_IN_PROGRESS_ENV = "OPENCLAW_UPDATE_IN_PROGRESS";
+const REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS = [
+  "extension entry escapes package directory",
+  "extension entry unreadable",
+] as const;
 
 function shouldFallbackClawHubToNpm(result: { ok: false; code?: string }): boolean {
   return (
@@ -413,6 +417,37 @@ function collectConfiguredPluginIdsWithMissingChannelConfigDescriptors(params: {
   return stalePluginIds;
 }
 
+function collectInstalledPluginIdsWithRepairablePackageDiagnostics(params: {
+  snapshot: PluginMetadataSnapshot;
+  installRecords: Record<string, PluginInstallRecord>;
+}): Set<string> {
+  const pluginIds = new Set<string>();
+  for (const diagnostic of params.snapshot.diagnostics) {
+    const pluginId = diagnostic.pluginId?.trim();
+    if (!pluginId || !Object.hasOwn(params.installRecords, pluginId)) {
+      continue;
+    }
+    if (
+      REPAIRABLE_PACKAGE_ENTRY_DIAGNOSTIC_MARKERS.some((marker) =>
+        diagnostic.message.includes(marker),
+      )
+    ) {
+      pluginIds.add(pluginId);
+    }
+  }
+  return pluginIds;
+}
+
+function forceNpmInstallRecordRepair(record: PluginInstallRecord): PluginInstallRecord {
+  if (record.source !== "npm") {
+    return record;
+  }
+  const next = { ...record };
+  delete next.resolvedSpec;
+  delete next.resolvedVersion;
+  return next;
+}
+
 function isInstalledRecordMissingOnDisk(
   record: PluginInstallRecord | undefined,
   env: NodeJS.ProcessEnv,
@@ -661,6 +696,11 @@ async function repairMissingPluginInstalls(params: {
       configuredChannelIds: params.channelIds,
     });
   const records = await loadInstalledPluginIndexInstallRecords({ env });
+  const installedPluginIdsWithRepairablePackageDiagnostics =
+    collectInstalledPluginIdsWithRepairablePackageDiagnostics({
+      snapshot,
+      installRecords: records,
+    });
   const changes: string[] = [];
   const warnings: string[] = [];
   const deferredPluginIds = new Set<string>();
@@ -710,10 +750,24 @@ async function repairMissingPluginInstalls(params: {
       !bundledPluginsById.has(pluginId) &&
       ((params.pluginIds.has(pluginId) &&
         (!knownIds.has(pluginId) || isInstalledRecordMissingOnDisk(nextRecords[pluginId], env))) ||
-        configuredPluginIdsWithStaleDescriptors.has(pluginId)),
+        configuredPluginIdsWithStaleDescriptors.has(pluginId) ||
+        installedPluginIdsWithRepairablePackageDiagnostics.has(pluginId)),
   );
 
   if (missingRecordedPluginIds.length > 0) {
+    for (const pluginId of missingRecordedPluginIds) {
+      const record = nextRecords[pluginId];
+      if (!record) {
+        continue;
+      }
+      const forced = forceNpmInstallRecordRepair(record);
+      if (forced !== record) {
+        if (nextRecords === records) {
+          nextRecords = { ...records };
+        }
+        nextRecords[pluginId] = forced;
+      }
+    }
     const updateResult = await updateNpmInstalledPlugins({
       config: {
         ...params.cfg,
@@ -731,7 +785,11 @@ async function repairMissingPluginInstalls(params: {
     });
     for (const outcome of updateResult.outcomes) {
       if (outcome.status === "updated" || outcome.status === "unchanged") {
-        changes.push(`Repaired missing configured plugin "${outcome.pluginId}".`);
+        changes.push(
+          installedPluginIdsWithRepairablePackageDiagnostics.has(outcome.pluginId)
+            ? `Repaired broken installed plugin "${outcome.pluginId}".`
+            : `Repaired missing configured plugin "${outcome.pluginId}".`,
+        );
       } else if (outcome.status === "error") {
         warnings.push(outcome.message);
       }
