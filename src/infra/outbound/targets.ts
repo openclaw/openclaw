@@ -84,6 +84,7 @@ export function resolveOutboundTarget(params: {
 export function resolveHeartbeatDeliveryTarget(params: {
   cfg: OpenClawConfig;
   entry?: SessionEntry;
+  deliveryContext?: DeliveryContext;
   heartbeat?: AgentDefaultsConfig["heartbeat"];
   turnSource?: DeliveryContext;
 }): OutboundTarget {
@@ -101,7 +102,7 @@ export function resolveHeartbeatDeliveryTarget(params: {
   }
 
   if (target === "none") {
-    const base = resolveSessionDeliveryTarget({ entry });
+    const base = resolveSessionDeliveryTarget({ entry, deliveryContext: params.deliveryContext });
     return buildNoHeartbeatDeliveryTarget({
       reason: "target-none",
       lastChannel: base.lastChannel,
@@ -111,11 +112,15 @@ export function resolveHeartbeatDeliveryTarget(params: {
 
   const resolvedTurnSource =
     target === "last"
-      ? mergeDeliveryContext(params.turnSource, deliveryContextFromSession(entry))
+      ? mergeDeliveryContext(
+          params.turnSource,
+          params.deliveryContext ?? deliveryContextFromSession(entry),
+        )
       : undefined;
 
   const resolvedTarget = resolveSessionDeliveryTarget({
     entry,
+    deliveryContext: params.deliveryContext,
     requestedChannel: target === "last" ? "last" : target,
     explicitTo: heartbeat?.to,
     mode: "heartbeat",

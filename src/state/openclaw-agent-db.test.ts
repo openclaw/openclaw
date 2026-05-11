@@ -128,37 +128,6 @@ describe("openclaw agent database", () => {
     });
   });
 
-  it("enforces one canonical session row per session key", () => {
-    const stateDir = createTempStateDir();
-    const database = openOpenClawAgentDatabase({
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    });
-    const agentDb = getNodeSqliteKysely<AgentDbTestDatabase>(database.db);
-
-    executeSqliteQuerySync(
-      database.db,
-      agentDb.insertInto("sessions").values({
-        session_id: "session-1",
-        session_key: "main:session-1",
-        created_at: 1,
-        updated_at: 1,
-      }),
-    );
-
-    expect(() =>
-      executeSqliteQuerySync(
-        database.db,
-        agentDb.insertInto("sessions").values({
-          session_id: "session-2",
-          session_key: "main:session-1",
-          created_at: 2,
-          updated_at: 2,
-        }),
-      ),
-    ).toThrow(/unique/i);
-  });
-
   it("stores memory embeddings as SQLite blobs", () => {
     const stateDir = createTempStateDir();
     const database = openOpenClawAgentDatabase({

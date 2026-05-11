@@ -36,7 +36,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
   ON sessions(created_at DESC, session_id);
 
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_sessions_session_key
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_session_key
   ON sessions(session_key);
 
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_conversation

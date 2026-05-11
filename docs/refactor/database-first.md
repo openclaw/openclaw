@@ -481,6 +481,10 @@ Completed consolidation/deletion highlights:
 - Agent-to-agent announce target hydration now uses typed `sessions.list`
   `deliveryContext` only. It no longer recovers account/thread routing from
   legacy `origin` or mirrored `last*` fields in list rows.
+- Heartbeat delivery resolution can now receive the typed SQLite
+  `deliveryContext` directly, and heartbeat runtime passes the per-agent
+  session delivery row instead of relying on compatibility `session_entries`
+  shadows for current routing.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

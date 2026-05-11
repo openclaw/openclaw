@@ -582,31 +582,16 @@ function countSessionEntryRows(database: OpenClawAgentDatabase): number {
   return typeof count === "bigint" ? Number(count) : count;
 }
 
-function readSqliteSessionEntryJson(
+function readProjectedSqliteSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
-): string | null {
+): SessionEntry | null {
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db.selectFrom("session_entries").select(["entry_json"]).where("session_key", "=", sessionKey),
+    selectSessionEntryRows(db).where("se.session_key", "=", sessionKey),
   );
-  return row?.entry_json ?? null;
-}
-
-function normalizeStoredSessionEntryJson(
-  sessionKey: string,
-  entryJson: string | null,
-): string | null {
-  if (entryJson === null) {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(entryJson) as SessionEntry;
-    return serializeExpectedSessionEntry(sessionKey, parsed);
-  } catch {
-    return entryJson;
-  }
+  return row ? projectTypedSessionColumns(row) : null;
 }
 
 export function countSqliteSessionEntries(options: SqliteSessionEntriesOptions): number {
@@ -639,10 +624,8 @@ export function applySqliteSessionEntriesPatch(
   const updatedAt = resolveNow(options);
   return runOpenClawAgentWriteTransaction((database) => {
     for (const [sessionKey, expected] of options.expectedEntries?.entries() ?? []) {
-      const currentJson = normalizeStoredSessionEntryJson(
-        sessionKey,
-        readSqliteSessionEntryJson(database, sessionKey),
-      );
+      const current = readProjectedSqliteSessionEntry(database, sessionKey);
+      const currentJson = current ? serializeExpectedSessionEntry(sessionKey, current) : null;
       const expectedJson = expected ? serializeExpectedSessionEntry(sessionKey, expected) : null;
       if (currentJson !== expectedJson) {
         return false;

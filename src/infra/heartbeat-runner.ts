@@ -57,6 +57,7 @@ import {
   canonicalizeMainSessionAlias,
   resolveAgentMainSessionKey,
 } from "../config/sessions/main-session.js";
+import { readSqliteSessionDeliveryContext } from "../config/sessions/session-entries.sqlite.js";
 import {
   deleteSessionEntry,
   getSessionEntry,
@@ -878,6 +879,17 @@ type HeartbeatPreflight = HeartbeatWakePayloadFlags & {
   heartbeatFileContent?: string;
 };
 
+function readHeartbeatSessionDeliveryContext(params: {
+  agentId: string;
+  sessionKey: string;
+}): ReturnType<typeof readSqliteSessionDeliveryContext> {
+  try {
+    return readSqliteSessionDeliveryContext(params);
+  } catch {
+    return undefined;
+  }
+}
+
 function inferHeartbeatWakeSourceFromReason(reason?: string): HeartbeatWakeSource | undefined {
   const trimmed = (reason ?? "").trim();
   if (trimmed === "exec-event") {
@@ -1391,9 +1403,14 @@ export async function runHeartbeatOnce(opts: {
   const heartbeatForDelivery = commitmentDeliveryContext
     ? { ...heartbeat, target: "last", to: undefined, accountId: undefined }
     : heartbeat;
+  const sessionDeliveryContext = readHeartbeatSessionDeliveryContext({
+    agentId: sessionAgentId,
+    sessionKey,
+  });
   const delivery = resolveHeartbeatDeliveryTarget({
     cfg,
     entry,
+    deliveryContext: sessionDeliveryContext,
     heartbeat: heartbeatForDelivery,
     // Isolated heartbeat runs drain system events from their dedicated
     // `:heartbeat` session, not from the base session we peek during preflight.
