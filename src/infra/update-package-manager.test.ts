@@ -7,8 +7,10 @@ import {
 describe("resolveUpdateBuildManager", () => {
   it("bootstraps pnpm via npm when pnpm and corepack are unavailable", async () => {
     const paths: string[] = [];
+    const calls: Array<{ argv: string[]; path: string }> = [];
     const runCommand: PackageManagerCommandRunner = async (argv, options) => {
       const key = argv.join(" ");
+      calls.push({ argv, path: options.env?.PATH ?? options.env?.Path ?? "" });
       if (key === "pnpm --version") {
         const envPath = options.env?.PATH ?? options.env?.Path ?? "";
         if (envPath.includes("openclaw-update-pnpm-")) {
@@ -34,9 +36,18 @@ describe("resolveUpdateBuildManager", () => {
     expect(result.kind).toBe("resolved");
     if (result.kind === "resolved") {
       expect(result.manager).toBe("pnpm");
-      expect(paths).toEqual(
-        expect.arrayContaining([expect.stringContaining("openclaw-update-pnpm-")]),
-      );
+      expect(calls.map((call) => call.argv)).toEqual([
+        ["pnpm", "--version"],
+        ["corepack", "--version"],
+        ["npm", "--version"],
+        ["npm", "install", "--prefix", calls[3]?.argv[3] ?? "", "pnpm@11"],
+        ["pnpm", "--version"],
+      ]);
+      const tempRoot = calls[3]?.argv[3];
+      expect(typeof tempRoot).toBe("string");
+      expect(tempRoot?.includes("openclaw-update-pnpm-")).toBe(true);
+      expect(paths).toHaveLength(1);
+      expect(paths[0]?.split(":")[0]).toBe(`${tempRoot}/node_modules/.bin`);
       await result.cleanup?.();
     }
   });

@@ -290,7 +290,7 @@ jobs:
     name: Run agentic native Telegram proof
     needs: [resolve_request, validate_refs]
     if: ${{ needs.resolve_request.outputs.should_run == 'true' }}
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 360
     environment: qa-live-shared
     outputs:

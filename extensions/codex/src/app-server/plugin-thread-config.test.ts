@@ -64,7 +64,7 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: true,
           open_world_enabled: true,
-          default_tools_approval_mode: "prompt",
+          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -253,7 +253,7 @@ describe("Codex plugin thread config", () => {
           enabled: true,
           destructive_enabled: false,
           open_world_enabled: true,
-          default_tools_approval_mode: "prompt",
+          default_tools_approval_mode: "auto",
         },
       },
     });
@@ -577,7 +577,7 @@ describe("Codex plugin thread config", () => {
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: true,
-      default_tools_approval_mode: "prompt",
+      default_tools_approval_mode: "auto",
     });
     expect(apps?.["github-app"]).not.toHaveProperty("tools");
   });

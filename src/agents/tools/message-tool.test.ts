@@ -888,6 +888,47 @@ describe("message tool schema scoping", () => {
     expect(properties).not.toHaveProperty("eventName");
   });
 
+  it("filters scoped schemas through the per-agent message action allowlist", () => {
+    const plugin = createChannelPlugin({
+      id: "discord",
+      label: "Discord",
+      docsPath: "/channels/discord",
+      blurb: "Discord test plugin.",
+      actions: ["send", "read", "react", "delete"],
+    });
+
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", source: "test", plugin }]));
+
+    const tool = createMessageTool({
+      config: {
+        agents: {
+          list: [
+            {
+              id: "sandbox",
+              tools: {
+                message: {
+                  actions: {
+                    allow: ["send"],
+                  },
+                },
+              },
+            },
+          ],
+        },
+      } as never,
+      currentChannelProvider: "discord",
+      agentId: "sandbox",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(tool.description).toContain("Supports actions: send.");
+    expect(tool.description).not.toContain("react");
+  });
+
   it("uses discovery account scope for other configured channel actions", () => {
     const currentPlugin = createChannelPlugin({
       id: "discord",

@@ -80,6 +80,10 @@ function buildTokenProvider(): MSTeamsAccessTokenProvider {
   };
 }
 
+async function resolvePublicHost(): Promise<{ address: string }> {
+  return { address: "93.184.216.34" };
+}
+
 describe("isBotFrameworkPersonalChatId", () => {
   it("detects a: prefix personal chat IDs", () => {
     expect(isBotFrameworkPersonalChatId("a:1dRsHCobZ1AxURzY05Dc")).toBe(true);
@@ -140,6 +144,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media?.path).toBe(runtime.savePath);
@@ -162,6 +167,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -187,6 +193,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -208,6 +215,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(media).toBeUndefined();
@@ -266,6 +274,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
       });
 
       expect(media?.path).toBe(runtime.savePath);
@@ -296,6 +305,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger,
       });
 
@@ -332,6 +342,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger,
       });
 
@@ -358,6 +369,7 @@ describe("downloadMSTeamsBotFrameworkAttachment", () => {
         tokenProvider: buildTokenProvider(),
         maxBytes: 10_000_000,
         fetchFn,
+        resolveFn: resolvePublicHost,
         logger: { warn },
       });
 
@@ -407,6 +419,7 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toHaveLength(2);
@@ -453,6 +466,7 @@ describe("downloadMSTeamsBotFrameworkAttachments", () => {
       tokenProvider: buildTokenProvider(),
       maxBytes: 10_000,
       fetchFn,
+      resolveFn: resolvePublicHost,
     });
 
     expect(result.media).toHaveLength(1);

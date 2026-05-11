@@ -2,7 +2,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
@@ -10,6 +10,19 @@ import { resolveLineGroupRequireMention } from "./group-policy.js";
 import { lineOutboundAdapter } from "./outbound.js";
 import { setLineRuntime } from "./runtime.js";
 import { createLineSendReceipt } from "./send-receipt.js";
+
+const ssrfMocks = vi.hoisted(() => ({
+  resolvePinnedHostnameWithPolicy: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  resolvePinnedHostnameWithPolicy: ssrfMocks.resolvePinnedHostnameWithPolicy,
+}));
+
+afterAll(() => {
+  vi.doUnmock("openclaw/plugin-sdk/ssrf-runtime");
+  vi.resetModules();
+});
 
 type LineRuntimeMocks = {
   pushMessageLine: ReturnType<typeof vi.fn>;
@@ -25,6 +38,14 @@ type LineRuntimeMocks = {
   resolveLineAccount: ReturnType<typeof vi.fn>;
   resolveTextChunkLimit: ReturnType<typeof vi.fn>;
 };
+
+beforeEach(() => {
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
+  ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
+    hostname: "example.com",
+    addresses: ["93.184.216.34"],
+  });
+});
 
 function lineResult(messageId: string, chatId = "c1") {
   return {

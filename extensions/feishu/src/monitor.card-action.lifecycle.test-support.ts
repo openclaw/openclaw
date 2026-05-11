@@ -257,6 +257,57 @@ describe("Feishu card-action lifecycle", () => {
     expect(latestFinalizedContext().MessageSid).toBe("card-action-tok-card-v2-context");
   });
 
+  it("routes v2 callbacks with nested operator identity", async () => {
+    const onCardAction = await setupLifecycleMonitor();
+    const chatId = "p2p:ou_user1";
+
+    await onCardAction({
+      operator: {
+        user_id: {
+          open_id: "ou_user1",
+          user_id: "user_1",
+          union_id: "union_1",
+        },
+      },
+      token: "tok-card-v2-nested-operator",
+      action: {
+        tag: "button",
+        value: createFeishuCardInteractionEnvelope({
+          k: "quick",
+          a: "feishu.quick_actions.help",
+          q: "/help",
+          c: {
+            u: "ou_user1",
+            h: chatId,
+            t: "p2p",
+            e: Date.now() + 60_000,
+          },
+        }),
+      },
+      context: {
+        open_message_id: "om_card_v2_nested",
+        open_chat_id: chatId,
+      },
+    });
+
+    expect(lastRuntime?.error).not.toHaveBeenCalled();
+    expect(dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
+    expect(createFeishuReplyDispatcherMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "acct-card",
+        chatId,
+        replyToMessageId: "om_card_v2_nested",
+      }),
+    );
+    expect(finalizeInboundContextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        AccountId: "acct-card",
+        SessionKey: "agent:bound-agent:feishu:direct:ou_user1",
+        MessageSid: "card-action-tok-card-v2-nested-operator",
+      }),
+    );
+  });
+
   it("routes SDK-style card callbacks without context as direct callbacks", async () => {
     const onCardAction = await setupLifecycleMonitor();
 

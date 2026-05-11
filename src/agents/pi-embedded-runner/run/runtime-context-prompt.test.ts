@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildCurrentTurnPrompt,
   buildCurrentTurnPromptContextPrefix,
   buildRuntimeContextSystemContext,
   queueRuntimeContextForNextTurn,
@@ -79,6 +80,22 @@ describe("runtime context prompt submission", () => {
   it("omits empty current-turn context", () => {
     expect(buildCurrentTurnPromptContextPrefix(undefined)).toBe("");
     expect(buildCurrentTurnPromptContextPrefix({ text: "   " })).toBe("");
+  });
+
+  it("joins current-turn context and prompt with the requested separator", () => {
+    expect(
+      buildCurrentTurnPrompt({
+        context: { text: "Current message:\n#34975 obviyus:", promptJoiner: " " },
+        prompt: "What do you mean hidden?",
+      }),
+    ).toBe("Current message:\n#34975 obviyus: What do you mean hidden?");
+
+    expect(
+      buildCurrentTurnPrompt({
+        context: { text: "Conversation context:" },
+        prompt: "visible ask",
+      }),
+    ).toBe("Conversation context:\n\nvisible ask");
   });
 
   it("queues runtime context as a hidden next-turn custom message", async () => {

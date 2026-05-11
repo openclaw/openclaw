@@ -56,9 +56,11 @@ export type RunCliAgentParams = {
   abortSignal?: AbortSignal;
   onExecutionStarted?: () => void;
   onExecutionPhase?: (info: {
-    phase: "model_call_started";
+    phase: "process_spawned" | "model_call_started";
     provider?: string;
     model?: string;
+    backend?: string;
+    source?: string;
     firstModelCallStarted?: boolean;
   }) => void;
   replyOperation?: ReplyOperation;

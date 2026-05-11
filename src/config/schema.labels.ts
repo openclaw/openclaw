@@ -215,6 +215,7 @@ export const FIELD_LABELS: Record<string, string> = {
     "Agent Cross-Context Messaging (Same Provider)",
   "agents.list[].tools.message.crossContext.allowAcrossProviders":
     "Agent Cross-Context Messaging (Across Providers)",
+  "agents.list[].tools.message.actions.allow": "Agent Message Action Allowlist",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
@@ -288,6 +289,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.message.crossContext.marker.prefix": "Cross-Context Marker Prefix",
   "tools.message.crossContext.marker.suffix": "Cross-Context Marker Suffix",
   "tools.message.broadcast.enabled": "Enable Message Broadcast",
+  "tools.message.actions.allow": "Message Action Allowlist",
   "tools.web.search.enabled": "Enable Web Search Tool",
   "tools.web.search.provider": "Web Search Provider",
   "tools.web.search.maxResults": "Web Search Max Results",

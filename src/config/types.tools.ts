@@ -698,6 +698,10 @@ export type MessageToolsConfig = {
       suffix?: string;
     };
   };
+  actions?: {
+    /** Message action names exposed and accepted by the message tool. */
+    allow?: string[];
+  };
   broadcast?: {
     /** Enable broadcast action (default: true). */
     enabled?: boolean;

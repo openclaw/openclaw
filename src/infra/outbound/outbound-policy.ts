@@ -127,6 +127,13 @@ function resolveAgentMessageToolsConfig(
             ...agentConfig.broadcast,
           }
         : undefined,
+    actions:
+      globalConfig?.actions || agentConfig.actions
+        ? {
+            ...globalConfig?.actions,
+            ...agentConfig.actions,
+          }
+        : undefined,
   };
 }
 
@@ -135,6 +142,30 @@ export function resolveEffectiveMessageToolsConfig(params: {
   agentId?: string | null;
 }): MessageToolsConfig | undefined {
   return resolveAgentMessageToolsConfig(params.cfg, params.agentId);
+}
+
+export function resolveAllowedMessageActions(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+}): string[] | undefined {
+  const allow = resolveEffectiveMessageToolsConfig(params)?.actions?.allow;
+  if (!allow) {
+    return undefined;
+  }
+  const normalized = allow.map((entry) => entry.trim()).filter(Boolean);
+  return normalized.length > 0 ? Array.from(new Set(normalized)) : undefined;
+}
+
+export function enforceMessageActionAllowlist(params: {
+  cfg: OpenClawConfig;
+  agentId?: string | null;
+  action: ChannelMessageActionName;
+}): void {
+  const allowed = resolveAllowedMessageActions(params);
+  if (!allowed || allowed.includes(params.action)) {
+    return;
+  }
+  throw new Error(`Message action "${params.action}" is disabled for this agent.`);
 }
 
 export function enforceCrossContextPolicy(params: {

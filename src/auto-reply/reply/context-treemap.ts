@@ -1,9 +1,9 @@
 import crypto from "node:crypto";
 import { writeFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import zlib from "node:zlib";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
+import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { estimateTokensFromChars } from "../../utils/cjk-chars.js";
 
 type Rect = {
@@ -483,7 +483,10 @@ export async function renderContextTreemapPng(params: {
     rgba(51, 65, 85),
     1,
   );
-  const outPath = path.join(os.tmpdir(), `openclaw-context-map-${crypto.randomUUID()}.png`);
+  const outPath = path.join(
+    resolvePreferredOpenClawTmpDir(),
+    `openclaw-context-map-${crypto.randomUUID()}.png`,
+  );
   await writeFile(outPath, encodePng(canvas.data));
   const caption = [
     "Context treemap",

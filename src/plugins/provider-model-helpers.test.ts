@@ -40,7 +40,7 @@ function expectClonedTemplateModel(
     expect(model).toBeUndefined();
     return;
   }
-  expect(model).toMatchObject(expected);
+  expect(model).toEqual(expected);
 }
 
 function expectPrefixMatch(params: {

@@ -23,15 +23,18 @@ function createTestContext(): {
   warn: ReturnType<typeof vi.fn>;
   onBlockReplyFlush: ReturnType<typeof vi.fn>;
   onAgentEvent: ReturnType<typeof vi.fn>;
+  onExecutionPhase: ReturnType<typeof vi.fn>;
 } {
   const onBlockReplyFlush = vi.fn();
   const onAgentEvent = vi.fn();
+  const onExecutionPhase = vi.fn();
   const warn = vi.fn();
   const ctx: ToolHandlerContext = {
     params: {
       runId: "run-test",
       onBlockReplyFlush,
       onAgentEvent,
+      onExecutionPhase,
       onToolResult: undefined,
     },
     flushBlockReplyBuffer: vi.fn(),
@@ -70,7 +73,7 @@ function createTestContext(): {
     trimMessagingToolSent: vi.fn(),
   };
 
-  return { ctx, warn, onBlockReplyFlush, onAgentEvent };
+  return { ctx, warn, onBlockReplyFlush, onAgentEvent, onExecutionPhase };
 }
 
 type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
@@ -139,7 +142,7 @@ function requireSingleMessagingTarget(ctx: ToolHandlerContext) {
 
 describe("handleToolExecutionStart read path checks", () => {
   it("does not warn when read tool uses file_path alias", async () => {
-    const { ctx, warn, onBlockReplyFlush } = createTestContext();
+    const { ctx, warn, onBlockReplyFlush, onExecutionPhase } = createTestContext();
 
     const evt: ToolExecutionStartEvent = {
       type: "tool_execution_start",
@@ -151,6 +154,12 @@ describe("handleToolExecutionStart read path checks", () => {
     await handleToolExecutionStart(ctx, evt);
 
     expect(onBlockReplyFlush).toHaveBeenCalledTimes(1);
+    expect(onExecutionPhase).toHaveBeenCalledWith({
+      phase: "tool_execution_started",
+      tool: "read",
+      toolCallId: "tool-1",
+      source: "pi-embedded",
+    });
     expect(warn).not.toHaveBeenCalled();
   });
 

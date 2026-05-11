@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
+import "../../test-support/browser-security.mock.js";
 import {
   readBody,
   resolveSafeRouteTabUrl,

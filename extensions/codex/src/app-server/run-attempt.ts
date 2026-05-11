@@ -99,6 +99,7 @@ import {
   type CodexDynamicToolSpec,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
+  type CodexThreadItem,
   type CodexTurnStartResponse,
   type JsonObject,
   type JsonValue,
@@ -1067,6 +1068,46 @@ export async function runCodexAppServerAttempt(
     lifecycleTerminalEmitted = true;
   };
 
+  const executionPhaseKeys = new Set<string>();
+  const emitExecutionPhaseOnce = (
+    key: string,
+    info: Parameters<NonNullable<EmbeddedRunAttemptParams["onExecutionPhase"]>>[0],
+  ) => {
+    if (executionPhaseKeys.has(key)) {
+      return;
+    }
+    executionPhaseKeys.add(key);
+    params.onExecutionPhase?.({
+      provider: params.provider,
+      model: params.modelId,
+      backend: "codex-app-server",
+      ...info,
+    });
+  };
+  const reportCodexExecutionNotification = (notification: CodexServerNotification) => {
+    if (notification.method === "turn/started") {
+      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
+      return;
+    }
+    if (notification.method === "item/agentMessage/delta") {
+      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
+      return;
+    }
+    if (notification.method !== "item/started") {
+      return;
+    }
+    const item = readCodexNotificationItem(notification.params);
+    const tool = item ? codexExecutionToolName(item) : undefined;
+    if (!item || !tool) {
+      return;
+    }
+    emitExecutionPhaseOnce(`tool:${item.id}`, {
+      phase: "tool_execution_started",
+      tool,
+      itemId: item.id,
+    });
+  };
+
   const handleNotification = async (notification: CodexServerNotification) => {
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
@@ -1082,6 +1123,7 @@ export async function runCodexAppServerAttempt(
       touchTurnCompletionActivity(`notification:${notification.method}`, {
         details: describeNotificationActivity(notification),
       });
+      reportCodexExecutionNotification(notification);
     }
     if (isCurrentTurnNotification && notification.method === "error") {
       if (isRetryableErrorNotification(notification.params)) {
@@ -1197,6 +1239,11 @@ export async function runCodexAppServerAttempt(
         callId: call.callId,
         tool: call.tool,
         arguments: call.arguments,
+      });
+      emitExecutionPhaseOnce(`tool:${call.callId}`, {
+        phase: "tool_execution_started",
+        tool: call.tool,
+        toolCallId: call.callId,
       });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
@@ -1371,6 +1418,7 @@ export async function runCodexAppServerAttempt(
   }
   turnId = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
   userInputBridge = createCodexUserInputBridge({
     paramsForRun: params,
     threadId: thread.threadId,
@@ -2593,6 +2641,36 @@ async function mirrorTranscriptBestEffort(params: {
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
+}
+
+function readCodexNotificationItem(params: JsonValue | undefined): CodexThreadItem | undefined {
+  if (!isJsonObject(params) || !isJsonObject(params.item)) {
+    return undefined;
+  }
+  const item = params.item;
+  return typeof item.id === "string" && typeof item.type === "string"
+    ? (item as CodexThreadItem)
+    : undefined;
+}
+
+function codexExecutionToolName(item: CodexThreadItem): string | undefined {
+  if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
+    return item.tool;
+  }
+  if (item.type === "mcpToolCall" && typeof item.tool === "string") {
+    const server = typeof item.server === "string" && item.server ? item.server : undefined;
+    return server ? `${server}.${item.tool}` : item.tool;
+  }
+  if (item.type === "commandExecution") {
+    return "bash";
+  }
+  if (item.type === "fileChange") {
+    return "apply_patch";
+  }
+  if (item.type === "webSearch") {
+    return "web_search";
+  }
+  return undefined;
 }
 
 function joinPresentSections(...sections: Array<string | undefined>): string {

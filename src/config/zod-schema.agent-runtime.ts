@@ -640,6 +640,12 @@ const MessageToolConfigSchema = z
       })
       .strict()
       .optional(),
+    actions: z
+      .object({
+        allow: z.array(z.string()).optional(),
+      })
+      .strict()
+      .optional(),
     broadcast: z
       .object({
         enabled: z.boolean().optional(),

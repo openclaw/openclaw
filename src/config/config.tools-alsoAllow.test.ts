@@ -71,4 +71,25 @@ describe("config: tools.alsoAllow", () => {
 
     expect(res.ok).toBe(true);
   });
+
+  it("allows per-agent message tool action allowlists", () => {
+    const res = validateConfigObject({
+      agents: {
+        list: [
+          {
+            id: "sandbox",
+            tools: {
+              message: {
+                actions: {
+                  allow: ["send"],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+
+    expect(res.ok).toBe(true);
+  });
 });
