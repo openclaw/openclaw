@@ -826,6 +826,10 @@ function buildTranscriptRecords(transcriptBytes: string): RuntimeParityTranscrip
   return records;
 }
 
+function countComparableTranscriptRecords(transcriptBytes: string) {
+  return buildTranscriptRecords(transcriptBytes).length;
+}
+
 function extractFinalAssistantText(records: RuntimeParityTranscriptRecord[]) {
   let lastAssistantText = "";
   for (const record of records) {
@@ -1037,23 +1041,19 @@ function classifyRuntimeParityCells(params: {
     }
   }
 
-  const piTranscriptLines = params.pi.transcriptBytes.trim().length
-    ? params.pi.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  const codexTranscriptLines = params.codex.transcriptBytes.trim().length
-    ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
+  const piTranscriptRecords = countComparableTranscriptRecords(params.pi.transcriptBytes);
+  const codexTranscriptRecords = countComparableTranscriptRecords(params.codex.transcriptBytes);
   if (compareTranscriptStructure) {
     if (
       (params.pi.toolCalls.length === 0 &&
         params.codex.toolCalls.length === 0 &&
-        piTranscriptLines !== codexTranscriptLines) ||
+        piTranscriptRecords !== codexTranscriptRecords) ||
       (!params.pi.finalText && !!params.codex.finalText) ||
       (!!params.pi.finalText && !params.codex.finalText)
     ) {
       return {
         drift: "structural",
-        driftDetails: `transcript/final-text structure differs (${piTranscriptLines} lines vs ${codexTranscriptLines})`,
+        driftDetails: `transcript/final-text structure differs (${piTranscriptRecords} message records vs ${codexTranscriptRecords} message records)`,
       };
     }
   }

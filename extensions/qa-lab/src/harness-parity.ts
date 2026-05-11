@@ -77,6 +77,25 @@ function sha256(value: string) {
   return createHash("sha256").update(value).digest("hex");
 }
 
+function countComparableTranscriptRecords(transcriptBytes: string) {
+  let count = 0;
+  for (const line of transcriptBytes.split(/\r?\n/u)) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(trimmed) as { message?: { role?: unknown } };
+      if (parsed.message && typeof parsed.message.role === "string") {
+        count += 1;
+      }
+    } catch {
+      // Ignore malformed QA transcript rows and keep parity classification deterministic.
+    }
+  }
+  return count;
+}
+
 function normalizeForStableHash(value: unknown): unknown {
   if (Array.isArray(value)) {
     return value.map((entry) => normalizeForStableHash(entry));
@@ -330,14 +349,10 @@ export function buildHarnessParityResult(params: {
       firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),
     };
   }
-  const leftTranscriptLines = params.left.transcriptBytes.trim().length
-    ? params.left.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
-  const rightTranscriptLines = params.right.transcriptBytes.trim().length
-    ? params.right.transcriptBytes.trim().split(/\r?\n/u).length
-    : 0;
+  const leftTranscriptRecords = countComparableTranscriptRecords(params.left.transcriptBytes);
+  const rightTranscriptRecords = countComparableTranscriptRecords(params.right.transcriptBytes);
   if (
-    leftTranscriptLines !== rightTranscriptLines ||
+    leftTranscriptRecords !== rightTranscriptRecords ||
     (!params.left.finalText && !!params.right.finalText) ||
     (!!params.left.finalText && !params.right.finalText)
   ) {
@@ -346,7 +361,7 @@ export function buildHarnessParityResult(params: {
       left: params.left,
       right: params.right,
       drift: "structural",
-      driftDetails: `transcript/final-text structure differs (${leftTranscriptLines} lines vs ${rightTranscriptLines})`,
+      driftDetails: `transcript/final-text structure differs (${leftTranscriptRecords} message records vs ${rightTranscriptRecords} message records)`,
       promptDelta,
       tokenDeltaPercent,
       firstDriftTurn: firstDriftTurn(params.left.transcriptBytes, params.right.transcriptBytes),

@@ -28,7 +28,7 @@ function makeCell(
 ): RuntimeParityCell {
   return {
     runtime,
-    transcriptBytes: '{"role":"assistant"}\n',
+    transcriptBytes: '{"message":{"role":"assistant","content":"same reply"}}\n',
     toolCalls: [],
     finalText: "same reply",
     usage: {
@@ -199,6 +199,31 @@ describe("runtime parity", () => {
             runtime === "pi"
               ? '{"message":{"role":"assistant"}}\n{"message":{"role":"assistant"}}\n'
               : '{"message":{"role":"assistant"}}\n',
+          finalText: "same user-visible outcome",
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
+  it("ignores runtime-specific boot metadata when comparable messages match", async () => {
+    const piBootRows = [
+      '{"type":"model_change","modelId":"gpt-5.5"}',
+      '{"type":"thinking_level_change","thinkingLevel":"off"}',
+      '{"type":"custom","customType":"model-snapshot"}',
+    ].join("\n");
+    const comparableMessages =
+      '{"message":{"role":"user","content":"marker"}}\n' +
+      '{"message":{"role":"assistant","content":"same user-visible outcome"}}\n';
+
+    const result = await runRuntimeParityScenario({
+      scenarioId: "runtime-boot-metadata",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          transcriptBytes:
+            runtime === "pi" ? `${piBootRows}\n${comparableMessages}` : comparableMessages,
           finalText: "same user-visible outcome",
         }),
       }),
@@ -388,7 +413,9 @@ describe("runtime parity", () => {
         scenarioStatus: "pass",
         cell: makeCell(runtime, {
           transcriptBytes:
-            runtime === "pi" ? '{"role":"assistant"}\n' : '{"role":"assistant"}\n{"role":"tool"}\n',
+            runtime === "pi"
+              ? '{"message":{"role":"assistant"}}\n'
+              : '{"message":{"role":"assistant"}}\n{"message":{"role":"tool"}}\n',
         }),
       }),
     });

@@ -123,6 +123,18 @@ describe("harness parity", () => {
     expect(classify({ finalText: "same text" }, { finalText: "different text" })).toBe("text-only");
     expect(
       classify(
+        {
+          transcriptBytes:
+            '{"type":"model_change","modelId":"gpt-5.5"}\n' +
+            '{"type":"thinking_level_change","thinkingLevel":"off"}\n' +
+            '{"type":"custom","customType":"model-snapshot"}\n' +
+            '{"message":{"role":"assistant","content":"same"}}\n',
+        },
+        { transcriptBytes: '{"message":{"role":"assistant","content":"same"}}\n' },
+      ),
+    ).toBe("none");
+    expect(
+      classify(
         { transcriptBytes: '{"message":{"role":"assistant"}}\n' },
         { transcriptBytes: '{"message":{"role":"assistant"}}\n{"message":{"role":"tool"}}\n' },
       ),
