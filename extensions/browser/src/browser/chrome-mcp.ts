@@ -906,6 +906,7 @@ export async function takeChromeMcpScreenshot(params: {
   timeoutMs?: number;
 }): Promise<Buffer> {
   return await withTempFile(async (filePath) => {
+    const format = params.format ?? "png";
     await callTool(
       params.profileName,
       chromeMcpProfileOptionsFromParams(params),
@@ -913,13 +914,12 @@ export async function takeChromeMcpScreenshot(params: {
       {
         pageId: parsePageId(params.targetId),
         filePath,
-        format: params.format ?? "png",
+        format,
         ...(params.uid ? { uid: params.uid } : {}),
         ...(params.fullPage ? { fullPage: true } : {}),
       },
       { timeoutMs: params.timeoutMs },
     );
-    const format = params.format ?? "png";
     return await fs.readFile(`${filePath}.${format}`);
   });
 }
