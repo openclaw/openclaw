@@ -209,7 +209,7 @@ describe("tool-loop-detection", () => {
       for (const hash of hashes) {
         expect(hash.startsWith("tool:")).toBe(true);
         expect(hash.length).toBe("tool:".length + 64);
-        expect([...hash.slice("tool:".length)].every((char) => /[a-f0-9]/.test(char))).toBe(true);
+        expect(/^[a-f0-9]+$/.test(hash.slice("tool:".length))).toBe(true);
       }
     });
 

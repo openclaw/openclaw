@@ -6,7 +6,7 @@ const hoisted = await vi.hoisted(async () => {
   const { createExportCommandSessionMocks } = await import("./commands-export-test-mocks.js");
   return {
     ...createExportCommandSessionMocks(vi),
-    resolveCommandsSystemPromptBundleMock: vi.fn(async () => ({
+    resolveCommandsSystemPromptBundleMock: vi.fn(async (_params: HandleCommandsParams) => ({
       systemPrompt: "system prompt",
       tools: [],
       skillsPrompt: "",

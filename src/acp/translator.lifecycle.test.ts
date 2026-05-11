@@ -327,16 +327,22 @@ describe("acp translator stable lifecycle handlers", () => {
         throw new Error("resume must not load transcript history");
       }
       return { ok: true };
-    }) as GatewayClient["request"];
-    const sessionStore = createInMemorySessionStore();
-    const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
-      sessionStore,
     });
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(
+      connection,
+      createAcpGateway(request as unknown as GatewayClient["request"]),
+      {
+        sessionStore,
+      },
+    );
 
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    const thoughtLevelOption = result.configOptions.find((option) => option.id === "thought_level");
+    const thoughtLevelOption = result.configOptions?.find(
+      (option) => option.id === "thought_level",
+    );
     expect(thoughtLevelOption?.currentValue).toBe("adaptive");
     expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
     expect(request.mock.calls.map((call) => call[0])).not.toContain("sessions.get");

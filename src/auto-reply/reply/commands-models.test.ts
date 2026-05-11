@@ -14,7 +14,9 @@ const modelCatalogMocks = vi.hoisted(() => ({
 }));
 
 const modelAuthLabelMocks = vi.hoisted(() => ({
-  resolveModelAuthLabel: vi.fn<(params: unknown) => string | undefined>(() => undefined),
+  resolveModelAuthLabel: vi.fn<
+    (params: { provider?: string; workspaceDir?: string }) => string | undefined
+  >(() => undefined),
 }));
 const modelProviderAuthMocks = vi.hoisted(() => {
   const state = {

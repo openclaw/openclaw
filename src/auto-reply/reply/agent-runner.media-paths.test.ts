@@ -205,8 +205,11 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(result?.mediaUrl).toBe("/tmp/outbound-media/generated.png");
-    expect(result?.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single reply payload");
+    }
+    expect(result.mediaUrl).toBe("/tmp/outbound-media/generated.png");
+    expect(result.mediaUrls).toEqual(["/tmp/outbound-media/generated.png"]);
     const outboundAttachmentCall = resolveOutboundAttachmentFromUrlMock.mock.calls[0];
     expect(outboundAttachmentCall?.[0]).toBe(path.join("/tmp/workspace", "out", "generated.png"));
     expect(outboundAttachmentCall?.[1]).toBe(5 * 1024 * 1024);
