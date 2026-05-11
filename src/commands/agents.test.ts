@@ -410,10 +410,11 @@ describe("agents helpers", () => {
         ],
       },
     };
+    const originalConfig = JSON.stringify(cfg);
 
     const result = pruneAgentConfig(cfg, "work");
 
     expect(result.config.agents?.list?.[0]?.tools?.agentToAgent?.allow).toEqual(["ops"]);
-    expect(cfg.agents?.list?.[1]?.tools?.agentToAgent?.allow).toEqual(["work", "ops"]);
+    expect(JSON.stringify(cfg)).toBe(originalConfig);
   });
 });
