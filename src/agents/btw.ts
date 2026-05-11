@@ -346,7 +346,7 @@ export async function runBtwSideQuestion(
     });
     return { text: result.text };
   }
-  if (harness.id !== "pi") {
+  if (harness.id === "codex") {
     throw new Error(`Selected agent harness "${harness.id}" does not support /btw side questions.`);
   }
 

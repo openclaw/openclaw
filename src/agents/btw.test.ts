@@ -530,6 +530,21 @@ describe("runBtwSideQuestion", () => {
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
   });
 
+  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
+    registerAgentHarness({
+      id: "custom",
+      label: "Custom test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    mockDoneAnswer("Direct fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Direct fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
+  });
+
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
     resolveModelWithRegistryMock.mockReturnValue({
       provider: "github-copilot",

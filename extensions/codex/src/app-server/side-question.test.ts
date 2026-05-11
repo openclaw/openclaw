@@ -226,6 +226,9 @@ describe("runCodexAppServerSideQuestion", () => {
       expect.objectContaining({
         threadId: "parent-thread",
         model: "gpt-5.5",
+        approvalPolicy: "never",
+        sandbox: "read-only",
+        dynamicTools: [],
         ephemeral: true,
         threadSource: "user",
         persistExtendedHistory: false,
@@ -247,6 +250,8 @@ describe("runCodexAppServerSideQuestion", () => {
       expect.objectContaining({
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
+        approvalPolicy: "never",
+        sandboxPolicy: { type: "readOnly", networkAccess: false },
         model: "gpt-5.5",
       }),
       expect.any(Object),
