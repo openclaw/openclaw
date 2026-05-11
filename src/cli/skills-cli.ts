@@ -16,6 +16,7 @@ import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { formatDocsLink } from "../terminal/links.js";
 import { theme } from "../terminal/theme.js";
 import { resolveOptionFromCommand } from "./cli-utils.js";
+import { formatCliCommand } from "./command-format.js";
 import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 export type {
@@ -183,12 +184,16 @@ export function registerSkillsCli(program: Command) {
       ) => {
         try {
           if (!slug && !opts.all) {
-            defaultRuntime.error("Provide a skill slug or use --all.");
+            defaultRuntime.error(
+              `Provide a skill slug or use --all. Example: ${formatCliCommand("openclaw skills update <slug>")} or ${formatCliCommand("openclaw skills update --all")}`,
+            );
             defaultRuntime.exit(1);
             return;
           }
           if (slug && opts.all) {
-            defaultRuntime.error("Use either a skill slug or --all.");
+            defaultRuntime.error(
+              `Use either a skill slug or --all, not both. Example: ${formatCliCommand("openclaw skills update <slug>")} or ${formatCliCommand("openclaw skills update --all")}`,
+            );
             defaultRuntime.exit(1);
             return;
           }
