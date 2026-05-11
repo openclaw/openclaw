@@ -1,19 +1,20 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { ConfiguredBindingRouteResult } from "openclaw/plugin-sdk/conversation-binding-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import * as conversationRuntime from "openclaw/plugin-sdk/conversation-binding-runtime";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveDiscordBoundConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
 import type { ThreadBindingRecord } from "./thread-bindings.js";
 
-type ResolvedConfiguredBindingRoute = ReturnType<
-  typeof conversationRuntime.resolveConfiguredBindingRoute
->;
+type ResolvedConfiguredBindingRoute = ConfiguredBindingRouteResult;
 type ConfiguredBindingResolution = NonNullable<
   NonNullable<ResolvedConfiguredBindingRoute>["bindingResolution"]
 >;
+
+type EnsureConfiguredBindingRouteReadyResult = { ok: true } | { ok: false; error: string };
 
 type DiscordNativeInteractionRouteState = {
   route: ResolvedAgentRoute;
@@ -21,9 +22,7 @@ type DiscordNativeInteractionRouteState = {
   boundSessionKey?: string;
   configuredRoute: ResolvedConfiguredBindingRoute | null;
   configuredBinding: ConfiguredBindingResolution | null;
-  bindingReadiness: Awaited<
-    ReturnType<typeof conversationRuntime.ensureConfiguredBindingRouteReady>
-  > | null;
+  bindingReadiness: EnsureConfiguredBindingRouteReadyResult | null;
 };
 
 export async function resolveDiscordNativeInteractionRouteState(params: {
