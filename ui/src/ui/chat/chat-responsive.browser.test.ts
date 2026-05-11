@@ -172,6 +172,10 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
                           <p>The chat shell should stay compact and readable.</p>
                           <pre><code>const importantLongIdentifier = "control-ui-chat-responsive-regression-fixture-keeps-code-scrollable"; console.log(importantLongIdentifier);</code></pre>
                         </div>
+                        <div class="chat-bubble-actions">
+                          <button class="chat-expand-btn" aria-label="expand">${iconSvg()}</button>
+                          <button class="chat-copy-btn" aria-label="copy">${iconSvg()}</button>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -441,4 +445,32 @@ describeBrowserLayout("chat responsive browser layout", () => {
       await page.close();
     }
   });
+
+  // Regression: on narrow viewports (max-width:640px) the .chat-bubble-actions
+  // floating buttons (copy + expand) used to overlap the message text because
+  // .chat-bubble.has-copy dropped its padding-right to 12px while the actions
+  // stayed pinned at top:6px;right:8px. The bubble must reserve enough right
+  // padding so the text never overlaps the action buttons.
+  it.each([
+    [320, 568],
+    [430, 932],
+    [600, 800],
+  ] as const)(
+    "keeps .chat-bubble-actions clear of message text at %ix%i",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        const bubble = await getBoundingBox(page, ".chat-bubble.has-copy");
+        const text = await getBoundingBox(page, ".chat-bubble.has-copy .chat-text");
+        const actions = await getBoundingBox(page, ".chat-bubble.has-copy .chat-bubble-actions");
+        // Actions must be inside the bubble's right edge.
+        expect(actions.x + actions.width).toBeLessThanOrEqual(bubble.x + bubble.width + 0.5);
+        // Critically: text's right edge must not extend into the actions' rect.
+        // Allow 0.5px of subpixel rounding tolerance.
+        expect(text.x + text.width).toBeLessThanOrEqual(actions.x + 0.5);
+      } finally {
+        await page.close();
+      }
+    },
+  );
 });

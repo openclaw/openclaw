@@ -466,6 +466,29 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector('[aria-label="Read aloud"]')).toBeNull();
   });
 
+  // Regression: assistant bubbles with copy/expand action buttons MUST carry the
+  // `has-copy` CSS class so the .chat-bubble.has-copy padding rules apply and
+  // the floating action buttons don't overlap message text. This bug shipped
+  // when an unrelated refactor accidentally dropped the class from
+  // bubbleClasses (see commit ead8be96fd).
+  it("marks assistant bubbles with .has-copy when action buttons are rendered", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      role: "assistant",
+      content:
+        "Thanks Todd! The email draft is ready to customize with individual regional manager names where you want to send them out.",
+      timestamp: 1000,
+    });
+
+    const bubble = container.querySelector(".chat-bubble");
+    const actions = container.querySelector(".chat-bubble-actions");
+    expect(bubble).not.toBeNull();
+    expect(actions).not.toBeNull();
+    // When .chat-bubble-actions is rendered, the bubble MUST have .has-copy so
+    // its padding-right reserves room for the absolutely-positioned buttons.
+    expect(bubble?.classList.contains("has-copy")).toBe(true);
+  });
+
   it("positions delete confirm by message side", () => {
     const container = document.createElement("div");
     clearDeleteConfirmSkip();

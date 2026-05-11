@@ -1441,11 +1441,17 @@ function renderGroupedMessage(
   const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
 
   const isToolMessage = normalizedRole === "tool" || isToolResult;
+  // Whether this bubble will render the floating .chat-bubble-actions (copy +
+  // expand buttons). Must be computed BEFORE bubbleClasses so the `has-copy`
+  // CSS class — which adds the right padding that keeps action buttons from
+  // overlapping message text — is applied when the actions are visible.
+  const willRenderBubbleActions = canCopyMarkdown || canExpand;
   const bubbleClasses = [
     "chat-bubble",
     isToolMessage ? "chat-bubble--tool-shell" : "",
     opts.isStreaming ? "streaming" : "",
     "fade-in",
+    willRenderBubbleActions ? "has-copy" : "",
   ]
     .filter(Boolean)
     .join(" ");
@@ -1491,7 +1497,7 @@ function renderGroupedMessage(
         : "Tool output";
   const toolMessageIcon = singleToolDisplay ? icons[singleToolDisplay.icon] : icons.zap;
 
-  const hasActions = canCopyMarkdown || canExpand;
+  const hasActions = willRenderBubbleActions;
   const duplicateCount = Math.max(1, Math.floor(opts.duplicateCount ?? 1));
 
   return html`
