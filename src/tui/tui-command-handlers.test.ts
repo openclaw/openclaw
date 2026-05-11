@@ -413,7 +413,7 @@ describe("tui command handlers", () => {
 
     // /new creates a unique session key (isolates TUI client) (#39217)
     expect(setSessionMock).toHaveBeenCalledTimes(1);
-    const newSessionKey = setSessionMock.mock.calls[0]?.[0];
+    const newSessionKey = setSessionMock.mock.calls[0]?.[0] as string | undefined;
     if (!newSessionKey) {
       throw new Error("expected /new to set a TUI session key");
     }
