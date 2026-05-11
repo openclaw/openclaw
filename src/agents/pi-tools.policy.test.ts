@@ -1,10 +1,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { upsertSessionEntry } from "../config/sessions.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   filterToolsByPolicy,
   isToolAllowedByPolicyName,
@@ -18,14 +20,48 @@ import {
 import { createStubTool } from "./test-helpers/pi-tool-stubs.js";
 import { providerAliasCases } from "./test-helpers/provider-alias-cases.js";
 
-vi.mock("../channels/plugins/session-conversation.js", () => ({
-  resolveSessionConversation: ({ rawId }: { rawId: string }) => ({
-    id: rawId,
-    threadId: undefined,
-    baseConversationId: rawId,
-    parentConversationCandidates: [],
-  }),
-}));
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  vi.unstubAllEnvs();
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
+});
+
+function useTempStateDir(): string {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pi-tools-policy-"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  return stateDir;
+}
+
+function seedGroupSession(params: {
+  sessionKey: string;
+  groupId: string;
+  channel?: string;
+  agentId?: string;
+  sessionId?: string;
+}) {
+  upsertSessionEntry({
+    agentId: params.agentId ?? "main",
+    sessionKey: params.sessionKey,
+    entry: {
+      sessionId: params.sessionId ?? params.sessionKey.replace(/:/g, "_"),
+      updatedAt: Date.now(),
+      chatType: "group",
+      deliveryContext: {
+        channel: params.channel ?? "whatsapp",
+        to: params.groupId,
+        accountId: "default",
+      },
+      groupId: params.groupId,
+    },
+  });
+}
 
 describe("pi-tools.policy", () => {
   it("treats * in allow as allow-all", () => {
@@ -84,6 +120,12 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("uses session-derived group policy when caller groupId disagrees", () => {
+    useTempStateDir();
+    seedGroupSession({
+      sessionKey: "agent:main:whatsapp:group:safe-room",
+      groupId: "safe-room",
+    });
+
     expect(
       resolveGroupToolPolicy({
         config: cfg,
@@ -96,6 +138,12 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("accepts caller groupId when it matches session-derived group context", () => {
+    useTempStateDir();
+    seedGroupSession({
+      sessionKey: "agent:main:whatsapp:group:trusted-group",
+      groupId: "trusted-group",
+    });
+
     expect(
       resolveTrustedGroupId({
         sessionKey: "agent:main:whatsapp:group:trusted-group",
@@ -114,6 +162,12 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("accepts caller groupId when spawnedBy provides the trusted group context", () => {
+    useTempStateDir();
+    seedGroupSession({
+      sessionKey: "agent:main:whatsapp:group:trusted-group",
+      groupId: "trusted-group",
+    });
+
     expect(
       resolveTrustedGroupId({
         sessionKey: "agent:main:main",
@@ -133,6 +187,11 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("keeps specific session group policy ahead of trusted parent caller groupId", () => {
+    useTempStateDir();
+    seedGroupSession({
+      sessionKey: "agent:main:whatsapp:group:room:sender:alice",
+      groupId: "room:sender:alice",
+    });
     const scopedCfg: OpenClawConfig = {
       channels: {
         whatsapp: {
@@ -159,6 +218,12 @@ describe("resolveGroupToolPolicy group context validation", () => {
   });
 
   it("prefers the session-derived channel over caller-supplied messageProvider", () => {
+    useTempStateDir();
+    seedGroupSession({
+      sessionKey: "agent:main:slack:group:C123",
+      groupId: "C123",
+      channel: "slack",
+    });
     const channelCfg = {
       channels: {
         discord: {

@@ -1,15 +1,11 @@
 import { getLoadedChannelPlugin } from "../channels/plugins/index.js";
-import { resolveSessionConversation } from "../channels/plugins/session-conversation.js";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
 import { resolveChannelGroupToolsPolicy } from "../config/group-policy.js";
+import { readSqliteSessionRoutingInfo } from "../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
 import { logWarn } from "../logger.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../sessions/session-key-utils.js";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -273,45 +269,30 @@ function resolveGroupContextFromSessionKey(sessionKey?: string | null): {
   if (!raw) {
     return {};
   }
-  const { baseSessionKey, threadId } = parseThreadSessionSuffix(raw);
-  const conversationKey = threadId ? baseSessionKey : raw;
-  const conversation = parseRawSessionConversationRef(conversationKey);
-  if (conversation) {
-    const resolvedConversation = resolveSessionConversation({
-      channel: conversation.channel,
-      kind: conversation.kind,
-      rawId: conversation.rawId,
+  let routingInfo;
+  try {
+    routingInfo = readSqliteSessionRoutingInfo({
+      agentId: resolveAgentIdFromSessionKey(raw),
+      sessionKey: raw,
     });
-    return {
-      channel: conversation.channel,
-      groupIds: collectUniqueStrings([
-        ...buildScopedGroupIdCandidates(conversation.rawId),
-        resolvedConversation?.id,
-        resolvedConversation?.baseConversationId,
-        ...(resolvedConversation?.parentConversationCandidates ?? []),
-      ]),
-    };
-  }
-  const base = conversationKey ?? raw;
-  const parts = base.split(":").filter(Boolean);
-  let body = parts[0] === "agent" ? parts.slice(2) : parts;
-  if (body[0] === "subagent") {
-    body = body.slice(1);
-  }
-  if (body.length < 3) {
+  } catch {
     return {};
   }
-  const [channel, kind, ...rest] = body;
+  const kind = routingInfo?.conversationKind ?? routingInfo?.chatType;
   if (kind !== "group" && kind !== "channel") {
     return {};
   }
-  const groupId = rest.join(":").trim();
+  const groupId = routingInfo?.conversationPeerId?.trim();
   if (!groupId) {
     return {};
   }
   return {
-    channel: normalizeLowercaseStringOrEmpty(channel),
-    groupIds: buildScopedGroupIdCandidates(groupId),
+    channel: normalizeLowercaseStringOrEmpty(routingInfo?.channel),
+    groupIds: collectUniqueStrings([
+      ...buildScopedGroupIdCandidates(groupId),
+      routingInfo?.parentConversationId,
+      routingInfo?.primaryConversationId,
+    ]),
   };
 }
 
