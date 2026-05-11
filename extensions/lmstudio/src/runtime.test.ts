@@ -140,6 +140,24 @@ describe("lmstudio-runtime", () => {
     ).resolves.toBeUndefined();
   });
 
+  it("allows header-only runtime auth when an api key env template is unset", async () => {
+    resolveApiKeyForProviderMock.mockRejectedValueOnce(
+      new Error('No API key found for provider "lmstudio". Auth store: /tmp/auth-profiles.json.'),
+    );
+
+    await expect(
+      resolveLmstudioRuntimeApiKey({
+        config: buildLmstudioConfig({
+          apiKey: "${LMSTUDIO_API_KEY}",
+          headers: {
+            Authorization: "Bearer proxy-token",
+          },
+        }),
+        env: {},
+      }),
+    ).resolves.toBeUndefined();
+  });
+
   it("suppresses profile runtime auth when Authorization is configured", async () => {
     resolveApiKeyForProviderMock.mockResolvedValueOnce({
       apiKey: "stale-profile-key",

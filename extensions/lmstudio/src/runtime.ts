@@ -74,6 +74,7 @@ export async function resolveLmstudioConfiguredApiKey(params: {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   path?: string;
+  allowUnresolved?: boolean;
 }): Promise<string | undefined> {
   const providerConfig = params.config?.models?.providers?.[LMSTUDIO_PROVIDER_ID];
   const apiKeyInput = providerConfig?.apiKey;
@@ -95,6 +96,9 @@ export async function resolveLmstudioConfiguredApiKey(params: {
         })
       : { value: directApiKey };
     if (resolved.unresolvedRefReason) {
+      if (params.allowUnresolved) {
+        return undefined;
+      }
       throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
     }
     const resolvedValue = normalizeOptionalSecretInput(resolved.value);
@@ -120,6 +124,9 @@ export async function resolveLmstudioConfiguredApiKey(params: {
     unresolvedReasonStyle: "detailed",
   });
   if (resolved.unresolvedRefReason) {
+    if (params.allowUnresolved) {
+      return undefined;
+    }
     throw new Error(`${path}: ${resolved.unresolvedRefReason}`);
   }
   const resolvedValue = normalizeOptionalSecretInput(resolved.value);
@@ -219,6 +226,7 @@ export async function resolveLmstudioRuntimeApiKey(params: {
     configuredApiKeyPromise ??= resolveLmstudioConfiguredApiKey({
       config,
       env: params.env,
+      allowUnresolved: hasAuthorizationHeader,
     });
     return await configuredApiKeyPromise;
   };

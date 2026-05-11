@@ -1142,6 +1142,20 @@ describe("lmstudio setup", () => {
       },
     },
     {
+      name: "ignores unresolved apiKey template when Authorization header is configured",
+      providerPatch: {
+        apiKey: "${LMSTUDIO_API_KEY}",
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+      expectedProviderPatch: {
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+    },
+    {
       name: "still injects lmstudio-local when only non-auth headers are configured",
       providerPatch: {
         headers: {
