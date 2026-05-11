@@ -54,7 +54,16 @@ const CONTEXT_FILE_ORDER = new Map<string, number>([
   ["memory.md", 70],
 ]);
 
-const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set(["heartbeat.md"]);
+// Files whose basename matches one of these names are injected *below* the
+// SYSTEM_PROMPT_CACHE_BOUNDARY (i.e. excluded from the cached system prefix).
+// HEARTBEAT.md is intentionally NOT in this set: in practice it is a static
+// workspace rules file that changes only when an operator edits it, not
+// turn-to-turn, so emitting it below the boundary forced an unnecessary cache
+// rewrite each turn (~1.8k tokens for a 7KB heartbeat). Putting it above the
+// boundary makes the cached prefix include HEARTBEAT.md and stay byte-stable
+// across turns. If a genuinely turn-volatile workspace file ever appears, add
+// its lowercase basename here.
+const DYNAMIC_CONTEXT_FILE_BASENAMES = new Set<string>();
 const DEFAULT_HEARTBEAT_PROMPT_CONTEXT_BLOCK =
   "Default heartbeat prompt:\n`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`";
 const SYSTEM_PROMPT_STABLE_PREFIX_CACHE_LIMIT = 64;

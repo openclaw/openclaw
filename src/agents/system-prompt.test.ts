@@ -1083,6 +1083,26 @@ describe("buildAgentSystemPrompt", () => {
     expect(reactionsPos).toBeGreaterThan(boundaryPos);
     expect(voicePos).toBeGreaterThan(boundaryPos);
   });
+
+  it("places HEARTBEAT.md above the cache boundary so the stable workspace prefix stays byte-identical across turns", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      contextFiles: [
+        { path: "AGENTS.md", content: "Agent rules." },
+        { path: "HEARTBEAT.md", content: "Heartbeat behaviour rules." },
+      ],
+    });
+
+    const heartbeatPos = prompt.indexOf("Heartbeat behaviour rules.");
+    const boundaryPos = prompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY);
+
+    expect(heartbeatPos).toBeGreaterThan(-1);
+    expect(boundaryPos).toBeGreaterThan(-1);
+    expect(heartbeatPos).toBeLessThan(boundaryPos);
+    // The dynamic-context heading should not be rendered when no file is
+    // marked dynamic.
+    expect(prompt).not.toContain("# Dynamic Project Context");
+  });
 });
 
 describe("buildAgentBootstrapSystemContext", () => {
