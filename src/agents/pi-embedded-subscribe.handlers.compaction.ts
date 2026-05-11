@@ -8,18 +8,22 @@ type SessionCompactionStartEvent = Extract<AgentSessionEvent, { type: "compactio
 type SessionCompactionEndEvent = Extract<AgentSessionEvent, { type: "compaction_end" }>;
 type CompactionReason = SessionCompactionStartEvent["reason"];
 
-type CompactionStartEvent = SessionCompactionStartEvent | {
-  type: "compaction_start";
-  reason?: unknown;
-};
+type CompactionStartEvent =
+  | SessionCompactionStartEvent
+  | {
+      type: "compaction_start";
+      reason?: unknown;
+    };
 
-type CompactionEndEvent = SessionCompactionEndEvent | {
-  type: "compaction_end";
-  reason?: unknown;
-  willRetry?: unknown;
-  result?: unknown;
-  aborted?: unknown;
-};
+type CompactionEndEvent =
+  | SessionCompactionEndEvent
+  | {
+      type: "compaction_end";
+      reason?: unknown;
+      willRetry?: unknown;
+      result?: unknown;
+      aborted?: unknown;
+    };
 
 function normalizeCompactionReason(reason: unknown): CompactionReason {
   return reason === "manual" || reason === "threshold" || reason === "overflow"
