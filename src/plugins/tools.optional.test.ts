@@ -388,8 +388,7 @@ function expectLoaderSelectedOnlyPluginIds(expectedPluginIds: readonly string[])
   const selectedPluginIds = loadOpenClawPluginsMock.mock.calls.map(
     ([params]) => (params as { onlyPluginIds?: string[] }).onlyPluginIds,
   );
-  expect(selectedPluginIds.length).toBeGreaterThan(0);
-  expect(selectedPluginIds).toEqual(selectedPluginIds.map(() => expectedPluginIds));
+  expect(selectedPluginIds).toStrictEqual([expectedPluginIds]);
 }
 
 function expectSingleDiagnosticMessage(

@@ -122,7 +122,7 @@ function formatModelPricingHealthLine(summary: HealthSummary): string | null {
     return null;
   }
   const detail = modelPricing.detail ? ` (${modelPricing.detail})` : "";
-  return `Model pricing: degraded${detail}`;
+  return `Model pricing: warning (optional pricing refresh degraded)${detail}`;
 }
 
 const resolveHeartbeatSummary = (cfg: OpenClawConfig, agentId: string) =>

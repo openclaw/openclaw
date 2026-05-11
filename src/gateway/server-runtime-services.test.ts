@@ -189,8 +189,9 @@ describe("server-runtime-services", () => {
     expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
     const deliveryLog = log.child.mock.results[0]?.value;
     const sessionDeliveryLog = log.child.mock.results[1]?.value;
-    expect(deliveryLog).toBeDefined();
-    expect(sessionDeliveryLog).toBeDefined();
+    if (!deliveryLog || !sessionDeliveryLog) {
+      throw new Error("Expected delivery recovery log children");
+    }
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
       deliver: hoisted.deliverOutboundPayloads,
       cfg: {},

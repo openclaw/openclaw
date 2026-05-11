@@ -317,7 +317,7 @@ describe("control UI routing", () => {
     toggle.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
     await app.updateComplete;
 
-    expect(request).not.toHaveBeenCalledWith("config.patch", expect.anything());
+    expect(request.mock.calls.some((call) => call[0] === "config.patch")).toBe(false);
     const confirmRestart = expectButtonWithText(app, "Confirm Restart");
     confirmRestart.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
@@ -390,7 +390,7 @@ describe("control UI routing", () => {
     expect(topShell.firstElementChild).toBe(toggle);
     expect(topShell.querySelector(".topbar-nav-toggle")).toBe(toggle);
     expectElement(actions, ".topbar-search", HTMLElement);
-    expect(toggle.getAttribute("aria-label")).toEqual(expect.stringMatching(/\S/u));
+    expect(toggle.getAttribute("aria-label")).toBe("Expand sidebar");
 
     const nav = expectElement(app, ".shell-nav", HTMLElement);
 

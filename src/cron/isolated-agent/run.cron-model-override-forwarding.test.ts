@@ -81,9 +81,9 @@ function createDeferred<T = void>() {
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
-  expect(value).toBeTruthy();
-  expect(typeof value).toBe("object");
-  expect(Array.isArray(value)).toBe(false);
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
   return value as Record<string, unknown>;
 }
 
@@ -177,11 +177,9 @@ describe("runCronIsolatedAgentTurn — cron model override forwarding (#58065)",
     const result = await runCronIsolatedAgentTurn(makeParams());
 
     expect(result.status).toBe("ok");
-    const embeddedCall = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
-      | { provider?: string; model?: string }
-      | undefined;
-    expect(embeddedCall?.provider).toBe("google");
-    expect(embeddedCall?.model).toBe("gemini-2.0-flash");
+    const embeddedCall = firstMockArg(runEmbeddedPiAgentMock);
+    expect(embeddedCall.provider).toBe("google");
+    expect(embeddedCall.model).toBe("gemini-2.0-flash");
   });
 
   it("forwards isolated cron execution phase updates from embedded runs", async () => {

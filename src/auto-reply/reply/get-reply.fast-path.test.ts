@@ -336,9 +336,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       cfg,
     );
 
-    expect(reply).toEqual(
-      expect.objectContaining({ text: expect.stringContaining("Think: high") }),
-    );
+    expect(Array.isArray(reply)).toBe(false);
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(reply.text).toContain("Think: high");
     expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();
@@ -391,9 +393,11 @@ describe("getReplyFromConfig fast test bootstrap", () => {
       cfg,
     );
 
-    expect(reply).toEqual(
-      expect.objectContaining({ text: expect.stringContaining("Think: xhigh") }),
-    );
+    expect(Array.isArray(reply)).toBe(false);
+    if (!reply || Array.isArray(reply)) {
+      throw new Error("expected single reply payload");
+    }
+    expect(reply.text).toContain("Think: xhigh");
     expect(mocks.loadModelCatalog).not.toHaveBeenCalled();
     expect(mocks.ensureAgentWorkspace).not.toHaveBeenCalled();
     expect(mocks.initSessionState).not.toHaveBeenCalled();

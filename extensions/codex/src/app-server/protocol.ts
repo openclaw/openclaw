@@ -166,7 +166,54 @@ export type CodexThread = {
   id: string;
   sessionId?: string;
   name?: string | null;
+  preview?: string | null;
+  createdAt?: number | null;
+  updatedAt?: number | null;
+  status?: CodexThreadStatus | null;
   cwd?: string | null;
+  source?: CodexSessionSource | null;
+  threadSource?: string | null;
+  agentNickname?: string | null;
+  agentRole?: string | null;
+};
+
+export type CodexThreadStatus =
+  | { type: "notLoaded" }
+  | { type: "idle" }
+  | { type: "systemError" }
+  | { type: "active"; activeFlags?: string[] };
+
+export type CodexSubAgentThreadSpawnSource = {
+  parent_thread_id: string;
+  depth?: number;
+  agent_path?: string | null;
+  agent_nickname?: string | null;
+  agent_role?: string | null;
+};
+
+export type CodexSubAgentSource =
+  | "review"
+  | "compact"
+  | "memory_consolidation"
+  | { thread_spawn: CodexSubAgentThreadSpawnSource }
+  | { other: string };
+
+export type CodexSessionSource =
+  | "cli"
+  | "vscode"
+  | "exec"
+  | "appServer"
+  | "unknown"
+  | { custom: string }
+  | { subAgent: CodexSubAgentSource };
+
+export type CodexThreadStartedNotification = {
+  thread: CodexThread;
+};
+
+export type CodexThreadStatusChangedNotification = {
+  threadId: string;
+  status: CodexThreadStatus;
 };
 
 export type CodexThreadItem = {

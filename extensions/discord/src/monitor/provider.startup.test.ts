@@ -246,7 +246,9 @@ describe("createDiscordMonitorClient", () => {
       runtimeProfile: "persistent",
       maxQueueSize: 1000,
     });
-    expect(handlers).toBeDefined();
+    if (!handlers) {
+      throw new Error("expected Discord client handlers");
+    }
     expect(Array.isArray(plugins)).toBe(true);
   });
 
@@ -280,7 +282,9 @@ describe("createDiscordMonitorClient", () => {
       maxQueueSize: 1000,
       fetch: restFetch,
     });
-    expect(handlers).toBeDefined();
+    if (!handlers) {
+      throw new Error("expected Discord client handlers");
+    }
     expect(Array.isArray(plugins)).toBe(true);
   });
 

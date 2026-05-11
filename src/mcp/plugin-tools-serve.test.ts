@@ -149,14 +149,15 @@ describe("plugin tools MCP server", () => {
       name: "memory_recall",
       arguments: { query: "remember this" },
     });
-    expect(execute).toHaveBeenCalledWith(
-      expect.stringMatching(/^mcp-\d+$/),
-      {
-        query: "remember this",
-      },
-      undefined,
-      undefined,
-    );
+    expect(execute).toHaveBeenCalledTimes(1);
+    const executeCall = execute.mock.calls[0];
+    const requestId = executeCall?.[0];
+    expect(typeof requestId).toBe("string");
+    expect(requestId?.startsWith("mcp-")).toBe(true);
+    expect(Number.isSafeInteger(Number(requestId?.slice("mcp-".length)))).toBe(true);
+    expect(executeCall?.[1]).toEqual({ query: "remember this" });
+    expect(executeCall?.[2]).toBeUndefined();
+    expect(executeCall?.[3]).toBeUndefined();
     expect(result.content).toEqual([{ type: "text", text: "Stored." }]);
   });
 

@@ -24,7 +24,9 @@ vi.mock("../../config/config.js", () => {
 const { skillsHandlers } = await import("./skills.js");
 
 function expectWrittenSkillEntry(skillKey: string, entry: unknown) {
-  expect(writtenConfig).toBeDefined();
+  if (!writtenConfig) {
+    throw new Error("Expected written config");
+  }
   const config = writtenConfig as {
     skills?: {
       entries?: Record<string, unknown>;

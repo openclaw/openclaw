@@ -455,20 +455,16 @@ describe("Graph shared-link helpers", () => {
   it("tryBuildGraphSharesUrlForSharedLink rewrites SharePoint URLs", () => {
     const url = "https://contoso.sharepoint.com/personal/user/Documents/report.pdf";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toEqual(
-      expect.stringMatching(
-        /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
-      ),
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 
   it("tryBuildGraphSharesUrlForSharedLink rewrites OneDrive URLs", () => {
     const url = "https://1drv.ms/b/s!AkxYabcdefg";
     const result = tryBuildGraphSharesUrlForSharedLink(url);
-    expect(result).toEqual(
-      expect.stringMatching(
-        /^https:\/\/graph\.microsoft\.com\/v1\.0\/shares\/u![A-Za-z0-9_-]+\/driveItem\/content$/,
-      ),
+    expect(result).toBe(
+      `https://graph.microsoft.com/v1.0/shares/${encodeGraphShareId(url)}/driveItem/content`,
     );
   });
 

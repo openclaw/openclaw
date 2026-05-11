@@ -5,6 +5,7 @@ import {
   uploadToConsentUrl,
   validateConsentUploadUrl,
 } from "./file-consent.js";
+import { buildUserAgent } from "./user-agent.js";
 
 // Helper: a resolveFn that returns a public IP by default
 const publicResolve = async () => ({ address: "13.107.136.10" });
@@ -277,7 +278,7 @@ describe("uploadToConsentUrl", () => {
     expect(opts?.headers).toEqual({
       "Content-Range": "bytes 0-4/5",
       "Content-Type": "application/octet-stream",
-      "User-Agent": expect.stringMatching(/^teams\.ts\[apps\]\/.+ OpenClaw\/.+$/),
+      "User-Agent": buildUserAgent(),
     });
     expect(opts?.body).toEqual(new Uint8Array(Buffer.from("hello")));
   });

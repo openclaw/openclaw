@@ -189,7 +189,7 @@ describe("gateway startup primary model warmup", () => {
     });
 
     expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("startup model warmup failed for codex/gpt-5.4"),
+      "startup model warmup failed for codex/gpt-5.4: Error: models write failed",
     );
   });
 });

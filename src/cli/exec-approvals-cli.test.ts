@@ -525,7 +525,9 @@ describe("exec approvals CLI", () => {
       requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals"),
     );
     const saved = requireRecord(saveExecApprovals.mock.calls[0]?.[0], "saved approvals");
-    expect(requireRecord(saved.agents, "saved agents")["*"]).toBeDefined();
+    if (requireRecord(saved.agents, "saved agents")["*"] === undefined) {
+      throw new Error("Expected wildcard exec approval agent entry");
+    }
   });
 
   it("removes wildcard allowlist entry and prunes empty agent", async () => {

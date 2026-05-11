@@ -93,11 +93,10 @@ describe("runHeartbeatOnce responsePrefix templates", () => {
     });
 
     expect(sendTelegram).toHaveBeenCalledTimes(1);
-    expect(sendTelegram).toHaveBeenCalledWith(
-      TELEGRAM_GROUP,
-      "[openai-codex/gpt-5.4|think:high] Heartbeat alert",
-      expect.any(Object),
-    );
+    const [target, message, options] = sendTelegram.mock.calls[0] ?? [];
+    expect(target).toBe(TELEGRAM_GROUP);
+    expect(message).toBe("[openai-codex/gpt-5.4|think:high] Heartbeat alert");
+    expect(typeof options).toBe("object");
   });
 
   it("uses the resolved responsePrefix when suppressing prefixed HEARTBEAT_OK replies", async () => {

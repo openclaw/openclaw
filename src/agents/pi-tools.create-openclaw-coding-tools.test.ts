@@ -252,6 +252,9 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("keeps PI Tool Search controls when core OpenClaw tools are not materialized", () => {
+    const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
+    createOpenClawToolsMock.mockClear();
+
     const tools = createOpenClawCodingTools({
       includeCoreTools: false,
       includeToolSearchControls: true,
@@ -270,11 +273,13 @@ describe("createOpenClawCodingTools", () => {
     });
     const names = new Set(tools.map((tool) => tool.name));
 
+    expect(createOpenClawToolsMock).not.toHaveBeenCalled();
     expect(names.has("tool_search_code")).toBe(true);
     expect(names.has("tool_search")).toBe(true);
     expect(names.has("tool_describe")).toBe(true);
     expect(names.has("tool_call")).toBe(true);
     expect(names.has("message")).toBe(false);
+    expect(names.has("exec")).toBe(false);
   });
 
   it("exposes only an explicitly authorized owner-only tool to non-owner sessions", () => {
@@ -445,10 +450,9 @@ describe("createOpenClawCodingTools", () => {
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
       expect(resolvePluginToolsSpy).toHaveBeenCalledTimes(1);
-      expect(resolvePluginToolsSpy.mock.calls[0]?.[0].options).toMatchObject({
-        modelProvider: "openrouter",
-        modelId: "openrouter/auto",
-      });
+      const pluginToolOptions = resolvePluginToolsSpy.mock.calls[0]?.[0].options;
+      expect(pluginToolOptions?.modelProvider).toBe("openrouter");
+      expect(pluginToolOptions?.modelId).toBe("openrouter/auto");
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

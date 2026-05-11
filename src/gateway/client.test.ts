@@ -711,6 +711,7 @@ describe("GatewayClient connect auth payload", () => {
   beforeEach(() => {
     vi.useRealTimers();
     wsInstances.length = 0;
+    clearDeviceAuthTokenMock.mockReset();
     loadDeviceAuthTokenMock.mockReset();
     storeDeviceAuthTokenMock.mockReset();
     logDebugMock.mockClear();
@@ -1204,6 +1205,33 @@ describe("GatewayClient connect auth payload", () => {
       code: 1008,
       reason: "connect failed",
       detailCode: "AUTH_DEVICE_TOKEN_MISMATCH",
+    });
+  });
+
+  it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue({
+      token: "stored-device-token",
+      scopes: ["operator.read"],
+    });
+    const onReconnectPaused = vi.fn();
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      onReconnectPaused,
+    });
+
+    const { ws: ws1, connect: firstConnect } = startClientAndConnect({ client });
+    expect(firstConnect.params?.auth?.token).toBe("stored-device-token");
+    await expectNoReconnectAfterConnectFailure({
+      client,
+      firstWs: ws1,
+      connectId: firstConnect.id,
+      failureDetails: { code: "AUTH_SCOPE_MISMATCH" },
+    });
+    expect(clearDeviceAuthTokenMock).not.toHaveBeenCalled();
+    expect(onReconnectPaused).toHaveBeenCalledWith({
+      code: 1008,
+      reason: "connect failed",
+      detailCode: "AUTH_SCOPE_MISMATCH",
     });
   });
 

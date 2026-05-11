@@ -37,8 +37,10 @@ function installFallbackShell(window: TestWindow, html: string): void {
   const sentinel = Array.from(parsed.querySelectorAll<HTMLScriptElement>("script:not([src])")).find(
     (script) => script.textContent?.includes("openclaw-mount-fallback"),
   );
-  expect(sentinel).toBeTruthy();
-  window.eval(sentinel?.textContent ?? "");
+  if (!sentinel?.textContent) {
+    throw new Error("Expected inline mount fallback script in index.html");
+  }
+  window.eval(sentinel.textContent);
 }
 
 describe("Control UI mount fallback", () => {

@@ -73,7 +73,11 @@ import {
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import {
+  projectContextEngineAssemblyForCodex,
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -430,6 +434,19 @@ function resolveCodexPluginAppCacheCodexHome(
   return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
 }
 
+function restrictCodexAppServerSandboxForOpenClawSandbox(
+  appServer: CodexAppServerRuntimeOptions,
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
+): CodexAppServerRuntimeOptions {
+  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    sandbox: "workspace-write",
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -449,12 +466,7 @@ export async function runCodexAppServerAttempt(
   const attemptStartedAt = Date.now();
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -470,6 +482,12 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
 
   const runAbortController = new AbortController();
   const abortFromUpstream = () => {
@@ -620,6 +638,12 @@ export async function runCodexAppServerAttempt(
         originalHistoryMessages: historyMessages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
+        maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+          contextTokenBudget: params.contextTokenBudget,
+          reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+            config: params.config,
+          }),
+        }),
       });
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
@@ -2955,6 +2979,7 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
+  restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

@@ -273,7 +273,15 @@ describe("resolveChannelSetupSelectionContributions", () => {
     expect(primerMeta?.selectionLabel).toBe("bad\\nid");
     expect(primerMeta?.blurb).toBe("Blurb\\nline");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("bad\\nid: Blurb\\nline"),
+      [
+        "Inbound DM safety defaults to pairing: unknown senders get a pairing code first.",
+        "Approve with: openclaw pairing approve <channel> <code>",
+        'Open/public DMs require dmPolicy="open" plus allowFrom=["*"].',
+        'For multi-user DMs, isolate sessions with: openclaw config set session.dmScope "per-channel-peer" (or "per-account-channel-peer" for multi-account channels).',
+        "Docs: https://docs.openclaw.ai/channels/pairing",
+        "",
+        "bad\\nid: Blurb\\nline",
+      ].join("\n"),
       "How channels work",
     );
   });
@@ -315,7 +323,7 @@ describe("resolveChannelSetupSelectionContributions", () => {
     if (typeof docsLink !== "function") {
       throw new Error("Expected docs link formatter");
     }
-    expect(docsLink("/channels/zalo", "Docs")).toContain("https://docs.openclaw.ai/channels/zalo");
+    expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
   });
 });

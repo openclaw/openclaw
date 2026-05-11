@@ -459,8 +459,8 @@ describe("chrome.ts internal", () => {
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
           if (process.platform === "linux") {
-            expect(spawnOptions.env?.XDG_CONFIG_HOME).toBeTruthy();
-            expect(spawnOptions.env?.XDG_CACHE_HOME).toBeTruthy();
+            expect(spawnOptions.env?.XDG_CONFIG_HOME).toEqual(expect.any(String));
+            expect(spawnOptions.env?.XDG_CACHE_HOME).toEqual(expect.any(String));
           }
           // Cleanup.
           running.proc.kill?.("SIGTERM");
@@ -723,7 +723,7 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send("not-json-at-all");
-              setTimeout(() => ws.close(), 1);
+              setImmediate(() => ws.close());
             });
           });
         },
@@ -740,7 +740,7 @@ describe("chrome.ts internal", () => {
           wss.on("connection", (ws) => {
             ws.on("message", () => {
               ws.send(JSON.stringify({ id: 42, result: { product: "Chrome" } }));
-              setTimeout(() => ws.close(), 1);
+              setImmediate(() => ws.close());
             });
           });
         },
@@ -849,7 +849,7 @@ describe("chrome.ts internal", () => {
         onConnection: (wss) => {
           wss.on("connection", (ws) => {
             // Immediately close with no response, triggering the 'close' branch.
-            setTimeout(() => ws.close(), 10);
+            setImmediate(() => ws.close());
           });
         },
         run: async (baseUrl) => {

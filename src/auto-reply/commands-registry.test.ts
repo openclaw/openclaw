@@ -592,7 +592,6 @@ describe("commands registry args", () => {
     };
 
     const args = parseCommandArgs(command, "set foo bar baz");
-    expect(args).toBeDefined();
     if (!args) {
       throw new Error("Expected parsed command args");
     }

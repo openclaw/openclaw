@@ -19,7 +19,9 @@ function sendOptions(call: unknown[] | undefined): {
   mediaUrl?: string;
 } {
   const options = call?.[2];
-  expect(options).toBeDefined();
+  if (!options) {
+    throw new Error("Expected Slack send options");
+  }
   return options as {
     blocks?: Array<{
       block_id?: string;

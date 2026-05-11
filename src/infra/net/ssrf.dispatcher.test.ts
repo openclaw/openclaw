@@ -77,6 +77,21 @@ function createDispatcherWithPinnedOverride(lookup: PinnedHostname["lookup"]) {
     ?.connect?.lookup;
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstAgentOptions(): Record<string, unknown> {
+  const [call] = agentCtor.mock.calls;
+  if (!call) {
+    throw new Error("expected Agent constructor call");
+  }
+  return requireRecord(call[0], "Agent constructor options");
+}
+
 describe("createPinnedDispatcher", () => {
   it("uses pinned lookup and inherits the shared undici family policy", () => {
     const lookup = vi.fn() as unknown as PinnedHostname["lookup"];
@@ -105,10 +120,10 @@ describe("createPinnedDispatcher", () => {
       },
       allowH2: false,
     });
-    const firstCallArg = agentCtor.mock.calls[0]?.[0] as
-      | { connect?: Record<string, unknown> }
-      | undefined;
-    expect(firstCallArg?.connect?.autoSelectFamily).toBe(true);
+    const firstCallArg = requireFirstAgentOptions();
+    expect(requireRecord(firstCallArg.connect, "Agent connect options").autoSelectFamily).toBe(
+      true,
+    );
   });
 
   it("reuses the global WSL2 autoSelectFamily policy for pinned dispatchers", () => {

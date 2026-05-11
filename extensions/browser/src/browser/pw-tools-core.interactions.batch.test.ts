@@ -57,7 +57,7 @@ describe("batchViaPlaywright", () => {
 
     expect(result).toEqual({ results: [{ ok: true }] });
     const [evaluateFn, evaluateOptions] = page?.evaluate.mock.calls[0] ?? [];
-    expect(evaluateFn).toEqual(expect.any(Function));
+    expect(typeof evaluateFn).toBe("function");
     expect(evaluateOptions?.fnBody).toBe("() => 1");
     expect(evaluateOptions?.timeoutMs).toBe(4500);
   });

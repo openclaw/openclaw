@@ -372,7 +372,7 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.replyOptions.onToolStart?.({ name: "exec" });
 
     expect(streamInstances[0]?.sendInformativeUpdate).toHaveBeenCalledWith(
-      expect.stringMatching(/^[^\n]+\.\.\.$/),
+      pickInformativeStatusText({ seed: "default:conv" }),
     );
   });
 

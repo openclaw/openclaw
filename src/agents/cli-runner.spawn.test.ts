@@ -35,6 +35,11 @@ import { setCliRunnerPrepareTestDeps } from "./cli-runner/prepare.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
 import { createClaudeApiErrorFixture } from "./test-helpers/claude-api-error-fixture.js";
 
+vi.mock("../plugin-sdk/anthropic-cli.js", () => ({
+  CLAUDE_CLI_BACKEND_ID: "claude-cli",
+  isClaudeCliProvider: (providerId: string) => providerId === "claude-cli",
+}));
+
 type ProcessSupervisor = ReturnType<typeof getProcessSupervisor>;
 type SupervisorSpawnFn = ProcessSupervisor["spawn"];
 
@@ -491,7 +496,13 @@ describe("runCliAgent spawn path", () => {
           },
         }),
       );
-      await expect(fs.access(pluginDir)).rejects.toMatchObject({ code: "ENOENT" });
+      let accessError: unknown;
+      try {
+        await fs.access(pluginDir);
+      } catch (error) {
+        accessError = error;
+      }
+      expect((accessError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }

@@ -1,8 +1,10 @@
+import { resolveAgentConfig } from "../../../agents/agent-scope-config.js";
 import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
 import { isToolAllowedByPolicies } from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { AgentToolsConfig, ToolsConfig } from "../../../config/types.tools.js";
+import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import { createLazyImportLoader } from "../../../shared/lazy-promise.js";
 
 type ChannelDoctorModule = typeof import("./channel-doctor.js");
@@ -191,6 +193,30 @@ export function collectVisibleReplyToolPolicyWarnings(cfg: OpenClawConfig): stri
   return warnings;
 }
 
+function formatChannelList(channels: string[]): string {
+  if (channels.length <= 2) {
+    return channels.map((channel) => `"${channel}"`).join(" and ");
+  }
+  return `${channels
+    .slice(0, 2)
+    .map((channel) => `"${channel}"`)
+    .join(", ")}, and ${channels.length - 2} more`;
+}
+
+export function collectChannelBoundMessageToolPolicyWarnings(cfg: OpenClawConfig): string[] {
+  return collectChannelRouteTargets(cfg).flatMap((target) => {
+    const agentTools = resolveAgentConfig(cfg, target.agentId)?.tools;
+    if (resolveMessageToolAvailability({ globalTools: cfg.tools, agentTools })) {
+      return [];
+    }
+    return [
+      `- Agent "${target.agentId}" is routed from channel ${formatChannelList(
+        target.channels,
+      )}, but the message tool is unavailable for that agent; explicit channel actions such as sendAttachment, upload-file, thread-reply, or reply can fail. Add "message" to the agent tool allowlist, add "group:messaging", or switch the agent to a profile that includes messaging tools.`,
+    ];
+  });
+}
+
 export async function collectDoctorPreviewWarnings(params: {
   cfg: OpenClawConfig;
   doctorFixCommand: string;
@@ -202,6 +228,7 @@ export async function collectDoctorPreviewWarnings(params: {
   const hasPluginConfig = hasPlugins(params.cfg);
 
   warnings.push(...collectVisibleReplyToolPolicyWarnings(params.cfg));
+  warnings.push(...collectChannelBoundMessageToolPolicyWarnings(params.cfg));
 
   const channelPluginRuntime =
     hasChannelConfig && hasExplicitChannelPluginBlockerConfig(params.cfg)

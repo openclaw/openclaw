@@ -149,7 +149,7 @@ describe("runBootOnce", () => {
       agentCommand.mockRejectedValue(new Error("boom"));
       await expect(runBootOnce({ cfg: {}, deps: makeDeps(), workspaceDir })).resolves.toEqual({
         status: "failed",
-        reason: expect.stringContaining("agent run failed: boom"),
+        reason: "agent run failed: boom",
       });
       expect(agentCommand).toHaveBeenCalledTimes(1);
     });

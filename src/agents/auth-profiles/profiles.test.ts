@@ -66,7 +66,8 @@ function readPersistedOAuthRefId(agentDir: string, profileId: string): string {
     profiles: Record<string, { oauthRef?: { id?: string } }>;
   };
   const refId = persisted.profiles[profileId]?.oauthRef?.id;
-  expect(refId).toEqual(expect.any(String));
+  expect(typeof refId).toBe("string");
+  expect(refId?.length).toBeGreaterThan(0);
   return String(refId);
 }
 
@@ -126,7 +127,8 @@ function expectOpenClawCredentialsOAuthRef(
   const ref = oauthRef as Record<string, unknown>;
   expect(ref.source).toBe("openclaw-credentials");
   expect(ref.provider).toBe(provider);
-  expect(ref.id).toEqual(expect.any(String));
+  expect(typeof ref.id).toBe("string");
+  expect(String(ref.id).length).toBeGreaterThan(0);
 }
 
 describe("promoteAuthProfileInOrder", () => {
@@ -856,7 +858,8 @@ describe("promoteAuthProfileInOrder", () => {
         profiles: Record<string, { oauthRef?: { id?: string } }>;
       };
       const refId = persisted.profiles[profileId]?.oauthRef?.id;
-      expect(refId).toEqual(expect.any(String));
+      expect(typeof refId).toBe("string");
+      expect(refId?.length).toBeGreaterThan(0);
       const secretPath = resolvePersistedOAuthSecretPath(String(refId));
       const secretFile = fs.readFileSync(secretPath, "utf8");
       expect(secretFile).not.toContain("delete-access-token");

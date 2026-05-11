@@ -1,5 +1,6 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { theme } from "../terminal/theme.js";
 import { registerPairingCli } from "./pairing-cli.js";
 
 const mocks = vi.hoisted(() => ({
@@ -229,8 +230,12 @@ describe("pairing cli", () => {
         | { nextConfig?: { commands?: { ownerAllowFrom?: string[] } } }
         | undefined;
       expect(replaceCall?.nextConfig?.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Approved"));
-      expect(log).toHaveBeenCalledWith(expect.stringContaining("Command owner configured"));
+      expect(log.mock.calls).toEqual([
+        [`${theme.success("Approved")} ${theme.muted("telegram")} sender ${theme.command("123")}.`],
+        [
+          `${theme.success("Command owner configured")} ${theme.command("telegram:123")} ${theme.muted("(commands.ownerAllowFrom was empty).")}`,
+        ],
+      ]);
     } finally {
       log.mockRestore();
     }

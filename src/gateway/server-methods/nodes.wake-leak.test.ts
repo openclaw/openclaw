@@ -39,8 +39,8 @@ vi.mock("../../infra/push-apns.js", () => ({
   shouldClearStoredApnsRegistration: mocks.shouldClearStoredApnsRegistration,
 }));
 
-import { maybeWakeNodeWithApns } from "./nodes.js";
 import { __testing as wakeTesting } from "./nodes-wake-state.js";
+import { maybeWakeNodeWithApns } from "./nodes.js";
 
 describe("maybeWakeNodeWithApns — no-registration leak guard", () => {
   beforeEach(() => {
@@ -58,11 +58,9 @@ describe("maybeWakeNodeWithApns — no-registration leak guard", () => {
 
     for (let i = 0; i < 50; i++) {
       const result = await maybeWakeNodeWithApns(`unregistered-node-${i}`);
-      expect(result).toMatchObject({
-        available: false,
-        throttled: false,
-        path: "no-registration",
-      });
+      expect(result.available).toBe(false);
+      expect(result.throttled).toBe(false);
+      expect(result.path).toBe("no-registration");
     }
 
     expect(wakeTesting.getNodeWakeByIdSize()).toBe(0);

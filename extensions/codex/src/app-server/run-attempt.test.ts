@@ -290,9 +290,12 @@ function expectResumeRequest(
   params: Record<string, unknown>,
 ) {
   const request = requests.find((entry) => entry.method === "thread/resume");
-  expect(request).toBeDefined();
+  if (!request) {
+    throw new Error("Expected thread/resume request");
+  }
+  const requestParams = request.params as Record<string, unknown> | undefined;
   for (const [key, value] of Object.entries(params)) {
-    expect((request?.params as Record<string, unknown> | undefined)?.[key]).toEqual(value);
+    expect(requestParams?.[key]).toEqual(value);
   }
 }
 
@@ -1954,9 +1957,11 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
-    expect(registration).toBeDefined();
-    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
-    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
+    if (!registration) {
+      throw new Error("Expected native hook relay registration");
+    }
+    expect(registration.expiresAtMs - startedAtMs).toBeGreaterThanOrEqual(relayFloorMs);
+    expect(registration.expiresAtMs - startedAtMs).toBeLessThan(relayFloorMs + 10_000);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -1982,9 +1987,11 @@ describe("runCodexAppServerAttempt", () => {
     const startRequest = harness.requests.find((request) => request.method === "thread/start");
     const relayId = extractRelayIdFromThreadRequest(startRequest?.params);
     const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
-    expect(registration).toBeDefined();
-    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(explicitTtlMs);
-    expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeLessThan(explicitTtlMs + 10_000);
+    if (!registration) {
+      throw new Error("Expected native hook relay registration");
+    }
+    expect(registration.expiresAtMs - startedAtMs).toBeGreaterThanOrEqual(explicitTtlMs);
+    expect(registration.expiresAtMs - startedAtMs).toBeLessThan(explicitTtlMs + 10_000);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
     await run;
@@ -2086,10 +2093,10 @@ describe("runCodexAppServerAttempt", () => {
       const startRequest = harness.requests.find((request) => request.method === "thread/start");
       relayId = extractRelayIdFromThreadRequest(startRequest?.params);
       const registration = nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId);
-      expect(registration).toBeDefined();
-      expect((registration?.expiresAtMs ?? 0) - startedAtMs).toBeGreaterThanOrEqual(
-        expectedRelayTtlMs,
-      );
+      if (!registration) {
+        throw new Error("Expected native hook relay registration");
+      }
+      expect(registration.expiresAtMs - startedAtMs).toBeGreaterThanOrEqual(expectedRelayTtlMs);
 
       await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
       completed = true;
@@ -2934,7 +2941,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(resolved).toBe(false);
 
     await harness.notify({
@@ -3028,7 +3035,7 @@ describe("runCodexAppServerAttempt", () => {
         },
       },
     });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await new Promise<void>((resolve) => setImmediate(resolve));
     expect(resolved).toBe(false);
 
     await harness.notify({
@@ -4658,6 +4665,34 @@ describe("runCodexAppServerAttempt", () => {
     expect(turnRequestParams?.sandboxPolicy).toEqual({ type: "dangerFullAccess" });
     expect(turnRequestParams?.serviceTier).toBe("priority");
     expect(turnRequestParams?.model).toBe("gpt-5.4-codex");
+  });
+
+  it("clamps Codex danger-full-access when OpenClaw sandboxing is active", () => {
+    const appServer = resolveCodexAppServerRuntimeOptions({
+      pluginConfig: {
+        appServer: {
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
+        },
+      },
+    });
+
+    const sandboxed = __testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, {
+      enabled: true,
+    } as never);
+    expect(sandboxed).not.toBe(appServer);
+    expect(sandboxed.approvalPolicy).toBe("never");
+    expect(sandboxed.sandbox).toBe("workspace-write");
+
+    expect(__testing.restrictCodexAppServerSandboxForOpenClawSandbox(appServer, null)).toBe(
+      appServer,
+    );
+    expect(
+      __testing.restrictCodexAppServerSandboxForOpenClawSandbox(
+        { ...appServer, sandbox: "read-only" },
+        { enabled: true } as never,
+      ).sandbox,
+    ).toBe("read-only");
   });
 
   it("passes current Codex service tier request values through app-server resume and turn requests", async () => {

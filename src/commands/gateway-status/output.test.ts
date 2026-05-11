@@ -101,10 +101,12 @@ describe("gateway status output", () => {
       discoveryCount: 0,
     });
 
-    const warning = warnings.find((entry) => entry.code === "no_gateway_reachable");
-    expect(warning?.message).toContain("openclaw gateway status --deep --require-rpc");
-    expect(warning?.targetIds).toStrictEqual(["localLoopback"]);
-    expect(warning?.message).toContain("lsof -nP -iTCP:<port>");
+    expect(warnings.find((entry) => entry.code === "no_gateway_reachable")).toStrictEqual({
+      code: "no_gateway_reachable",
+      message:
+        "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+      targetIds: ["localLoopback"],
+    });
   });
 
   it("derives summary capability from reachable probes only in json output", () => {
@@ -217,20 +219,60 @@ describe("gateway status output", () => {
 
     expect(mocks.writeRuntimeJson).toHaveBeenCalledOnce();
     expect(mocks.writeRuntimeJson.mock.calls[0]?.[0]).toBe(runtime);
-    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1] as
-      | {
-          ok?: unknown;
-          degraded?: unknown;
-          primaryTargetId?: unknown;
-          targets?: Array<{ connect?: { ok?: unknown; rpcOk?: unknown; error?: unknown } }>;
-        }
-      | undefined;
-    expect(payload?.ok).toBe(true);
-    expect(payload?.degraded).toBe(true);
-    expect(payload?.primaryTargetId).toBe("detail-timeout");
-    expect(payload?.targets).toHaveLength(1);
-    expect(payload?.targets?.[0]?.connect?.ok).toBe(true);
-    expect(payload?.targets?.[0]?.connect?.rpcOk).toBe(false);
-    expect(payload?.targets?.[0]?.connect?.error).toBe("timeout");
+    const payload = mocks.writeRuntimeJson.mock.calls[0]?.[1];
+    expect(payload).toStrictEqual({
+      ok: true,
+      degraded: true,
+      capability: "read_only",
+      ts: expect.any(Number),
+      durationMs: expect.any(Number),
+      timeoutMs: 5_000,
+      primaryTargetId: "detail-timeout",
+      warnings: [
+        {
+          code: "probe_detail_failed",
+          message:
+            "Gateway accepted the WebSocket connection, but follow-up read diagnostics failed: timeout",
+          targetIds: ["detail-timeout"],
+        },
+      ],
+      network: {
+        localLoopbackUrl: "ws://127.0.0.1:18789",
+        localTailnetUrl: null,
+        tailnetIPv4: null,
+      },
+      discovery: {
+        timeoutMs: 500,
+        count: 0,
+        beacons: [],
+      },
+      targets: [
+        {
+          id: "detail-timeout",
+          kind: "explicit",
+          url: "ws://127.0.0.1:18789",
+          active: true,
+          tunnel: null,
+          connect: {
+            ok: true,
+            rpcOk: false,
+            scopeLimited: false,
+            latencyMs: 40,
+            error: "timeout",
+            close: null,
+          },
+          auth: {
+            role: "operator",
+            scopes: ["operator.read"],
+            capability: "read_only",
+          },
+          self: null,
+          config: null,
+          health: null,
+          summary: null,
+          presence: null,
+        },
+      ],
+    });
   });
 });

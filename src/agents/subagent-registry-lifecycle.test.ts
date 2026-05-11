@@ -105,8 +105,9 @@ function createRunEntry(overrides: Partial<SubagentRunRecord> = {}): SubagentRun
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -115,8 +116,9 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
 
 function firstCallArg(mock: ReturnType<typeof vi.fn>): Record<string, unknown> {
   const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeTypeOf("object");
-  expect(arg).not.toBeNull();
+  if (!arg || typeof arg !== "object") {
+    throw new Error("expected first call argument object");
+  }
   return arg as Record<string, unknown>;
 }
 

@@ -55,7 +55,7 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("/root/.config/gh/hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "mismatch",
       effectiveConfigDir: "/root/.openclaw/agents/main/agent/codex-home/home/.config/gh",
       alternateConfigDir: "/root/.config/gh",
@@ -72,10 +72,13 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("/home/alice/.config/gh/hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "mismatch",
+      effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
       alternateConfigDir: "/home/alice/.config/gh",
+      alternateHostsFile: "/home/alice/.config/gh/hosts.yml",
       alternateHomeHint: "/home/alice",
+      suggestedEnvValue: "/home/alice/.config/gh",
     });
   });
 
@@ -86,10 +89,13 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("/home/ops/.config/gh/hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "mismatch",
+      effectiveConfigDir: "/var/lib/openclaw/agent/.config/gh",
       alternateConfigDir: "/home/ops/.config/gh",
+      alternateHostsFile: "/home/ops/.config/gh/hosts.yml",
       alternateHomeHint: "/home/ops",
+      suggestedEnvValue: "/home/ops/.config/gh",
     });
   });
 
@@ -165,11 +171,13 @@ describe("detectGhConfigDirMismatch", () => {
         candidateOperatorHomes: ["/Users/operator"],
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "mismatch",
       effectiveConfigDir: "/Users/agent/.config/gh",
       alternateConfigDir: "/Users/operator/.config/gh",
+      alternateHostsFile: "/Users/operator/.config/gh/hosts.yml",
       alternateHomeHint: "/Users/operator",
+      suggestedEnvValue: "/Users/operator/.config/gh",
     });
   });
 
@@ -181,7 +189,7 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI\\hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "auth-discoverable",
       effectiveConfigDir: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI",
     });
@@ -198,7 +206,7 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("C:\\Users\\agent\\XDG\\gh\\hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "auth-discoverable",
       effectiveConfigDir: "C:\\Users\\agent\\XDG\\gh",
     });
@@ -212,7 +220,7 @@ describe("detectGhConfigDirMismatch", () => {
         fileExists: fileSet("C:\\Users\\agent\\.config\\gh\\hosts.yml"),
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "auth-discoverable",
       effectiveConfigDir: "C:\\Users\\agent\\.config\\gh",
     });
@@ -226,10 +234,13 @@ describe("detectGhConfigDirMismatch", () => {
         candidateOperatorHomes: ["/srv/automation"],
       }),
     );
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       kind: "mismatch",
+      effectiveConfigDir: "/agent/home/.config/gh",
       alternateConfigDir: "/srv/automation/.config/gh",
+      alternateHostsFile: "/srv/automation/.config/gh/hosts.yml",
       alternateHomeHint: "/srv/automation",
+      suggestedEnvValue: "/srv/automation/.config/gh",
     });
   });
 });

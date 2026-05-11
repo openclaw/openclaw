@@ -273,21 +273,28 @@ describe("msteams monitor handler authz", () => {
   }
 
   function recordFromMockCall(value: unknown): Record<string, unknown> {
-    expect(value).toBeDefined();
+    if (!value || typeof value !== "object") {
+      throw new Error("Expected mock call record");
+    }
     return value as Record<string, unknown>;
   }
 
   function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
     const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
-    expect(calls?.[callIndex]).toBeDefined();
-    return calls?.[callIndex]?.[argIndex];
+    const call = calls?.[callIndex];
+    if (!call) {
+      throw new Error(`Expected mock call at index ${callIndex}`);
+    }
+    return call[argIndex];
   }
 
   function logMeta(logFn: unknown, message: string): Record<string, unknown> {
     const calls = (logFn as { mock?: { calls?: Array<[unknown, unknown?]> } }).mock?.calls ?? [];
     const call = calls.find(([loggedMessage]) => loggedMessage === message);
-    expect(call).toBeDefined();
-    return recordFromMockCall(call?.[1]);
+    if (!call) {
+      throw new Error(`Expected log message: ${message}`);
+    }
+    return recordFromMockCall(call[1]);
   }
 
   it("does not treat DM pairing-store entries as group allowlist entries", async () => {

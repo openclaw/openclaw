@@ -52,8 +52,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -78,6 +79,9 @@ function mockArg(source: MockCallSource, callIndex: number, argIndex: number, la
   const call = source.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call argument ${argIndex}: ${label}`);
   }
   return call[argIndex];
 }
@@ -182,6 +186,33 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     await cleanupTempPaths(tempPaths);
     clearMemoryPluginState();
     vi.restoreAllMocks();
+  });
+
+  it("enables Tool Search controls for embedded PI runs when configured", async () => {
+    await createContextEngineAttemptRunner({
+      contextEngine: {
+        assemble: async ({ messages }) => ({ messages, estimatedTokens: 1 }),
+      },
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        config: {
+          tools: {
+            toolSearch: true,
+          },
+        } as OpenClawConfig,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalled();
+    const options = mockParams(
+      hoisted.createOpenClawCodingToolsMock,
+      0,
+      "createOpenClawCodingTools options",
+    );
+    expect(options.includeToolSearchControls).toBe(true);
+    expect(options.toolSearchCatalogRef).toBeTruthy();
   });
 
   it("sends transcriptPrompt visibly and queues runtime context as hidden custom context", async () => {

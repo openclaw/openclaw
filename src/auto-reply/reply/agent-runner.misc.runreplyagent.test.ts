@@ -2591,7 +2591,7 @@ describe("runReplyAgent transient HTTP retry", () => {
 
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
     expect(runtimeErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("Transient HTTP provider error before reply"),
+      'Transient HTTP provider error before reply (521 <!DOCTYPE html><html lang="en-US"><head><title>Web server is down</title></head><body>Cloudflare</body></html>). Retrying once in 2500ms.',
     );
 
     const payload = Array.isArray(result) ? result[0] : result;

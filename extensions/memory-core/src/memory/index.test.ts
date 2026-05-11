@@ -373,14 +373,10 @@ describe("memory index", () => {
     expect(embedBatchInputCalls).toBeGreaterThan(0);
 
     const imageResults = await manager.search("image");
-    expect(imageResults.map((result) => result.path)).toContainEqual(
-      expect.stringMatching(/diagram\.png$/),
-    );
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
 
     const audioResults = await manager.search("audio");
-    expect(audioResults.map((result) => result.path)).toContainEqual(
-      expect.stringMatching(/meeting\.wav$/),
-    );
+    expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {

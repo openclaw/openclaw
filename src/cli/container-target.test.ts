@@ -359,7 +359,9 @@ describe("maybeRunCliInContainer", () => {
     const podmanCall = spawnSync.mock.calls[2];
     expect(podmanCall?.[0]).toBe("podman");
     expect(podmanCall?.[1]).toContain("OPENCLAW_PROXY_URL=http://127.0.0.1:3128");
-    expect(podmanCall?.[2]).toBeDefined();
+    if (podmanCall?.[2] === undefined) {
+      throw new Error("Expected podman spawn options");
+    }
   });
 
   it("executes through podman when the named container is running", () => {

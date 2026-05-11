@@ -198,8 +198,10 @@ describe("gateway run option collisions", () => {
 
   function callArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex = 0): unknown {
     const call = mock.mock.calls[index];
-    expect(call).toBeDefined();
-    return call?.[argIndex];
+    if (!call) {
+      throw new Error(`Expected mock call ${index}`);
+    }
+    return call[argIndex];
   }
 
   function gatewayStartOptions(index = 0) {

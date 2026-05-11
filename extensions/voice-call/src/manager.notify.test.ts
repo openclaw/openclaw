@@ -91,7 +91,7 @@ function requireSingleStartListeningCall(provider: FakeProvider) {
 type HarnessManager = Awaited<ReturnType<typeof createManagerHarness>>["manager"];
 
 async function waitForPlaybackDispatch() {
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
 async function initiateCallWithMessage(

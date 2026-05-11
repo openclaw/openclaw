@@ -49,8 +49,6 @@ describe("handleSlackAction", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -73,7 +71,6 @@ describe("handleSlackAction", () => {
 
   function requireSlackSendCall(index: number) {
     const call = sendSlackMessage.mock.calls[index] as unknown[] | undefined;
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing Slack send call ${index + 1}`);
     }

@@ -1,9 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 type ResolveProviderInstallCatalogEntries =
   typeof import("../plugins/provider-install-catalog.js").resolveProviderInstallCatalogEntries;
 type ResolveManifestProviderAuthChoices =
@@ -14,6 +10,10 @@ type ResolveProviderModelPickerEntries =
   typeof import("../plugins/provider-wizard.js").resolveProviderModelPickerEntries;
 type ResolvePluginProviders =
   typeof import("../plugins/providers.runtime.js").resolvePluginProviders;
+type ResolveProviderSetupFlowContributions =
+  typeof import("./provider-flow.js").resolveProviderSetupFlowContributions;
+type ResolveProviderModelPickerFlowContributions =
+  typeof import("./provider-flow.runtime.js").resolveProviderModelPickerFlowContributions;
 
 const resolveProviderInstallCatalogEntries = vi.hoisted(() =>
   vi.fn<ResolveProviderInstallCatalogEntries>(() => []),
@@ -45,11 +45,12 @@ vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProviders,
 }));
 
-import { resolveProviderSetupFlowContributions } from "./provider-flow.js";
-import { resolveProviderModelPickerFlowContributions } from "./provider-flow.runtime.js";
+let resolveProviderSetupFlowContributions: ResolveProviderSetupFlowContributions;
+let resolveProviderModelPickerFlowContributions: ResolveProviderModelPickerFlowContributions;
 
 describe("provider flow install catalog contributions", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    vi.resetModules();
     resolveManifestProviderAuthChoices.mockReset();
     resolveManifestProviderAuthChoices.mockReturnValue([]);
     resolveProviderInstallCatalogEntries.mockReset();
@@ -60,6 +61,8 @@ describe("provider flow install catalog contributions", () => {
     resolveProviderModelPickerEntries.mockReturnValue([]);
     resolvePluginProviders.mockReset();
     resolvePluginProviders.mockReturnValue([]);
+    ({ resolveProviderSetupFlowContributions } = await import("./provider-flow.js"));
+    ({ resolveProviderModelPickerFlowContributions } = await import("./provider-flow.runtime.js"));
   });
 
   it("surfaces manifest provider auth choices before setup runtime loads", () => {

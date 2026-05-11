@@ -96,7 +96,9 @@ async function waitForAfterToolCall(hooks: {
     expect(hooks.afterToolCall.mock.calls.length).toBe(1);
   });
   const call = hooks.afterToolCall.mock.calls[0];
-  expect(call).toBeDefined();
+  if (!call) {
+    throw new Error("Expected afterToolCall hook call");
+  }
   return call as [Record<string, unknown>, Record<string, unknown>];
 }
 

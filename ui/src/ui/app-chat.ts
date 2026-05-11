@@ -84,6 +84,7 @@ export type ChatAbortOptions = {
 };
 
 export const CHAT_SESSIONS_ACTIVE_MINUTES = 120;
+export const CHAT_SESSIONS_REFRESH_LIMIT = 100;
 export {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -768,8 +769,8 @@ export async function refreshChat(
   });
   const secondaryRefresh = Promise.allSettled([
     loadSessions(host as unknown as SessionsState, {
-      activeMinutes: 0,
-      limit: 0,
+      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
+      limit: CHAT_SESSIONS_REFRESH_LIMIT,
       includeGlobal: true,
       includeUnknown: true,
       agentId: resolveAgentIdForSession(host) ?? undefined,

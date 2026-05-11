@@ -117,9 +117,7 @@ describe("qa docker harness", () => {
 
     expect(result.imageName).toBe("openclaw:qa-local-prebaked");
     expect(calls).toEqual([
-      expect.stringContaining(
-        "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
-      ),
+      "docker build -t openclaw:qa-local-prebaked --build-arg OPENCLAW_EXTENSIONS=qa-channel qa-lab -f Dockerfile . @/repo/openclaw",
     ]);
   });
 });

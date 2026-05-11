@@ -93,8 +93,6 @@ async function readSessionFileJsonLines<T>(sessionFile: string): Promise<T[]> {
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }
@@ -109,7 +107,9 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
 
 function requireMockArg(mock: typeof runCliAgentMock, callIndex: number, label: string) {
   const arg = mock.mock.calls[callIndex]?.[0];
-  expect(arg).toBeDefined();
+  if (arg === undefined) {
+    throw new Error(`Expected mock argument for ${label}`);
+  }
   return requireRecord(arg, label);
 }
 
