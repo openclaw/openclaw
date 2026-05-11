@@ -810,4 +810,27 @@ describe("doctor state integrity oauth dir checks", () => {
     const text = await runStateIntegrityText(cfg);
     expect(text).not.toContain("recent sessions are missing transcripts");
   });
+
+  it("suppresses split-state warning when OPENCLAW_IGNORE_SPLIT_STATE_WARNING is set", async () => {
+    // Create an extra state directory to trigger the warning condition
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (stateDir) {
+      const extraStateDir = path.join(path.dirname(stateDir), ".openclaw-other");
+      fs.mkdirSync(extraStateDir, { recursive: true });
+    }
+
+    // First confirm it warns by default
+    let text = await runStateIntegrityText({});
+    expect(text).toContain("Multiple state directories detected");
+
+    // Then confirm it suppresses the warning when the flag is set
+    noteMock.mockClear();
+    process.env.OPENCLAW_IGNORE_SPLIT_STATE_WARNING = "true";
+    try {
+      text = await runStateIntegrityText({});
+      expect(text).not.toContain("Multiple state directories detected");
+    } finally {
+      delete process.env.OPENCLAW_IGNORE_SPLIT_STATE_WARNING;
+    }
+  });
 });

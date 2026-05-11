@@ -8,6 +8,7 @@ import { hasConfiguredSecretInput } from "../config/types.secrets.js";
 import { resolveGatewayAuthTokenSourceConflict } from "../gateway/auth-token-source-conflict.js";
 import { resolveGatewayAuth } from "../gateway/auth.js";
 import { isLoopbackHost, resolveGatewayBindHost } from "../gateway/net.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { resolveExecPolicyScopeSnapshot } from "../infra/exec-approvals-effective.js";
 import { loadExecApprovals, type ExecAsk, type ExecSecurity } from "../infra/exec-approvals.js";
 import { collectExecFilesystemPolicyDriftHits } from "../security/exec-filesystem-policy.js";
@@ -237,7 +238,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
   ];
 
   if (isExposed) {
-    if (!hasSharedSecret) {
+    if (!hasSharedSecret && cfg.gateway?.auth?.mode !== "trusted-proxy") {
       const authFixLines =
         resolvedAuth.mode === "password"
           ? [
@@ -257,7 +258,7 @@ export async function noteSecurityWarnings(cfg: OpenClawConfig) {
         ...saferRemoteAccessLines,
         ...authFixLines,
       );
-    } else {
+    } else if (!isTruthyEnvValue(process.env.OPENCLAW_IGNORE_BIND_WARNING)) {
       // Auth is configured, but still warn about network exposure
       warnings.push(
         `- WARNING: Gateway bound to ${bindDescriptor} (network-accessible).`,

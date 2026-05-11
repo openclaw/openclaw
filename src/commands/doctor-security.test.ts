@@ -26,6 +26,7 @@ describe("noteSecurityWarnings gateway exposure", () => {
   let prevToken: string | undefined;
   let prevPassword: string | undefined;
   let prevHome: string | undefined;
+  let prevIgnoreBindWarning: string | undefined;
 
   beforeEach(() => {
     note.mockClear();
@@ -35,8 +36,10 @@ describe("noteSecurityWarnings gateway exposure", () => {
     prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
     prevPassword = process.env.OPENCLAW_GATEWAY_PASSWORD;
     prevHome = process.env.HOME;
+    prevIgnoreBindWarning = process.env.OPENCLAW_IGNORE_BIND_WARNING;
     delete process.env.OPENCLAW_GATEWAY_TOKEN;
     delete process.env.OPENCLAW_GATEWAY_PASSWORD;
+    delete process.env.OPENCLAW_IGNORE_BIND_WARNING;
   });
 
   afterEach(() => {
@@ -54,6 +57,11 @@ describe("noteSecurityWarnings gateway exposure", () => {
       delete process.env.HOME;
     } else {
       process.env.HOME = prevHome;
+    }
+    if (prevIgnoreBindWarning === undefined) {
+      delete process.env.OPENCLAW_IGNORE_BIND_WARNING;
+    } else {
+      process.env.OPENCLAW_IGNORE_BIND_WARNING = prevIgnoreBindWarning;
     }
   });
 
@@ -133,6 +141,25 @@ describe("noteSecurityWarnings gateway exposure", () => {
     const message = lastMessage();
     expect(message).toContain("WARNING");
     expect(message).not.toContain("CRITICAL");
+  });
+
+  it("warns about critical exposure even when ignore bind warning flag is set", async () => {
+    process.env.OPENCLAW_IGNORE_BIND_WARNING = "true";
+    const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("CRITICAL");
+    expect(message).toContain("without authentication");
+  });
+
+  it("suppresses non-critical exposure warning when ignore bind warning flag is set and auth exists", async () => {
+    process.env.OPENCLAW_IGNORE_BIND_WARNING = "true";
+    process.env.OPENCLAW_GATEWAY_TOKEN = "token-123";
+    const cfg = { gateway: { bind: "lan" } } as OpenClawConfig;
+    await noteSecurityWarnings(cfg);
+    const message = lastMessage();
+    expect(message).toContain("No channel security warnings detected");
+    expect(message).not.toContain("Gateway bound");
   });
 
   it("treats SecretRef token config as authenticated for exposure warning level", async () => {
