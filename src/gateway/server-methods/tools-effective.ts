@@ -242,8 +242,8 @@ function resolveTrustedToolsEffectiveContext(params: {
   });
   const resolvedModel = resolveSessionModelRef(loaded.cfg, loaded.entry, sessionAgentId);
   const messageProvider = delivery?.channel ?? routing?.channel ?? loaded.entry.channel;
-  const accountId = delivery?.accountId ?? routing?.accountId ?? loaded.entry.lastAccountId;
-  const threadId = delivery?.threadId ?? routing?.conversationThreadId ?? loaded.entry.lastThreadId;
+  const accountId = delivery?.accountId ?? routing?.accountId;
+  const threadId = delivery?.threadId ?? routing?.conversationThreadId;
   return {
     cfg: loaded.cfg,
     agentId: sessionAgentId,

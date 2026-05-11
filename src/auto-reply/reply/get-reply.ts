@@ -479,7 +479,6 @@ export async function getReplyFromConfig(
         channel:
           groupResolution?.channel ??
           sessionEntry.channel ??
-          sessionEntry.origin?.provider ??
           (typeof finalized.OriginatingChannel === "string"
             ? finalized.OriginatingChannel
             : undefined) ??

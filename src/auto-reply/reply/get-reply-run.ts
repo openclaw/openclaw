@@ -114,7 +114,6 @@ function normalizeToolProgressDetail(value: unknown): "explain" | "raw" | undefi
 
 function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefined {
   return (
-    normalizePromptRouteChannel(entry?.origin?.provider) ??
     normalizePromptRouteChannel(entry?.channel) ??
     normalizePromptRouteChannel(entry?.lastChannel) ??
     normalizePromptRouteChannel(entry?.deliveryContext?.channel)
@@ -190,23 +189,15 @@ export function resolvePromptSessionContextForSystemEvent(params: {
   setIfMissing("OriginatingChannel", persistedProvider);
   setIfMissing(
     "OriginatingTo",
-    normalizeOptionalString(
-      sessionEntry.lastTo ?? sessionEntry.deliveryContext?.to ?? sessionEntry.origin?.to,
-    ),
+    normalizeOptionalString(sessionEntry.deliveryContext?.to ?? sessionEntry.lastTo),
   );
   setIfMissing(
     "AccountId",
-    normalizeOptionalString(
-      sessionEntry.lastAccountId ??
-        sessionEntry.deliveryContext?.accountId ??
-        sessionEntry.origin?.accountId,
-    ),
+    normalizeOptionalString(sessionEntry.deliveryContext?.accountId ?? sessionEntry.lastAccountId),
   );
   setIfMissing(
     "MessageThreadId",
-    sessionEntry.lastThreadId ??
-      sessionEntry.deliveryContext?.threadId ??
-      sessionEntry.origin?.threadId,
+    sessionEntry.deliveryContext?.threadId ?? sessionEntry.lastThreadId,
   );
 
   return changed ? next : sessionCtx;

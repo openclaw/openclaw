@@ -108,6 +108,14 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
   }
 }
 
+function clearCompatibilityRoutingShadow(entry: SessionEntry): void {
+  delete entry.deliveryContext;
+  delete entry.lastChannel;
+  delete entry.lastTo;
+  delete entry.lastAccountId;
+  delete entry.lastThreadId;
+}
+
 function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   const parsed = parseSessionEntry(row);
   const sessionId = optionalString(row.typed_session_id) ?? parsed?.sessionId;
@@ -124,6 +132,7 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
       updatedAt: updatedAt ?? 0,
     }),
   };
+  clearCompatibilityRoutingShadow(next);
   if (sessionId) {
     next.sessionId = sessionId;
   }

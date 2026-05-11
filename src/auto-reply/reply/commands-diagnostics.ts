@@ -505,12 +505,10 @@ function buildCodexDiagnosticsSessions(
       channelId: resolveDiagnosticsSessionChannelId(entry, params, sessionKey),
       accountId:
         normalizeOptionalString(entry.deliveryContext?.accountId) ??
-        normalizeOptionalString(entry.origin?.accountId) ??
         normalizeOptionalString(entry.lastAccountId) ??
         (sessionKey === params.sessionKey ? (params.ctx.AccountId ?? undefined) : undefined),
       messageThreadId:
         entry.deliveryContext?.threadId ??
-        entry.origin?.threadId ??
         entry.lastThreadId ??
         (sessionKey === params.sessionKey &&
         (typeof params.ctx.MessageThreadId === "string" ||
@@ -532,7 +530,6 @@ function resolveDiagnosticsSessionChannel(
   return (
     normalizeOptionalString(entry.deliveryContext?.channel) ??
     normalizeOptionalString(entry.lastChannel) ??
-    normalizeOptionalString(entry.origin?.provider) ??
     normalizeOptionalString(entry.channel) ??
     (sessionKey === params.sessionKey ? params.command.channel : undefined)
   );

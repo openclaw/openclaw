@@ -250,7 +250,19 @@ The branch already has a real shared SQLite base:
   Each session has at most one `primary` conversation link; when a shared-main
   route sees a new direct peer, the prior primary becomes a related
   conversation and `sessions.primary_conversation_id` points at the current
-  typed delivery target.
+  typed delivery target. Closed routing/status columns are enforced with SQLite
+  `CHECK` constraints instead of relying only on TypeScript unions.
+  Runtime session projection clears compatibility routing shadows from
+  `session_entries.entry_json` before applying typed session/conversation
+  columns, so stale JSON payloads cannot resurrect delivery targets.
+  Subagent announce routing likewise requires the typed SQLite delivery context;
+  it no longer falls back to compatibility `SessionEntry` route fields.
+  Gateway `chat.send` explicit delivery inheritance reads the typed SQLite
+  delivery context instead of `origin`/`last*` compatibility fields.
+  `tools.effective` likewise derives provider/account/thread context from typed
+  SQLite delivery/routing rows, not stale `last*` session-entry shadows.
+  System-event prompt context rebuilds channel/to/account/thread fields from
+  typed delivery fields instead of `origin` shadows.
 - Transcript events, transcript snapshots, and trajectory runtime events now
   reference the canonical per-agent `sessions` root and cascade on session
   deletion. Transcript identity/idempotency rows continue to cascade from the
@@ -274,7 +286,8 @@ The branch already has a real shared SQLite base:
   target agent/session columns, conversation kind, status, expiry, and metadata
   stored as relational columns instead of a duplicated opaque binding record.
   The durable binding key includes the normalized conversation kind so
-  direct/group/channel refs cannot collide. The old
+  direct/group/channel refs cannot collide, and SQLite rejects invalid binding
+  kind/status values. The old
   `bindings/current-conversations.json` file is doctor migration input only.
 - Delivery queue recovery now overlays typed queue columns for channel, target,
   account, session, retry, error, platform-send, and recovery state onto the

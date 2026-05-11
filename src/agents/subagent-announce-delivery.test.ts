@@ -295,14 +295,15 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids when requester origin omits one for the same chat", () => {
     expect(
       resolveAnnounceOrigin(
-        {
-          lastChannel: "topicchat",
-          lastTo: "topicchat:room-a:topic:99",
-          lastThreadId: 99,
-        },
+        undefined,
         {
           channel: "topicchat",
           to: "topicchat:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-a:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({
@@ -342,14 +343,15 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
   it("preserves stored thread ids for group-prefixed requester targets", () => {
     expect(
       resolveAnnounceOrigin(
-        {
-          lastChannel: "topicchat",
-          lastTo: "topicchat:room-a:topic:99",
-          lastThreadId: 99,
-        },
+        undefined,
         {
           channel: "topicchat",
           to: "group:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-a:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({
@@ -362,14 +364,15 @@ describe("resolveAnnounceOrigin threaded route targets", () => {
   it("still strips stale thread ids when the stored route points at a different chat", () => {
     expect(
       resolveAnnounceOrigin(
-        {
-          lastChannel: "topicchat",
-          lastTo: "topicchat:room-b:topic:99",
-          lastThreadId: 99,
-        },
+        undefined,
         {
           channel: "topicchat",
           to: "topicchat:room-a",
+        },
+        {
+          channel: "topicchat",
+          to: "topicchat:room-b:topic:99",
+          threadId: 99,
         },
       ),
     ).toEqual({

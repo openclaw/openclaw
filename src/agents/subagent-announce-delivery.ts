@@ -494,7 +494,7 @@ async function maybeQueueSubagentAnnounce(params: {
 
   const queueSettings = resolveQueueSettings({
     cfg,
-    channel: entry?.lastChannel ?? entry?.deliveryContext?.channel ?? entry?.origin?.provider,
+    channel: deliveryContext?.channel,
     sessionEntry: entry,
   });
 

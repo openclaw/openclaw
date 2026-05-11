@@ -24,6 +24,7 @@ import {
   listSessionEntries,
   patchSessionEntry,
   recordSessionMetaFromInbound,
+  updateLastRoute,
   upsertSessionEntry,
 } from "./store.js";
 import {
@@ -161,6 +162,105 @@ describe("SQLite session row backend", () => {
       model: "gpt-5.5",
       agent_harness_id: "codex",
       display_name: "Ops",
+    });
+  });
+
+  it("rejects invalid persisted session and conversation enum values", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+
+    expect(() =>
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("sessions").values({
+          session_id: "invalid-session",
+          session_key: "invalid-session",
+          session_scope: "legacy-file",
+          created_at: 1,
+          updated_at: 1,
+        }),
+      ),
+    ).toThrow(/CHECK constraint failed/);
+
+    expect(() =>
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("conversations").values({
+          conversation_id: "invalid-conversation",
+          channel: "discord",
+          account_id: "default",
+          kind: "file",
+          peer_id: "user:U1",
+          created_at: 1,
+          updated_at: 1,
+        }),
+      ),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
+  it("does not recover route updates from stale entry_json delivery context", async () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:ops",
+      entry: {
+        sessionId: "ops-session",
+        updatedAt: 200,
+        chatType: "direct",
+        channel: "discord",
+        deliveryContext: {
+          channel: "discord",
+          to: "user:U1",
+          accountId: "work",
+        },
+      },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_entries")
+        .set({
+          entry_json: JSON.stringify({
+            sessionId: "ops-session",
+            updatedAt: 200,
+            chatType: "direct",
+            channel: "discord",
+            deliveryContext: {
+              channel: "discord",
+              to: "user:stale",
+              accountId: "stale-account",
+            },
+          }),
+        })
+        .where("session_key", "=", "discord:ops"),
+    );
+    executeSqliteQuerySync(database.db, db.deleteFrom("conversations"));
+
+    await updateLastRoute({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:ops",
+      channel: "discord",
+      to: "user:U2",
+    });
+
+    expect(getSessionEntry({ agentId: "ops", env, sessionKey: "discord:ops" })).toMatchObject({
+      deliveryContext: {
+        channel: "discord",
+        to: "user:U2",
+        accountId: "default",
+      },
+      lastChannel: "discord",
+      lastTo: "user:U2",
+      lastAccountId: "default",
     });
   });
 

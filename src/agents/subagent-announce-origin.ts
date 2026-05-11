@@ -1,7 +1,6 @@
 import { resolveRouteTargetForLoadedChannel } from "../channels/plugins/target-parsing-loaded.js";
 import { normalizeOptionalString } from "../shared/string-coerce.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
@@ -59,13 +58,12 @@ function shouldStripThreadFromAnnounceEntry(
 }
 
 export function resolveAnnounceOrigin(
-  entry?: DeliveryContextSessionSource,
+  _entry?: DeliveryContextSessionSource,
   requesterOrigin?: DeliveryContext,
   entryDeliveryContext?: DeliveryContext,
 ): DeliveryContext | undefined {
   const normalizedRequester = normalizeDeliveryContext(requesterOrigin);
-  const normalizedEntry =
-    normalizeDeliveryContext(entryDeliveryContext) ?? deliveryContextFromSession(entry);
+  const normalizedEntry = normalizeDeliveryContext(entryDeliveryContext);
   if (normalizedRequester?.channel && isInternalMessageChannel(normalizedRequester.channel)) {
     return mergeDeliveryContext(
       {

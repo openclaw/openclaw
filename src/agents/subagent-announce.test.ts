@@ -141,34 +141,28 @@ vi.mock("./subagent-announce-delivery.js", () => ({
     return { delivered: true, path: "direct" };
   },
   loadRequesterSessionEntry: (sessionKey: string) => {
-    const store = sessionRowsMock() as Record<string, unknown>;
+    const store = sessionRowsMock() as Record<string, { deliveryContext?: unknown }>;
     const entry = store?.[sessionKey];
-    return { entry };
+    return { entry, deliveryContext: entry?.deliveryContext };
   },
   loadSessionEntryByKey: (sessionKey: string) => {
     const store = sessionRowsMock() as Record<string, unknown>;
     return store?.[sessionKey] ?? { sessionId: sessionKey };
   },
   resolveAnnounceOrigin: (
-    entry:
-      | {
-          lastChannel?: string;
-          lastTo?: string;
-          lastAccountId?: string;
-          lastThreadId?: string;
-          origin?: { provider?: string; channel?: string; accountId?: string };
-        }
-      | undefined,
+    _entry: unknown,
     requesterOrigin?: { channel?: string; to?: string; accountId?: string; threadId?: string },
+    entryDeliveryContext?: {
+      channel?: string;
+      to?: string;
+      accountId?: string;
+      threadId?: string;
+    },
   ) => ({
-    channel:
-      requesterOrigin?.channel ??
-      entry?.lastChannel ??
-      entry?.origin?.provider ??
-      entry?.origin?.channel,
-    to: requesterOrigin?.to ?? entry?.lastTo,
-    accountId: requesterOrigin?.accountId ?? entry?.lastAccountId ?? entry?.origin?.accountId,
-    threadId: requesterOrigin?.threadId ?? entry?.lastThreadId,
+    channel: requesterOrigin?.channel ?? entryDeliveryContext?.channel,
+    to: requesterOrigin?.to ?? entryDeliveryContext?.to,
+    accountId: requesterOrigin?.accountId ?? entryDeliveryContext?.accountId,
+    threadId: requesterOrigin?.threadId ?? entryDeliveryContext?.threadId,
   }),
   resolveSubagentCompletionOrigin: async (params: { requesterOrigin?: unknown }) =>
     params.requesterOrigin,
@@ -465,9 +459,11 @@ describe("subagent announce seam flow", () => {
       "agent:main:main": {
         sessionId: "session-tg-group",
         updatedAt: Date.now(),
-        lastChannel: "telegram",
-        lastTo: "-1001234567890",
-        lastAccountId: "bot:123",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-1001234567890",
+          accountId: "bot:123",
+        },
       },
     }));
 

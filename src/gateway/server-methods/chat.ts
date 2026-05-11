@@ -13,7 +13,9 @@ import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
 import {
+  readSqliteSessionDeliveryContext,
   readSqliteSessionRoutingInfo,
+  type SqliteSessionDeliveryContext,
   type SqliteSessionRoutingInfo,
 } from "../../config/sessions/session-entries.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -550,6 +552,7 @@ function scheduleChatHistoryManagedImageCleanup(params: {
 function resolveChatSendOriginatingRoute(params: {
   client?: { mode?: string | null; id?: string | null } | null;
   deliver?: boolean;
+  deliveryContext?: SqliteSessionDeliveryContext;
   entry?: ChatSendDeliveryEntry;
   explicitOrigin?: ChatSendExplicitOrigin;
   hasConnectedClient?: boolean;
@@ -575,21 +578,10 @@ function resolveChatSendOriginatingRoute(params: {
     };
   }
 
-  const routeChannelCandidate = normalizeMessageChannel(
-    params.entry?.deliveryContext?.channel ??
-      params.entry?.lastChannel ??
-      params.entry?.origin?.provider,
-  );
-  const routeToCandidate = params.entry?.deliveryContext?.to ?? params.entry?.lastTo;
-  const routeAccountIdCandidate =
-    params.entry?.deliveryContext?.accountId ??
-    params.entry?.lastAccountId ??
-    params.entry?.origin?.accountId ??
-    undefined;
-  const routeThreadIdCandidate =
-    params.entry?.deliveryContext?.threadId ??
-    params.entry?.lastThreadId ??
-    params.entry?.origin?.threadId;
+  const routeChannelCandidate = normalizeMessageChannel(params.deliveryContext?.channel);
+  const routeToCandidate = params.deliveryContext?.to;
+  const routeAccountIdCandidate = params.deliveryContext?.accountId;
+  const routeThreadIdCandidate = params.deliveryContext?.threadId;
   if (params.sessionKey.length > CHAT_SEND_SESSION_KEY_MAX_LENGTH) {
     return {
       originatingChannel: INTERNAL_MESSAGE_CHANNEL,
@@ -1959,9 +1951,14 @@ export const chatHandlers: GatewayRequestHandlers = {
       agentId,
       sessionKey,
     });
+    const deliveryContext = readSqliteSessionDeliveryContext({
+      agentId,
+      sessionKey,
+    });
     const originatingRoute = resolveChatSendOriginatingRoute({
       client: clientInfo,
       deliver: p.deliver,
+      deliveryContext,
       entry,
       explicitOrigin: explicitOriginResult.value,
       hasConnectedClient: client?.connect !== undefined,

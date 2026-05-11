@@ -67,6 +67,12 @@ const mockState = vi.hoisted(() => ({
     accountId?: string;
     primaryConversationId?: string;
   } | null,
+  sessionDeliveryContext: null as {
+    channel?: string;
+    to?: string;
+    accountId?: string;
+    threadId?: string;
+  } | null,
   emittedTranscriptUpdates: [] as Array<{
     agentId?: string;
     sessionId?: string;
@@ -149,6 +155,10 @@ vi.mock("../../config/sessions/session-entries.sqlite.js", async () => {
   >("../../config/sessions/session-entries.sqlite.js");
   return {
     ...original,
+    readSqliteSessionDeliveryContext: () =>
+      mockState.sessionDeliveryContext ??
+      (mockState.sessionEntry.deliveryContext as typeof mockState.sessionDeliveryContext) ??
+      undefined,
     readSqliteSessionRoutingInfo: () => mockState.sessionRoutingInfo ?? undefined,
   };
 });
@@ -659,6 +669,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.lastDispatchImageOrder = undefined;
     mockState.modelCatalog = null;
     mockState.sessionRoutingInfo = null;
+    mockState.sessionDeliveryContext = null;
     mockState.emittedTranscriptUpdates = [];
     mockState.savedMediaResults = [];
     mockState.saveMediaError = null;
@@ -1548,16 +1559,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send falls back to origin provider metadata for configured main CLI delivery inheritance", async () => {
+  it("chat.send uses typed SQLite delivery context for configured main CLI delivery inheritance", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-origin-provider-routes-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      origin: {
-        provider: "whatsapp",
-        accountId: "default",
-      },
-      lastTo: "whatsapp:+8613800138000",
+    mockState.sessionDeliveryContext = {
+      channel: "whatsapp",
+      to: "whatsapp:+8613800138000",
+      accountId: "default",
     };
     mockState.sessionRoutingInfo = {
       sessionScope: "shared-main",
@@ -1592,17 +1601,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     });
   });
 
-  it("chat.send falls back to origin thread metadata for configured main CLI delivery inheritance", async () => {
+  it("chat.send uses typed SQLite thread metadata for configured main CLI delivery inheritance", async () => {
     createTranscriptFixture("openclaw-chat-send-config-main-origin-thread-routes-");
     mockState.mainSessionKey = "work";
     mockState.finalText = "ok";
-    mockState.sessionEntry = {
-      origin: {
-        provider: "telegram",
-        accountId: "default",
-        threadId: "42",
-      },
-      lastTo: "telegram:6812765697",
+    mockState.sessionDeliveryContext = {
+      channel: "telegram",
+      to: "telegram:6812765697",
+      accountId: "default",
+      threadId: "42",
     };
     mockState.sessionRoutingInfo = {
       sessionScope: "shared-main",

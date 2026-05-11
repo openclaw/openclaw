@@ -1,7 +1,6 @@
 import type { MsgContext } from "../../auto-reply/templating.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import {
-  deliveryContextFromSession,
   mergeDeliveryContext,
   normalizeDeliveryContext,
   normalizeSessionDeliveryFields,
@@ -9,6 +8,7 @@ import {
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {
   conversationIdentityFromMsgContext,
+  conversationIdentityFromSessionEntry,
   type ConversationIdentity,
 } from "./conversation-identity.js";
 import { deriveSessionMetaPatch } from "./metadata.js";
@@ -163,6 +163,7 @@ export function readSessionUpdatedAt(params: {
 function resolveSessionRowOptionsFromSessionKey(params: {
   agentId?: string;
   sessionKey: string;
+  env?: NodeJS.ProcessEnv;
 }): SessionEntryRowOptions {
   const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
   if (!agentId) {
@@ -170,11 +171,12 @@ function resolveSessionRowOptionsFromSessionKey(params: {
       `Session stores are SQLite-only; cannot resolve agent for ${params.sessionKey}`,
     );
   }
-  return { agentId };
+  return { agentId, env: params.env };
 }
 
 export async function recordSessionMetaFromInbound(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   sessionKey: string;
   ctx: MsgContext;
   groupResolution?: import("./types.js").GroupKeyResolution | null;
@@ -185,6 +187,7 @@ export async function recordSessionMetaFromInbound(params: {
   const rowOptions = resolveSessionRowOptionsFromSessionKey({
     agentId: params.agentId,
     sessionKey,
+    env: params.env,
   });
   const normalizedKey = normalizeSessionRowKey(sessionKey);
   const existing = getSessionEntry({ ...rowOptions, sessionKey });
@@ -224,6 +227,7 @@ export async function recordSessionMetaFromInbound(params: {
 
 export async function updateLastRoute(params: {
   agentId?: string;
+  env?: NodeJS.ProcessEnv;
   sessionKey: string;
   channel?: SessionEntry["lastChannel"];
   to?: string;
@@ -239,6 +243,7 @@ export async function updateLastRoute(params: {
   const rowOptions = resolveSessionRowOptionsFromSessionKey({
     agentId: params.agentId,
     sessionKey,
+    env: params.env,
   });
   const normalizedKey = normalizeSessionRowKey(sessionKey);
   const existing = getSessionEntry({ ...rowOptions, sessionKey });
@@ -266,9 +271,7 @@ export async function updateLastRoute(params: {
     explicitContext?.channel || explicitContext?.to || inlineContext?.channel || inlineContext?.to,
   );
   const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
-  const existingDeliveryContext =
-    readExistingDeliveryContext({ ...rowOptions, sessionKey }) ??
-    deliveryContextFromSession(existing);
+  const existingDeliveryContext = readExistingDeliveryContext({ ...rowOptions, sessionKey });
   const fallbackContext = clearThreadFromFallback
     ? removeThreadFromDeliveryContext(existingDeliveryContext)
     : existingDeliveryContext;
@@ -306,15 +309,15 @@ export async function updateLastRoute(params: {
     ...rowOptions,
     sessionKey: normalizedKey,
     entry: next,
-    conversationIdentities: ctx
-      ? [
-          conversationIdentityFromMsgContext({
+    conversationIdentities: [
+      ctx
+        ? conversationIdentityFromMsgContext({
             ctx,
             deliveryContext: normalized.deliveryContext,
             groupResolution: params.groupResolution,
-          }),
-        ].filter((entry) => entry !== null)
-      : undefined,
+          })
+        : conversationIdentityFromSessionEntry(next),
+    ].filter((entry) => entry !== null),
   });
   return next;
 }

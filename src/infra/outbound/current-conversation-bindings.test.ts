@@ -270,6 +270,30 @@ describe("generic current-conversation bindings", () => {
     expectBindingMetadata(resolved, { label: "workspace-dm" });
   });
 
+  it("rejects invalid persisted generic binding enum values", () => {
+    const { database, db } = getCurrentConversationBindingsTestDb();
+
+    expect(() =>
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("current_conversation_bindings").values({
+          binding_key: "invalid",
+          binding_id: "invalid",
+          target_agent_id: "codex",
+          target_session_key: "agent:codex:session",
+          channel: "workspace",
+          account_id: "default",
+          conversation_kind: "file",
+          conversation_id: "user:U123",
+          target_kind: "locator",
+          status: "active",
+          bound_at: 1,
+          updated_at: 1,
+        }),
+      ),
+    ).toThrow(/CHECK constraint failed/);
+  });
+
   it("keeps conversation kinds as part of the binding identity", async () => {
     await bindGenericCurrentConversation({
       targetSessionKey: "agent:codex:direct-session",
