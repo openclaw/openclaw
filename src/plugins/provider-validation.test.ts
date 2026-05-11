@@ -50,7 +50,7 @@ function normalizeProviderFixture(provider: ProviderPlugin) {
 
 function expectNormalizedProviderFixture(params: {
   provider: ProviderPlugin;
-  expectedProvider?: ProviderPlugin | null;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
 }) {
@@ -69,7 +69,7 @@ function expectNormalizedProviderFixture(params: {
 
 function expectProviderNormalizationResult(params: {
   provider: ProviderPlugin;
-  expectedProvider?: ProviderPlugin | null;
+  expectedProvider?: unknown;
   expectedDiagnostics?: ReadonlyArray<{ level: PluginDiagnostic["level"]; message: string }>;
   expectedDiagnosticText?: readonly string[];
   assert?: (
