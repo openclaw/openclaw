@@ -320,7 +320,7 @@ export async function runBtwSideQuestion(
     sessionKey: params.sessionKey,
   });
   if (harness.runSideQuestion) {
-    const { authProfileId, authProfileIdSource } = await resolveRuntimeModel({
+    const { model, authProfileId, authProfileIdSource } = await resolveRuntimeModel({
       cfg: params.cfg,
       provider: params.provider,
       model: params.model,
@@ -335,6 +335,8 @@ export async function runBtwSideQuestion(
     });
     const result = await harness.runSideQuestion({
       ...params,
+      provider: model.provider,
+      model: model.id,
       sessionId,
       sessionFile,
       agentId: sessionAgentId,
