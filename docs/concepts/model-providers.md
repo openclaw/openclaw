@@ -43,7 +43,7 @@ Reference for **LLM/model providers** (not chat channels like WhatsApp/Telegram)
   <Accordion title="CLI runtimes">
     CLI runtimes use the same split: choose canonical model refs such as `anthropic/claude-*`, `google/gemini-*`, or `openai/gpt-*`, then set provider/model runtime policy to `claude-cli`, `google-gemini-cli`, or `codex-cli` when you want a local CLI backend.
 
-    Legacy `claude-cli/*`, `google-gemini-cli/*`, and `codex-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately.
+    Legacy `google-gemini-cli/*` and `codex-cli/*` refs migrate back to canonical provider refs with the runtime recorded separately. Legacy `claude-cli/*` refs are preserved as-is by `openclaw doctor` and continue to work without migration.
 
   </Accordion>
 </AccordionGroup>

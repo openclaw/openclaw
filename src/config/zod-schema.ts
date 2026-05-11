@@ -350,7 +350,6 @@ const CommitmentsSchema = z
 export const OpenClawSchema = z
   .object({
     $schema: z.string().optional(),
-    defaultModel: z.string().optional(),
     meta: z
       .object({
         lastTouchedVersion: z.string().optional(),
