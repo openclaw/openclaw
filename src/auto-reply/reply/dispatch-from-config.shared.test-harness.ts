@@ -174,14 +174,6 @@ const replyMediaPathMocks = vi.hoisted(() => ({
 const runtimePluginMocks = vi.hoisted(() => ({
   ensureRuntimePluginsLoaded: vi.fn(),
 }));
-const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
-}));
 
 export {
   acpManagerRuntimeMocks,
@@ -195,30 +187,6 @@ export {
   sessionStoreMocks,
   runtimePluginMocks,
 };
-
-function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
-  const trimmed = sessionKey?.trim();
-  if (!trimmed) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const threadMarker = ":thread:";
-  const topicMarker = ":topic:";
-  const marker = trimmed.includes(threadMarker)
-    ? threadMarker
-    : trimmed.includes(topicMarker)
-      ? topicMarker
-      : undefined;
-  if (!marker) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const index = trimmed.lastIndexOf(marker);
-  if (index < 0) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
-  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
-  return { baseSessionKey, threadId };
-}
 
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: () => true,
@@ -237,12 +205,6 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-}));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
 }));
 vi.mock("./dispatch-from-config.runtime.js", () => ({
   createInternalHookEvent: internalHookMocks.createInternalHookEvent,
@@ -424,9 +386,6 @@ export function resetPluginTtsAndThreadMocks() {
   replyMediaPathMocks.createReplyMediaPathNormalizer
     .mockReset()
     .mockReturnValue(async (payload: ReplyPayload) => payload);
-  threadInfoMocks.parseSessionThreadInfo
-    .mockReset()
-    .mockImplementation(parseGenericThreadSessionInfo);
 }
 
 export function setDiscordTestRegistry() {

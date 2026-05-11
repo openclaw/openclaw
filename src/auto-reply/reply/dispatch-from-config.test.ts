@@ -168,7 +168,20 @@ const sessionStoreMocks = vi.hoisted(() => ({
     return sessionStoreMocks.currentEntry;
   }),
   readSqliteSessionRoutingInfo: vi.fn(
-    () => undefined as { conversationThreadId?: string } | undefined,
+    () =>
+      undefined as
+        | {
+            accountId?: string;
+            channel?: string;
+            chatType?: string;
+            conversationKind?: string;
+            conversationPeerId?: string;
+            conversationThreadId?: string;
+            parentConversationId?: string;
+            primaryConversationId?: string;
+            sessionScope?: string;
+          }
+        | undefined,
   ),
 }));
 const acpManagerRuntimeMocks = vi.hoisted(() => ({
@@ -321,39 +334,6 @@ const conversationBindingMocks = vi.hoisted(() => {
     resolveConversationBindingThreadIdFromMessage: (ctx: BindingMsgContext) => resolveThreadId(ctx),
   };
 });
-const threadInfoMocks = vi.hoisted(() => ({
-  parseSessionThreadInfo: vi.fn<
-    (sessionKey: string | undefined) => {
-      baseSessionKey: string | undefined;
-      threadId: string | undefined;
-    }
-  >(),
-}));
-
-function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
-  const trimmed = sessionKey?.trim();
-  if (!trimmed) {
-    return { baseSessionKey: undefined, threadId: undefined };
-  }
-  const threadMarker = ":thread:";
-  const topicMarker = ":topic:";
-  const marker = trimmed.includes(threadMarker)
-    ? threadMarker
-    : trimmed.includes(topicMarker)
-      ? topicMarker
-      : undefined;
-  if (!marker) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const index = trimmed.lastIndexOf(marker);
-  if (index < 0) {
-    return { baseSessionKey: trimmed, threadId: undefined };
-  }
-  const baseSessionKey = trimmed.slice(0, index).trim() || undefined;
-  const threadId = trimmed.slice(index + marker.length).trim() || undefined;
-  return { baseSessionKey, threadId };
-}
-
 vi.mock("./route-reply.runtime.js", () => ({
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
@@ -406,12 +386,6 @@ vi.mock("../../logging/diagnostic.js", () => ({
   logMessageProcessed: diagnosticMocks.logMessageProcessed,
   logSessionStateChange: diagnosticMocks.logSessionStateChange,
   markDiagnosticSessionProgress: diagnosticMocks.markDiagnosticSessionProgress,
-}));
-vi.mock("../../config/sessions/thread-info.js", () => ({
-  parseSessionThreadInfo: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
-  parseSessionThreadInfoFast: (sessionKey: string | undefined) =>
-    threadInfoMocks.parseSessionThreadInfo(sessionKey),
 }));
 vi.mock("../../config/sessions/session-entries.sqlite.js", () => ({
   readSqliteSessionRoutingInfo: sessionStoreMocks.readSqliteSessionRoutingInfo,
@@ -920,8 +894,6 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.resolveSessionRowEntry.mockClear();
     sessionStoreMocks.readSqliteSessionRoutingInfo.mockReset();
     sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValue(undefined);
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
@@ -4184,8 +4156,6 @@ describe("before_dispatch hook", () => {
     resetInboundDedupe();
     mocks.routeReply.mockReset();
     mocks.routeReply.mockResolvedValue({ ok: true, messageId: "mock" });
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     setNoAbort();
@@ -4331,8 +4301,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
     hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
-    threadInfoMocks.parseSessionThreadInfo.mockReset();
-    threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
   });
 
   it("still calls the replyResolver when sendPolicy is deny", async () => {
@@ -4992,6 +4960,15 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
 
   it("falls back to automatic group/channel delivery when group tools remove the message tool", async () => {
     setNoAbort();
+    sessionStoreMocks.readSqliteSessionRoutingInfo.mockReturnValue({
+      accountId: "default",
+      channel: "discord",
+      chatType: "channel",
+      conversationKind: "channel",
+      conversationPeerId: "C1",
+      primaryConversationId: "discord:channel:C1",
+      sessionScope: "main",
+    });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");

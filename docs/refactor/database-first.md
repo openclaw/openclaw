@@ -517,6 +517,8 @@ Completed consolidation/deletion highlights:
 - Channel model override matching now uses explicit group and parent
   conversation metadata. It no longer decodes parent conversation ids from
   `parentSessionKey`.
+- The old session thread-info wrapper and loaded-plugin thread parser are gone;
+  no runtime code imports `config/sessions/thread-info`.
 - Completion delivery, send policy, and task maintenance no longer derive chat
   type from `session_key` shape. The old chat-type key parser has been deleted;
   these paths require typed session metadata, typed delivery context, or
