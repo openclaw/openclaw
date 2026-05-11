@@ -94,7 +94,7 @@ describe("modelsAuthListCommand", () => {
       provider: "openai-codex",
     });
     expect(runtime.jsonPayloads).toStrictEqual([
-      expect.objectContaining({
+      {
         agentDir: "/tmp/openclaw/agents/coder",
         agentId: "coder",
         authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
@@ -110,7 +110,7 @@ describe("modelsAuthListCommand", () => {
           },
         ],
         provider: "openai-codex",
-      }),
+      },
     ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
     expect(runtime.jsonPayloads[0]).toMatchObject({
