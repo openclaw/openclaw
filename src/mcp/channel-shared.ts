@@ -32,11 +32,6 @@ type SessionRow = {
     accountId?: string;
     threadId?: string | number;
   };
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
   label?: string;
   displayName?: string;
   derivedTitle?: string;

@@ -301,11 +301,6 @@ describe("tools.effective handler", () => {
         lastChannel: "telegram",
         lastAccountId: "acct-1",
         lastTo: "channel-1",
-        origin: {
-          provider: "telegram",
-          accountId: "acct-1",
-          threadId: 42,
-        },
         groupId: "group-4",
         groupChannel: "#ops",
         space: "workspace-5",
@@ -331,38 +326,6 @@ describe("tools.effective handler", () => {
 
     expect(resolveEffectiveToolInventoryArg()?.currentThreadTs).toBe("42");
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-  });
-
-  it("does not recover routing from stale origin shadows", async () => {
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      canonicalKey: "main:abc",
-      entry: {
-        sessionId: "session-origin-thread",
-        updatedAt: 1,
-        origin: {
-          provider: "telegram",
-          accountId: "acct-1",
-          threadId: 42,
-        },
-        modelProvider: "openai",
-        model: "gpt-4.1",
-      },
-    } as never);
-    runtimeMocks.readSqliteSessionDeliveryContext.mockReturnValueOnce(undefined);
-    runtimeMocks.readSqliteSessionRoutingInfo.mockReturnValueOnce(undefined);
-
-    const { respond, invoke } = createInvokeParams({ sessionKey: "main:abc" });
-    await invoke();
-
-    expect(runtimeMocks.resolveEffectiveToolInventory).toHaveBeenCalledWith(
-      expect.objectContaining({
-        messageProvider: undefined,
-        accountId: undefined,
-        currentThreadTs: undefined,
-      }),
-    );
-    expect((respond.mock.calls[0] as RespondCall | undefined)?.[0]).toBe(true);
   });
 
   it("passes senderIsOwner=true for admin-scoped callers", async () => {

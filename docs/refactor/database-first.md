@@ -559,8 +559,9 @@ Completed consolidation/deletion highlights:
   delivery context only. It no longer decodes channel, peer, account, or thread
   targets from `agentSessionKey`.
 - Runtime session rows no longer carry the old `lastProvider` route alias.
-  Helpers and tests use `lastChannel`, `deliveryContext`, and `origin` instead;
-  doctor migration is the only place that should translate older route aliases.
+  Helpers and tests use typed `lastChannel` and `deliveryContext` fields;
+  doctor migration is the only place that should translate older route aliases
+  or persisted `origin` shadows.
 - Transcript events, VFS rows, and tool artifact rows now write to the per-agent
   database. The unshipped global transcript-file mapping table is gone; doctor
   records legacy source paths in durable migration rows instead.

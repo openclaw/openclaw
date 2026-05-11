@@ -232,7 +232,6 @@ describe("delivery context helpers", () => {
         channel: "demo-channel",
         lastTo: " -1001 ",
         deliveryContext: { threadId: " 777 " },
-        origin: { threadId: 42 },
       }),
     ).toEqual({
       channel: "demo-channel",

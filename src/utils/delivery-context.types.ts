@@ -23,10 +23,5 @@ export type DeliveryContextSessionSource = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
-  origin?: {
-    provider?: string;
-    accountId?: string;
-    threadId?: string | number;
-  };
   deliveryContext?: DeliveryContext;
 };
