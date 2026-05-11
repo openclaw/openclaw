@@ -172,7 +172,9 @@ describe("json-file helpers", () => {
         } catch (error) {
           saveError = error;
         }
-        expect(saveError).toBeDefined();
+        if (saveError === undefined) {
+          throw new Error("Expected saveJsonFile to fail");
+        }
         expect((saveError as { code?: unknown }).code).toBe("ENOENT");
         expect(fs.existsSync(missingTargetDir)).toBe(false);
         expect(fs.lstatSync(linkPath).isSymbolicLink()).toBe(true);

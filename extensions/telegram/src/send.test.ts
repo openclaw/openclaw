@@ -127,7 +127,9 @@ function expectMediaSendCall(
 ): void {
   const [actualChatId, media, actualParams] = requireMockCall(call, label);
   expect(actualChatId).toBe(chatId);
-  expect(media).toBeDefined();
+  if (media === undefined) {
+    throw new Error(`expected ${label} media`);
+  }
   expect(actualParams).toEqual(expectedParams);
 }
 
@@ -1072,7 +1074,9 @@ describe("sendMessageTelegram", () => {
 
       const [, media, videoParams] = requireMockCall(sendVideo.mock.calls[0], "send video call");
       expect(sendVideo.mock.calls[0]?.[0]).toBe(chatId);
-      expect(media).toBeDefined();
+      if (media === undefined) {
+        throw new Error("expected send video media");
+      }
       const params = requireRecord(videoParams, "send video params");
       expect(typeof params.caption).toBe("string");
       expect(params.parse_mode).toBe("HTML");

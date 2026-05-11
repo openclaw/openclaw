@@ -52,7 +52,10 @@ describe("doctor empty allowlist policy scan", () => {
       },
     );
 
-    expect(warnings).toContain("extra:channels.telegram");
+    expect(warnings).toStrictEqual([
+      '- channels.telegram.groupPolicy is "allowlist" but groupAllowFrom (and allowFrom) is empty — all group messages will be silently dropped. Add sender IDs to channels.telegram.groupAllowFrom or channels.telegram.allowFrom, or set groupPolicy to "open".',
+      "extra:channels.telegram",
+    ]);
   });
 
   it("skips disabled channel and account entries", () => {

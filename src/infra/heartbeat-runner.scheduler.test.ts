@@ -64,8 +64,10 @@ describe("startHeartbeatRunner", () => {
 
   function getRunCall(runSpy: MockRunOnce, callIndex: number) {
     const call = runSpy.mock.calls[callIndex];
-    expect(call).toBeDefined();
-    const options = call?.[0];
+    if (!call) {
+      throw new Error(`Expected heartbeat run call ${callIndex}`);
+    }
+    const options = call[0];
     expect(typeof options).toBe("object");
     expect(options).not.toBeNull();
     return options as Record<string, unknown>;
@@ -93,9 +95,11 @@ describe("startHeartbeatRunner", () => {
       .slice(params.startIndex ?? 0)
       .map((entry) => entry[0] as { agentId?: string; heartbeat?: { every?: string } })
       .find((options) => options.agentId === params.agentId);
-    expect(call).toBeDefined();
+    if (!call) {
+      throw new Error(`Expected heartbeat run call for ${params.agentId}`);
+    }
     if (params.expectedHeartbeatEvery) {
-      expect(call?.heartbeat?.every).toBe(params.expectedHeartbeatEvery);
+      expect(call.heartbeat?.every).toBe(params.expectedHeartbeatEvery);
     }
   }
 

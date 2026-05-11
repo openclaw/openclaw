@@ -190,9 +190,9 @@ describe("healthCommand", () => {
     });
 
     const lines = formatHealthChannelLines(summary, { accountMode: "all" });
-    expect(lines).toContain(
+    expect(lines).toStrictEqual([
       "Telegram: ok (@pinguini_ugi_bot:main:196ms, @flurry_ugi_bot:flurry:190ms, @poe_ugi_bot:poe:188ms)",
-    );
+    ]);
   });
 
   it("formats statusState without inferring from linked", () => {
@@ -209,7 +209,7 @@ describe("healthCommand", () => {
     });
 
     const lines = formatHealthChannelLines(summary, { accountMode: "default" });
-    expect(lines).toContain("WhatsApp: auth stabilizing");
+    expect(lines).toStrictEqual(["WhatsApp: auth stabilizing"]);
   });
 });
 

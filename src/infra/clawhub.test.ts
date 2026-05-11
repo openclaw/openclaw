@@ -27,7 +27,9 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   } catch (error) {
     statError = error;
   }
-  expect(statError).toBeDefined();
+  if (statError === undefined) {
+    throw new Error(`Expected ${targetPath} to be missing`);
+  }
   expect((statError as { code?: unknown }).code).toBe("ENOENT");
 }
 

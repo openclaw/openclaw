@@ -138,7 +138,7 @@ describe("Codex app-server approval bridge", () => {
     const requestPayload = gatewayRequestPayload();
     expect(String(requestPayload.description)).toContain("Command: pnpm test extensions/codex");
     expect(String(requestPayload.description)).not.toContain("bash -lc");
-    expect(findApprovalEvent(params, { command: "pnpm test extensions/codex" })).toBeDefined();
+    findApprovalEvent(params, { command: "pnpm test extensions/codex" });
   });
 
   it("describes command approval permission and policy amendments", async () => {
@@ -306,7 +306,7 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayRequestPayload().description).toBe(
       "Command: prefix VISIBLE suffix\nSession: agent:main:session-1",
     );
-    expect(findApprovalEvent(params, { command: "prefix VISIBLE suffix" })).toBeDefined();
+    findApprovalEvent(params, { command: "prefix VISIBLE suffix" });
   });
 
   it("strips bidi and invisible formatting controls from command previews", async () => {
@@ -331,7 +331,7 @@ describe("Codex app-server approval bridge", () => {
     expect(gatewayRequestPayload().description).toBe(
       "Command: echo safe cod.exe hidden done\nSession: agent:main:session-1",
     );
-    expect(findApprovalEvent(params, { command: "echo safe cod.exe hidden done" })).toBeDefined();
+    findApprovalEvent(params, { command: "echo safe cod.exe hidden done" });
   });
 
   it("marks oversized unsafe command previews as omitted", async () => {

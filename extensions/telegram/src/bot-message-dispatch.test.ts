@@ -329,8 +329,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
   function expectDeliveredReply(index: number, expected: Record<string, unknown>, callIndex = 0) {
     const params = expectDeliverRepliesParams({}, callIndex);
     const replies = params.replies as Array<unknown> | undefined;
-    expect(replies).toBeDefined();
-    return expectRecordFields(replies?.[index], expected);
+    if (!Array.isArray(replies)) {
+      throw new Error("Expected delivered replies array");
+    }
+    return expectRecordFields(replies[index], expected);
   }
 
   function expectDispatchParams(expected: Record<string, unknown>) {

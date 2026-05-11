@@ -20,6 +20,7 @@ import {
   type CodexAppServerEventProjectorOptions,
   type CodexAppServerToolTelemetry,
 } from "./event-projector.js";
+import { CodexNativeSubagentTaskMirror } from "./native-subagent-task-mirror.js";
 import { rememberCodexRateLimits, resetCodexRateLimitCacheForTests } from "./rate-limit-cache.js";
 import { createCodexTestModel } from "./test-support.js";
 
@@ -641,6 +642,36 @@ describe("CodexAppServerEventProjector", () => {
 
     const result = projector.buildResult(buildEmptyToolTelemetry());
     expect(result.assistantTexts).toStrictEqual([]);
+  });
+
+  it("mirrors native subagent notifications before current-turn filtering", async () => {
+    const projector = await createProjector({
+      ...(await createParams()),
+      sessionKey: "agent:main:main",
+    } as EmbeddedRunAttemptParams);
+    const mirrorSpy = vi.spyOn(CodexNativeSubagentTaskMirror.prototype, "handleNotification");
+    const notification = {
+      method: "item/completed",
+      params: {
+        threadId: THREAD_ID,
+        turnId: "child-turn",
+        item: {
+          type: "collabAgentToolCall",
+          tool: "spawnAgent",
+          senderThreadId: THREAD_ID,
+          receiverThreadIds: ["child-thread"],
+          agentsStates: {
+            "child-thread": { status: "completed", message: "done" },
+          },
+        },
+      },
+    } as ProjectorNotification;
+
+    await projector.handleNotification(notification);
+
+    expect(mirrorSpy).toHaveBeenCalledWith(notification);
+    const result = projector.buildResult(buildEmptyToolTelemetry());
+    expect(result.assistantTexts).toEqual([]);
   });
 
   it("ignores notifications that omit top-level thread and turn ids", async () => {

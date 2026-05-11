@@ -95,6 +95,8 @@ describe("CronService.getJob", () => {
       id: persisted.id,
       name: "persisted-job",
     });
-    expect(reader.getJob(persisted.id)).toBeDefined();
+    if (reader.getJob(persisted.id) === undefined) {
+      throw new Error("Expected persisted cron job");
+    }
   });
 });

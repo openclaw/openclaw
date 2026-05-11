@@ -544,7 +544,9 @@ describe("bedrock mantle discovery", () => {
 
     expect(provider?.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
     expect(mockFetch.mock.calls[0]?.[0]).toBe("https://bedrock-mantle.us-east-1.api.aws/v1/models");
-    expect(mockFetch.mock.calls[0]?.[1]).toBeDefined();
+    if (mockFetch.mock.calls[0]?.[1] === undefined) {
+      throw new Error("expected Mantle models fetch init");
+    }
   });
 
   // ---------------------------------------------------------------------------
