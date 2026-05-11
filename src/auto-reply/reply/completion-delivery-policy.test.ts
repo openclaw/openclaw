@@ -35,6 +35,15 @@ describe("completion delivery policy", () => {
     ).toBe("direct");
   });
 
+  it("prefers typed delivery-context chat type over key inference", () => {
+    expect(
+      resolveCompletionChatType({
+        requesterSessionKey: "agent:main:opaque:legacy-key",
+        requesterSessionOrigin: { channel: "notifychat", to: "123", chatType: "group" },
+      }),
+    ).toBe("group");
+  });
+
   it.each([
     { to: "group:ops", expected: "group" },
     { to: "channel:C123", expected: "channel" },
@@ -91,12 +100,26 @@ describe("completion delivery policy", () => {
   });
 
   it("routes group and channel task completions through the requester session", () => {
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:whatsapp:group:123@g.us")).toBe(
-      true,
-    );
     expect(
-      shouldRouteCompletionThroughRequesterSession("agent:main:discord:guild:123:channel:456"),
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:whatsapp:group:123@g.us",
+      }),
     ).toBe(true);
-    expect(shouldRouteCompletionThroughRequesterSession("agent:main:discord:dm:U123")).toBe(false);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:discord:guild:123:channel:456",
+      }),
+    ).toBe(true);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:discord:dm:U123",
+      }),
+    ).toBe(false);
+    expect(
+      shouldRouteCompletionThroughRequesterSession({
+        requesterSessionKey: "agent:main:opaque:legacy-key",
+        requesterSessionOrigin: { channel: "notifychat", to: "123", chatType: "channel" },
+      }),
+    ).toBe(true);
   });
 });

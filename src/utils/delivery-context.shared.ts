@@ -20,6 +20,7 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
         : undefined,
     to: context.to,
     accountId: context.accountId,
+    chatType: context.chatType,
     threadId: context.threadId,
   });
   if (!route) {
@@ -30,6 +31,10 @@ export function normalizeDeliveryContext(context?: DeliveryContext): DeliveryCon
     to: channelRouteTarget(route),
     accountId: normalizeAccountId(route.accountId),
   };
+  const chatType = route.target?.chatType;
+  if (chatType) {
+    normalized.chatType = chatType;
+  }
   const threadId = channelRouteThreadId(route);
   if (threadId != null) {
     normalized.threadId = threadId;
@@ -123,6 +128,9 @@ export function mergeDeliveryContext(
     accountId: channelsConflict
       ? normalizedPrimary?.accountId
       : (normalizedPrimary?.accountId ?? normalizedFallback?.accountId),
+    chatType: channelsConflict
+      ? normalizedPrimary?.chatType
+      : (normalizedPrimary?.chatType ?? normalizedFallback?.chatType),
     threadId: channelsConflict
       ? normalizedPrimary?.threadId
       : (normalizedPrimary?.threadId ?? normalizedFallback?.threadId),

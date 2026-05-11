@@ -22,6 +22,15 @@ export function resolveCompletionChatType(params: {
     return explicit;
   }
 
+  const directOriginChatType = normalizeChatType(params.directOrigin?.chatType);
+  if (directOriginChatType) {
+    return directOriginChatType;
+  }
+  const requesterOriginChatType = normalizeChatType(params.requesterSessionOrigin?.chatType);
+  if (requesterOriginChatType) {
+    return requesterOriginChatType;
+  }
+
   for (const key of [params.targetRequesterSessionKey, params.requesterSessionKey]) {
     const derived = deriveSessionChatType(key);
     if (derived !== "unknown") {
@@ -55,9 +64,22 @@ export function completionRequiresMessageToolDelivery(params: {
 }
 
 export function shouldRouteCompletionThroughRequesterSession(
-  sessionKey: string | undefined | null,
+  params:
+    | string
+    | null
+    | undefined
+    | {
+        requesterSessionKey?: string | null;
+        targetRequesterSessionKey?: string | null;
+        requesterEntry?: CompletionDeliverySessionEntry;
+        directOrigin?: DeliveryContext;
+        requesterSessionOrigin?: DeliveryContext;
+      },
 ): boolean {
-  const chatType = deriveSessionChatType(sessionKey);
+  const chatType =
+    typeof params === "string" || params == null
+      ? deriveSessionChatType(params)
+      : resolveCompletionChatType(params);
   return chatType === "group" || chatType === "channel";
 }
 

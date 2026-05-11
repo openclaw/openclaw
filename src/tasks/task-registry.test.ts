@@ -991,6 +991,55 @@ describe("task-registry", () => {
     });
   });
 
+  it("routes typed group ACP completion through the parent session without parsing owner key", async () => {
+    await withTaskRegistryTempDir(async (root) => {
+      process.env.OPENCLAW_STATE_DIR = root;
+      resetTaskRegistryForTests();
+      hoisted.sendMessageMock.mockResolvedValue({
+        channel: "guildchat",
+        to: "guildchat:opaque",
+        via: "direct",
+      });
+
+      createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:main:opaque-session",
+        scopeKind: "session",
+        requesterOrigin: {
+          channel: "guildchat",
+          to: "opaque-room",
+          chatType: "group",
+        },
+        childSessionKey: "agent:main:acp:typed-child",
+        runId: "run-typed-group-terminal",
+        task: "Investigate issue",
+        status: "running",
+        deliveryStatus: "pending",
+        startedAt: 100,
+      });
+
+      emitAgentEvent({
+        runId: "run-typed-group-terminal",
+        stream: "lifecycle",
+        data: {
+          phase: "end",
+          endedAt: 250,
+        },
+      });
+
+      await waitForAssertion(() =>
+        expect(findTaskByRunId("run-typed-group-terminal")).toMatchObject({
+          status: "succeeded",
+          deliveryStatus: "session_queued",
+        }),
+      );
+      expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
+      expect(peekSystemEvents("agent:main:opaque-session")).toEqual([
+        expect.stringContaining("Background task done: ACP background task"),
+      ]);
+    });
+  });
+
   it("records delivery failure and queues a session fallback when direct delivery misses", async () => {
     await withTaskRegistryTempDir(async (root) => {
       process.env.OPENCLAW_STATE_DIR = root;

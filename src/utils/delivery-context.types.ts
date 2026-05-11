@@ -8,11 +8,12 @@ export type DeliveryIntentRef = {
 
 export type DeliveryContext = Pick<
   ChannelRouteTargetInput,
-  "accountId" | "channel" | "threadId" | "to"
+  "accountId" | "channel" | "chatType" | "threadId" | "to"
 > & {
   channel?: string;
   to?: string;
   accountId?: string;
+  chatType?: ChannelRouteTargetInput["chatType"];
   threadId?: string | number;
   deliveryIntent?: DeliveryIntentRef;
 };

@@ -1062,7 +1062,12 @@ function getTaskDeliveryState(taskId: string): TaskDeliveryState | undefined {
 
 function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   const owner = resolveTaskDeliveryOwner(task);
-  if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
+  if (
+    shouldRouteCompletionThroughRequesterSession({
+      requesterSessionKey: owner.sessionKey,
+      requesterSessionOrigin: owner.requesterOrigin,
+    })
+  ) {
     return false;
   }
   const origin = owner.requesterOrigin;
