@@ -228,6 +228,86 @@ describe("fal image-generation provider", () => {
     });
   });
 
+  it("allows GPT Image 2 edits up to 16 reference images", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+    fetchWithSsrFGuardMock
+      .mockResolvedValueOnce({
+        response: new Response(
+          JSON.stringify({
+            images: [{ url: "https://v3.fal.media/files/example/gpt-edited.png" }],
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          },
+        ),
+        release: vi.fn(async () => {}),
+      })
+      .mockResolvedValueOnce({
+        response: new Response(Buffer.from("gpt-edited-data"), {
+          status: 200,
+          headers: { "content-type": "image/png" },
+        }),
+        release: vi.fn(async () => {}),
+      });
+
+    const inputImages = Array.from({ length: 16 }, (_, index) => ({
+      buffer: Buffer.from(`ref-${index + 1}`),
+      mimeType: "image/png",
+    }));
+
+    const provider = buildFalImageGenerationProvider();
+    await provider.generateImage({
+      provider: "fal",
+      model: "openai/gpt-image-2",
+      prompt: "combine all references",
+      cfg: {},
+      inputImages,
+    });
+
+    expectFalJsonPost({
+      call: 1,
+      url: "https://fal.run/openai/gpt-image-2/edit",
+      body: {
+        prompt: "combine all references",
+        num_images: 1,
+        output_format: "png",
+        image_urls: inputImages.map(
+          (image) => `data:image/png;base64,${image.buffer.toString("base64")}`,
+        ),
+      },
+    });
+  });
+
+  it("rejects GPT Image 2 edits above 16 reference images", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "openai/gpt-image-2",
+        prompt: "too many references",
+        cfg: {},
+        inputImages: Array.from({ length: 17 }, () => ({
+          buffer: Buffer.from("ref"),
+          mimeType: "image/png",
+        })),
+      }),
+    ).rejects.toThrow("fal GPT Image edit supports at most 16 reference images");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("routes Nano Banana 2 edits through /edit with NB2 geometry", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
@@ -285,6 +365,30 @@ describe("fal image-generation provider", () => {
         ],
       },
     });
+  });
+
+  it("rejects Nano Banana 2 edits above 14 reference images", async () => {
+    vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
+      apiKey: "fal-test-key",
+      source: "env",
+      mode: "api-key",
+    });
+    _setFalFetchGuardForTesting(fetchWithSsrFGuardMock);
+
+    const provider = buildFalImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "fal",
+        model: "fal-ai/nano-banana-2",
+        prompt: "too many references",
+        cfg: {},
+        inputImages: Array.from({ length: 15 }, () => ({
+          buffer: Buffer.from("ref"),
+          mimeType: "image/png",
+        })),
+      }),
+    ).rejects.toThrow("fal Nano Banana edit supports at most 14 reference images");
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 
   it("preserves exact custom Fal edit endpoints", async () => {

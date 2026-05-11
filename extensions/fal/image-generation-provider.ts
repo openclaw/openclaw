@@ -26,6 +26,8 @@ const DEFAULT_FAL_BASE_URL = "https://fal.run";
 const DEFAULT_FAL_IMAGE_MODEL = "fal-ai/flux/dev";
 const DEFAULT_FAL_EDIT_SUBPATH = "image-to-image";
 const DEFAULT_OUTPUT_FORMAT = "png";
+const GPT_IMAGE_EDIT_MAX_INPUT_IMAGES = 16;
+const NANO_BANANA_EDIT_MAX_INPUT_IMAGES = 14;
 const FAL_OUTPUT_FORMATS = ["png", "jpeg"] as const;
 const FAL_SUPPORTED_SIZES = [
   "1024x1024",
@@ -275,7 +277,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       edit: {
         enabled: true,
         maxCount: 4,
-        maxInputImages: 14,
+        maxInputImages: GPT_IMAGE_EDIT_MAX_INPUT_IMAGES,
         supportsSize: true,
         supportsAspectRatio: true,
         supportsResolution: true,
@@ -299,13 +301,8 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       if (!auth.apiKey) {
         throw new Error("fal API key missing");
       }
-      if ((req.inputImages?.length ?? 0) > 14) {
-        throw new Error(
-          `fal image edit supports at most 14 reference images (requested ${req.inputImages?.length})`,
-        );
-      }
-
-      const hasInputImages = (req.inputImages?.length ?? 0) > 0;
+      const inputImageCount = req.inputImages?.length ?? 0;
+      const hasInputImages = inputImageCount > 0;
       const imageSize = resolveFalImageSize({
         size: req.size,
         resolution: req.resolution,
@@ -314,11 +311,30 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
       });
       const model = ensureFalModelPath(req.model, hasInputImages);
 
-      // Flux models: enforce 1-image limit and no aspect ratio at runtime
-      const isEditModel =
-        model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-");
-      if (hasInputImages && !isEditModel) {
-        if ((req.inputImages?.length ?? 0) > 1) {
+      const isGptImageEditModel = model.startsWith("openai/gpt-image-");
+      const isNanoBananaEditModel = model.startsWith("fal-ai/nano-banana-");
+      if (
+        hasInputImages &&
+        isGptImageEditModel &&
+        inputImageCount > GPT_IMAGE_EDIT_MAX_INPUT_IMAGES
+      ) {
+        throw new Error(
+          `fal GPT Image edit supports at most ${GPT_IMAGE_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
+        );
+      }
+      if (
+        hasInputImages &&
+        isNanoBananaEditModel &&
+        inputImageCount > NANO_BANANA_EDIT_MAX_INPUT_IMAGES
+      ) {
+        throw new Error(
+          `fal Nano Banana edit supports at most ${NANO_BANANA_EDIT_MAX_INPUT_IMAGES} reference images (requested ${inputImageCount})`,
+        );
+      }
+
+      // Flux/custom edit endpoints use the singular image_url contract.
+      if (hasInputImages && !isGptImageEditModel && !isNanoBananaEditModel) {
+        if (inputImageCount > 1) {
           throw new Error(
             "fal flux image generation currently supports at most one reference image",
           );
@@ -367,7 +383,7 @@ export function buildFalImageGenerationProvider(): ImageGenerationProvider {
           throw new Error("fal image edit request missing reference image");
         }
         // GPT Image 2 and NB2 use image_urls (array); Flux uses image_url (singular)
-        if (model.startsWith("openai/gpt-image-") || model.startsWith("fal-ai/nano-banana-")) {
+        if (isGptImageEditModel || isNanoBananaEditModel) {
           requestBody.image_urls = req.inputImages!.map((img) => toImageDataUrl(img));
         } else {
           requestBody.image_url = toImageDataUrl(input);

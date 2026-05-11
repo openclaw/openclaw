@@ -43,14 +43,14 @@ OpenClaw ships a bundled `fal` provider for hosted image and video generation.
 The bundled `fal` image-generation provider defaults to
 `fal/fal-ai/flux/dev`.
 
-| Capability     | Value                                                     |
-| -------------- | --------------------------------------------------------- |
-| Max images     | 4 per request                                             |
-| Edit mode      | Flux: 1 reference image; GPT Image 2/Nano Banana 2: 14    |
-| Size overrides | Supported                                                 |
-| Aspect ratio   | Supported for generate and GPT Image 2/Nano Banana 2 edit |
-| Resolution     | Supported                                                 |
-| Output format  | `png` or `jpeg`                                           |
+| Capability     | Value                                                       |
+| -------------- | ----------------------------------------------------------- |
+| Max images     | 4 per request                                               |
+| Edit mode      | Flux: 1 reference image; GPT Image 2: 16; Nano Banana 2: 14 |
+| Size overrides | Supported                                                   |
+| Aspect ratio   | Supported for generate and GPT Image 2/Nano Banana 2 edit   |
+| Resolution     | Supported                                                   |
+| Output format  | `png` or `jpeg`                                             |
 
 <Warning>
 Flux image-to-image requests do **not** support `aspectRatio` overrides. GPT

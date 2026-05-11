@@ -107,13 +107,13 @@ Use `action: "list"` to inspect available providers and models at runtime:
 
 ## Provider capabilities
 
-| Capability            | ComfyUI            | DeepInfra | fal                  | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
-| --------------------- | ------------------ | --------- | -------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
-| Generate (max count)  | Workflow-defined   | 4         | 4                    | 4              | 9                     | 4              | 1     | 4              |
-| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT/NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
-| Size control          | -                  | ✓         | ✓                    | ✓              | -                     | Up to 4K       | -     | -              |
-| Aspect ratio          | -                  | -         | ✓                    | ✓              | ✓                     | -              | -     | ✓              |
-| Resolution (1K/2K/4K) | -                  | -         | ✓                    | ✓              | -                     | -              | -     | 1K, 2K         |
+| Capability            | ComfyUI            | DeepInfra | fal                       | Google         | MiniMax               | OpenAI         | Vydra | xAI            |
+| --------------------- | ------------------ | --------- | ------------------------- | -------------- | --------------------- | -------------- | ----- | -------------- |
+| Generate (max count)  | Workflow-defined   | 4         | 4                         | 4              | 9                     | 4              | 1     | 4              |
+| Edit / reference      | 1 image (workflow) | 1 image   | Flux: 1; GPT: 16; NB2: 14 | Up to 5 images | 1 image (subject ref) | Up to 5 images | -     | Up to 5 images |
+| Size control          | -                  | ✓         | ✓                         | ✓              | -                     | Up to 4K       | -     | -              |
+| Aspect ratio          | -                  | -         | ✓                         | ✓              | ✓                     | -              | -     | ✓              |
+| Resolution (1K/2K/4K) | -                  | -         | ✓                         | ✓              | -                     | -              | -     | 1K, 2K         |
 
 ## Tool parameters
 
@@ -241,8 +241,9 @@ reference images. Pass a reference image path or URL:
 ```
 
 OpenAI, OpenRouter, Google, and xAI support up to 5 reference images via the
-`images` parameter. fal supports 1 reference image for Flux image-to-image and
-up to 14 for GPT Image 2 and Nano Banana 2 edits. MiniMax and ComfyUI support 1.
+`images` parameter. fal supports 1 reference image for Flux image-to-image, up
+to 16 for GPT Image 2 edits, and up to 14 for Nano Banana 2 edits. MiniMax and
+ComfyUI support 1.
 
 ## Provider deep dives
 
