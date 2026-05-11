@@ -73,7 +73,11 @@ import {
   type CodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./config.js";
-import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
+import {
+  projectContextEngineAssemblyForCodex,
+  resolveCodexContextEngineProjectionMaxChars,
+  resolveCodexContextEngineProjectionReserveTokens,
+} from "./context-engine-projection.js";
 import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
@@ -634,6 +638,12 @@ export async function runCodexAppServerAttempt(
         originalHistoryMessages: historyMessages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
+        maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
+          contextTokenBudget: params.contextTokenBudget,
+          reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+            config: params.config,
+          }),
+        }),
       });
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
