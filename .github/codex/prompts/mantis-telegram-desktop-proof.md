@@ -43,12 +43,8 @@ Required workflow:
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
    install and build each worktree with the repo's normal `pnpm` commands.
-   If `MANTIS_CANDIDATE_TRUST` is `fork-pr-head`, treat the
-   candidate worktree as untrusted fork code: do not pass GitHub, OpenAI,
-   Crabbox, Convex, or other workflow secrets into candidate install, build, or
-   runtime commands. The candidate SUT may receive only the proof runner's
-   short-lived Telegram bot token, generated local config/state paths, and mock
-   model key needed for this isolated proof.
+   The workflow rejects fork PR heads before this agent starts, so both refs are
+   repository-owned commits selected by the trusted workflow.
 5. In each worktree, run the real-user Telegram Crabbox proof flow from the
    skill with `$OPENCLAW_TELEGRAM_USER_PROOF_CMD`; do not run
    `pnpm qa:telegram-user:crabbox` directly. The proof command comes from the

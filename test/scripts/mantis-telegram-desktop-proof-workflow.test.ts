@@ -127,11 +127,15 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     expect(workflowText).not.toContain("allow_fork_candidate");
   });
 
-  it("trusts the open PR head and marks fork heads for sandboxed handling", () => {
+  it("rejects fork PR heads before the secret-bearing agent job", () => {
     const workflowText = readFileSync(WORKFLOW, "utf8");
     expect(workflowText).toContain("repos/${GITHUB_REPOSITORY}/pulls/${PR_NUMBER}");
-    expect(workflowText).toContain('candidate_trust="fork-pr-head"');
     expect(workflowText).toContain('pr_head_repo" != "$GITHUB_REPOSITORY"');
+    expect(workflowText).toContain(
+      "this secret-bearing proof job only accepts repository-owned PR heads",
+    );
+    expect(workflowText).toContain('candidate_trust="repo-pr-head"');
+    expect(workflowText).not.toContain('candidate_trust="fork-pr-head"');
 
     const agent = workflowStep("Run Codex Mantis Telegram agent");
     expect(agent.env?.MANTIS_CANDIDATE_TRUST).toBe(
@@ -139,9 +143,9 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     );
 
     const prompt = readFileSync(PROMPT, "utf8");
-    expect(prompt).toContain("MANTIS_CANDIDATE_TRUST");
-    expect(prompt).toContain("fork-pr-head");
-    expect(prompt).toContain("untrusted fork code");
+    expect(prompt).toContain("The workflow rejects fork PR heads before this agent starts");
+    expect(prompt).not.toContain("fork-pr-head");
+    expect(prompt).not.toContain("untrusted fork code");
   });
 
   it("checks the Telegram user driver before leasing credentials", () => {

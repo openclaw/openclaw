@@ -205,10 +205,11 @@ jobs:
             echo "candidate ref '${CANDIDATE_REF}' resolved to ${candidate_revision}, which is not the open PR head." >&2
             exit 1
           fi
-          candidate_trust="open-pr-head"
           if [[ "$pr_head_repo" != "$GITHUB_REPOSITORY" ]]; then
-            candidate_trust="fork-pr-head"
+            echo "candidate ref '${CANDIDATE_REF}' is from fork '${pr_head_repo}', but this secret-bearing proof job only accepts repository-owned PR heads." >&2
+            exit 1
           fi
+          candidate_trust="repo-pr-head"
 
           echo "baseline_revision=${baseline_revision}" >> "$GITHUB_OUTPUT"
           echo "candidate_revision=${candidate_revision}" >> "$GITHUB_OUTPUT"
