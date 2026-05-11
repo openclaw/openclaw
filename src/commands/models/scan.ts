@@ -331,7 +331,7 @@ export async function modelsScanCommand(
     throw new Error("No image-capable models selected for image model.");
   }
 
-  const _updated = await updateConfig((cfg) => {
+  await updateConfig((cfg) => {
     const nextModels = { ...cfg.agents?.defaults?.models };
     for (const entry of selected) {
       if (!nextModels[entry]) {

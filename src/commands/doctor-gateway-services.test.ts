@@ -554,8 +554,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -571,8 +571,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -630,8 +630,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: {} });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).not.toHaveBeenCalled();
@@ -661,10 +661,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "custom-gateway.service",
       "system",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("skipped command/entrypoint rewrites"),
-      "Gateway service config",
-    );
+    expectNoteContaining("skipped command/entrypoint rewrites", "Gateway service config");
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
@@ -728,14 +725,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
     await runRepair({ gateway: { port: 18888 } });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service port does not match current gateway config."),
+    expectNoteContaining(
+      "Gateway service port does not match current gateway config.",
       "Gateway service config",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("leaving supervisor metadata unchanged"),
-      "Gateway service config",
-    );
+    expectNoteContaining("leaving supervisor metadata unchanged", "Gateway service config");
     expect(mocks.install).not.toHaveBeenCalled();
     expect(mocks.stage).not.toHaveBeenCalled();
   });
@@ -752,14 +746,11 @@ describe("maybeRepairGatewayServiceConfig", () => {
       updateInProgress: false,
     });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("openclaw gateway install --force"),
-      "Gateway service config",
-    );
+    expectNoteContaining("openclaw gateway install --force", "Gateway service config");
     expect(mocks.stage).not.toHaveBeenCalled();
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -776,8 +767,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       updateInProgress: true,
     });
 
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway service entrypoint does not match the current install."),
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
     expect(mocks.stage).toHaveBeenCalledTimes(1);
@@ -939,8 +930,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
       await runRepair({ gateway: {} });
 
       expect(mocks.auditGatewayServiceConfig).toHaveBeenCalledTimes(1);
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("Gateway service entrypoint does not match the current install."),
+      expectNoteContaining(
+        "Gateway service entrypoint does not match the current install.",
         "Gateway service config",
       );
       expect(mocks.note).toHaveBeenCalledWith(
@@ -974,10 +965,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
 
         await runRepair({ gateway: {} });
 
-        expect(mocks.note).toHaveBeenCalledWith(
-          expect.stringContaining("resolves to a source checkout"),
-          "Gateway service config",
-        );
+        expectNoteContaining("resolves to a source checkout", "Gateway service config");
         expect(mocks.install).not.toHaveBeenCalled();
       } finally {
         await fs.rm(root, { recursive: true, force: true });
@@ -1019,10 +1007,7 @@ describe("maybeScanExtraGatewayServices", () => {
       "custom-gateway.service",
       "user",
     );
-    expect(mocks.note).not.toHaveBeenCalledWith(
-      expect.stringContaining("custom-gateway.service"),
-      "Other gateway-like services detected",
-    );
+    expectNoNoteContaining("custom-gateway.service", "Other gateway-like services detected");
   });
 
   it("reports active non-legacy Linux gateway-like services", async () => {
@@ -1045,10 +1030,7 @@ describe("maybeScanExtraGatewayServices", () => {
       "custom-gateway.service",
       "system",
     );
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("custom-gateway.service"),
-      "Other gateway-like services detected",
-    );
+    expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
   });
 
   it("removes legacy Linux user systemd services", async () => {
@@ -1096,10 +1078,7 @@ describe("maybeScanExtraGatewayServices", () => {
       env: process.env,
       stdout: process.stdout,
     });
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("clawdbot-gateway.service"),
-      "Legacy gateway removed",
-    );
+    expectNoteContaining("clawdbot-gateway.service", "Legacy gateway removed");
     expect(runtime.log).toHaveBeenCalledWith(
       "Legacy gateway services removed. Installing OpenClaw gateway next.",
     );
@@ -1120,10 +1099,7 @@ describe("maybeScanExtraGatewayServices", () => {
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
       await maybeScanExtraGatewayServices({ deep: false }, runtime, makeDoctorPrompts());
 
-      expect(mocks.note).toHaveBeenCalledWith(
-        expect.stringContaining("clawdbot-gateway.service"),
-        "Other gateway-like services detected",
-      );
+      expectNoteContaining("clawdbot-gateway.service", "Other gateway-like services detected");
       expect(mocks.note).toHaveBeenCalledWith(
         EXTERNAL_SERVICE_REPAIR_NOTE,
         "Legacy gateway cleanup skipped",

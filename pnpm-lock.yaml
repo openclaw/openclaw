@@ -3360,7 +3360,7 @@ packages:
     os: [win32]
 
   '@openclaw/fs-safe@https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c':
-    resolution: {tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/openclaw/fs-safe/tar.gz/c7ccb99d3058f2acf2ad2758ad2470c7e113a53c}
     version: 0.2.0
     engines: {node: '>=20.11'}
 
@@ -4848,7 +4848,7 @@ packages:
     resolution: {integrity: sha512-58rWEqDGg+CKCyEeKm2KoxxSwTWtHh/NLTW9ObR4K8CGF6VwuuGudEI1CtniS/oSRmL1nJq/eh8MKARiluw4DQ==}
 
   '@whiskeysockets/libsignal-node@https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67':
-    resolution: {tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
+    resolution: {gitHosted: true, tarball: https://codeload.github.com/whiskeysockets/libsignal-node/tar.gz/1c30d7d7e76a3b0aa120b04dc6a26f5a12dccf67}
     version: 2.0.1
 
   '@zed-industries/codex-acp-darwin-arm64@0.14.0':

@@ -1,3 +1,4 @@
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { typedCases } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type Guild } from "./internal/discord.js";
@@ -201,7 +202,7 @@ describe("DiscordMessageListener", () => {
       {} as unknown as import("./internal/discord.js").Client,
     );
     await flushAsyncWork();
-    expect(logger.error).toHaveBeenCalledWith(expect.stringContaining("discord handler failed"));
+    expect(logger.error).toHaveBeenCalledWith(danger("discord handler failed: Error: boom"));
   });
 
   it("does not apply its own slow-listener logging", async () => {

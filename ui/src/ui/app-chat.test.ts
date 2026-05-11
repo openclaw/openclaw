@@ -287,8 +287,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -331,8 +331,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -383,8 +383,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const fetchMock = vi.fn((input: string | URL | Request) => {
@@ -489,8 +489,8 @@ describe("refreshChatAvatar", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = createObjectURL;
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const mainRequest = createDeferred<{ avatarUrl?: string }>();
@@ -1388,8 +1388,8 @@ describe("handleSendChat", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = vi.fn(() => "blob:brief");
-        static revokeObjectURL = vi.fn();
+        static override createObjectURL = vi.fn(() => "blob:brief");
+        static override revokeObjectURL = vi.fn();
       },
     );
     const request = vi.fn(async (method: string) => {
@@ -1427,8 +1427,8 @@ describe("handleSendChat", () => {
     vi.stubGlobal(
       "URL",
       class extends URL {
-        static createObjectURL = vi.fn(() => "blob:queued");
-        static revokeObjectURL = revokeObjectURL;
+        static override createObjectURL = vi.fn(() => "blob:queued");
+        static override revokeObjectURL = revokeObjectURL;
       },
     );
     const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });

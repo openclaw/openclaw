@@ -240,7 +240,7 @@ function getActionEnum(properties: Record<string, unknown>) {
 function expectStringSchema(
   schema: unknown,
   expected?: {
-    descriptionIncludes?: string;
+    description?: string;
   },
 ) {
   expect(schema).toBeTruthy();
@@ -249,8 +249,8 @@ function expectStringSchema(
   }
   const record = schema as Record<string, unknown>;
   expect(record.type).toBe("string");
-  if (expected?.descriptionIncludes) {
-    expect(record.description).toEqual(expect.stringContaining(expected.descriptionIncludes));
+  if (expected?.description) {
+    expect(record.description).toBe(expected.description);
   }
 }
 
@@ -1065,7 +1065,10 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("read");
-    expectStringSchema(properties.messageId, { descriptionIncludes: "read" });
+    expectStringSchema(properties.messageId, {
+      description:
+        "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+    });
   });
 });
 

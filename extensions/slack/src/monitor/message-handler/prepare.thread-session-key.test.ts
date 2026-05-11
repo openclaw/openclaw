@@ -115,15 +115,25 @@ describe("thread-level session keys", () => {
       isRoomish: true,
     });
 
-    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        conversation: {
-          channel: "slack",
-          accountId: "default",
-          conversationId: "C123",
-        },
-      }),
-    );
+    expect(resolveConfiguredBindingRouteMock).toHaveBeenCalledTimes(1);
+    const [bindingRouteRequest] = resolveConfiguredBindingRouteMock.mock.calls[0];
+    expect(bindingRouteRequest).toEqual({
+      cfg: ctx.cfg,
+      route: {
+        agentId: "main",
+        channel: "slack",
+        accountId: "default",
+        sessionKey: "agent:main:slack:channel:c123",
+        mainSessionKey: "agent:main:main",
+        lastRoutePolicy: "session",
+        matchedBy: "default",
+      },
+      conversation: {
+        channel: "slack",
+        accountId: "default",
+        conversationId: "C123",
+      },
+    });
     expect(routing.route.agentId).toBe("codex");
     expect(routing.sessionKey).toBe(targetSessionKey);
     expect(routing.configuredBindingSessionKey).toBe(targetSessionKey);

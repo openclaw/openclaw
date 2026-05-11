@@ -78,6 +78,29 @@ async function startWatchdogScenario(params: {
   return { scripted, sleep, spies, ...started };
 }
 
+function expectErrorContaining(errorFn: unknown, text: string): void {
+  const messages = ((errorFn as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
+    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  );
+  expect(messages.some((message) => message.includes(text))).toBe(true);
+}
+
+function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
+  const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
+  expect(calls?.[callIndex]).toBeDefined();
+  return calls?.[callIndex]?.[argIndex];
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    expect((error as { code?: unknown }).code).toBe("ENOENT");
+    return;
+  }
+  throw new Error(`Expected path to be missing: ${targetPath}`);
+}
+
 describe("web auto-reply connection", () => {
   installWebAutoReplyUnitTestHooks();
 
@@ -140,7 +163,7 @@ describe("web auto-reply connection", () => {
         await run;
       }
 
-      expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(scenario.expectedError));
+      expectErrorContaining(runtime.error, scenario.expectedError);
     }
   });
 
@@ -186,9 +209,9 @@ describe("web auto-reply connection", () => {
     expect(completedQuickly).toBe(true);
     expect(scripted.getListenerCount()).toBe(1);
     expect(sleep).not.toHaveBeenCalled();
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("status 440"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("session conflict"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+    expectErrorContaining(runtime.error, "status 440");
+    expectErrorContaining(runtime.error, "session conflict");
+    expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
   it.each([
@@ -260,20 +283,14 @@ describe("web auto-reply connection", () => {
       expect(scripted.getListenerCount()).toBe(1);
       expect(sleep).not.toHaveBeenCalled();
       expect(getActiveWebListener(accountId)).toBeNull();
-      await expect(fs.stat(authDir)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(statuses).toContainEqual(
-        expect.objectContaining({
-          connected: false,
-          healthState,
-        }),
-      );
-      expect(statuses.at(-1)).toEqual(
-        expect.objectContaining({
-          running: false,
-          connected: false,
-          healthState,
-        }),
-      );
+      await expectPathMissing(authDir);
+      expect(
+        statuses.some((entry) => entry.connected === false && entry.healthState === healthState),
+      ).toBe(true);
+      const finalStatus = statuses.at(-1);
+      expect(finalStatus?.running).toBe(false);
+      expect(finalStatus?.connected).toBe(false);
+      expect(finalStatus?.healthState).toBe(healthState);
     },
   );
 
@@ -304,8 +321,9 @@ describe("web auto-reply connection", () => {
     controller.abort();
     await run;
 
-    expect(sleep).toHaveBeenCalledWith(expect.any(Number), expect.any(AbortSignal));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("inbox attach"));
+    expect(typeof mockCallArg(sleep, 0, 0)).toBe("number");
+    expect(mockCallArg(sleep, 0, 1)).toBeInstanceOf(AbortSignal);
+    expectErrorContaining(runtime.error, "inbox attach");
   });
 
   it("stops retrying inbox attach when auth stays unstable past max attempts", async () => {
@@ -326,8 +344,8 @@ describe("web auto-reply connection", () => {
 
     expect(listenerFactory).toHaveBeenCalledTimes(2);
     expect(sleep).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Retry 1/2"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("Stopping web monitoring"));
+    expectErrorContaining(runtime.error, "Retry 1/2");
+    expectErrorContaining(runtime.error, "Stopping web monitoring");
   });
 
   it("forces reconnect when watchdog closes without onClose", async () => {

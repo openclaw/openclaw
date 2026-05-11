@@ -626,7 +626,12 @@ describe("bundled plugin postinstall", () => {
     await expectPathExists(thirdPartyNodeModules);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps:"),
+      `[postinstall] pruned legacy plugin runtime deps: ${[
+        oldBrandLegacyRoot,
+        defaultLegacyRoot,
+        overrideLegacyRoot,
+        systemLegacyRoot,
+      ].join(", ")}`,
     );
   });
 
@@ -663,7 +668,7 @@ describe("bundled plugin postinstall", () => {
     await expectPathMissing(legacyRuntimeRoot);
     expect(log.warn).not.toHaveBeenCalled();
     expect(log.log).toHaveBeenCalledWith(
-      expect.stringContaining("[postinstall] pruned legacy plugin runtime deps symlinks:"),
+      `[postinstall] pruned legacy plugin runtime deps symlinks: ${slackLink}`,
     );
   });
 
@@ -682,10 +687,14 @@ describe("bundled plugin postinstall", () => {
       }),
     ).toStrictEqual([]);
 
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
-      ),
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenNthCalledWith(
+      1,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.clawdbot/plugin-runtime-deps: Error: locked",
+    );
+    expect(warn).toHaveBeenNthCalledWith(
+      2,
+      "[postinstall] could not prune legacy plugin runtime deps /home/alice/.openclaw/plugin-runtime-deps: Error: locked",
     );
   });
 

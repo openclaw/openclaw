@@ -60,11 +60,14 @@ describe("dreaming artifact repair", () => {
     expect(audit.sessionCorpusFileCount).toBe(1);
     expect(audit.suspiciousSessionCorpusFileCount).toBe(1);
     expect(audit.suspiciousSessionCorpusLineCount).toBe(1);
-    expect(audit.issues).toEqual([
-      expect.objectContaining({
+    expect(audit.issues).toStrictEqual([
+      {
+        severity: "warn",
         code: "dreaming-session-corpus-self-ingested",
+        message:
+          "Dreaming session corpus appears to contain self-ingested narrative content (1 suspicious line).",
         fixable: true,
-      }),
+      },
     ]);
   });
 
