@@ -127,13 +127,16 @@ Approve and sign? Reply yes to proceed.
 
 The MCP returns structured errors; surface them faithfully:
 
-| MCP error      | What to say                                                                                                    |
-| -------------- | -------------------------------------------------------------------------------------------------------------- |
-| `missing_env`  | "This agent's runtime credentials aren't set up. Redeploy the agent from the dashboard so they get populated." |
-| Status 400     | Show the error message verbatim — it's user-readable.                                                          |
-| Status 401/403 | "Agent's runtime credentials are stale. Redeploy the agent and try again."                                     |
-| Status 500     | "Rain temporarily unavailable. Try again in a moment."                                                         |
-| Status 502     | Same as 500.                                                                                                   |
+| MCP error / code            | What to say                                                                                                    |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `missing_env`               | "This agent's runtime credentials aren't set up. Redeploy the agent from the dashboard so they get populated." |
+| Status 400 / `bad_input`    | Show the `error` message verbatim — it's user-readable.                                                        |
+| Status 401/403              | "Agent's runtime credentials are stale. Redeploy the agent and try again."                                     |
+| 409 `market_not_tradable`   | "This market isn't in a tradable state right now. Check `details.status` with `rain_get_market`."              |
+| 409 `expired`               | "This market has passed its end time and is no longer tradable."                                               |
+| 409 `insufficient_position` | "You don't have enough shares to sell that amount."                                                            |
+| Status 500                  | "Rain temporarily unavailable. Try again in a moment."                                                         |
+| Status 502                  | Same as 500.                                                                                                   |
 
 ## Notes
 
