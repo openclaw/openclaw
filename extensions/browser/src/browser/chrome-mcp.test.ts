@@ -732,4 +732,32 @@ describe("chrome MCP page parsing", () => {
     await expectation;
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
+
+  it("honors abort signals while waiting for ephemeral availability probes", async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () =>
+      ({
+        client: {
+          callTool: vi.fn(),
+          listTools: vi.fn(),
+          close: closeMock,
+          connect: vi.fn(),
+        },
+        transport: {
+          pid: 123,
+        },
+        ready: new Promise<void>(() => {}),
+      }) as unknown as ChromeMcpSession;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const promise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      ephemeral: true,
+      signal: ctrl.signal,
+    });
+    ctrl.abort(new Error("status budget exhausted"));
+
+    await expect(promise).rejects.toThrow(/status budget exhausted/);
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
 });

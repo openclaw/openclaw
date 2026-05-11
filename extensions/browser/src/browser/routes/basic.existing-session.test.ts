@@ -11,7 +11,10 @@ const { registerBrowserBasicRoutes } = await import("./basic.js");
 function createExistingSessionProfileState(params?: {
   isHttpReachable?: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable?: (timeoutMs?: number) => Promise<boolean>;
-  isReachable?: (timeoutMs?: number, options?: { ephemeral?: boolean }) => Promise<boolean>;
+  isReachable?: (
+    timeoutMs?: number,
+    options?: { ephemeral?: boolean; signal?: AbortSignal },
+  ) => Promise<boolean>;
 }) {
   return {
     resolved: {
@@ -326,7 +329,10 @@ describe("basic browser routes", () => {
     expect(response.statusCode).toBe(200);
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
-    expect(isReachable).toHaveBeenCalledWith(5_000, { ephemeral: true });
+    expect(isReachable).toHaveBeenCalledWith(
+      expect.any(Number),
+      expect.objectContaining({ ephemeral: true, signal: expect.any(AbortSignal) }),
+    );
     expect(isHttpReachable).not.toHaveBeenCalled();
     const body = responseBodyRecord(response);
     expect(body.cdpHttp).toBe(true);
@@ -335,9 +341,37 @@ describe("basic browser routes", () => {
     expect(body.running).toBe(true);
   });
 
+  it("keeps Chrome MCP page-readiness inside the status budget", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const isReachable = vi.fn(async () => true);
+    try {
+      const response = await callBasicRouteWithState({
+        state: createExistingSessionProfileState({
+          isTransportAvailable: async () => {
+            vi.setSystemTime(4_000);
+            return true;
+          },
+          isReachable,
+        }),
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(isReachable).toHaveBeenCalledWith(
+        4_000,
+        expect.objectContaining({ ephemeral: true, signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("page-readiness probe runs in ephemeral mode so status does not seed a cached session", async () => {
     const isReachable = vi.fn<
-      (timeoutMs?: number, options?: { ephemeral?: boolean }) => Promise<boolean>
+      (
+        timeoutMs?: number,
+        options?: { ephemeral?: boolean; signal?: AbortSignal },
+      ) => Promise<boolean>
     >(async () => true);
 
     await callBasicRouteWithState({
@@ -348,7 +382,9 @@ describe("basic browser routes", () => {
     });
 
     expect(isReachable).toHaveBeenCalledTimes(1);
-    expect(isReachable.mock.calls[0]?.[1]).toEqual({ ephemeral: true });
+    expect(isReachable.mock.calls[0]?.[1]).toEqual(
+      expect.objectContaining({ ephemeral: true, signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("skips the page-reachability probe when transport is unavailable", async () => {
