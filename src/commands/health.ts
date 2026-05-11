@@ -70,6 +70,9 @@ const debugHealth = (...args: unknown[]) => {
   }
 };
 
+const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
+  "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+
 const redactIMessageProbeErrorMessage = (message: string): string => {
   const trimmed = message.trim();
   if (!trimmed) {
@@ -94,10 +97,14 @@ const buildNonSensitiveProbeFailure = (
   }
 
   const error = redactIMessageProbeErrorMessage(record.error);
-  if (!error.includes("~/Library/Messages/chat.db")) {
+  if (
+    !/\bimsg\b/i.test(error) ||
+    !error.includes("~/Library/Messages/chat.db") ||
+    !/\bFull Disk Access\b/i.test(error)
+  ) {
     return undefined;
   }
-  return { ok: false, error };
+  return { ok: false, error: PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR };
 };
 
 const formatDurationParts = (ms: number): string => {
