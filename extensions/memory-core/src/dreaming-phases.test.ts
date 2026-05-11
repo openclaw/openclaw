@@ -3041,7 +3041,7 @@ describe("dedupeEntries — CJK-aware snippet similarity (#80613)", () => {
 
     const deduped = __testing.dedupeEntries([a, b], 0.7);
     expect(deduped).toHaveLength(2);
-    expect(deduped.map((entry) => entry.key).sort()).toStrictEqual(["mixed-a", "mixed-b"]);
+    expect(deduped.map((entry) => entry.key).toSorted()).toStrictEqual(["mixed-a", "mixed-b"]);
   });
 
   it("preserves the existing ASCII paraphrase dedupe behavior", () => {
