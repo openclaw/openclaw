@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
@@ -248,7 +249,7 @@ function makeSyntheticToolResultEntry(params: {
   });
   return {
     type: "message",
-    id: `repair-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    id: `repair-${randomUUID()}`,
     parentId: typeof params.parent.id === "string" ? params.parent.id : undefined,
     timestamp: new Date().toISOString(),
     message: message as unknown as SessionMessageEntry["message"],
