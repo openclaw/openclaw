@@ -111,7 +111,6 @@ import {
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
 import {
   formatCodexUsageLimitErrorMessage,
-  resolveCodexUsageLimitResetAtMs,
   shouldRefreshCodexRateLimitsForUsageLimitMessage,
 } from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
@@ -145,7 +144,6 @@ const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
-const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
@@ -1470,7 +1468,7 @@ export async function runCodexAppServerAttempt(
       timeoutMs: appServer.requestTimeoutMs,
       signal: runAbortController.signal,
     });
-    const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(error);
+    const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_start_failed", error: turnStartErrorMessage },
@@ -2376,12 +2374,6 @@ type CodexUsageLimitErrorSource = {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
   rateLimits?: JsonValue;
-  rateLimitsTrustedForProfile?: boolean;
-};
-
-type CodexUsageLimitErrorResult = {
-  message: string;
-  rateLimitsForProfile?: JsonValue;
 };
 
 async function formatCodexTurnStartUsageLimitError(params: {
@@ -2390,8 +2382,8 @@ async function formatCodexTurnStartUsageLimitError(params: {
   pendingNotifications: CodexServerNotification[];
   timeoutMs?: number;
   signal?: AbortSignal;
-}): Promise<CodexUsageLimitErrorResult | undefined> {
-  return refreshCodexUsageLimitError({
+}): Promise<string | undefined> {
+  return refreshCodexUsageLimitErrorMessage({
     client: params.client,
     source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
     timeoutMs: params.timeoutMs,
@@ -2405,32 +2397,9 @@ async function refreshCodexUsageLimitErrorMessage(params: {
   timeoutMs?: number;
   signal?: AbortSignal;
 }): Promise<string | undefined> {
-  return (
-    await refreshCodexUsageLimitError({
-      client: params.client,
-      source: params.source,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    })
-  )?.message;
-}
-
-async function refreshCodexUsageLimitError(params: {
-  client: CodexAppServerClient;
-  source: CodexUsageLimitErrorSource;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<CodexUsageLimitErrorResult | undefined> {
   const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
   if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
+    return initialMessage ?? undefined;
   }
   const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
     client: params.client,
@@ -2438,22 +2407,14 @@ async function refreshCodexUsageLimitError(params: {
     signal: params.signal,
   });
   if (!rateLimits) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
+    return initialMessage;
   }
   const refreshedMessage = formatCodexUsageLimitErrorMessage({
     message: params.source.message,
     codexErrorInfo: params.source.codexErrorInfo,
     rateLimits,
   });
-  const message = refreshedMessage ?? initialMessage;
-  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
+  return refreshedMessage ?? initialMessage;
 }
 
 async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
@@ -2493,14 +2454,13 @@ function readCodexTurnStartUsageLimitErrorSource(
   const notificationError = readLatestCodexErrorNotification(pendingNotifications);
   const notificationRateLimits = readLatestRateLimitNotificationPayload(pendingNotifications);
   const errorPayload = readCodexErrorPayload(error);
-  const rateLimits =
-    notificationRateLimits ?? errorPayload.rateLimits ?? readRecentCodexRateLimits();
   return {
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
-    rateLimits,
-    rateLimitsTrustedForProfile:
-      notificationRateLimits !== undefined || errorPayload.rateLimits !== undefined,
+    rateLimits:
+      readLatestRateLimitNotificationPayload(pendingNotifications) ??
+      errorPayload.rateLimits ??
+      readRecentCodexRateLimits(),
   };
 }
 

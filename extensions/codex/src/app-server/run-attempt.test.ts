@@ -2908,6 +2908,36 @@ describe("runCodexAppServerAttempt", () => {
     expect(result.promptError).not.toContain("Codex did not return a reset time");
   });
 
+  it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      if (method === "account/rateLimits/read") {
+        return rateLimitsUpdated(resetsAt).params;
+      }
+      return undefined;
+    });
+
+    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
+      (error: unknown) => error,
+    );
+    await harness.waitForMethod("account/rateLimits/read");
+
+    const error = await runError;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "You've reached your Codex subscription usage limit.",
+    );
+    expect((error as Error).message).toContain("Next reset in");
+    expect((error as Error).message).not.toContain("Codex did not return a reset time");
+  });
+
   it("cleans up native hook relay state when the Codex turn aborts", async () => {
     const sessionId = "session";
     const workspaceDir = path.join(tempDir, "workspace");
