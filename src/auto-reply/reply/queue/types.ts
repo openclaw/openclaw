@@ -101,6 +101,9 @@ export type FollowupRun = {
     skipProviderRuntimeHints?: boolean;
     silentExpected?: boolean;
     allowEmptyAssistantReplyAsSilent?: boolean;
+    suppressNextUserMessagePersistence?: boolean;
+    suppressNextUserMessagePersistenceSessionId?: string;
+    suppressNextUserMessagePersistenceEntryId?: string;
   };
 };
 

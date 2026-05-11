@@ -4,6 +4,10 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import { clearConfigCache } from "../config/config.js";
+import { clearSessionStoreCacheForTest, type SessionEntry } from "../config/sessions.js";
+import { writeSessionStoreCache } from "../config/sessions/store-cache.js";
+import * as hookRunnerGlobal from "../plugins/hook-runner-global.js";
+import * as transcriptEvents from "../sessions/transcript-events.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { __setMaxChatHistoryMessagesBytesForTest } from "./server-constants.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
@@ -110,6 +114,143 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 
 async function writeMainSessionTranscript(sessionDir: string, lines: string[]) {
   await fs.writeFile(path.join(sessionDir, "sess-main.jsonl"), `${lines.join("\n")}\n`, "utf-8");
+}
+
+async function readTranscriptRecords(
+  transcriptPath: string,
+): Promise<Array<Record<string, unknown>>> {
+  const raw = await fs.readFile(transcriptPath, "utf-8").catch((err: unknown) => {
+    if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
+      return "";
+    }
+    throw err;
+  });
+  return raw
+    .split(/\r?\n/)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
+async function readSessionTranscriptRecords(
+  sessionDir: string,
+  sessionId: string,
+): Promise<Array<Record<string, unknown>>> {
+  return readTranscriptRecords(path.join(sessionDir, `${sessionId}.jsonl`));
+}
+
+type ChatSendResponse = { id: string; ok: boolean; payload?: unknown; error?: unknown };
+
+type ChatSendDispatchParams = {
+  dispatcher: {
+    sendFinalReply: (payload: { text: string }) => boolean;
+    markComplete: () => void;
+    waitForIdle: () => Promise<void>;
+  };
+  replyOptions?: Pick<
+    GetReplyOptions,
+    | "onAgentRunStart"
+    | "suppressNextUserMessagePersistence"
+    | "suppressNextUserMessagePersistenceSessionId"
+    | "suppressNextUserMessagePersistenceEntryId"
+  >;
+};
+
+function createChatSendContext(
+  params: {
+    activeRuns?: Map<string, { sessionKey: string; sessionId?: string }>;
+  } = {},
+): GatewayRequestContext {
+  return {
+    loadGatewayModelCatalog: vi.fn<GatewayRequestContext["loadGatewayModelCatalog"]>(),
+    logGateway: {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+    },
+    agentRunSeq: new Map<string, number>(),
+    chatAbortControllers: params.activeRuns ?? new Map(),
+    chatAbortedRuns: new Map(),
+    chatRunBuffers: new Map(),
+    chatDeltaSentAt: new Map(),
+    chatDeltaLastBroadcastLen: new Map(),
+    addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
+    broadcast: vi.fn(),
+    nodeSendToSession: vi.fn(),
+    registerToolEventRecipient: vi.fn(),
+    dedupe: new Map(),
+  } as unknown as GatewayRequestContext;
+}
+
+async function writeMainWebchatSession(entry: Partial<SessionEntry> = {}) {
+  await writeSessionStore({
+    entries: {
+      main: {
+        sessionId: "sess-main",
+        updatedAt: Date.now(),
+        ...entry,
+      },
+    },
+  });
+}
+
+async function callWebchatChatSend(params: {
+  context: GatewayRequestContext;
+  responses: ChatSendResponse[];
+  requestId: string;
+  message: string;
+  idempotencyKey: string;
+}) {
+  const requestParams = {
+    sessionKey: "main",
+    message: params.message,
+    idempotencyKey: params.idempotencyKey,
+  };
+  const { chatHandlers } = await import("./server-methods/chat.js");
+  await chatHandlers["chat.send"]({
+    req: {
+      type: "req",
+      id: params.requestId,
+      method: "chat.send",
+      params: requestParams,
+    },
+    params: requestParams,
+    client: {
+      connect: {
+        client: {
+          id: GATEWAY_CLIENT_NAMES.CONTROL_UI,
+          mode: GATEWAY_CLIENT_MODES.WEBCHAT,
+        },
+        scopes: ["operator.write"],
+      },
+    } as never,
+    isWebchatConnect: () => true,
+    respond: ((ok, payload, error) => {
+      params.responses.push({ id: params.requestId, ok, payload, error });
+    }) as RespondFn,
+    context: params.context,
+  });
+}
+
+function expectChatSendStarted(params: {
+  responses: ChatSendResponse[];
+  requestId: string;
+  runId: string;
+}) {
+  expect(params.responses).toContainEqual({
+    id: params.requestId,
+    ok: true,
+    payload: { runId: params.runId, status: "started" },
+    error: undefined,
+  });
+}
+
+function findUserTranscriptEntries(records: Array<Record<string, unknown>>, content?: string) {
+  return records.filter((record) => {
+    const message = record.message as { role?: unknown; content?: unknown } | undefined;
+    return message?.role === "user" && (content === undefined || message.content === content);
+  });
 }
 
 async function fetchHistoryMessages(
@@ -423,7 +564,9 @@ describe("gateway server chat", () => {
         payload: { runId: "idem-active-a", status: "in_flight" },
         error: undefined,
       });
-      expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
       expect(context.addChatRun).toHaveBeenCalledTimes(1);
 
       dispatchRelease.resolve();
@@ -536,6 +679,652 @@ describe("gateway server chat", () => {
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(2);
       expect(context.addChatRun).toHaveBeenCalledTimes(2);
     } finally {
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send persists WebChat user turns before dispatch enters the agent lane", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        dispatchParams?.replyOptions?.onAgentRunStart?.("idem-eager-user");
+        await dispatchRelease.promise;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-eager-user",
+        message: "show quickly",
+        idempotencyKey: "idem-eager-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-eager-user",
+        runId: "idem-eager-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBe(true);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId).toBe(
+        "sess-main",
+      );
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceEntryId).toEqual(
+        expect.any(String),
+      );
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          messageId: expect.any(String),
+          message: expect.objectContaining({
+            role: "user",
+            content: "show quickly",
+          }),
+        }),
+      );
+
+      const records = await readSessionTranscriptRecords(sessionDir, "sess-main");
+      const durableUserEntries = findUserTranscriptEntries(records);
+      expect(durableUserEntries).toHaveLength(1);
+      expect(durableUserEntries[0]).toEqual(
+        expect.objectContaining({
+          type: "message",
+          id: expect.any(String),
+          parentId: null,
+          message: expect.objectContaining({
+            role: "user",
+            content: "show quickly",
+          }),
+        }),
+      );
+
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send skips WebChat transcript persistence for reset commands", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        dispatchParams.dispatcher.sendFinalReply({ text: "reset handled" });
+        dispatchParams.dispatcher.markComplete();
+        await dispatchParams.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-reset-user",
+        message: "/new clean branch",
+        idempotencyKey: "idem-reset-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-reset-user",
+        runId: "idem-reset-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId,
+      ).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceEntryId,
+      ).toBeUndefined();
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(await readSessionTranscriptRecords(sessionDir, "sess-main")).toHaveLength(0);
+
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send applies transcript redaction before eager WebChat persistence", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const secret = "sk-1234567890abcdef";
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        (params as ChatSendDispatchParams).replyOptions?.onAgentRunStart?.("idem-redacted-user");
+        await dispatchRelease.promise;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-redacted-user",
+        message: `please inspect OPENAI_API_KEY=${secret}`,
+        idempotencyKey: "idem-redacted-user",
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      const records = await readSessionTranscriptRecords(sessionDir, "sess-main");
+      const rawTranscript = JSON.stringify(records);
+      expect(rawTranscript).not.toContain(secret);
+      expect(rawTranscript).toContain("OPENAI_API_KEY=");
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: expect.not.stringContaining(secret),
+          }),
+        }),
+      );
+
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send skips eager WebChat persistence when message-write hooks are registered", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const hookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "before_message_write",
+    } as never);
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        dispatchParams?.replyOptions?.onAgentRunStart?.("idem-hooked-user");
+        await dispatchRelease.promise;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-hooked-user",
+        message: "do not bypass hooks",
+        idempotencyKey: "idem-hooked-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-hooked-user",
+        runId: "idem-hooked-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId,
+      ).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceEntryId,
+      ).toBeUndefined();
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(await readSessionTranscriptRecords(sessionDir, "sess-main")).toHaveLength(0);
+
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      hookRunnerSpy.mockRestore();
+      emitSpy.mockRestore();
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send retries fallback persistence when eager WebChat persistence has no session yet", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        await writeMainWebchatSession();
+        dispatchParams.dispatcher.sendFinalReply({ text: "first non-agent reply" });
+        dispatchParams.dispatcher.markComplete();
+        await dispatchParams.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-first-fallback-user",
+        message: "first fallback user",
+        idempotencyKey: "idem-first-fallback-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-first-fallback-user",
+        runId: "idem-first-fallback-user",
+      });
+      await vi.waitFor(
+        () => {
+          expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+        },
+        { timeout: 1000, interval: 5 },
+      );
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBeUndefined();
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          message: expect.objectContaining({
+            role: "user",
+            content: "first fallback user",
+          }),
+        }),
+      );
+      const emitCall = emitSpy.mock.calls.find((call) => {
+        const payload = call[0] as { message?: { role?: unknown; content?: unknown } };
+        return (
+          payload.message?.role === "user" && payload.message.content === "first fallback user"
+        );
+      });
+      const sessionFile = (emitCall?.[0] as { sessionFile?: string } | undefined)?.sessionFile;
+      expect(sessionFile).toEqual(expect.any(String));
+      const records = await readTranscriptRecords(sessionFile as string);
+      const userEntries = findUserTranscriptEntries(records, "first fallback user");
+      expect(userEntries).toHaveLength(1);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send applies message-write hooks when fallback persistence records a non-agent WebChat turn", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    const runBeforeMessageWrite = vi.fn(
+      (event: { message: { role?: string; content?: unknown } }) => ({
+        message: {
+          ...event.message,
+          content: "hook transformed fallback user",
+        },
+      }),
+    );
+    const hookRunnerSpy = vi.spyOn(hookRunnerGlobal, "getGlobalHookRunner").mockReturnValue({
+      hasHooks: (hookName: string) => hookName === "before_message_write",
+      runBeforeMessageWrite,
+    } as never);
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        dispatchParams.dispatcher.sendFinalReply({ text: "non-agent hook reply" });
+        dispatchParams.dispatcher.markComplete();
+        await dispatchParams.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: { tool: 0, block: 0, final: 1 },
+        };
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-hook-fallback-user",
+        message: "fallback hook original",
+        idempotencyKey: "idem-hook-fallback-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-hook-fallback-user",
+        runId: "idem-hook-fallback-user",
+      });
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBeUndefined();
+      expect(runBeforeMessageWrite).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: expect.objectContaining({
+            role: "user",
+            content: "fallback hook original",
+          }),
+        }),
+        expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+        }),
+      );
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          message: expect.objectContaining({
+            role: "user",
+            content: "hook transformed fallback user",
+          }),
+        }),
+      );
+      const records = await readSessionTranscriptRecords(sessionDir, "sess-main");
+      const userEntries = findUserTranscriptEntries(records);
+      expect(userEntries).toHaveLength(1);
+      expect((userEntries[0]?.message as { content?: unknown } | undefined)?.content).toBe(
+        "hook transformed fallback user",
+      );
+      expect(JSON.stringify(records)).not.toContain("fallback hook original");
+    } finally {
+      hookRunnerSpy.mockRestore();
+      emitSpy.mockRestore();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send defers eager WebChat persistence while the same session has an active run", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const dispatchRelease = createDeferred<void>();
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeMainWebchatSession();
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext({
+        activeRuns: new Map([
+          [
+            "active-existing",
+            {
+              sessionKey: "main",
+              sessionId: "sess-main",
+            },
+          ],
+        ]),
+      });
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+        dispatchParams?.replyOptions?.onAgentRunStart?.("idem-queued-user");
+        await dispatchRelease.promise;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-queued-user",
+        message: "wait behind active run",
+        idempotencyKey: "idem-queued-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-queued-user",
+        runId: "idem-queued-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId,
+      ).toBeUndefined();
+      expect(
+        dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceEntryId,
+      ).toBeUndefined();
+      expect(emitSpy).not.toHaveBeenCalled();
+      expect(await readSessionTranscriptRecords(sessionDir, "sess-main")).toHaveLength(0);
+
+      dispatchRelease.resolve();
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchRelease.resolve();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send persists WebChat user turns into the active session after daily rollover", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const emitSpy = vi.spyOn(transcriptEvents, "emitSessionTranscriptUpdate");
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      const staleAt = Date.now() - 72 * 60 * 60 * 1000;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            sessionStartedAt: staleAt,
+            lastInteractionAt: staleAt,
+            updatedAt: staleAt,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          type: "session",
+          id: "sess-main",
+          timestamp: new Date(staleAt).toISOString(),
+        }),
+      ]);
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-rollover-eager-user",
+        message: "visible after rollover",
+        idempotencyKey: "idem-rollover-eager-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-rollover-eager-user",
+        runId: "idem-rollover-eager-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+
+      const store = JSON.parse(
+        await fs.readFile(path.join(sessionDir, "sessions.json"), "utf-8"),
+      ) as Record<string, { sessionFile?: string; sessionId?: string }>;
+      const activeEntry = store["agent:main:main"];
+      const activeSessionId = activeEntry?.sessionId;
+      expect(activeSessionId).toEqual(expect.any(String));
+      expect(activeSessionId).not.toBe("sess-main");
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBe(true);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId).toBe(
+        activeSessionId,
+      );
+      expect(emitSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:main:main",
+          message: expect.objectContaining({
+            role: "user",
+            content: "visible after rollover",
+          }),
+        }),
+      );
+
+      const activeTranscriptPath =
+        activeEntry?.sessionFile ?? path.join(sessionDir, `${activeSessionId}.jsonl`);
+      const activeRecords = await readTranscriptRecords(activeTranscriptPath);
+      const activeUserEntries = findUserTranscriptEntries(activeRecords, "visible after rollover");
+      expect(activeUserEntries).toHaveLength(1);
+
+      const staleFiles = (await fs.readdir(sessionDir)).filter((name) =>
+        name.startsWith("sess-main.jsonl"),
+      );
+      for (const staleFile of staleFiles) {
+        const staleRaw = await fs.readFile(path.join(sessionDir, staleFile), "utf-8");
+        expect(staleRaw).not.toContain("visible after rollover");
+      }
+
+      await vi.waitFor(() => {
+        expect(context.removeChatRun).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+    } finally {
+      emitSpy.mockRestore();
+      dispatchInboundMessageMock.mockReset();
+      testState.sessionStorePath = undefined;
+      clearConfigCache();
+      await fs.rm(sessionDir, { recursive: true, force: true });
+    }
+  });
+
+  test("chat.send ignores stale session-store cache before eager WebChat persistence", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      const storePath = path.join(sessionDir, "sessions.json");
+      testState.sessionStorePath = storePath;
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-fresh",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+      const staleStore: Record<string, SessionEntry> = {
+        "agent:main:main": {
+          sessionId: "sess-stale",
+          updatedAt: Date.now() - 1_000,
+        },
+      };
+      const stat = await fs.stat(storePath);
+      writeSessionStoreCache({
+        storePath,
+        store: staleStore,
+        mtimeMs: stat.mtimeMs,
+        sizeBytes: stat.size,
+        serialized: JSON.stringify(staleStore),
+      });
+
+      const responses: ChatSendResponse[] = [];
+      const context = createChatSendContext();
+      let dispatchParams: ChatSendDispatchParams | undefined;
+      dispatchInboundMessageMock.mockImplementation(async (params: unknown) => {
+        dispatchParams = params as ChatSendDispatchParams;
+      });
+
+      await callWebchatChatSend({
+        context,
+        responses,
+        requestId: "send-cache-race-eager-user",
+        message: "fresh cache target",
+        idempotencyKey: "idem-cache-race-eager-user",
+      });
+
+      expectChatSendStarted({
+        responses,
+        requestId: "send-cache-race-eager-user",
+        runId: "idem-cache-race-eager-user",
+      });
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(1);
+      }, FAST_WAIT_OPTS);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistence).toBe(true);
+      expect(dispatchParams?.replyOptions?.suppressNextUserMessagePersistenceSessionId).toBe(
+        "sess-fresh",
+      );
+
+      const freshRecords = await readSessionTranscriptRecords(sessionDir, "sess-fresh");
+      const freshUserEntries = findUserTranscriptEntries(freshRecords, "fresh cache target");
+      expect(freshUserEntries).toHaveLength(1);
+
+      const staleRecords = await readSessionTranscriptRecords(sessionDir, "sess-stale");
+      const staleUserEntries = findUserTranscriptEntries(staleRecords, "fresh cache target");
+      expect(staleUserEntries).toHaveLength(0);
+    } finally {
+      clearSessionStoreCacheForTest();
       dispatchInboundMessageMock.mockReset();
       testState.sessionStorePath = undefined;
       clearConfigCache();

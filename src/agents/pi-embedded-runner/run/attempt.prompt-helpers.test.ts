@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  makeAgentAssistantMessage,
+  makeAgentUserMessage,
+} from "../../test-helpers/agent-message-fixtures.js";
 
 const musicGenerationTaskStatusMocks = vi.hoisted(() => ({
   buildActiveMusicGenerationTaskPromptContextForSession: vi.fn(),
@@ -28,6 +32,8 @@ vi.mock("../../../plugins/host-hook-state.js", () => hostHookStateMocks);
 
 import {
   forgetPromptBuildDrainCacheForRun,
+  resolveTrailingUserPromptRepair,
+  resolveSuppressedCurrentUserTranscriptContext,
   resolvePromptSubmissionSkipReason,
   resolveAttemptPrependSystemContext,
   resolvePromptBuildHookResult,
@@ -141,6 +147,124 @@ describe("resolvePromptSubmissionSkipReason", () => {
         imageCount: 0,
       }),
     ).toBe("empty_prompt_history_images");
+  });
+});
+
+describe("resolveSuppressedCurrentUserTranscriptContext", () => {
+  it("removes the eagerly persisted current user turn from model history", () => {
+    const earlier = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "ready" }],
+      timestamp: 1,
+    });
+    const eagerUser = makeAgentUserMessage({ content: "ship it", timestamp: 2 });
+
+    const result = resolveSuppressedCurrentUserTranscriptContext({
+      messages: [earlier, eagerUser],
+      leafEntry: {
+        type: "message",
+        id: "entry-eager",
+        message: eagerUser,
+      },
+      suppressNextUserMessagePersistence: true,
+      suppressNextUserMessagePersistenceEntryId: "entry-eager",
+    });
+
+    expect(result.suppressed).toBe(true);
+    expect(result.messages).toEqual([earlier]);
+  });
+
+  it("keeps history unchanged when the suppression entry id does not match the active leaf", () => {
+    const eagerUser = makeAgentUserMessage({ content: "ship it", timestamp: 2 });
+
+    const result = resolveSuppressedCurrentUserTranscriptContext({
+      messages: [eagerUser],
+      leafEntry: {
+        type: "message",
+        id: "entry-other",
+        message: eagerUser,
+      },
+      suppressNextUserMessagePersistence: true,
+      suppressNextUserMessagePersistenceEntryId: "entry-eager",
+    });
+
+    expect(result.suppressed).toBe(false);
+    expect(result.messages).toEqual([eagerUser]);
+  });
+
+  it("keeps history unchanged when no eager transcript entry id is supplied", () => {
+    const eagerUser = makeAgentUserMessage({ content: "ship it", timestamp: 2 });
+
+    const result = resolveSuppressedCurrentUserTranscriptContext({
+      messages: [eagerUser],
+      leafEntry: {
+        type: "message",
+        id: "entry-eager",
+        message: eagerUser,
+      },
+      suppressNextUserMessagePersistence: true,
+    });
+
+    expect(result.suppressed).toBe(false);
+    expect(result.messages).toEqual([eagerUser]);
+  });
+});
+
+describe("resolveTrailingUserPromptRepair", () => {
+  it("repairs the older trailing user left after eager current-user suppression", () => {
+    const earlier = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "ready" }],
+      timestamp: 1,
+    });
+    const olderUser = makeAgentUserMessage({ content: "older active turn", timestamp: 2 });
+    const eagerUser = makeAgentUserMessage({ content: "current inbound turn", timestamp: 3 });
+
+    const suppressed = resolveSuppressedCurrentUserTranscriptContext({
+      messages: [earlier, olderUser, eagerUser],
+      leafEntry: {
+        type: "message",
+        id: "entry-eager",
+        message: eagerUser,
+      },
+      suppressNextUserMessagePersistence: true,
+      suppressNextUserMessagePersistenceEntryId: "entry-eager",
+    });
+
+    const repair = resolveTrailingUserPromptRepair({
+      prompt: "current inbound turn",
+      trigger: "user",
+      messages: suppressed.messages,
+    });
+
+    expect(repair.repaired).toBe(true);
+    expect(repair.merged).toBe(true);
+    expect(repair.removeMessage).toBe(true);
+    expect(repair.messages).toEqual([earlier]);
+    expect(repair.prompt).toBe(
+      "[Queued user message that arrived while the previous turn was still active]\n" +
+        "older active turn\n\n" +
+        "current inbound turn",
+    );
+  });
+
+  it("leaves model history unchanged when it does not end with a user message", () => {
+    const earlier = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "ready" }],
+      timestamp: 1,
+    });
+
+    const repair = resolveTrailingUserPromptRepair({
+      prompt: "current inbound turn",
+      trigger: "user",
+      messages: [earlier],
+    });
+
+    expect(repair).toEqual({
+      prompt: "current inbound turn",
+      messages: [earlier],
+      repaired: false,
+      merged: false,
+      removeMessage: false,
+    });
   });
 });
 

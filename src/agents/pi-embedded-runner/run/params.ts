@@ -220,6 +220,8 @@ export type RunEmbeddedPiAgentParams = {
    */
   allowTransientCooldownProbe?: boolean;
   suppressNextUserMessagePersistence?: boolean;
+  suppressNextUserMessagePersistenceSessionId?: string;
+  suppressNextUserMessagePersistenceEntryId?: string;
   onUserMessagePersisted?: (message: Extract<AgentMessage, { role: "user" }>) => void;
   /**
    * Dispose bundled MCP runtimes when the overall run ends instead of preserving

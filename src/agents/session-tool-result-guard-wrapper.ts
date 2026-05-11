@@ -82,6 +82,34 @@ function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): A
   } as unknown as AgentMessage;
 }
 
+export function applySessionMessagePersistenceTransforms(params: {
+  message: AgentMessage;
+  config?: OpenClawConfig;
+  inputProvenance?: InputProvenance;
+  agentId?: string;
+  sessionKey?: string;
+  runBeforeMessageWriteHooks?: boolean;
+}): AgentMessage | null {
+  let message = applyInputProvenanceToUserMessage(params.message, params.inputProvenance);
+  const hookRunner = getGlobalHookRunner();
+  if (params.runBeforeMessageWriteHooks && hookRunner?.hasHooks("before_message_write")) {
+    const result = hookRunner.runBeforeMessageWrite(
+      { message },
+      {
+        agentId: params.agentId,
+        sessionKey: params.sessionKey,
+      },
+    );
+    if (result?.block) {
+      return null;
+    }
+    if (result?.message) {
+      message = result.message;
+    }
+  }
+  return redactTranscriptMessage(message, params.config);
+}
+
 /**
  * Apply the tool-result guard to a SessionManager exactly once and expose
  * a flush method on the instance for easy teardown handling.
