@@ -190,12 +190,13 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
   expect(endEvent.transcriptArchived).toBe(true);
+  const realDir = await fs.realpath(dir);
   const archivedSessionFile = expectStringWithPrefix(
     endEvent.sessionFile,
-    path.join(dir, "sess-main.jsonl.reset."),
+    path.join(realDir, "sess-main.jsonl.reset."),
     "archived session file",
   );
-  expect(path.dirname(archivedSessionFile)).toBe(dir);
+  expect(path.dirname(archivedSessionFile)).toBe(realDir);
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");
