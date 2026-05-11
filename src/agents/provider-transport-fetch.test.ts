@@ -1,4 +1,4 @@
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { Stream } from "openai/streaming";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildGuardedModelFetch } from "./provider-transport-fetch.js";

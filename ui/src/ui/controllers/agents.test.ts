@@ -371,11 +371,8 @@ describe("saveAgentsConfig", () => {
 
     await saveAgentsConfig(state);
 
-    expect(request).toHaveBeenNthCalledWith(
-      1,
-      "config.set",
-      expect.objectContaining({ baseHash: "hash-1" }),
-    );
+    expect(request.mock.calls[0]?.[0]).toBe("config.set");
+    expect(request.mock.calls[0]?.[1]?.baseHash).toBe("hash-1");
     expect(JSON.parse(request.mock.calls[0]?.[1]?.raw as string)).toEqual({
       agents: { list: [{ id: "main" }] },
     });

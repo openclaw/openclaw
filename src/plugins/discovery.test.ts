@@ -278,6 +278,17 @@ function expectEscapesPackageDiagnostic(diagnostics: Array<{ message: string }>)
   );
 }
 
+function expectEscapesPackageDiagnosticForPlugin(
+  diagnostics: Array<{ message: string; pluginId?: string }>,
+  pluginId: string,
+) {
+  expect(
+    diagnostics.some(
+      (entry) => entry.pluginId === pluginId && entry.message.includes("escapes package directory"),
+    ),
+  ).toBe(true);
+}
+
 function expectDiagnostic(params: {
   diagnostics: Array<{
     level?: string;
@@ -393,6 +404,7 @@ async function expectRejectedPackageExtensionEntry(params: {
   setup: (stateDir: string) => boolean | void;
   expectedDiagnostic?: "escapes" | "none" | "runtime";
   expectedId?: string;
+  expectedDiagnosticPluginId?: string;
 }) {
   if (params.setup(params.stateDir) === false) {
     return;
@@ -405,7 +417,14 @@ async function expectRejectedPackageExtensionEntry(params: {
     expect(result.candidates).toHaveLength(0);
   }
   if (params.expectedDiagnostic === "escapes") {
-    expectEscapesPackageDiagnostic(result.diagnostics);
+    if (params.expectedDiagnosticPluginId) {
+      expectEscapesPackageDiagnosticForPlugin(
+        result.diagnostics,
+        params.expectedDiagnosticPluginId,
+      );
+    } else {
+      expectEscapesPackageDiagnostic(result.diagnostics);
+    }
     return;
   }
   if (params.expectedDiagnostic === "runtime") {
@@ -1569,6 +1588,7 @@ describe("discoverOpenClawPlugins", () => {
       name: "rejects package extension entries that are hardlinked aliases",
       expectedDiagnostic: "escapes" as const,
       expectedId: "pack",
+      expectedDiagnosticPluginId: "pack",
       setup: (stateDir: string) => {
         if (process.platform === "win32") {
           return false;

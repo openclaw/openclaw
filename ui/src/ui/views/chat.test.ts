@@ -740,13 +740,13 @@ describe("chat attachment picker", () => {
     input!.dispatchEvent(new Event("change", { bubbles: true }));
 
     await vi.waitFor(() => {
-      expect(onAttachmentsChange).toHaveBeenCalledWith([
-        expect.objectContaining({
-          fileName: "brief.pdf",
-          mimeType: "application/pdf",
-          sizeBytes: file.size,
-        }),
-      ]);
+      const attachments = onAttachmentsChange.mock.calls[0]?.[0] as
+        | Array<{ fileName?: string; mimeType?: string; sizeBytes?: number }>
+        | undefined;
+      expect(attachments).toHaveLength(1);
+      expect(attachments?.[0]?.fileName).toBe("brief.pdf");
+      expect(attachments?.[0]?.mimeType).toBe("application/pdf");
+      expect(attachments?.[0]?.sizeBytes).toBe(file.size);
     });
 
     const nextAttachments = onAttachmentsChange.mock.calls[0]?.[0] ?? [];

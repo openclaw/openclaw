@@ -94,11 +94,19 @@ describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => 
     const pids = findGatewayPidsOnPortSync(18789);
 
     expect(pids).toEqual([gatewayPidA, gatewayPidB]);
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "/usr/sbin/lsof",
-      ["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"],
-      expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
+    const [command, args, options] =
+      spawnSyncMock.mock.calls.find(
+        ([spawnCommand, spawnArgs]) =>
+          spawnCommand === "/usr/sbin/lsof" &&
+          Array.isArray(spawnArgs) &&
+          spawnArgs.includes("-iTCP:18789"),
+      ) ?? [];
+    expect(command).toBe("/usr/sbin/lsof");
+    expect(args).toEqual(["-nP", "-iTCP:18789", "-sTCP:LISTEN", "-Fpc"]);
+    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(
+      "utf8",
     );
+    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.timeout).toBe(2000);
   });
 
   it("returns empty when lsof fails", () => {
@@ -159,11 +167,14 @@ describe.runIf(process.platform !== "win32")("cleanStaleGatewayProcessesSync", (
 
     expect(killed).toEqual([stalePid]);
     expect(resolveGatewayPortMock).not.toHaveBeenCalled();
-    expect(spawnSyncMock).toHaveBeenCalledWith(
-      "/usr/sbin/lsof",
-      ["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"],
-      expect.objectContaining({ encoding: "utf8", timeout: 2000 }),
+    expect(spawnSyncMock).toHaveBeenCalledTimes(2);
+    const [command, args, options] = spawnSyncMock.mock.calls[0] ?? [];
+    expect(command).toBe("/usr/sbin/lsof");
+    expect(args).toEqual(["-nP", "-iTCP:19999", "-sTCP:LISTEN", "-Fpc"]);
+    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.encoding).toBe(
+      "utf8",
     );
+    expect((options as { encoding?: unknown; timeout?: unknown } | undefined)?.timeout).toBe(2000);
     expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGTERM");
     expect(killSpy).toHaveBeenCalledWith(stalePid, "SIGKILL");
   });

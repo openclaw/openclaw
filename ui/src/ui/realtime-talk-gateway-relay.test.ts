@@ -210,10 +210,10 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     pumpMicrophone(new Float32Array(4096));
 
     expect(client.request).not.toHaveBeenCalledWith("talk.session.cancelOutput", expect.anything());
-    expect(client.request).toHaveBeenCalledWith(
-      "talk.session.appendAudio",
-      expect.objectContaining({ sessionId: "relay-1" }),
-    );
+    const appendCall = vi
+      .mocked(client.request)
+      .mock.calls.find((call) => call[0] === "talk.session.appendAudio");
+    expect((appendCall?.[1] as { sessionId?: string } | undefined)?.sessionId).toBe("relay-1");
     transport.stop();
   });
 
@@ -380,15 +380,14 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
         args: { question: "status?" },
       },
     });
-    await vi.waitFor(() =>
-      expect(client.request).toHaveBeenCalledWith(
-        "talk.client.toolCall",
-        expect.objectContaining({
-          callId: "call-1",
-          relaySessionId: "relay-1",
-        }),
-      ),
-    );
+    await vi.waitFor(() => {
+      const toolCall = vi
+        .mocked(client.request)
+        .mock.calls.find((call) => call[0] === "talk.client.toolCall");
+      const params = toolCall?.[1] as { callId?: string; relaySessionId?: string } | undefined;
+      expect(params?.callId).toBe("call-1");
+      expect(params?.relaySessionId).toBe("relay-1");
+    });
 
     emitGatewayFrame({
       event: "chat",

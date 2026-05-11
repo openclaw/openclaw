@@ -420,9 +420,9 @@ describe("gateway plugin HTTP auth boundary", () => {
     });
 
     expect(observedRuntimeScopes).toHaveLength(1);
-    expect(observedRuntimeScopes[0]).toEqual(
-      expect.arrayContaining(["operator.admin", "operator.read", "operator.write"]),
-    );
+    expect(observedRuntimeScopes[0]).toContain("operator.admin");
+    expect(observedRuntimeScopes[0]).toContain("operator.read");
+    expect(observedRuntimeScopes[0]).toContain("operator.write");
     expect(adminAllowedResults).toEqual([true]);
   });
 

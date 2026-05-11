@@ -1,5 +1,5 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   installOpenClawOwnedToolHooks,
   resetOpenClawOwnedToolHooks,
@@ -47,7 +47,7 @@ function createToolHandlerCtx(): ToolHandlerContext {
       messagingToolSentTargets: [] as MessagingToolSend[],
       successfulCronAdds: 0,
     },
-    log: { debug: vi.fn(), warn: vi.fn() },
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     flushBlockReplyBuffer: vi.fn(),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,

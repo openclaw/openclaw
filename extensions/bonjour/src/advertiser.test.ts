@@ -46,6 +46,10 @@ function warnMessages(): string[] {
   return logger.warn.mock.calls.map(([message]) => String(message));
 }
 
+function expectWarnContaining(fragment: string) {
+  expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
+}
+
 function enableAdvertiserUnitMode(hostname = "test-host") {
   // Allow advertiser to run in unit tests.
   delete process.env.VITEST;
@@ -246,6 +250,22 @@ describe("gateway bonjour advertiser", () => {
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
+  it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
+    enableAdvertiserUnitMode();
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-clawcks-test";
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
     process.env.OPENCLAW_DISABLE_BONJOUR = "0";
@@ -407,17 +427,13 @@ describe("gateway bonjour advertiser", () => {
     expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
+    expectWarnContaining("suppressing ciao cancellation");
 
     logger.warn.mockClear();
     expect(
       handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao interface assertion"),
-    );
+    expectWarnContaining("suppressing ciao interface assertion");
 
     logger.warn.mockClear();
     expect(
@@ -430,9 +446,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao netmask assertion"),
-    );
+    expectWarnContaining("suppressing ciao netmask assertion");
 
     logger.warn.mockClear();
     expect(
@@ -442,9 +456,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao self-probe race"),
-    );
+    expectWarnContaining("suppressing ciao self-probe race");
 
     await started.stop();
   });
@@ -470,9 +482,7 @@ describe("gateway bonjour advertiser", () => {
       expect(createService).toHaveBeenCalledTimes(2);
     });
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
+    expectWarnContaining("suppressing ciao cancellation");
     expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
@@ -709,9 +719,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("service stuck in announcing"),
-    );
+    expectWarnContaining("service stuck in announcing");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -737,9 +745,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(55_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("disabling advertiser after 1 stuck-state restart"),
-    );
+    expectWarnContaining("disabling advertiser after 1 stuck-state restart");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(2);

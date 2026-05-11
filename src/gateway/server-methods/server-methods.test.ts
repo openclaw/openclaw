@@ -2303,13 +2303,23 @@ describe("gateway healthHandlers.health cache freshness", () => {
       isWebchatConnect: () => false,
     });
 
-    expect(mockCallArg(respond, 0, 1)).toMatchObject({
-      modelPricing: {
-        state: "degraded",
-        detail: "OpenRouter pricing fetch failed: TypeError: fetch failed",
-        sources: [{ source: "openrouter", state: "degraded", lastFailureAt: 123 }],
-      },
-    });
+    const payload = mockCallArg(respond, 0, 1) as
+      | {
+          modelPricing?: {
+            state?: string;
+            detail?: string;
+            sources?: Array<{ source?: string; state?: string; lastFailureAt?: number }>;
+          };
+        }
+      | undefined;
+    expect(payload?.modelPricing?.state).toBe("degraded");
+    expect(payload?.modelPricing?.detail).toBe(
+      "OpenRouter pricing fetch failed: TypeError: fetch failed",
+    );
+    expect(payload?.modelPricing?.sources).toHaveLength(1);
+    expect(payload?.modelPricing?.sources?.[0]?.source).toBe("openrouter");
+    expect(payload?.modelPricing?.sources?.[0]?.state).toBe("degraded");
+    expect(payload?.modelPricing?.sources?.[0]?.lastFailureAt).toBe(123);
     expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
     expect(refreshHealthSnapshot).toHaveBeenCalledWith({
       probe: false,

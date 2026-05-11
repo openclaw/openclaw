@@ -27,8 +27,9 @@ describe("buildMistralRealtimeTranscriptionProvider", () => {
       },
     });
 
-    expect(resolved).toMatchObject({
+    expect(resolved).toEqual({
       apiKey: "mistral-key",
+      baseUrl: undefined,
       model: "voxtral-mini-transcribe-realtime-2602",
       encoding: "pcm_mulaw",
       sampleRate: 8000,

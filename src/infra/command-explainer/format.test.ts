@@ -77,7 +77,9 @@ describe("formatCommandSpans", () => {
     const commandTexts = formatCommandSpans(explanation).map((commandSpan) =>
       explanation.source.slice(commandSpan.startIndex, commandSpan.endIndex),
     );
-    expect(commandTexts).toEqual(expect.arrayContaining(["sh", "echo", "node"]));
+    expect(commandTexts).toContain("sh");
+    expect(commandTexts).toContain("echo");
+    expect(commandTexts).toContain("node");
   });
 
   it("ignores invalid executable spans", () => {

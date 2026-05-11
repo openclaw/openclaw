@@ -461,17 +461,16 @@ describe("createMSTeamsReplyDispatcher", () => {
     await dispatcher.markDispatchIdle();
 
     expect(onSentMessageIds).toHaveBeenCalledWith(["id-1"]);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Microsoft Teams delivery failed"),
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        contextKey: "msteams:delivery-failure:conv",
-      }),
-    );
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("The user may not have received the full reply"),
-      expect.any(Object),
-    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledTimes(1);
+    const [message, context] = enqueueSystemEventMock.mock.calls[0] ?? [];
+    expect(message).toContain("Microsoft Teams delivery failed");
+    expect(message).toContain("1 of 2 message blocks were not delivered");
+    expect(message).toContain("The user may not have received the full reply");
+    expect(message).toContain("Error: Error: gateway timeout.");
+    expect(context).toEqual({
+      sessionKey: "agent:main:main",
+      contextKey: "msteams:delivery-failure:conv",
+    });
   });
 
   it("does not queue a delivery-failure system event when Teams send succeeds", async () => {

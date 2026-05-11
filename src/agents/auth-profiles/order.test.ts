@@ -31,11 +31,11 @@ async function importAuthProfileModulesWithAliasRegistry() {
   vi.doMock("../../plugins/manifest-registry.js", () => ({
     loadPluginManifestRegistry,
   }));
-  const [{ resolveAuthProfileOrder }, { markAuthProfileGood }] = await Promise.all([
+  const [{ resolveAuthProfileOrder }, { markAuthProfileSuccess }] = await Promise.all([
     import("./order.js"),
     import("./profiles.js"),
   ]);
-  return { markAuthProfileGood, resolveAuthProfileOrder };
+  return { markAuthProfileSuccess, resolveAuthProfileOrder };
 }
 
 describe("resolveAuthProfileOrder", () => {
@@ -221,32 +221,243 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toStrictEqual([]);
   });
 
-  it("marks aliased provider profiles good under the canonical auth provider", async () => {
-    const { markAuthProfileGood } = await importAuthProfileModulesWithAliasRegistry();
-    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-alias-"));
+  it("lets Codex auth use friendly OpenAI auth order entries", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai-codex",
+          key: "sk-backup",
+        },
+        "openai:platform": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai:personal", "openai:backup", "openai:platform"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai:personal", "openai:backup", "openai:platform"]);
+  });
+
+  it("lets Codex auth discover normal OpenAI API-key profiles as backups", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai:backup": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai:oauth": {
+          type: "oauth",
+          provider: "openai",
+          access: "wrong-provider-access",
+          refresh: "wrong-provider-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
+  });
+
+  it("preserves native Codex profiles before OpenAI alias API-key order", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai:default"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:default"]);
+  });
+
+  it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+        "openai-codex:legacy": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "legacy-access",
+          refresh: "legacy-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai:personal"],
+            "openai-codex": ["openai-codex:legacy"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:legacy"]);
+  });
+
+  it("keeps configured Codex auth order ahead of stored OpenAI fallback order", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:platform": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai-codex:work": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "work-access",
+          refresh: "work-refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+      order: {
+        openai: ["openai:platform"],
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            "openai-codex": ["openai-codex:work"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:work"]);
+  });
+
+  it("marks profile success with one canonical last-good and usage update", async () => {
+    const { markAuthProfileSuccess } = await importAuthProfileModulesWithAliasRegistry();
+    const agentDir = await mkdtemp(path.join(os.tmpdir(), "openclaw-auth-profile-success-"));
     try {
       const store: AuthProfileStore = {
         version: 1,
         profiles: {
           "fixture-provider:default": {
-            type: "api_key",
+            type: "oauth",
             provider: "fixture-provider",
-            key: "sk-test",
+            access: "token",
+            refresh: "refresh",
+            expires: Date.now() + 60_000,
+          },
+        },
+        usageStats: {
+          "fixture-provider:default": {
+            errorCount: 3,
+            blockedUntil: Date.now() + 120_000,
+            blockedReason: "subscription_limit",
+            cooldownUntil: Date.now() + 60_000,
+            cooldownReason: "rate_limit",
           },
         },
       };
       saveAuthProfileStore(store, agentDir);
 
-      await markAuthProfileGood({
+      const beforeSuccess = Date.now();
+      await markAuthProfileSuccess({
         store,
         provider: "fixture-provider-plan",
         profileId: "fixture-provider:default",
         agentDir,
       });
+      const afterSuccess = Date.now();
 
       expect(store.lastGood).toEqual({
         "fixture-provider": "fixture-provider:default",
       });
+      expect(store.usageStats?.["fixture-provider:default"]).toMatchObject({
+        errorCount: 0,
+        blockedUntil: undefined,
+        blockedReason: undefined,
+        cooldownUntil: undefined,
+        cooldownReason: undefined,
+      });
+      const lastUsed = store.usageStats?.["fixture-provider:default"]?.lastUsed;
+      expect(typeof lastUsed).toBe("number");
+      expect(Number.isFinite(lastUsed)).toBe(true);
+      expect(lastUsed).toBeGreaterThanOrEqual(beforeSuccess);
+      expect(lastUsed).toBeLessThanOrEqual(afterSuccess);
     } finally {
       await rm(agentDir, { force: true, recursive: true });
     }

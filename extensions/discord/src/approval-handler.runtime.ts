@@ -111,9 +111,9 @@ class ExecApprovalContainer extends DiscordUiContainer {
 }
 
 class ExecApprovalActionButton extends Button {
-  customId: string;
-  label: string;
-  style: ButtonStyle;
+  override customId: string;
+  override label: string;
+  override style: ButtonStyle;
 
   constructor(params: { approvalId: string; descriptor: ExecApprovalActionDescriptor }) {
     super();

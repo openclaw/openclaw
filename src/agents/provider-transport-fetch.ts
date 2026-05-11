@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import {
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode,
@@ -8,7 +8,10 @@ import {
   ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist,
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { emitModelTransportDebug } from "./model-transport-debug.js";
+import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
   ensureModelProviderLocalService,
   type ProviderLocalServiceLease,
@@ -21,6 +24,7 @@ import {
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const log = createSubsystemLogger("provider-transport-fetch");
 
 function hasReadableSseData(block: string): boolean {
   const dataLines = block
@@ -408,10 +412,32 @@ function resolveModelTransportSsrFPolicy(params: {
   return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
-export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
+export function buildGuardedModelFetch(
+  model: Model<Api>,
+  timeoutMs?: number,
+  options?: { sanitizeSse?: boolean },
+): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
+  const summarizeError = (error: unknown): string => {
+    if (!error || typeof error !== "object") {
+      return `type=${typeof error}`;
+    }
+    const record = error as Record<string, unknown>;
+    const cause =
+      record.cause && typeof record.cause === "object"
+        ? (record.cause as Record<string, unknown>)
+        : undefined;
+    const read = (value: unknown) => (typeof value === "string" ? value : typeof value);
+    return [
+      `name=${read(record.name)}`,
+      `code=${read(record.code)}`,
+      `causeName=${read(cause?.name)}`,
+      `causeCode=${read(cause?.code)}`,
+      `message=${error instanceof Error ? error.message : read(record.message)}`,
+    ].join(" ");
+  };
   return async (input, init) => {
     let localServiceLease: ProviderLocalServiceLease | undefined;
     const request = input instanceof Request ? new Request(input, init) : undefined;
@@ -458,6 +484,15 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       ...(policy ? { policy } : {}),
     };
     let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>>;
+    const fetchStartedAt = Date.now();
+    const useEnvProxy = !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url);
+    emitModelTransportDebug(
+      log,
+      `[model-fetch] start provider=${model.provider} api=${model.api} model=${model.id} ` +
+        `method=${(requestInit ?? init)?.method ?? "GET"} url=${formatModelTransportDebugUrl(url)} timeoutMs=${requestTimeoutMs} ` +
+        `proxy=${dispatcherPolicy ? "configured" : useEnvProxy ? "env" : "none"} ` +
+        `policy=${policy ? "custom" : "default"}`,
+    );
     try {
       localServiceLease = await ensureModelProviderLocalService(
         model,
@@ -465,15 +500,25 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
         (requestInit ?? init)?.signal,
       );
       result = await fetchWithSsrFGuard(
-        !dispatcherPolicy && shouldUseEnvHttpProxyForUrl(url)
+        useEnvProxy
           ? withTrustedEnvProxyGuardedFetchMode(guardedFetchOptions)
           : guardedFetchOptions,
       );
     } catch (error) {
+      log.warn(
+        `[model-fetch] error provider=${model.provider} api=${model.api} model=${model.id} ` +
+          `elapsedMs=${Date.now() - fetchStartedAt} ${summarizeError(error)}`,
+      );
       localServiceLease?.release();
       throw error;
     }
     let response = result.response;
+    emitModelTransportDebug(
+      log,
+      `[model-fetch] response provider=${model.provider} api=${model.api} model=${model.id} ` +
+        `status=${response.status} elapsedMs=${Date.now() - fetchStartedAt} ` +
+        `contentType=${response.headers.get("content-type") ?? ""}`,
+    );
     if (shouldBypassLongSdkRetry(response)) {
       const headers = new Headers(response.headers);
       headers.set("x-should-retry", "false");
@@ -489,6 +534,8 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       result.refreshTimeout,
       localServiceLease,
     );
-    return sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
+    return options?.sanitizeSse === false
+      ? response
+      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

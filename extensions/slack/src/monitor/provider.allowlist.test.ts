@@ -122,14 +122,10 @@ describe("slack startup user allowlist resolution", () => {
       await flush();
 
       expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenCalledTimes(2);
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ entries: ["@global-user"] }),
-      );
-      expect(slackTestState.resolveSlackUserAllowlistMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ entries: ["@channel-user"] }),
-      );
+      const [globalAllowlist] = slackTestState.resolveSlackUserAllowlistMock.mock.calls[0] ?? [];
+      const [channelAllowlist] = slackTestState.resolveSlackUserAllowlistMock.mock.calls[1] ?? [];
+      expect(globalAllowlist?.entries).toEqual(["@global-user"]);
+      expect(channelAllowlist?.entries).toEqual(["@channel-user"]);
     } finally {
       await stopSlackMonitor(monitor);
     }

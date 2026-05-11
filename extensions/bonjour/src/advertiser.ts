@@ -135,6 +135,10 @@ function readBonjourDisableOverride(): boolean | null {
 }
 
 function isContainerEnvironment() {
+  if (process.env.FLY_MACHINE_ID?.trim() && process.env.FLY_APP_NAME?.trim()) {
+    return true;
+  }
+
   for (const sentinelPath of ["/.dockerenv", "/run/.containerenv", "/var/run/.containerenv"]) {
     try {
       if (fs.existsSync(sentinelPath)) {

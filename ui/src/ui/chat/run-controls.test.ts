@@ -251,12 +251,13 @@ describe("context notice", () => {
       contextTokens: 200_000,
     };
     const lowUsage = getContextNoticeViewModel(lowUsageSession, 200_000);
-    expect(lowUsage).toMatchObject({
-      pct: 23,
-      detail: "46k / 200k",
-      warning: false,
-      compactRecommended: false,
-    });
+    if (!lowUsage) {
+      throw new Error("expected low usage context notice");
+    }
+    expect(lowUsage.pct).toBe(23);
+    expect(lowUsage.detail).toBe("46k / 200k");
+    expect(lowUsage.warning).toBe(false);
+    expect(lowUsage.compactRecommended).toBe(false);
     render(renderContextNotice(lowUsageSession, 200_000), container);
     expect(container.textContent).toContain("23% context used");
     expect(container.textContent).toContain("46k / 200k");

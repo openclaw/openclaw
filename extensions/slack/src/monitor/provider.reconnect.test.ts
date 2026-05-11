@@ -47,17 +47,12 @@ describe("slack socket reconnect helpers", () => {
     publishSlackConnectedStatus(setStatus);
 
     expect(setStatus).toHaveBeenCalledTimes(1);
-    expect(setStatus).toHaveBeenCalledWith(
-      expect.objectContaining({
-        connected: true,
-        lastConnectedAt: 1_711_406_400_000,
-        healthState: "healthy",
-        lastError: null,
-      }),
-    );
-    expect(setStatus).not.toHaveBeenCalledWith(
-      expect.objectContaining({ lastEventAt: 1_711_406_400_000 }),
-    );
+    const [status] = setStatus.mock.calls[0] ?? [];
+    expect(status?.connected).toBe(true);
+    expect(status?.lastConnectedAt).toBe(1_711_406_400_000);
+    expect(status?.healthState).toBe("healthy");
+    expect(status?.lastError).toBeNull();
+    expect(status).not.toHaveProperty("lastEventAt");
   });
 
   it("marks socket mode disconnected when an error closes the socket", () => {

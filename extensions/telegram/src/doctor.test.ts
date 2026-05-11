@@ -119,16 +119,16 @@ describe("telegram doctor", () => {
         },
       },
     });
-    expect(result.changes).toEqual(
-      expect.arrayContaining([
-        "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
-        "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
-        "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
-        "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
-        "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
-        "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
-      ]),
-    );
+    for (const change of [
+      "Moved channels.telegram.streamMode → channels.telegram.streaming.mode (block).",
+      "Moved channels.telegram.chunkMode → channels.telegram.streaming.chunkMode.",
+      "Moved channels.telegram.blockStreaming → channels.telegram.streaming.block.enabled.",
+      "Moved channels.telegram.draftChunk → channels.telegram.streaming.preview.chunk.",
+      "Moved channels.telegram.accounts.work.streaming (boolean) → channels.telegram.accounts.work.streaming.mode (off).",
+      "Moved channels.telegram.accounts.work.blockStreamingCoalesce → channels.telegram.accounts.work.streaming.block.coalesce.",
+    ]) {
+      expect(result.changes).toContain(change);
+    }
   });
 
   it("does not duplicate streaming.mode change messages when streamMode wins over boolean streaming", () => {
@@ -346,12 +346,13 @@ describe("telegram doctor", () => {
     expect(warnings[0]).toContain('"Working..." tool-progress preview');
     expect(warnings[0]).toContain("Current-message replies without selected quote text");
     expect(warnings[1]).toContain("streaming.preview.toolProgress: false");
-    expect(
-      await telegramDoctor.collectPreviewWarnings?.({
-        cfg,
-        doctorFixCommand: "openclaw doctor --fix",
-      }),
-    ).toEqual(expect.arrayContaining([expect.stringContaining("selected quote replies")]));
+    const collectedWarnings = await telegramDoctor.collectPreviewWarnings?.({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    expect(collectedWarnings?.some((warning) => warning.includes("selected quote replies"))).toBe(
+      true,
+    );
   });
 
   it("warns for the implicit default Telegram account when accounts is empty", () => {

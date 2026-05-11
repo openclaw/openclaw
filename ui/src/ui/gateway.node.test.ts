@@ -121,7 +121,9 @@ function expectLatestRequestTiming(
   expected: Partial<RequestTimingPayload>,
 ) {
   const timing = onRequestTiming.mock.calls.at(-1)?.[0] as RequestTimingPayload | undefined;
-  expect(timing).toMatchObject(expected);
+  for (const [key, value] of Object.entries(expected)) {
+    expect(timing?.[key as keyof RequestTimingPayload]).toBe(value);
+  }
   expect(timing?.startedAtMs).toBeTypeOf("number");
   expect(timing?.endedAtMs).toBeTypeOf("number");
   expect(timing?.durationMs).toBeTypeOf("number");
@@ -283,6 +285,97 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
 
+  it("reports browser security errors from WebSocket construction without retrying", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    class ThrowingWebSocket {
+      static OPEN = 1;
+
+      constructor(_url: string) {
+        const err = new Error("Cannot connect due to a security error.");
+        err.name = "SecurityError";
+        throw err;
+      }
+    }
+    vi.stubGlobal("WebSocket", ThrowingWebSocket);
+
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+
+    expect(() => client.start()).not.toThrow();
+    const close = onClose.mock.calls[0]?.[0] as
+      | {
+          code?: number;
+          reason?: string;
+          error?: {
+            code?: string;
+            message?: string;
+            details?: { code?: string; browserErrorName?: string };
+          };
+        }
+      | undefined;
+    expect(close?.code).toBe(1006);
+    expect(close?.reason).toBe("security error");
+    expect(close?.error?.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expect(close?.error?.message).toContain("Use wss://");
+    expect(close?.error?.details?.code).toBe("BROWSER_WEBSOCKET_SECURITY_ERROR");
+    expect(close?.error?.details?.browserErrorName).toBe("SecurityError");
+    expect(wsInstances).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
+  it("reports generic WebSocket construction failures without retrying", async () => {
+    vi.useFakeTimers();
+    const onClose = vi.fn();
+    class ThrowingWebSocket {
+      static OPEN = 1;
+
+      constructor(_url: string) {
+        throw new TypeError("constructor failed");
+      }
+    }
+    vi.stubGlobal("WebSocket", ThrowingWebSocket);
+
+    const client = new GatewayBrowserClient({
+      url: "ws://gateway.example:18789",
+      token: "shared-auth-token",
+      onClose,
+    });
+
+    expect(() => client.start()).not.toThrow();
+    const close = onClose.mock.calls[0]?.[0] as
+      | {
+          code?: number;
+          reason?: string;
+          error?: {
+            code?: string;
+            message?: string;
+            details?: { code?: string; browserErrorName?: string; browserMessage?: string };
+          };
+        }
+      | undefined;
+    expect(close?.code).toBe(1006);
+    expect(close?.reason).toBe("websocket error");
+    expect(close?.error?.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
+    expect(close?.error?.message).toContain("Could not create the Gateway WebSocket");
+    expect(close?.error?.details?.code).toBe("BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR");
+    expect(close?.error?.details?.browserErrorName).toBe("TypeError");
+    expect(close?.error?.details?.browserMessage).toBe("constructor failed");
+    expect(wsInstances).toHaveLength(0);
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    vi.useRealTimers();
+  });
+
   it("reports request timing for attributed RPC latency", async () => {
     const onRequestTiming = vi.fn();
     const client = new GatewayBrowserClient({
@@ -355,12 +448,14 @@ describe("GatewayBrowserClient", () => {
       error: { code: "CONFIG_ERROR", message: "config failed" },
     });
 
-    await expect(request).rejects.toMatchObject({ gatewayCode: "CONFIG_ERROR" });
-    expect(onRequestTiming).toHaveBeenCalledWith(
-      expect.not.objectContaining({
-        params: expect.anything(),
-      }),
-    );
+    try {
+      await request;
+      throw new Error("expected config.get request to reject");
+    } catch (error) {
+      expect((error as { gatewayCode?: string }).gatewayCode).toBe("CONFIG_ERROR");
+    }
+    expect(onRequestTiming).toHaveBeenCalledTimes(1);
+    expect(onRequestTiming.mock.calls[0]?.[0]).not.toHaveProperty("params");
     expectLatestRequestTiming(onRequestTiming, {
       id: frame.id,
       method: "config.get",

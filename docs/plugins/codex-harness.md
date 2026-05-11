@@ -17,9 +17,14 @@ selection, OpenClaw dynamic tools, approvals, media delivery, and the visible
 transcript mirror.
 
 The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
-Do not configure `openai-codex/gpt-*` model refs. `openai-codex` is the auth
-profile provider for Codex OAuth or Codex API-key profiles, not the model
-provider prefix for new agent config.
+Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
+under `auth.order.openai`; older `openai-codex:*` profiles and
+`auth.order.openai-codex` entries remain supported for existing installs.
+
+OpenClaw starts Codex app-server threads with Codex native code mode and
+code-mode-only enabled. That keeps deferred/searchable OpenClaw dynamic tools
+inside Codex's own code execution and tool-search surface instead of adding a
+PI-style tool-search wrapper on top of Codex.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes). The short version is:
@@ -96,21 +101,37 @@ turn resolves the harness from current config.
 The quickstart config is the minimum viable Codex harness config. Set Codex
 harness options in OpenClaw config, and use the CLI only for Codex auth:
 
-| Need                                   | Set                                                                | Where                          |
-| -------------------------------------- | ------------------------------------------------------------------ | ------------------------------ |
-| Enable the harness                     | `plugins.entries.codex.enabled: true`                              | OpenClaw config                |
-| Keep an allowlisted plugin install     | Include `codex` in `plugins.allow`                                 | OpenClaw config                |
-| Route OpenAI agent turns through Codex | `agents.defaults.model` or `agents.list[].model` as `openai/gpt-*` | OpenClaw agent config          |
-| Sign in with Codex OAuth               | `openclaw models auth login --provider openai-codex`               | CLI auth profile               |
-| Fail closed when Codex is unavailable  | Provider or model `agentRuntime.id: "codex"`                       | OpenClaw model/provider config |
-| Use direct OpenAI API traffic          | Provider or model `agentRuntime.id: "pi"` with normal OpenAI auth  | OpenClaw model/provider config |
-| Tune app-server behavior               | `plugins.entries.codex.config.appServer.*`                         | Codex plugin config            |
-| Enable native Codex plugin apps        | `plugins.entries.codex.config.codexPlugins.*`                      | Codex plugin config            |
-| Enable Codex Computer Use              | `plugins.entries.codex.config.computerUse.*`                       | Codex plugin config            |
+| Need                                   | Set                                                                              | Where                              |
+| -------------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------- |
+| Enable the harness                     | `plugins.entries.codex.enabled: true`                                            | OpenClaw config                    |
+| Keep an allowlisted plugin install     | Include `codex` in `plugins.allow`                                               | OpenClaw config                    |
+| Route OpenAI agent turns through Codex | `agents.defaults.model` or `agents.list[].model` as `openai/gpt-*`               | OpenClaw agent config              |
+| Sign in with Codex OAuth               | `openclaw models auth login --provider openai-codex`                             | CLI auth profile                   |
+| Add API-key backup for Codex runs      | `openai:*` API-key profile listed after subscription auth in `auth.order.openai` | CLI auth profile + OpenClaw config |
+| Fail closed when Codex is unavailable  | Provider or model `agentRuntime.id: "codex"`                                     | OpenClaw model/provider config     |
+| Use direct OpenAI API traffic          | Provider or model `agentRuntime.id: "pi"` with normal OpenAI auth                | OpenClaw model/provider config     |
+| Tune app-server behavior               | `plugins.entries.codex.config.appServer.*`                                       | Codex plugin config                |
+| Enable native Codex plugin apps        | `plugins.entries.codex.config.codexPlugins.*`                                    | Codex plugin config                |
+| Enable Codex Computer Use              | `plugins.entries.codex.config.computerUse.*`                                     | Codex plugin config                |
 
-Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns.
-`openai-codex` is only the auth-profile provider name for Codex OAuth and
-Codex API-key profiles. Do not write new `openai-codex/gpt-*` model refs.
+Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
+`auth.order.openai` for subscription-first/API-key-backup ordering. Existing
+`openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
+do not write new `openai-codex/gpt-*` model refs.
+
+```json5
+{
+  auth: {
+    order: {
+      openai: ["openai-codex:user@example.com", "openai:api-key-backup"],
+    },
+  },
+}
+```
+
+In that shape, both profiles still run through Codex for `openai/gpt-*` agent
+turns. The API key is only an auth fallback, not a request to switch to PI or
+plain OpenAI Responses.
 
 The rest of this page covers common variants users must choose between:
 deployment shape, fail-closed routing, guardian approval policy, native Codex
@@ -379,7 +400,8 @@ For upload mechanics and runtime-level diagnostics boundaries, see
 
 Auth is selected in this order:
 
-1. An explicit OpenClaw Codex auth profile for the agent.
+1. Ordered OpenAI auth profiles for the agent, preferably under
+   `auth.order.openai`. Existing `openai-codex:*` profile ids remain valid.
 2. The app-server's existing account in that agent's Codex home.
 3. For local stdio app-server launches only, `CODEX_API_KEY`, then
    `OPENAI_API_KEY`, when no app-server account is present and OpenAI auth is
@@ -393,6 +415,11 @@ Explicit Codex API-key profiles and local stdio env-key fallback use app-server
 login instead of inherited child-process env. WebSocket app-server connections
 do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
+
+If a subscription profile hits a Codex usage limit, OpenClaw records the reset
+time when Codex reports one and tries the next ordered auth profile for the same
+Codex run. When the reset time passes, the subscription profile becomes eligible
+again without changing the selected `openai/gpt-*` model or Codex runtime.
 
 If a deployment needs additional environment isolation, add those variables to
 `appServer.clearEnv`:

@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clickChromeMcpElement,
@@ -9,6 +10,7 @@ import {
   openChromeMcpTab,
   resetChromeMcpSessionsForTest,
   setChromeMcpSessionFactoryForTest,
+  takeChromeMcpScreenshot,
 } from "./chrome-mcp.js";
 
 type ToolCall = {
@@ -78,6 +80,15 @@ function createFakeSession(): ChromeMcpSession {
         ],
       };
     }
+    if (name === "take_screenshot") {
+      const filePath = typeof args?.filePath === "string" ? args.filePath : undefined;
+      const format = args?.format === "jpeg" ? "jpeg" : "png";
+      if (!filePath) {
+        throw new Error("missing filePath");
+      }
+      await fs.writeFile(`${filePath}.${format}`, Buffer.from(`screenshot:${format}`));
+      return { content: [{ type: "text", text: `Saved screenshot to ${filePath}.${format}.` }] };
+    }
     throw new Error(`unexpected tool ${name}`);
   });
 
@@ -125,6 +136,19 @@ describe("chrome MCP page parsing", () => {
         type: "page",
       },
     ]);
+  });
+
+  it("reads screenshot files with the extension written by chrome-devtools-mcp", async () => {
+    const factory: ChromeMcpSessionFactory = async () => createFakeSession();
+    setChromeMcpSessionFactoryForTest(factory);
+
+    await expect(
+      takeChromeMcpScreenshot({
+        profileName: "chrome-live",
+        targetId: "1",
+        format: "jpeg",
+      }),
+    ).resolves.toEqual(Buffer.from("screenshot:jpeg"));
   });
 
   it("adds --userDataDir when an explicit Chromium profile path is configured", () => {
@@ -706,6 +730,34 @@ describe("chrome MCP page parsing", () => {
     await vi.advanceTimersByTimeAsync(50);
 
     await expectation;
+    expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("honors abort signals while waiting for ephemeral availability probes", async () => {
+    const closeMock = vi.fn().mockResolvedValue(undefined);
+    const factory: ChromeMcpSessionFactory = async () =>
+      ({
+        client: {
+          callTool: vi.fn(),
+          listTools: vi.fn(),
+          close: closeMock,
+          connect: vi.fn(),
+        },
+        transport: {
+          pid: 123,
+        },
+        ready: new Promise<void>(() => {}),
+      }) as unknown as ChromeMcpSession;
+    setChromeMcpSessionFactoryForTest(factory);
+
+    const ctrl = new AbortController();
+    const promise = ensureChromeMcpAvailable("chrome-live", undefined, {
+      ephemeral: true,
+      signal: ctrl.signal,
+    });
+    ctrl.abort(new Error("status budget exhausted"));
+
+    await expect(promise).rejects.toThrow(/status budget exhausted/);
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 });

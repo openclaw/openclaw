@@ -841,12 +841,13 @@ describe("connectGateway", () => {
       },
     });
 
-    expect(host.chatSideResult).toMatchObject({
-      kind: "btw",
-      runId: "btw-run-1",
-      question: "what changed?",
-      text: "Only the UI layer is missing support.",
-    });
+    const sideResult = host.chatSideResult as
+      | { kind?: string; runId?: string; question?: string; text?: string }
+      | undefined;
+    expect(sideResult?.kind).toBe("btw");
+    expect(sideResult?.runId).toBe("btw-run-1");
+    expect(sideResult?.question).toBe("what changed?");
+    expect(sideResult?.text).toBe("Only the UI layer is missing support.");
     expect(host.chatSideResultTerminalRuns.has("btw-run-1")).toBe(true);
   });
 

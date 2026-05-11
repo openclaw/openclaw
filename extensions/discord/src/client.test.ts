@@ -59,7 +59,7 @@ describe("createDiscordRestClient", () => {
 
     expect(result.token).toBe("explicit-account-token");
     expect(result.account.accountId).toBe("ops");
-    expect(result.account.config.retry).toMatchObject({ attempts: 7 });
+    expect(result.account.config.retry).toEqual({ attempts: 7 });
   });
 
   it("still fails closed when no explicit token is provided and config token is unresolved", () => {

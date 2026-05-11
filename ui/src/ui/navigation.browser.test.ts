@@ -324,12 +324,10 @@ describe("control UI routing", () => {
     await nextFrame();
     await app.updateComplete;
 
-    expect(request).toHaveBeenCalledWith(
-      "config.patch",
-      expect.objectContaining({
-        baseHash: "hash-1",
-      }),
-    );
+    const patchCall = request.mock.calls.find((call) => call[0] === "config.patch") as
+      | [string, { baseHash?: string }]
+      | undefined;
+    expect(patchCall?.[1].baseHash).toBe("hash-1");
   });
 
   it("renders the refreshed top navigation shell", async () => {

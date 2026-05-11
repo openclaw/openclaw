@@ -88,16 +88,15 @@ describe("createPinnedDispatcher", () => {
 
     const dispatcher = createPinnedDispatcher(pinned);
 
-    expect(dispatcher).toMatchObject({
-      options: {
-        connect: {
-          lookup,
-          autoSelectFamily: true,
-          autoSelectFamilyAttemptTimeout: 300,
-        },
-        allowH2: false,
-      },
-    });
+    const dispatcherOptions = (
+      dispatcher as {
+        options?: { allowH2?: boolean; connect?: Record<string, unknown> };
+      }
+    ).options;
+    expect(dispatcherOptions?.connect?.lookup).toBe(lookup);
+    expect(dispatcherOptions?.connect?.autoSelectFamily).toBe(true);
+    expect(dispatcherOptions?.connect?.autoSelectFamilyAttemptTimeout).toBe(300);
+    expect(dispatcherOptions?.allowH2).toBe(false);
     expect(agentCtor).toHaveBeenCalledWith({
       connect: {
         lookup,

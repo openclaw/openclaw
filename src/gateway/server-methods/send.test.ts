@@ -774,6 +774,25 @@ describe("gateway send mirroring", () => {
     expect(deliveryCall()?.threadId).toBe("1710000000.9999");
   });
 
+  it("forwards gateway send delivery options to outbound delivery", async () => {
+    mockDeliverySuccess("m-options");
+
+    await runSend({
+      to: "channel:C1",
+      message: "<b>report</b>",
+      channel: "slack",
+      forceDocument: true,
+      silent: true,
+      parseMode: "HTML",
+      idempotencyKey: "idem-send-options",
+    });
+
+    const options = mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+    expect(options?.forceDocument).toBe(true);
+    expect(options?.silent).toBe(true);
+    expect(options?.formatting).toEqual({ parseMode: "HTML" });
+  });
+
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
     mockDeliverySuccess("m-thread-derived");
     mocks.resolveOutboundSessionRoute.mockResolvedValueOnce({
@@ -1076,7 +1095,7 @@ describe("gateway send mirroring", () => {
     });
 
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(capturedMediaLocalRoots).toEqual(expect.arrayContaining([TEST_AGENT_WORKSPACE]));
+    expect(capturedMediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {

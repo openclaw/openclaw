@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { buildCommandPayloadCandidates } from "../infra/command-analysis/risks.js";
 import { analyzeShellCommand } from "../infra/exec-approvals-analysis.js";
 import {
@@ -8,7 +8,6 @@ import {
   type ExecSecurity,
   loadExecApprovals,
   maxAsk,
-  minSecurity,
   requireValidExecTarget,
 } from "../infra/exec-approvals.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
@@ -40,7 +39,6 @@ import {
   applyPathPrepend,
   applyShellPath,
   normalizeExecAsk,
-  normalizeExecSecurity,
   normalizePathPrepend,
   resolveExecTarget,
   resolveApprovalRunningNoticeMs,
@@ -1346,8 +1344,7 @@ export function createExecTool(
       const approvalDefaults = loadExecApprovals().defaults;
       const configuredSecurity =
         defaults?.security ?? approvalDefaults?.security ?? (host === "sandbox" ? "deny" : "full");
-      const requestedSecurity = normalizeExecSecurity(params.security);
-      let security = minSecurity(configuredSecurity, requestedSecurity ?? configuredSecurity);
+      let security = configuredSecurity;
       if (elevatedRequested && elevatedMode === "full") {
         security = "full";
       }
@@ -1572,6 +1569,8 @@ export function createExecTool(
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
         sessionKey: notifySessionKey,
+        mainKey: defaults?.mainKey,
+        sessionScope: defaults?.sessionScope,
         notifyDeliveryContext,
         timeoutSec: effectiveTimeout,
         onUpdate,

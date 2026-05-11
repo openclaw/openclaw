@@ -22,9 +22,9 @@ const prepareProviderRuntimeAuthMock = vi.fn();
 const registerProviderStreamForModelMock = vi.fn();
 const diagDebugMock = vi.fn();
 
-vi.mock("@mariozechner/pi-ai", async () => {
+vi.mock("@earendil-works/pi-ai", async () => {
   const original =
-    await vi.importActual<typeof import("@mariozechner/pi-ai")>("@mariozechner/pi-ai");
+    await vi.importActual<typeof import("@earendil-works/pi-ai")>("@earendil-works/pi-ai");
   return {
     ...original,
     streamSimple: (...args: unknown[]) => streamSimpleMock(...args),
@@ -38,7 +38,7 @@ vi.mock("node:fs/promises", () => ({
   readFile: (...args: unknown[]) => readFileMock(...args),
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => ({
+vi.mock("@earendil-works/pi-coding-agent", () => ({
   buildSessionContext: (...args: unknown[]) => buildSessionContextMock(...args),
   generateSummary: vi.fn(async () => "summary"),
   migrateSessionEntries: (...args: unknown[]) => migrateSessionEntriesMock(...args),
@@ -95,6 +95,7 @@ vi.mock("../logging/diagnostic.js", () => ({
 }));
 
 const { runBtwSideQuestion } = await import("./btw.js");
+const { clearAgentHarnesses, registerAgentHarness } = await import("./harness/registry.js");
 type RunBtwSideQuestionParams = Parameters<typeof runBtwSideQuestion>[0];
 
 const DEFAULT_AGENT_DIR = "/tmp/agent";
@@ -345,6 +346,7 @@ describe("runBtwSideQuestion", () => {
     prepareProviderRuntimeAuthMock.mockReset();
     registerProviderStreamForModelMock.mockReset();
     diagDebugMock.mockReset();
+    clearAgentHarnesses();
 
     readFileMock.mockResolvedValue("mock transcript");
     parseSessionEntriesMock.mockReturnValue([
@@ -469,6 +471,78 @@ describe("runBtwSideQuestion", () => {
     const ensureArgs = ensureOpenClawModelsJsonMock.mock.calls[0];
     expect(ensureArgs?.[1]).toBe(DEFAULT_AGENT_DIR);
     expect(ensureArgs?.[2]).toEqual({ workspaceDir: "/tmp/workspace" });
+  });
+
+  it("routes Codex-selected BTW questions through the harness side-question hook", async () => {
+    const codexSideQuestionMock = vi.fn().mockResolvedValue({ text: "Codex side answer." });
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+      runSideQuestion: codexSideQuestionMock,
+    });
+    resolveModelWithRegistryMock.mockReturnValue({
+      provider: "openai",
+      id: "gpt-5.5",
+      api: "openai-responses",
+    });
+    resolveSessionAuthProfileOverrideMock.mockResolvedValue("openai-codex:work");
+
+    const result = await runSideQuestion({
+      provider: "openai",
+      model: "gpt-5.5",
+      sessionKey: DEFAULT_SESSION_KEY,
+    });
+
+    expect(result).toEqual({ text: "Codex side answer." });
+    expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
+    expect(codexSideQuestionMock.mock.calls[0]?.[0]).toMatchObject({
+      provider: "openai",
+      model: "gpt-5.5",
+      question: DEFAULT_QUESTION,
+      sessionId: "session-1",
+      agentId: "main",
+      workspaceDir: "/tmp/workspace",
+      authProfileId: "openai-codex:work",
+    });
+    expect(codexSideQuestionMock.mock.calls[0]?.[0].sessionFile).toContain("session-1.jsonl");
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back to the direct provider call when Codex lacks BTW support", async () => {
+    registerAgentHarness({
+      id: "codex",
+      label: "Codex test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+
+    await expect(
+      runSideQuestion({
+        provider: "openai",
+        model: "gpt-5.5",
+        sessionKey: DEFAULT_SESSION_KEY,
+      }),
+    ).rejects.toThrow('Selected agent harness "codex" does not support /btw side questions.');
+    expect(streamSimpleMock).not.toHaveBeenCalled();
+    expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
+  });
+
+  it("keeps the direct provider fallback for non-Codex harnesses without side-question hooks", async () => {
+    registerAgentHarness({
+      id: "custom",
+      label: "Custom test harness",
+      supports: () => ({ supported: true, priority: 100 }),
+      runAttempt: vi.fn(),
+    });
+    mockDoneAnswer("Direct fallback answer.");
+
+    const result = await runSideQuestion();
+
+    expect(result).toEqual({ text: "Direct fallback answer." });
+    expect(streamSimpleMock).toHaveBeenCalledTimes(1);
   });
 
   it("applies provider runtime auth before streaming github-copilot BTW questions", async () => {
@@ -773,7 +847,7 @@ describe("runBtwSideQuestion", () => {
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
     expect(diagDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),
+      "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
   });
 
@@ -792,9 +866,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(diagDebugMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("btw transcript persistence skipped"),
-    );
+    expect(diagDebugMock).not.toHaveBeenCalled();
   });
 
   it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {
@@ -824,7 +896,7 @@ describe("runBtwSideQuestion", () => {
     expect(messages.some((message) => message.role === "toolResult")).toBe(false);
   });
 
-  it("strips assistant tool calls from BTW context so no-tool side questions stay tool-free", async () => {
+  it("strips assistant tool calls from fallback BTW context so stale calls are not replayed", async () => {
     mockActiveTranscript([
       createUserTranscriptMessage(),
       createAssistantTranscriptMessage(

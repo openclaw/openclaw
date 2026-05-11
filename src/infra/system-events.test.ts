@@ -203,12 +203,10 @@ describe("system events (session routing)", () => {
     first.resetSystemEventsForTest();
     second.enqueueSystemEvent("Node connected", { sessionKey: key, contextKey: "build:123" });
 
-    expect(first.peekSystemEventEntries(key)).toEqual([
-      expect.objectContaining({
-        text: "Node connected",
-        contextKey: "build:123",
-      }),
-    ]);
+    const entries = first.peekSystemEventEntries(key);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.text).toBe("Node connected");
+    expect(entries[0]?.contextKey).toBe("build:123");
     expect(first.isSystemEventContextChanged(key, "build:123")).toBe(false);
     expect(first.drainSystemEvents(key)).toEqual(["Node connected"]);
 

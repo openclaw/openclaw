@@ -1105,9 +1105,9 @@ describe("updateNpmInstalledPlugins", () => {
     expect(installPluginFromNpmSpecMock).toHaveBeenCalledTimes(1);
     expect(fs.existsSync(peerLinkPath("brave"))).toBe(true);
     expect(fs.existsSync(peerLinkPath("codex"))).toBe(true);
-    expect(warnMessages).toContainEqual(
-      expect.stringContaining('Could not repair openclaw peer link for "broken"'),
-    );
+    expect(warnMessages).toEqual([
+      `Could not repair openclaw peer link for "broken" at ${brokenInstallPath}: Error: EEXIST: file already exists, mkdir '${path.join(brokenInstallPath, "node_modules")}'`,
+    ]);
   });
 
   it("refreshes legacy npm install records before skipping unchanged artifacts", async () => {
@@ -1969,7 +1969,9 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
-    expect(warnMessages).toEqual([expect.stringContaining("has no beta npm release")]);
+    expect(warnMessages).toEqual([
+      'Plugin "openclaw-codex-app-server" has no beta npm release for openclaw-codex-app-server@beta; falling back to openclaw-codex-app-server.',
+    ]);
     expectCodexAppServerInstallState({
       result,
       spec: "openclaw-codex-app-server",
@@ -2009,7 +2011,9 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(npmInstallCall(0)?.spec).toBe("openclaw-codex-app-server@beta");
     expect(npmInstallCall(1)?.spec).toBe("openclaw-codex-app-server");
-    expect(warnMessages).toEqual([expect.stringContaining("failed beta npm update")]);
+    expect(warnMessages).toEqual([
+      'Plugin "openclaw-codex-app-server" failed beta npm update for openclaw-codex-app-server@beta; falling back to openclaw-codex-app-server.',
+    ]);
     expectCodexAppServerInstallState({
       result,
       spec: "openclaw-codex-app-server",
@@ -2206,7 +2210,9 @@ describe("updateNpmInstalledPlugins", () => {
 
     expect(clawHubInstallCall(0)?.spec).toBe("clawhub:demo@beta");
     expect(clawHubInstallCall(1)?.spec).toBe("clawhub:demo");
-    expect(warnMessages).toEqual([expect.stringContaining("has no beta ClawHub release")]);
+    expect(warnMessages).toEqual([
+      'Plugin "demo" has no beta ClawHub release for clawhub:demo@beta; falling back to clawhub:demo.',
+    ]);
     expectRecordFields(result.config.plugins?.installs?.demo, {
       source: "clawhub",
       spec: "clawhub:demo",

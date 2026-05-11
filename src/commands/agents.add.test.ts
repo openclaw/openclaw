@@ -1,8 +1,11 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
@@ -32,6 +35,10 @@ import { agentsAddCommand } from "./agents.js";
 
 const runtime = createTestRuntime();
 
+function oauthProfileSecretId(authStorePath: string, profileId: string): string {
+  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
+}
+
 describe("agents add command", () => {
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
@@ -48,7 +55,10 @@ describe("agents add command", () => {
 
     await agentsAddCommand({ name: "Work" }, runtime, { hasFlags: true });
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
@@ -60,7 +70,10 @@ describe("agents add command", () => {
       hasFlags: false,
     });
 
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--workspace"));
+    expect(runtime.error).toHaveBeenCalledOnce();
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Non-interactive agent creation requires --workspace. Re-run ${formatCliCommand("openclaw agents add <id> --workspace <path>")} or omit flags to use the wizard.`,
+    );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
@@ -133,6 +146,67 @@ describe("agents add command", () => {
         "openai:default",
       ]);
     } finally {
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("copies portable Codex OAuth profiles without inline token material", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = root;
+    try {
+      const sourceAgentDir = path.join(root, "main", "agent");
+      const destAgentDir = path.join(root, "work", "agent");
+      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
+      const expires = Date.now() + 60_000;
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai-codex:default": {
+              type: "oauth",
+              provider: "openai-codex",
+              access: "codex-copy-access-token",
+              refresh: "codex-copy-refresh-token",
+              expires,
+              copyToAgents: true,
+            },
+          },
+        },
+        sourceAgentDir,
+      );
+
+      const result = await __testing.copyPortableAuthProfiles({
+        sourceAgentDir,
+        destAuthPath,
+      });
+
+      expect(result).toEqual({ copied: 1, skipped: 0 });
+      const copiedRaw = await fs.readFile(destAuthPath, "utf8");
+      expect(copiedRaw).not.toContain("codex-copy-access-token");
+      expect(copiedRaw).not.toContain("codex-copy-refresh-token");
+      const copied = JSON.parse(copiedRaw) as {
+        profiles: Record<string, Record<string, unknown>>;
+      };
+      const credential = copied.profiles["openai-codex:default"];
+      expect(credential).toStrictEqual({
+        type: "oauth",
+        provider: "openai-codex",
+        expires,
+        copyToAgents: true,
+        oauthRef: {
+          source: "openclaw-credentials",
+          provider: "openai-codex",
+          id: oauthProfileSecretId(destAuthPath, "openai-codex:default"),
+        },
+      });
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
       await fs.rm(root, { recursive: true, force: true });
     }
   });

@@ -169,21 +169,22 @@ describe("ACP translator event ledger replay", () => {
 
     await secondAgent.loadSession(createLoadSessionRequest(created.sessionId));
 
-    expect(secondRequestMock).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    expect(secondRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
     const replayedUpdates = secondConnection.__sessionUpdateMock.mock.calls.map(
       (call) => call[0]?.update,
     );
     const replayedUpdateTypes = replayedUpdates.map((update) => update?.sessionUpdate);
-    expect(replayedUpdateTypes).toEqual(
-      expect.arrayContaining([
-        "session_info_update",
-        "available_commands_update",
-        "user_message_chunk",
-        "tool_call",
-        "tool_call_update",
-        "agent_message_chunk",
-      ]),
-    );
+    expect(replayedUpdateTypes).toEqual([
+      "session_info_update",
+      "available_commands_update",
+      "user_message_chunk",
+      "tool_call",
+      "tool_call_update",
+      "agent_message_chunk",
+      "session_info_update",
+      "session_info_update",
+      "available_commands_update",
+    ]);
     expect(replayedUpdates).toContainEqual({
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "Question" },
@@ -223,13 +224,21 @@ describe("ACP translator event ledger replay", () => {
 
     await listedAgent.loadSession(createLoadSessionRequest(firstSession.sessionKey));
 
-    expect(listedRequestMock).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    expect(listedRequestMock.mock.calls.map((call) => call[0])).not.toContain("sessions.get");
     const listedReplayTypes = listedConnection.__sessionUpdateMock.mock.calls.map(
       (call) => call[0]?.update?.sessionUpdate,
     );
-    expect(listedReplayTypes).toEqual(
-      expect.arrayContaining(["user_message_chunk", "tool_call", "agent_message_chunk"]),
-    );
+    expect(listedReplayTypes).toEqual([
+      "session_info_update",
+      "available_commands_update",
+      "user_message_chunk",
+      "tool_call",
+      "tool_call_update",
+      "agent_message_chunk",
+      "session_info_update",
+      "session_info_update",
+      "available_commands_update",
+    ]);
 
     const listedPrompt = listedAgent.prompt(
       createPromptRequest(firstSession.sessionKey, "Follow-up"),
@@ -265,7 +274,7 @@ describe("ACP translator event ledger replay", () => {
     ).toHaveLength(2);
     await expect(
       eventLedger.readReplayBySessionId({ sessionId: firstSession.sessionKey }),
-    ).resolves.toMatchObject({ complete: false });
+    ).resolves.toEqual({ complete: false, events: [] });
 
     firstSessionStore.clearAllSessionsForTest();
   });

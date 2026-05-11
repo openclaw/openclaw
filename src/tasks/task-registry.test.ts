@@ -987,12 +987,12 @@ describe("task-registry", () => {
         },
       });
 
-      await waitForAssertion(() =>
-        expect(findTaskByRunId(runId)).toMatchObject({
-          status: "succeeded",
-          deliveryStatus: "session_queued",
-        }),
-      );
+      await waitForAssertion(() => {
+        const task = findTaskByRunId(runId);
+        expect(task).toBeDefined();
+        expect(task?.status).toBe("succeeded");
+        expect(task?.deliveryStatus).toBe("session_queued");
+      });
       expect(hoisted.sendMessageMock).not.toHaveBeenCalled();
       expect(peekSystemEvents(ownerKey)).toEqual([
         expect.stringContaining("Background task done: ACP background task"),

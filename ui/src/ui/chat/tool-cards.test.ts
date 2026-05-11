@@ -178,12 +178,11 @@ describe("tool-cards", () => {
     expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
     sidebarButton!.click();
 
-    expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "canvas",
-        docId: "cv_sidebar",
-        entryUrl: "/__openclaw__/canvas/documents/cv_sidebar/index.html",
-      }),
-    );
+    const sidebar = onOpenSidebar.mock.calls[0]?.[0] as
+      | { kind?: string; docId?: string; entryUrl?: string }
+      | undefined;
+    expect(sidebar?.kind).toBe("canvas");
+    expect(sidebar?.docId).toBe("cv_sidebar");
+    expect(sidebar?.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 });

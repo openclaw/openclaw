@@ -181,11 +181,11 @@ describe("loadDotEnv", () => {
 
         expect(process.env.FOO).toBe("from-global");
         expect(process.env.BAR).toBe("from-gateway");
-        expect(loggerMocks.warn).toHaveBeenCalledWith(
-          expect.stringContaining("Conflicting values in"),
-          expect.objectContaining({
-            ignoredPath: expect.stringContaining("gateway.env"),
-          }),
+        expect(loggerMocks.warn).toHaveBeenCalledOnce();
+        const [message, metadata] = loggerMocks.warn.mock.calls[0] ?? [];
+        expect(String(message)).toContain("Conflicting values in");
+        expect(String((metadata as { ignoredPath?: unknown } | undefined)?.ignoredPath)).toContain(
+          "gateway.env",
         );
       });
     });
