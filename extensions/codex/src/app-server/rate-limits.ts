@@ -177,8 +177,7 @@ function selectNextRateLimitReset(
     (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  candidates.sort((left, right) => left.resetsAtMs - right.resetsAtMs);
-  return candidates[0];
+  return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
 }
 
 function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string {
@@ -383,8 +382,7 @@ function selectSnapshotBlockingReset(
     (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  candidates.sort((left, right) => left.resetsAtMs - right.resetsAtMs);
-  return candidates[0];
+  return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
 }
 
 function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
