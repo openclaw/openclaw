@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { replaceFileAtomic } from "../infra/replace-file.js";
 import { makeMissingToolResult } from "./session-transcript-repair.js";
 import { STREAM_ERROR_FALLBACK_TEXT } from "./stream-message-shared.js";
