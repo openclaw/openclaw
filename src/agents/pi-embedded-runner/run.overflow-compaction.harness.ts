@@ -221,7 +221,9 @@ export const mockedGetApiKeyForModel = vi.fn(
   }),
 );
 export const mockedEnsureAuthProfileStore = vi.fn(() => ({}));
-export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(() => ({}));
+export const mockedEnsureAuthProfileStoreWithoutExternalProfiles = vi.fn(
+  (_agentDir?: string, _options?: { allowKeychainPrompt?: boolean }) => ({}),
+);
 export const mockedResolveAuthProfileOrder = vi.fn(() => [] as string[]);
 export const mockedMarkAuthProfileSuccess = vi.fn(async () => {});
 export const mockedShouldPreferExplicitConfigApiKeyAuth = vi.fn(() => false);

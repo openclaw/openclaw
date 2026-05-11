@@ -59,16 +59,18 @@ function requireArray(value: unknown, label: string): unknown[] {
 
 function mockCall(source: MockCallSource, index: number, label: string) {
   const call = source.mock.calls[index];
-  expect(call, label).toBeDefined();
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
   return call;
 }
 
 function responseCall(source: MockCallSource, index = 0) {
   const call = mockCall(source, index, `response call ${index}`);
   return {
-    ok: call?.[0],
-    result: call?.[1],
-    error: call?.[2],
+    ok: call[0],
+    result: call[1],
+    error: call[2],
   };
 }
 
@@ -87,8 +89,10 @@ function acceptedResult(source: MockCallSource) {
       ? (result as Record<string, unknown>).status === "accepted"
       : false;
   });
-  expect(call, "accepted response call").toBeDefined();
-  return requireRecord(call?.[1], "accepted response result");
+  if (!call) {
+    throw new Error("Expected accepted response call");
+  }
+  return requireRecord(call[1], "accepted response result");
 }
 
 function acceptedApprovalId(source: MockCallSource) {

@@ -8,7 +8,7 @@ describe("RealtimeTalkSession consult handoff", () => {
     let listener: ((event: { event: string; payload?: unknown }) => void) | undefined;
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "talk.client.toolCall") {
-        window.setTimeout(() => {
+        setImmediate(() => {
           listener?.({
             event: "chat",
             payload: {
@@ -17,7 +17,7 @@ describe("RealtimeTalkSession consult handoff", () => {
               message: { text: "Basement lights are off." },
             },
           });
-        }, 0);
+        });
         return { runId: "run-1" };
       }
       throw new Error(`unexpected request: ${method}`);

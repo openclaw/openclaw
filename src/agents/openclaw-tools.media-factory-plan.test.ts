@@ -265,9 +265,10 @@ describe("optional media tool factory planning", () => {
         pluginToolAllowlist: allowlistFromAlsoAllowOnlyPolicy,
       })
     ).map((tool) => tool.name);
-    expect(toolNames).toEqual(
-      expect.arrayContaining(["image_generate", "video_generate", "music_generate", "pdf"]),
-    );
+    expect(toolNames).toContain("image_generate");
+    expect(toolNames).toContain("video_generate");
+    expect(toolNames).toContain("music_generate");
+    expect(toolNames).toContain("pdf");
   });
 
   it("keeps denylists authoritative when alsoAllow-only policies preserve factory construction", () => {

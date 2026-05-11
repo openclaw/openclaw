@@ -176,18 +176,15 @@ describe("minimax provider hooks", () => {
       }),
     } as never);
 
-    const provider = "provider" in (catalog ?? {}) ? catalog?.provider : undefined;
-    expect(provider).toMatchObject({
-      api: "anthropic-messages",
-      authHeader: true,
-      baseUrl: "https://api.minimax.io/anthropic",
-    });
-    expect(provider?.models.find((model) => model.id === "MiniMax-M2.7")).toMatchObject({
-      id: "MiniMax-M2.7",
-      input: ["text"],
-      name: "MiniMax M2.7",
-      reasoning: true,
-    });
+    const provider = catalog && "provider" in catalog ? catalog.provider : undefined;
+    expect(provider?.api).toBe("anthropic-messages");
+    expect(provider?.authHeader).toBe(true);
+    expect(provider?.baseUrl).toBe("https://api.minimax.io/anthropic");
+    const model = provider?.models.find((entry: { id?: string }) => entry.id === "MiniMax-M2.7");
+    expect(model?.id).toBe("MiniMax-M2.7");
+    expect(model?.input).toEqual(["text"]);
+    expect(model?.name).toBe("MiniMax M2.7");
+    expect(model?.reasoning).toBe(true);
   });
 
   it("owns fast-mode stream wrapping for MiniMax transports", async () => {

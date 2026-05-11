@@ -67,12 +67,14 @@ describe("fireAndForgetBoundedHook", () => {
       { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
     );
 
-    await Promise.resolve();
-    expect(starts).toEqual(["first"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first"]);
+    });
     expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
 
     resolveFirst?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(starts).toEqual(["first", "second"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first", "second"]);
+    });
   });
 });

@@ -87,10 +87,19 @@ function expectErrorContaining(errorFn: unknown, text: string): void {
   expect(messages.some((message) => message.includes(text))).toBe(true);
 }
 
+function mockStringMessages(mocked: unknown): string[] {
+  return ((mocked as { mock?: { calls?: unknown[][] } }).mock?.calls ?? []).map((call) =>
+    typeof call[0] === "string" ? call[0] : call[0] instanceof Error ? call[0].message : "",
+  );
+}
+
 function mockCallArg(mocked: unknown, callIndex: number, argIndex: number): unknown {
   const calls = (mocked as { mock?: { calls?: unknown[][] } }).mock?.calls;
-  expect(calls?.[callIndex]).toBeDefined();
-  return calls?.[callIndex]?.[argIndex];
+  const call = calls?.[callIndex];
+  if (!call) {
+    throw new Error(`Expected mock call at index ${callIndex}`);
+  }
+  return call[argIndex];
 }
 
 async function expectPathMissing(targetPath: string): Promise<void> {
@@ -442,10 +451,14 @@ describe("web auto-reply connection", () => {
       await Promise.resolve();
       await run;
 
-      expect(runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("WhatsApp Web watchdog is recovering a stale connection"),
-      );
-      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("status 499"));
+      expect(
+        mockStringMessages(runtime.log).some((message) =>
+          message.includes("WhatsApp Web watchdog is recovering a stale connection"),
+        ),
+      ).toBe(true);
+      expect(
+        mockStringMessages(runtime.error).some((message) => message.includes("status 499")),
+      ).toBe(false);
       expect(
         statuses.some(
           (status) =>

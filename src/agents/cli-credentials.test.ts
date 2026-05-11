@@ -244,13 +244,13 @@ describe("cli credentials", () => {
       expectFields(first, {
         type: "oauth",
         provider: "anthropic",
-        access: expect.stringMatching(/^token-/),
+        access: "token-1735689600000",
         refresh: "cached-refresh",
       });
       expectFields(second, {
         type: "oauth",
         provider: "anthropic",
-        access: expect.stringMatching(/^token-/),
+        access: expectSameObject ? "token-1735689600000" : "token-1735690500001",
         refresh: "cached-refresh",
       });
       if (expectSameObject) {

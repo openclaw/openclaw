@@ -471,7 +471,6 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
       event: "chat",
       payload: { runId: "run-1", state: "final", message: { text: "late answer" } },
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(
       vi
         .mocked(client.request)

@@ -142,8 +142,10 @@ function expectError(result: CallResult, code: string, message: string): void {
 
 function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
   const call = mock.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
 }
 
 async function makeSkillArchive(params: {

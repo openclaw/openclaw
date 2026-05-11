@@ -768,9 +768,11 @@ describe("runContextEngineMaintenance", () => {
           status: "cancelled",
           notifyPolicy: "silent",
         });
-        expect(tasks.map((task) => task.runId)).toContainEqual(
-          expect.stringMatching(/^turn-maint:/),
-        );
+        expect(
+          tasks.some(
+            (task) => typeof task.runId === "string" && task.runId.startsWith("turn-maint:"),
+          ),
+        ).toBe(true);
       } finally {
         vi.useRealTimers();
       }

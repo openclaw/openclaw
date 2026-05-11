@@ -65,7 +65,7 @@ describe("doctor config flow steps", () => {
       warnings: [],
     } satisfies DoctorConfigPreflightResult["snapshot"]);
 
-    expect(result.issueLines).toEqual([expect.stringContaining("- heartbeat:")]);
+    expect(result.issueLines).toEqual(["- heartbeat: use agents.defaults.heartbeat"]);
     expect(result.changeLines).not.toStrictEqual([]);
     expect(result.state.fixHints).toContain(
       'Run "openclaw doctor --fix" to migrate legacy config keys.',

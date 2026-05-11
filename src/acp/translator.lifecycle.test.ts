@@ -351,6 +351,11 @@ describe("acp translator stable lifecycle handlers", () => {
         sessionUpdate: "session_info_update",
         title: "Work session",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+          spawnedWorkspaceDir: "/tmp/openclaw",
+        },
       },
     });
 

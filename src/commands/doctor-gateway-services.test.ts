@@ -202,8 +202,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 
 function callArg(mock: { mock: { calls: Array<Array<unknown>> } }, index: number, label: string) {
   const call = mock.mock.calls.at(index);
-  expect(call, label).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error(`Expected mock call: ${label}`);
+  }
+  return call[0];
 }
 
 function expectCallField(

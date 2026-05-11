@@ -105,7 +105,8 @@ function createChatFinalEvent(sessionKey: string): EventFrame {
 }
 
 async function expectOversizedPromptRejected(params: { sessionId: string; text: string }) {
-  const request = vi.fn(async () => ({ ok: true })) as GatewayClient["request"];
+  const requestMock = vi.fn(async (_method: string) => ({ ok: true }));
+  const request = requestMock as GatewayClient["request"];
   const sessionStore = createInMemorySessionStore();
   const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
     sessionStore,
@@ -115,7 +116,7 @@ async function expectOversizedPromptRejected(params: { sessionId: string; text: 
   await expect(agent.prompt(createPromptRequest(params.sessionId, params.text))).rejects.toThrow(
     /maximum allowed size/i,
   );
-  expect(request).not.toHaveBeenCalledWith("chat.send", expect.anything(), expect.anything());
+  expect(requestMock.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   const session = sessionStore.getSession(params.sessionId);
   expect(session?.activeRunId).toBeNull();
   expect(session?.abortController).toBeNull();
@@ -259,7 +260,14 @@ describe("acp session UX bridge behavior", () => {
     const result = await agent.newSession(createNewSessionRequest());
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.modes?.availableModes.map((mode) => mode.id)).toContain("adaptive");
+    expect(result.modes?.availableModes.map((mode) => mode.id)).toStrictEqual([
+      "off",
+      "minimal",
+      "low",
+      "medium",
+      "high",
+      "adaptive",
+    ]);
     expectConfigOption(result.configOptions, "thought_level", {
       currentValue: "adaptive",
       category: "thought_level",
@@ -378,6 +386,10 @@ describe("acp session UX bridge behavior", () => {
         sessionUpdate: "session_info_update",
         title: "Fix ACP bridge",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({
@@ -690,7 +702,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
   it("accepts forwarded timeout config options without failing OpenClaw ACP bridge turns", async () => {
     const sessionStore = createInMemorySessionStore();
     const connection = createAcpConnection();
-    const request = vi.fn(async (method: string) => {
+    const requestMock = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return {
           ts: Date.now(),
@@ -715,7 +727,8 @@ describe("acp setSessionConfigOption bridge behavior", () => {
       }
       expect(method).not.toBe("sessions.patch");
       return { ok: true };
-    }) as GatewayClient["request"];
+    });
+    const request = requestMock as GatewayClient["request"];
     const agent = new AcpGatewayAgent(connection, createAcpGateway(request), {
       sessionStore,
     });
@@ -727,7 +740,7 @@ describe("acp setSessionConfigOption bridge behavior", () => {
     );
     expect(Array.isArray(result.configOptions)).toBe(true);
 
-    expect(request).not.toHaveBeenCalledWith("sessions.patch", expect.anything());
+    expect(requestMock.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
 
     sessionStore.clearAllSessionsForTest();
   });
@@ -950,6 +963,10 @@ describe("acp session metadata and usage updates", () => {
         sessionUpdate: "session_info_update",
         title: "Usage session",
         updatedAt: "2024-03-09T16:02:03.000Z",
+        _meta: {
+          sessionKey: "usage-session",
+          kind: "direct",
+        },
       },
     });
     expect(sessionUpdate).toHaveBeenCalledWith({

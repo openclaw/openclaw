@@ -331,7 +331,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -347,8 +349,10 @@ function gatewayRequests(): Array<{ method?: string; params?: Record<string, unk
 
 function gatewayRequest(method: string): { method?: string; params?: Record<string, unknown> } {
   const request = gatewayRequests().find((candidate) => candidate.method === method);
-  expect(request).toBeDefined();
-  return request as { method?: string; params?: Record<string, unknown> };
+  if (!request) {
+    throw new Error(`Expected gateway request for ${method}`);
+  }
+  return request;
 }
 
 function expectGatewayMethodNotCalled(method: string): void {

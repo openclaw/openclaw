@@ -101,10 +101,12 @@ describe("gateway status output", () => {
       discoveryCount: 0,
     });
 
-    const warning = warnings.find((entry) => entry.code === "no_gateway_reachable");
-    expect(warning?.message).toContain("openclaw gateway status --deep --require-rpc");
-    expect(warning?.targetIds).toStrictEqual(["localLoopback"]);
-    expect(warning?.message).toContain("lsof -nP -iTCP:<port>");
+    expect(warnings.find((entry) => entry.code === "no_gateway_reachable")).toStrictEqual({
+      code: "no_gateway_reachable",
+      message:
+        "No gateway answered any probe and Bonjour discovery returned no local gateways. Run `openclaw gateway status --deep --require-rpc` to inspect service state, config paths, listener owners, and logs; include `ss -ltnp` or `lsof -nP -iTCP:<port> -sTCP:LISTEN` for the configured port when filing a report.",
+      targetIds: ["localLoopback"],
+    });
   });
 
   it("derives summary capability from reachable probes only in json output", () => {

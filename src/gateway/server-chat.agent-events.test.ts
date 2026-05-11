@@ -186,7 +186,6 @@ describe("agent event handler", () => {
     label: string,
   ) {
     const call = mock.mock.calls[index];
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing ${label} call ${index + 1}`);
     }

@@ -1,13 +1,10 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
-
-function loggedMessages(runtime: ReturnType<typeof createCleanupCommandRuntime>) {
-  return runtime.log.mock.calls.map(([message]) => String(message));
-}
 
 const { uninstallCommand } = await import("./uninstall.js");
 
@@ -28,7 +25,9 @@ describe("uninstallCommand", () => {
     });
 
     expect(
-      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
     ).toBe(true);
   });
 
@@ -41,7 +40,9 @@ describe("uninstallCommand", () => {
     });
 
     expect(
-      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
     ).toBe(false);
   });
 });

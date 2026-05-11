@@ -150,16 +150,23 @@ type MockWithCalls = {
 };
 
 function mockCallArg(mock: MockWithCalls, callIndex = 0, argIndex = 0): unknown {
-  const call = mock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return call?.[argIndex];
+  const call = mock.mock.calls.at(callIndex);
+  if (!call) {
+    throw new Error(`Expected mock call ${callIndex}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`Expected mock call ${callIndex} argument ${argIndex}`);
+  }
+  return call[argIndex];
 }
 
 function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -250,10 +257,14 @@ describe("runEmbeddedPiAgent overflow compaction trigger routing", () => {
     });
 
     expect(mockedEnsureAuthProfileStore).not.toHaveBeenCalled();
-    expect(mockedEnsureAuthProfileStoreWithoutExternalProfiles).toHaveBeenCalledWith(
-      expect.stringMatching(/[/\\]\.openclaw[/\\]agents[/\\]main[/\\]agent$/),
-      { allowKeychainPrompt: false },
-    );
+    const authStoreCall = mockedEnsureAuthProfileStoreWithoutExternalProfiles.mock.calls[0] as
+      | [string | undefined, { allowKeychainPrompt?: boolean } | undefined]
+      | undefined;
+    expect(typeof authStoreCall?.[0]).toBe("string");
+    expect(
+      String(authStoreCall?.[0]).replaceAll("\\", "/").endsWith("/.openclaw/agents/main/agent"),
+    ).toBe(true);
+    expect(authStoreCall?.[1]).toEqual({ allowKeychainPrompt: false });
   });
 
   it("forwards optional attempt params and the runtime plan into one attempt call", async () => {

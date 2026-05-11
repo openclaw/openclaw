@@ -112,7 +112,7 @@ describe("doctor plugin manifest legacy contract repair", () => {
 
     expect(migrations).toHaveLength(1);
     expect(migrations[0]?.changeLines).toEqual([
-      expect.stringContaining("moved speechProviders to contracts.speechProviders"),
+      `- ${path.join(root, "openclaw.plugin.json")}: moved speechProviders to contracts.speechProviders`,
     ]);
   });
 

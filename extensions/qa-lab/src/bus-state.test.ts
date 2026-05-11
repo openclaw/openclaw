@@ -61,7 +61,7 @@ describe("qa-bus state", () => {
     expect(snapshot.messages[0]?.reactions).toHaveLength(1);
     expect(snapshot.messages[0]?.reactions[0]?.emoji).toBe("eyes");
     expect(snapshot.messages[0]?.reactions[0]?.senderId).toBe("alice");
-    expect(snapshot.messages[0]?.reactions[0]?.timestamp).toEqual(expect.any(Number));
+    expect(typeof snapshot.messages[0]?.reactions[0]?.timestamp).toBe("number");
   });
 
   it("waits for a text match and rejects on timeout", async () => {

@@ -86,8 +86,10 @@ function callArg(
   label: string,
 ) {
   const call = mock.mock.calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
 }
 
 function expectDynamicSpec(

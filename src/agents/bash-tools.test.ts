@@ -958,7 +958,7 @@ describe("exec backgrounded onUpdate suppression", () => {
       ]);
       // Abort almost immediately so the signal fires while the command
       // is still producing output.
-      setTimeout(() => abortController.abort(), 0);
+      setImmediate(() => abortController.abort());
       await execTool.execute(nextCallId(), { command }, abortController.signal, onUpdateSpy);
       const callsAtAbort = onUpdateSpy.mock.calls.length;
       // Allow a tick for any straggling stdout data events.

@@ -177,9 +177,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://my-host.tail1234.ts.net",
-    );
+    ]);
   });
 
   it("adds Tailscale origin to controlUi.allowedOrigins when tailscale funnel is enabled", async () => {
@@ -191,9 +191,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, password }) => ({ mode, password }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://my-host.tail1234.ts.net",
-    );
+    ]);
   });
 
   it("does not add Tailscale origin when getTailnetHostname fails", async () => {
@@ -237,9 +237,9 @@ describe("promptGatewayConfig", () => {
       confirmResult: true,
       authConfigFactory: ({ mode, token }) => ({ mode, token }),
     });
-    expect(result.config.gateway?.controlUi?.allowedOrigins).toContain(
+    expect(result.config.gateway?.controlUi?.allowedOrigins).toEqual([
       "https://[fd7a:115c:a1e0::12]",
-    );
+    ]);
   });
 
   it("stores gateway token as SecretRef when token source is ref", async () => {

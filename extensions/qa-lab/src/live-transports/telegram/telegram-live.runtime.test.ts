@@ -28,8 +28,10 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
 
 function requireScenario<T extends { id: string }>(scenarios: T[], id: string): T {
   const scenario = scenarios.find((candidate) => candidate.id === id);
-  expect(scenario).toBeDefined();
-  return scenario as T;
+  if (!scenario) {
+    throw new Error(`Expected scenario ${id}`);
+  }
+  return scenario;
 }
 
 describe("telegram live qa runtime", () => {

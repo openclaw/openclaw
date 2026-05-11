@@ -29,16 +29,23 @@ async function freePort(): Promise<number> {
 }
 
 async function waitForProbeFailure(url: string): Promise<void> {
-  const deadline = Date.now() + 2_000;
-  while (Date.now() < deadline) {
-    try {
-      await fetch(url);
-    } catch {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, 50));
+  try {
+    await expect
+      .poll(
+        async () => {
+          try {
+            await fetch(url);
+            return false;
+          } catch {
+            return true;
+          }
+        },
+        { timeout: 2_000, interval: 50 },
+      )
+      .toBe(true);
+  } catch {
+    throw new Error("local service still responded after idle stop");
   }
-  throw new Error("local service still responded after idle stop");
 }
 
 describe("provider local service", () => {

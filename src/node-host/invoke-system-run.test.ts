@@ -656,8 +656,11 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         expect(transparent.runCommand).not.toHaveBeenCalled();
         expectInvokeErrorMessage(transparent.sendInvokeResult, { message: "allowlist miss" });
       } else {
+        const expectedTrPath = fs.realpathSync(
+          fs.existsSync("/usr/bin/tr") ? "/usr/bin/tr" : "/bin/tr",
+        );
         expect(requireFirstRunCommandArgs(transparent.runCommand)).toEqual([
-          expect.stringMatching(/(^|[/\\])tr$/),
+          expectedTrPath,
           "a",
           "b",
         ]);

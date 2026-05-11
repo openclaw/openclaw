@@ -1,13 +1,10 @@
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
+  cleanupCommandLogMessages,
   createCleanupCommandRuntime,
   resetCleanupCommandMocks,
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
-
-function loggedMessages(runtime: ReturnType<typeof createCleanupCommandRuntime>) {
-  return runtime.log.mock.calls.map(([message]) => String(message));
-}
 
 describe("resetCommand", () => {
   const runtime = createCleanupCommandRuntime();
@@ -31,7 +28,9 @@ describe("resetCommand", () => {
     });
 
     expect(
-      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
     ).toBe(true);
   });
 
@@ -44,7 +43,9 @@ describe("resetCommand", () => {
     });
 
     expect(
-      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+      cleanupCommandLogMessages(runtime).some((message) =>
+        message.includes("openclaw backup create"),
+      ),
     ).toBe(false);
   });
 });

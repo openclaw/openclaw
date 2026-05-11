@@ -112,7 +112,7 @@ describe("telegramPlugin gateway startup", () => {
     await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
     expect(ctx.log?.error).toHaveBeenCalledWith(
-      expect.stringContaining('Telegram bot token unauthorized for account "ops"'),
+      '[ops] Telegram bot token unauthorized for account "ops" (getMe returned 401 from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.',
     );
   });
 

@@ -428,7 +428,10 @@ describe("gateway-cli coverage", () => {
       startGatewayServer.mockRejectedValueOnce(new Error("nope"));
       await expectGatewayExit(["gateway", "--token", "test-token", "--allow-unconfigured"]);
 
-      expect(startGatewayServer).toHaveBeenCalledWith(19001, expect.anything());
+      expect(startGatewayServer).toHaveBeenCalledTimes(1);
+      const startCall = startGatewayServer.mock.calls[0];
+      expect(startCall?.[0]).toBe(19001);
+      expect(typeof startCall?.[1]).toBe("object");
     });
   });
 });

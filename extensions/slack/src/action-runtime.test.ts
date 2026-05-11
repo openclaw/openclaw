@@ -73,7 +73,6 @@ describe("handleSlackAction", () => {
 
   function requireSlackSendCall(index: number) {
     const call = sendSlackMessage.mock.calls[index] as unknown[] | undefined;
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing Slack send call ${index + 1}`);
     }

@@ -43,12 +43,16 @@ describe("acquireFileLock", () => {
       "utf8",
     );
 
-    await expect(acquireFileLock(filePath, options)).rejects.toSatisfy((error) => {
-      const lockError = error as { code?: string; lockPath?: string };
-      expect(lockError.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
-      expect(lockError.lockPath).toMatch(/oauth-refresh\.lock$/);
-      return true;
-    });
+    let caught: { code?: string; lockPath?: string } | undefined;
+    try {
+      await acquireFileLock(filePath, options);
+    } catch (error) {
+      caught = error as { code?: string; lockPath?: string };
+    }
+    expect(caught?.code).toBe(FILE_LOCK_TIMEOUT_ERROR_CODE);
+    expect(caught?.lockPath ? path.relative(await fs.realpath(tempDir), caught.lockPath) : "").toBe(
+      "oauth-refresh.lock",
+    );
   }, 5_000);
 
   it("closes an opened lock handle when writing the owner payload fails", async () => {

@@ -53,17 +53,16 @@ let resolveModelAsync: typeof import("./model.js").resolveModelAsync;
 function expectWorkspaceHookCall(mock: { mock: { calls: unknown[][] } }) {
   expect(mock.mock.calls).toHaveLength(1);
   const [arg] = mock.mock.calls[0] ?? [];
-  expect(arg).toBeTruthy();
   if (!arg || typeof arg !== "object") {
     throw new Error("Expected runtime hook call argument");
   }
   const call = arg as { context?: unknown; workspaceDir?: unknown };
   expect(call.workspaceDir).toBe("/tmp/workspace");
-  expect(call.context).toBeTruthy();
   if (!call.context || typeof call.context !== "object") {
     throw new Error("Expected runtime hook context");
   }
-  expect((call.context as { workspaceDir?: unknown }).workspaceDir).toBe("/tmp/workspace");
+  const context = call.context as { workspaceDir?: unknown };
+  expect(context.workspaceDir).toBe("/tmp/workspace");
 }
 
 beforeEach(async () => {

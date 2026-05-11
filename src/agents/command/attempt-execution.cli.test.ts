@@ -109,7 +109,9 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
 
 function requireMockArg(mock: typeof runCliAgentMock, callIndex: number, label: string) {
   const arg = mock.mock.calls[callIndex]?.[0];
-  expect(arg).toBeDefined();
+  if (arg === undefined) {
+    throw new Error(`Expected mock argument for ${label}`);
+  }
   return requireRecord(arg, label);
 }
 

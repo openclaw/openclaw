@@ -131,7 +131,6 @@ function expectSummaryFields(
 
 function requireItem(items: MigrationItem[], id: string): MigrationItem {
   const item = items.find((candidate) => candidate.id === id);
-  expect(item).toBeDefined();
   if (!item) {
     throw new Error(`missing migration item ${id}`);
   }

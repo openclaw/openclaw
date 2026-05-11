@@ -102,7 +102,13 @@ function requireString(value: unknown, label: string): string {
 }
 
 function isLowerHex(value: string): boolean {
-  return [...value].every((char) => (char >= "0" && char <= "9") || (char >= "a" && char <= "f"));
+  for (let index = 0; index < value.length; index += 1) {
+    const code = value.charCodeAt(index);
+    if (!((code >= 48 && code <= 57) || (code >= 97 && code <= 102))) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function isUuidV4(value: string): boolean {

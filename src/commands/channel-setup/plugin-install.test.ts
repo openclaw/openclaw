@@ -301,7 +301,10 @@ async function runInitialValueForChannel(channel: "dev" | "beta") {
   });
 
   const call = select.mock.calls[0];
-  return call?.[0]?.initialValue;
+  if (!call) {
+    throw new Error("Expected select call");
+  }
+  return call[0]?.initialValue;
 }
 
 function expectPluginLoadedFromLocalPath(

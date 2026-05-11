@@ -56,21 +56,6 @@ function createModelsProviderData(entries: Record<string, string[]>): ModelsProv
   return createBaseModelsProviderData(entries, { defaultProviderOrder: "sorted" });
 }
 
-async function waitForCondition(
-  predicate: () => boolean,
-  opts?: { attempts?: number; delayMs?: number },
-): Promise<void> {
-  const attempts = opts?.attempts ?? 50;
-  const delayMs = opts?.delayMs ?? 0;
-  for (let index = 0; index < attempts; index += 1) {
-    if (predicate()) {
-      return;
-    }
-    await new Promise((resolve) => setTimeout(resolve, delayMs));
-  }
-  throw new Error("condition not met");
-}
-
 function createModelPickerContext(): ModelPickerContext {
   const cfg = {
     session: {
@@ -541,7 +526,7 @@ describe("Discord model picker interactions", () => {
     await button.run(submitInteraction as unknown as PickerButtonInteraction, submitData);
 
     expect(withTimeoutSpy).toHaveBeenCalledTimes(1);
-    await waitForCondition(() => dispatchSpy.mock.calls.length === 1);
+    await vi.waitFor(() => expect(dispatchSpy).toHaveBeenCalledTimes(1));
     expect(submitInteraction.followUp).toHaveBeenCalledTimes(1);
     const followUpPayload = submitInteraction.followUp.mock.calls[0]?.[0] as {
       components?: Array<{ components?: Array<{ content?: string }> }>;

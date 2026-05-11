@@ -42,7 +42,6 @@ function requireMockCall(mock: unknown, index: number, label: string): unknown[]
     throw new Error(`${label} did not expose mock calls`);
   }
   const call = calls[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call ${index + 1}`);
   }

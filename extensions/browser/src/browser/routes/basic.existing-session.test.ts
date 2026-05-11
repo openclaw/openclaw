@@ -335,7 +335,7 @@ describe("basic browser routes", () => {
           [number, { ephemeral?: boolean; signal?: AbortSignal }]
         >
       )[0] ?? [];
-    expect(timeoutMs).toEqual(expect.any(Number));
+    expect(timeoutMs).toBe(7_000);
     expect(reachabilityOptions?.ephemeral).toBe(true);
     expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(isHttpReachable).not.toHaveBeenCalled();

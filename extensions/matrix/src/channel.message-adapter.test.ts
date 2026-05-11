@@ -52,7 +52,6 @@ describe("matrix channel message adapter", () => {
 
   it("backs declared durable-final capabilities with runtime outbound proofs", async () => {
     const adapter = matrixPlugin.message;
-    expect(adapter).toBeDefined();
     if (!adapter?.send?.text || !adapter.send.media) {
       throw new Error("Expected Matrix message adapter send capabilities.");
     }

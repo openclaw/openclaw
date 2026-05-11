@@ -1045,7 +1045,9 @@ describe("agent request events", () => {
     // server-node-events must log-and-return on parse failure — no agent
     // dispatch, no crash, and the refusal reason bubbles up via logGateway.
     expect(agentCommandMock).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringMatching(/attachment parse failed.*non-image/i));
+    expect(warn).toHaveBeenCalledWith(
+      "agent.request attachment parse failed: attachment a.pdf: non-image attachments not supported",
+    );
   });
 
   beforeEach(() => {

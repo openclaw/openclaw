@@ -84,7 +84,7 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
       expect(state.running).toBe(false);
 
       // The timer must be re-armed.
-      expect(state.timer).toEqual(expect.anything());
+      expect(state.timer).not.toBeNull();
     });
   });
 

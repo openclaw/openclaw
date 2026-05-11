@@ -276,8 +276,6 @@ describe("backup commands", () => {
 
       const stateAsset = result.assets.find((asset) => asset.kind === "state");
       const workspaceAsset = result.assets.find((asset) => asset.kind === "workspace");
-      expect(stateAsset).toBeDefined();
-      expect(workspaceAsset).toBeDefined();
       if (!stateAsset || !workspaceAsset) {
         throw new Error("Expected backup assets to include state and workspace entries.");
       }
@@ -329,8 +327,6 @@ describe("backup commands", () => {
         ) => {
           const manifestPath = entryPaths[0];
           const stateRoot = entryPaths[1];
-          expect(manifestPath).toBeDefined();
-          expect(stateRoot).toBeDefined();
           if (!manifestPath || !stateRoot) {
             throw new Error("backup test expected manifest and state entries");
           }

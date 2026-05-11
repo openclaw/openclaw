@@ -234,7 +234,7 @@ describe("cdp.helpers internal", () => {
         connectionCount += 1;
         socket.on("message", () => {
           // Defer close so the pending entry is definitely registered.
-          setTimeout(() => socket.close(), 10);
+          setImmediate(() => socket.close());
         });
       });
       await expect(

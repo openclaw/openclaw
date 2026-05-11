@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/config.js";
 import * as mediaStore from "../../media/store.js";
 import * as webMedia from "../../media/web-media.js";
 import * as musicGenerationRuntime from "../../music-generation/runtime.js";
+import * as fetchTimeout from "../../utils/fetch-timeout.js";
 import * as musicGenerateBackground from "./music-generate-background.js";
 import { createMusicGenerateTool } from "./music-generate-tool.js";
 
@@ -103,6 +104,15 @@ vi.mock("../../media/web-media.js", async () => {
   };
 });
 vi.mock("../../music-generation/runtime.js", () => musicGenerationRuntimeMocks);
+vi.mock("../../utils/fetch-timeout.js", async () => {
+  const actual = await vi.importActual<typeof import("../../utils/fetch-timeout.js")>(
+    "../../utils/fetch-timeout.js",
+  );
+  return {
+    ...actual,
+    buildTimeoutAbortSignal: vi.fn(actual.buildTimeoutAbortSignal),
+  };
+});
 vi.mock("./music-generate-background.js", () => musicGenerateBackgroundMocks);
 vi.mock("../../tasks/runtime-internal.js", () => taskRuntimeInternalMocks);
 vi.mock("../../tasks/detached-task-runtime.js", () => taskExecutorMocks);
@@ -128,6 +138,7 @@ function resetMusicGenerateMocks() {
   mediaStoreMocks.saveMediaBuffer.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReset();
   taskRuntimeInternalMocks.listTasksForOwnerKey.mockReturnValue([]);
+  vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mockClear();
   taskExecutorMocks.createRunningTaskRun.mockReset();
   taskExecutorMocks.completeTaskRunByRunId.mockReset();
   taskExecutorMocks.failTaskRunByRunId.mockReset();
@@ -406,6 +417,57 @@ describe("createMusicGenerateTool", () => {
       applied: 10_000,
       minimum: 10_000,
     });
+  });
+
+  it("uses configured timeoutMs for music generation and lets calls override it", async () => {
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "night-drive.mp3",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-night-drive.mp3",
+      id: "generated-night-drive.mp3",
+      size: 11,
+      contentType: "audio/mpeg",
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "night-drive synthwave",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "night-drive synthwave",
+      timeoutMs: 12_345,
+    });
+
+    expect(generateMusicOptions(0).timeoutMs).toBe(180_000);
+    expect(generateMusicOptions(1).timeoutMs).toBe(12_345);
+    expect(detailsOf(defaultResult).timeoutMs).toBe(180_000);
+    expect(detailsOf(overrideResult).timeoutMs).toBe(12_345);
   });
 
   it("starts background generation and wakes the session with MEDIA lines", async () => {
@@ -727,7 +789,7 @@ describe("createMusicGenerateTool", () => {
       config: asConfig({
         agents: {
           defaults: {
-            musicGenerationModel: { primary: "minimax/music-2.6" },
+            musicGenerationModel: { primary: "minimax/music-2.6", timeoutMs: 180_000 },
           },
         },
         tools: { web: { fetch: { ssrfPolicy: { allowRfc2544BenchmarkRange: true } } } },
@@ -751,5 +813,12 @@ describe("createMusicGenerateTool", () => {
     };
     expect(loadOptions.requestInit?.signal).toBeInstanceOf(AbortSignal);
     expect(loadOptions.ssrfPolicy).toEqual({ allowRfc2544BenchmarkRange: true });
+    expect(generateMusicOptions().timeoutMs).toBe(180_000);
+    expect(fetchTimeout.buildTimeoutAbortSignal).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchTimeout.buildTimeoutAbortSignal).mock.calls[0]?.[0]).toEqual({
+      operation: "music-generate.reference-fetch",
+      timeoutMs: 30_000,
+      url: "http://198.18.0.153/reference.png",
+    });
   });
 });

@@ -355,9 +355,11 @@ describe("runConfigureWizard", () => {
     await expect(runWebConfigureWizard()).resolves.toBeUndefined();
 
     expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining(
+      [
         "No web search providers are currently available under this plugin policy.",
-      ),
+        "Enable plugins or remove deny rules, then rerun configure.",
+        "Docs: https://docs.openclaw.ai/tools/web",
+      ].join("\n"),
       "Web search",
     );
     expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);

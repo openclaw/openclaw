@@ -400,13 +400,13 @@ describe("gateway-status command", () => {
       degraded?: boolean;
       warnings?: Array<{ code?: string; message?: string; targetIds?: string[] }>;
     };
-    expect(parsed.degraded).toBe(true);
+    expect(parsed.degraded).toBe(false);
     const pricingWarnings =
       parsed.warnings?.filter((warning) => warning.code === "model_pricing_degraded") ?? [];
     expect(pricingWarnings).toHaveLength(2);
     expect(pricingWarnings.map((warning) => warning.message)).toEqual([
-      "Model pricing degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
-      "Model pricing degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
+      "Model pricing warning: optional pricing refresh degraded: OpenRouter pricing fetch failed: TypeError: fetch failed",
     ]);
     expect(pricingWarnings.map((warning) => warning.targetIds)).toEqual([
       ["sshTunnel"],

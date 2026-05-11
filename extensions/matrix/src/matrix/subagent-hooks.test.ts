@@ -114,7 +114,6 @@ function requireBindCallWithTarget(targetSessionKey: string) {
     const record = params as { targetSessionKey?: string };
     return record.targetSessionKey === targetSessionKey;
   });
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing bind call for ${targetSessionKey}`);
   }

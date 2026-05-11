@@ -1,7 +1,11 @@
-import { escapeRegExp, formatEnvelopeTimestamp } from "openclaw/plugin-sdk/channel-test-helpers";
+import {
+  escapeRegExp,
+  formatEnvelopeTimestamp,
+  stripAnsi,
+} from "openclaw/plugin-sdk/channel-test-helpers";
 import type { GetReplyOptions, MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { stripAnsi } from "../../../src/terminal/ansi.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 const harness = await import("./bot.create-telegram-bot.test-harness.js");
 const conversationRuntime = await import("openclaw/plugin-sdk/conversation-runtime");
@@ -246,7 +250,9 @@ describe("createTelegramBot", () => {
 
     expect(errorHandler).toBeTypeOf("function");
     errorHandler?.(new Error("handler boom"));
-    const errorMessage = stripAnsi(String(runtime.error.mock.calls[0]?.[0]));
+    const errorCalls = (runtime.error as unknown as { mock: { calls: Array<[unknown]> } }).mock
+      .calls;
+    const errorMessage = sanitizeTerminalText(String(errorCalls[0]?.[0]));
     expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
   });
 
@@ -439,9 +445,8 @@ describe("createTelegramBot", () => {
     const sequentializer = sequentializeSpy.mock.results[0]?.value as
       | TelegramMiddleware
       | undefined;
-    expect(sequentializer).toBeDefined();
     if (!sequentializer) {
-      return;
+      throw new Error("Expected sequentialize middleware");
     }
 
     const topicCtx = (threadId: number, updateId: number) => {

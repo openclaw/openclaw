@@ -78,6 +78,40 @@ describe("browser remote profile fallback and attachOnly behavior", () => {
     expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
   });
 
+  it("filters browser-internal targets from raw CDP tab listing", async () => {
+    vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
+    const { remote } = deps.createRemoteRouteHarness(
+      vi.fn(
+        deps.createJsonListFetchMock([
+          {
+            id: "OMNI",
+            title: "Omnibox Popup",
+            url: "chrome://omnibox-popup.top-chrome/",
+            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/OMNI",
+            type: "page",
+          },
+          {
+            id: "UNTRUSTED",
+            title: "Untrusted",
+            url: "chrome-untrusted://foo/",
+            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/UNTRUSTED",
+            type: "page",
+          },
+          {
+            id: "T1",
+            title: "Tab 1",
+            url: "https://example.com",
+            webSocketDebuggerUrl: "wss://browserless.example/devtools/page/T1",
+            type: "page",
+          },
+        ]),
+      ),
+    );
+
+    const tabs = await remote.listTabs();
+    expect(tabs.map((t) => t.targetId)).toEqual(["T1"]);
+  });
+
   it("fails closed for remote tab opens in strict mode without Playwright", async () => {
     vi.spyOn(deps.pwAiModule, "getPwAiModule").mockResolvedValue(null);
     const { state, remote, fetchMock } = deps.createRemoteRouteHarness();

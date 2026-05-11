@@ -79,6 +79,9 @@ function mockArg(source: MockCallSource, callIndex: number, argIndex: number, la
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
   }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call argument ${argIndex}: ${label}`);
+  }
   return call[argIndex];
 }
 

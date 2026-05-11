@@ -269,9 +269,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "main");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "main");
     const defaultSessionEntry = sessionStore["voice:15550001111"];
-    expect(defaultSessionEntry).toBeDefined();
+    if (!defaultSessionEntry) {
+      throw new Error("Expected default voice session entry");
+    }
     expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      defaultSessionEntry?.sessionId,
+      defaultSessionEntry.sessionId,
       defaultSessionEntry,
       {
         agentId: "main",
@@ -317,9 +319,11 @@ describe("generateVoiceResponse", () => {
     expect(resolveAgentWorkspaceDir).toHaveBeenCalledWith(coreConfig, "voice");
     expect(resolveAgentIdentity).toHaveBeenCalledWith(coreConfig, "voice");
     const voiceSessionEntry = sessionStore["voice:15550001111"];
-    expect(voiceSessionEntry).toBeDefined();
+    if (!voiceSessionEntry) {
+      throw new Error("Expected routed voice session entry");
+    }
     expect(resolveSessionFilePath).toHaveBeenCalledWith(
-      voiceSessionEntry?.sessionId,
+      voiceSessionEntry.sessionId,
       voiceSessionEntry,
       {
         agentId: "voice",

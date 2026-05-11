@@ -258,7 +258,6 @@ describe("openrouter video generation provider", () => {
     });
     expect(rows).toHaveLength(1);
     const row = rows[0];
-    expect(row).toBeDefined();
     if (!row) {
       throw new Error("expected OpenRouter catalog row");
     }

@@ -36,6 +36,7 @@ import type {
 } from "../plugins/hook-types.js";
 import { normalizeAgentId, toAgentStoreSessionKey } from "../routing/session-key.js";
 import { defaultRuntime } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import {
   dispatchGatewayCronFinishedNotifications,
   sendGatewayCronFailureAlert,
@@ -196,30 +197,38 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+  const resolveCronTarget = (opts?: {
+    agentId?: string | null;
+    sessionKey?: string | null;
+    preserveUntargeted?: boolean;
+  }) => {
     const requestedAgentId =
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
+    const requestedSessionKey =
+      typeof opts?.sessionKey === "string" && opts.sessionKey.trim() ? opts.sessionKey : undefined;
+    if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
+      return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
+    }
+
+    // Derive from canonical agent-prefixed keys only. Relative keys intentionally
+    // fall through to the configured default instead of hardcoding "main".
     const derivedAgentId =
-      requestedAgentId ??
-      (opts?.sessionKey
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(opts.sessionKey))
-        : undefined);
-    const runtimeConfigBase = getRuntimeConfig();
-    const runtimeConfig =
-      derivedAgentId !== undefined
-        ? mergeRuntimeAgentConfig(runtimeConfigBase, derivedAgentId)
-        : runtimeConfigBase;
-    const agentId = derivedAgentId || undefined;
-    const sessionKey =
-      opts?.sessionKey && agentId
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: opts.sessionKey,
-          })
+      requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
+        ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
+    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
+      requestedAgentId ?? derivedAgentId,
+    );
+    const agentId = resolvedAgentId || undefined;
+    const sessionKey = agentId
+      ? resolveCronSessionKey({
+          runtimeConfig,
+          agentId,
+          requestedSessionKey,
+        })
+      : undefined;
     return { runtimeConfig, agentId, sessionKey };
   };
 
@@ -279,12 +288,10 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(opts?.agentId);
-      const sessionKey = resolveCronSessionKey({
-        runtimeConfig,
-        agentId,
-        requestedSessionKey: opts?.sessionKey,
-      });
+      const { sessionKey } = resolveCronTarget(opts);
+      if (!sessionKey) {
+        throw new Error("Cron system event target did not resolve a session key.");
+      }
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
@@ -292,7 +299,7 @@ export function buildGatewayCronService(params: {
       });
     },
     requestHeartbeat: (opts) => {
-      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",
@@ -303,7 +310,10 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: true,
+      });
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         source: opts?.source ?? "cron",

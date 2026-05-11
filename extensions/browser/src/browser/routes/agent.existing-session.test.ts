@@ -115,8 +115,10 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 function callArg(mock: unknown, callIndex: number, argIndex: number, label: string) {
   const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
   const call = calls.at(callIndex);
-  expect(call, label).toBeDefined();
-  return call?.[argIndex];
+  if (!call) {
+    throw new Error(`Expected ${label}`);
+  }
+  return call[argIndex];
 }
 
 function expectExistingSessionProfile(value: unknown) {

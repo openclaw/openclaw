@@ -180,6 +180,37 @@ describe("resolveToolsBySender", () => {
     ).toEqual({ allow: ["exec"] });
   });
 
+  it("matches channel-scoped sender IDs through canonical channel aliases", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "channel:msteams:user:alice": { allow: ["exec"] },
+          "id:user:alice": { deny: ["exec"] },
+          "*": { deny: ["write"] },
+        },
+        messageProvider: "teams",
+        senderId: "user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+  });
+
+  it("keeps legacy colon sender IDs as sender IDs, not channel keys", () => {
+    const warningSpy = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "discord:user:alice": { allow: ["exec"] },
+          "channel:discord:user:alice": { deny: ["exec"] },
+        },
+        messageProvider: "slack",
+        senderId: "discord:user:alice",
+      }),
+    ).toEqual({ allow: ["exec"] });
+
+    expect(warningSpy).toHaveBeenCalledTimes(1);
+  });
+
   it("does not allow senderName collisions to match id keys", () => {
     const victimId = "f4ce8a7d-1111-2222-3333-444455556666";
     expect(
@@ -272,6 +303,20 @@ describe("resolveToolsBySender", () => {
         senderName: "alice",
       }),
     ).toEqual({ deny: ["exec"] });
+  });
+
+  it("prefers channel-specific sender policy before generic id policy", () => {
+    expect(
+      resolveToolsBySender({
+        toolsBySender: {
+          "channel:discord:alice": { allow: ["read"] },
+          "id:alice": { deny: ["read"] },
+          "*": { deny: ["exec"] },
+        },
+        messageProvider: "discord",
+        senderId: "alice",
+      }),
+    ).toEqual({ allow: ["read"] });
   });
 
   it("emits one deprecation warning per legacy key", () => {

@@ -126,7 +126,7 @@ describe("readServiceStatusSummary", () => {
       expect(layout.packageRootReal).toBe(realRoot);
       expect(layout.packageVersion).toBe("0.0.0-test");
       expect(layout.entrypointSourceCheckout).toBe(true);
-      expect(layout.execStart).toContain("gateway run");
+      expect(layout.execStart).toBe(`/usr/bin/node ${entrypoint} gateway run`);
     });
   });
 });

@@ -107,6 +107,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     const mockedSendMissingScopeForbidden = vi.mocked(sendMissingScopeForbidden);
     mockedSendMissingScopeForbidden.mockClear();
     vi.mocked(readJsonBodyOrError).mockClear();
+    const res = {} as unknown as ServerResponse;
 
     const result = await handleGatewayPostJsonEndpoint(
       {
@@ -114,7 +115,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
         method: "POST",
         headers: { host: "localhost" },
       } as unknown as IncomingMessage,
-      {} as unknown as ServerResponse,
+      res,
       {
         pathname: "/v1/ok",
         auth: {} as unknown as ResolvedGatewayAuth,
@@ -127,10 +128,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     expect(vi.mocked(authorizeOperatorScopesForMethod)).toHaveBeenCalledWith("chat.send", [
       "operator.approvals",
     ]);
-    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(
-      expect.anything(),
-      "operator.write",
-    );
+    expect(mockedSendMissingScopeForbidden).toHaveBeenCalledWith(res, "operator.write");
     expect(vi.mocked(readJsonBodyOrError)).not.toHaveBeenCalled();
   });
 

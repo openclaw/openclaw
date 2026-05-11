@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS,
   DEFAULT_APPROVAL_TIMEOUT_MS,
@@ -8,6 +8,9 @@ const commandExplainerMock = vi.hoisted(() => ({
   importCount: 0,
   explainShellCommand: vi.fn(async (command: string): Promise<string> => command),
   formatCommandSpans: vi.fn((command: string) => {
+    if (command.startsWith("pwsh ") || command.startsWith("cmd.exe ")) {
+      return [];
+    }
     if (command.startsWith("node ")) {
       return [{ startIndex: 0, endIndex: 4 }];
     }
@@ -36,9 +39,34 @@ let callGatewayTool: typeof import("./tools/gateway.js").callGatewayTool;
 let requestExecApprovalDecision: typeof import("./bash-tools.exec-approval-request.js").requestExecApprovalDecision;
 let registerExecApprovalRequestForHost: typeof import("./bash-tools.exec-approval-request.js").registerExecApprovalRequestForHost;
 
+const initialProcessPlatform = Object.getOwnPropertyDescriptor(process, "platform");
+
+function setProcessPlatformForTest(platform: NodeJS.Platform): void {
+  Object.defineProperty(process, "platform", {
+    configurable: true,
+    enumerable: true,
+    value: platform,
+  });
+}
+
+function restoreProcessPlatformForTest(): void {
+  if (initialProcessPlatform) {
+    Object.defineProperty(process, "platform", initialProcessPlatform);
+  }
+}
+
 type ApprovalRequestPayload = {
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
 };
+
+function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
+  const call = vi.mocked(callGatewayTool).mock.calls[callIndex];
+  expect(call?.[0]).toBe("exec.approval.request");
+  const payload = call?.[2];
+  expect(typeof payload).toBe("object");
+  expect(payload).not.toBeNull();
+  return payload as ApprovalRequestPayload;
+}
 
 describe("requestExecApprovalDecision", () => {
   beforeAll(async () => {
@@ -51,6 +79,11 @@ describe("requestExecApprovalDecision", () => {
     vi.mocked(callGatewayTool).mockClear();
     commandExplainerMock.explainShellCommand.mockClear();
     commandExplainerMock.formatCommandSpans.mockClear();
+    restoreProcessPlatformForTest();
+  });
+
+  afterEach(() => {
+    restoreProcessPlatformForTest();
   });
 
   it("does not load the command explainer when importing approval requests", () => {
@@ -217,6 +250,7 @@ describe("requestExecApprovalDecision", () => {
     await registerExecApprovalRequestForHost({
       approvalId: "approval-id",
       command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      commandHighlighting: true,
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
@@ -231,6 +265,47 @@ describe("requestExecApprovalDecision", () => {
     expect(payload?.commandSpans).toContainEqual({ startIndex: 20, endIndex: 26 });
   });
 
+  it("does not generate command spans by default", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | { commandSpans?: unknown }
+      | undefined;
+    expect(payload?.commandSpans).toBeUndefined();
+  });
+
+  it("does not generate command spans when command highlighting is disabled", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: 'ls | grep "stuff" | python -c \'print("hi")\'',
+      commandHighlighting: false,
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.explainShellCommand).not.toHaveBeenCalled();
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    const payload = vi.mocked(callGatewayTool).mock.calls[0]?.[2] as
+      | { commandSpans?: unknown }
+      | undefined;
+    expect(payload?.commandSpans).toBeUndefined();
+  });
+
   it("uses system run plan command text for host approval explanations", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
@@ -243,6 +318,7 @@ describe("requestExecApprovalDecision", () => {
         agentId: null,
         sessionKey: null,
       },
+      commandHighlighting: true,
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",
@@ -255,6 +331,73 @@ describe("requestExecApprovalDecision", () => {
     expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 4 });
   });
 
+  it("omits generated command spans for unsupported shell wrapper languages", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-powershell",
+      command: 'pwsh -Command "Get-ChildItem"',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-cmd",
+      command: 'cmd.exe /d /s /c "dir"',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(2);
+    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
+    expect(requireApprovalRequestPayload(1).commandSpans).toBeUndefined();
+  });
+
+  it("omits generated command spans for Windows gateway PowerShell commands", async () => {
+    setProcessPlatformForTest("win32");
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-powershell",
+      command:
+        'Set-Content -Path "windows-agent-proof.txt" -Value "WINDOWS_AGENT_EXEC_OK" -NoNewline',
+      workdir: "C:\\project",
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
+  });
+
+  it("omits generated command spans for unsupported shell wrappers through system run carriers", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-carrier",
+      systemRunPlan: {
+        argv: ["timeout", "5", "pwsh", "-Command", "Get-ChildItem"],
+        cwd: "/tmp/project",
+        commandText: 'timeout 5 pwsh -Command "Get-ChildItem"',
+        agentId: null,
+        sessionKey: null,
+      },
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(commandExplainerMock.formatCommandSpans).not.toHaveBeenCalled();
+    expect(vi.mocked(callGatewayTool).mock.calls).toHaveLength(1);
+    expect(requireApprovalRequestPayload(0).commandSpans).toBeUndefined();
+  });
+
   it("keeps explicit command spans", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
@@ -262,6 +405,7 @@ describe("requestExecApprovalDecision", () => {
       approvalId: "approval-id",
       command: "echo hi",
       commandSpans: [{ startIndex: 0, endIndex: 4 }],
+      commandHighlighting: true,
       workdir: "/tmp/project",
       host: "node",
       security: "allowlist",

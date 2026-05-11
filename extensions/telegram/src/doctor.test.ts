@@ -481,9 +481,9 @@ describe("telegram doctor", () => {
       configured: false,
       config: {},
     });
-    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([
-      expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"),
-    ]);
+    const missingEnvWarning =
+      "- channels.telegram: default account has no available bot token, and TELEGRAM_BOT_TOKEN is absent in this doctor environment. After migration, verify TELEGRAM_BOT_TOKEN is present in the state-dir .env or configure channels.telegram.botToken / channels.telegram.accounts.default.botToken as a SecretRef.";
+    expect(collectTelegramMissingEnvTokenWarnings({ cfg, env: {} })).toEqual([missingEnvWarning]);
 
     inspectTelegramAccountMock.mockReturnValueOnce({
       enabled: true,
@@ -511,7 +511,7 @@ describe("telegram doctor", () => {
         doctorFixCommand: "openclaw doctor --fix",
         env: {},
       }),
-    ).toContainEqual(expect.stringContaining("TELEGRAM_BOT_TOKEN is absent"));
+    ).toContain(missingEnvWarning);
   });
 
   it("does not warn about TELEGRAM_BOT_TOKEN when a non-default account is selected", () => {

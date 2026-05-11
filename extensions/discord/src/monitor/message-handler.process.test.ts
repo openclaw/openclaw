@@ -491,7 +491,6 @@ function requireReactionCall(
   index: number,
 ) {
   const call = mock.mock.calls[index] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing reaction call ${index + 1}`);
   }
@@ -564,7 +563,6 @@ function createMockDraftStreamForTest() {
 
 function expectPreviewEditContent(content: string) {
   const call = editMessageDiscord.mock.calls[0] as unknown[] | undefined;
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error("missing preview edit call");
   }
@@ -760,7 +758,6 @@ describe("processDiscordMessage ack reactions", () => {
     const resolveCall = discordTargetMocks.resolveDiscordTargetChannelId.mock.calls[0] as
       | unknown[]
       | undefined;
-    expect(resolveCall).toBeDefined();
     if (!resolveCall) {
       throw new Error("missing Discord target resolve call");
     }

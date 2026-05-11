@@ -156,11 +156,11 @@ describe("sendMessage channel normalization", () => {
         },
       },
       assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
+        expect(deps.localchat).toHaveBeenCalledTimes(1);
+        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
+        expect(to).toBe("someone@example.com");
+        expect(text).toBe("hi");
+        expect(typeof options).toBe("object");
       },
       expectedChannel: "localchat",
     },

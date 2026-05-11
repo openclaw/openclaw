@@ -367,15 +367,16 @@ describe("openai tts", () => {
         responseFormat: "mp3",
         timeoutMs: 5_000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const events = store.getSessionEvents("tts-session", 10);
-      expect(
-        events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
-      ).toBe(true);
-      expect(
-        events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
-      ).toBe(true);
+      await vi.waitFor(() => {
+        const events = store.getSessionEvents("tts-session", 10);
+        expect(
+          events.some((event) => event.kind === "request" && event.host === "api.openai.com"),
+        ).toBe(true);
+        expect(
+          events.some((event) => event.kind === "response" && event.host === "api.openai.com"),
+        ).toBe(true);
+      });
     });
 
     it("does not double-capture TTS exchanges when the global fetch patch is installed", async () => {
@@ -403,20 +404,24 @@ describe("openai tts", () => {
         responseFormat: "mp3",
         timeoutMs: 5_000,
       });
-      await new Promise((resolve) => setTimeout(resolve, 0));
-      finalizeDebugProxyCapture();
 
       const store = getDebugProxyCaptureStore(
         process.env.OPENCLAW_DEBUG_PROXY_DB_PATH,
         process.env.OPENCLAW_DEBUG_PROXY_BLOB_DIR,
       );
-      const events = store
-        .getSessionEvents("tts-patched-session", 10)
-        .filter((event) => event.host === "api.openai.com");
-      expect(events).toHaveLength(2);
-      const kinds = events.map((event) => String(event.kind)).toSorted();
-      expect(kinds).toEqual(["request", "response"]);
-      store.close();
+      let events: Array<Record<string, unknown>> = [];
+      try {
+        await vi.waitFor(() => {
+          events = store
+            .getSessionEvents("tts-patched-session", 10)
+            .filter((event) => event.host === "api.openai.com");
+          expect(events).toHaveLength(2);
+        });
+        const kinds = events.map((event) => String(event.kind)).toSorted();
+        expect(kinds).toEqual(["request", "response"]);
+      } finally {
+        finalizeDebugProxyCapture();
+      }
     });
   });
 });

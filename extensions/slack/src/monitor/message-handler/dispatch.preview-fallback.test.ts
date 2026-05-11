@@ -140,7 +140,6 @@ function expectRecordFields(record: Record<string, unknown>, fields: Record<stri
 
 function requireMockCall(mock: unknown, index: number, label: string): unknown[] {
   const call = (mock as { mock?: { calls?: unknown[][] } }).mock?.calls?.[index];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`missing ${label} call ${index + 1}`);
   }

@@ -254,7 +254,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -267,8 +269,10 @@ function streamContext(callIndex = 0): {
   systemPrompt?: unknown;
 } {
   const call = streamSimpleMock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return (call?.[1] ?? {}) as {
+  if (!call) {
+    throw new Error(`Expected streamSimple call at index ${callIndex}`);
+  }
+  return (call[1] ?? {}) as {
     messages?: Array<Record<string, unknown>>;
     systemPrompt?: unknown;
   };
