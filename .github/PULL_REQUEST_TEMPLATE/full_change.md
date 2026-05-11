@@ -1,18 +1,3 @@
-## ⚡ Quick Fix or 📋 Full Change?
-
-This project uses **multiple PR templates** to make contributing easier:
-
-- **⚡ Quick Fix** — for typos, one-line bug fixes, minor docs/config updates (~30 lines)
-- **📋 Full Change** — for features, refactors, security changes, breaking changes (~160 lines)
-
-When you create a new PR, GitHub will show a template chooser so you can pick the right one.
-
-If you don't see the chooser, you can manually select:
-- Quick Fix: [`.github/PULL_REQUEST_TEMPLATE/quick_fix.md`](.github/PULL_REQUEST_TEMPLATE/quick_fix.md)
-- Full Change: [`.github/PULL_REQUEST_TEMPLATE/full_change.md`](.github/PULL_REQUEST_TEMPLATE/full_change.md)
-
----
-
 ## Summary
 
 Describe the problem and fix in 2–5 bullets:
