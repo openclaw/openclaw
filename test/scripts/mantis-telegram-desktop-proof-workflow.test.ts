@@ -4,6 +4,7 @@ import { parse } from "yaml";
 
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
+const PACKAGE_JSON = "package.json";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
 const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 
@@ -23,6 +24,19 @@ type Workflow = {
   jobs?: Record<string, WorkflowJob>;
 };
 
+type PackageJson = {
+  packageManager?: string;
+};
+
+function repositoryPnpmVersion(): string {
+  const packageJson = JSON.parse(readFileSync(PACKAGE_JSON, "utf8")) as PackageJson;
+  const version = packageJson.packageManager?.match(/^pnpm@(.+)$/)?.[1];
+  if (!version) {
+    throw new Error(`Missing pnpm packageManager pin in ${PACKAGE_JSON}`);
+  }
+  return version.split("+", 1)[0];
+}
+
 function workflowStep(name: string): WorkflowStep {
   const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
   const steps = workflow.jobs?.run_telegram_desktop_proof?.steps ?? [];
@@ -34,12 +48,13 @@ function workflowStep(name: string): WorkflowStep {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
-  it("runs with the repository pnpm major", () => {
+  it("uses the repository pnpm version pin", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
     const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
+    const pnpmVersion = repositoryPnpmVersion();
 
-    expect(workflow.env?.PNPM_VERSION).toBe("11.0.8");
-    expect(liveWorkflow.env?.PNPM_VERSION).toBe("11.0.8");
+    expect(workflow.env?.PNPM_VERSION).toBe(pnpmVersion);
+    expect(liveWorkflow.env?.PNPM_VERSION).toBe(pnpmVersion);
   });
 
   it("uses the repo-owned Telegram user driver by default", () => {
