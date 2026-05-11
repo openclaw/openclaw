@@ -586,6 +586,27 @@ function normalizeSessionCorpusSnippet(value: string): string {
   return value.replace(/\s+/g, " ").trim().slice(0, SESSION_INGESTION_MAX_SNIPPET_CHARS);
 }
 
+function shouldRejectDreamingSessionCorpusSnippet(snippet: string): boolean {
+  const value = String(snippet || "").trim();
+  if (!value) return true;
+
+  // Preserve explicit durable signals even when assistant-authored.
+  if (/\bArthur (confirmed|decided|approved|rejected|corrected)\b/i.test(value)) return false;
+  if (/\bdecision\b|\baccepted\b|\bverified\b|\bPASS\b/i.test(value)) return false;
+  if (/\bcommit\s+[0-9a-f]{7,40}\b/i.test(value)) return false;
+  if (/\bPR\s*#\d+\b/i.test(value)) return false;
+
+  // Reject obvious assistant process chatter before it reaches session-corpus.
+  if (/\bAssistant:\s+Need\b/i.test(value)) return true;
+  if (/\bAssistant:\s+Now\b/i.test(value)) return true;
+  if (/\bAssistant:\s+Oops\b/i.test(value)) return true;
+  if (/worktree maybe not created|\bpoll\.?\s*$/i.test(value)) return true;
+  if (/\bNeed commit PR\b|\bcommit PR\b/i.test(value)) return true;
+  if (/^\s*(Assistant:\s*)?(inspect|commit|push|merge|poll)\.?\s*$/i.test(value)) return true;
+
+  return false;
+}
+
 function hashSessionMessageId(value: string): string {
   return createHash("sha1").update(value).digest("hex");
 }
@@ -898,6 +919,9 @@ async function collectSessionIngestionBatches(params: {
       const rawSnippet = lines[index] ?? "";
       const snippet = normalizeSessionCorpusSnippet(rawSnippet);
       if (snippet.length < SESSION_INGESTION_MIN_SNIPPET_CHARS) {
+        continue;
+      }
+      if (shouldRejectDreamingSessionCorpusSnippet(snippet)) {
         continue;
       }
       const lineNumber = entry.lineMap[index] ?? index + 1;
@@ -1851,6 +1875,7 @@ async function runPhaseIfTriggered(
 export const __testing = {
   runPhaseIfTriggered,
   previewRemDreaming,
+  shouldRejectDreamingSessionCorpusSnippet,
   constants: {
     LIGHT_SLEEP_EVENT_TEXT,
     REM_SLEEP_EVENT_TEXT,
