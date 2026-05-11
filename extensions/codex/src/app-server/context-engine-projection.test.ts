@@ -1,5 +1,5 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
 
 function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
@@ -100,5 +100,83 @@ describe("projectContextEngineAssemblyForCodex", () => {
 
     expect(result.promptText).toContain("[truncated ");
     expect(result.promptText.length).toBeLessThan(25_000);
+  });
+
+  it("reports estimated projection stats when no tokenizer is supplied", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "abcd".repeat(10))],
+      originalHistoryMessages: [],
+      prompt: "next",
+    });
+
+    expect(result.stats.accounting).toBe("estimated");
+    expect(result.stats.projectedPromptChars).toBe(result.promptText.length);
+    expect(result.stats.promptTokens).toBe(Math.ceil(result.promptText.length / 4));
+    expect(result.stats.capChars).toBe(24_000);
+    expect(result.stats.reserveTokens).toBeUndefined();
+  });
+
+  it("reports exact projection stats when the tokenizer returns a count", () => {
+    const tokenize = vi.fn().mockReturnValue(42);
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      tokenize,
+    });
+
+    expect(tokenize).toHaveBeenCalledWith(result.promptText);
+    expect(result.stats.accounting).toBe("exact");
+    expect(result.stats.promptTokens).toBe(42);
+  });
+
+  it("falls back to estimated when the tokenizer throws or returns a non-number", () => {
+    const throwing = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      tokenize: () => {
+        throw new Error("tokenizer offline");
+      },
+    });
+    expect(throwing.stats.accounting).toBe("estimated");
+
+    const garbage = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      tokenize: () => Number.NaN,
+    });
+    expect(garbage.stats.accounting).toBe("estimated");
+    expect(garbage.stats.promptTokens).toBe(Math.ceil(garbage.promptText.length / 4));
+  });
+
+  it("surfaces configured reserveTokens in projection stats", () => {
+    const result = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      reserveTokens: 12_345,
+    });
+
+    expect(result.stats.reserveTokens).toBe(12_345);
+  });
+
+  it("ignores non-finite reserveTokens values", () => {
+    const negative = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      reserveTokens: -1,
+    });
+    const nan = projectContextEngineAssemblyForCodex({
+      assembledMessages: [textMessage("assistant", "Earlier answer")],
+      originalHistoryMessages: [],
+      prompt: "next",
+      reserveTokens: Number.NaN,
+    });
+
+    expect(negative.stats.reserveTokens).toBeUndefined();
+    expect(nan.stats.reserveTokens).toBeUndefined();
   });
 });
