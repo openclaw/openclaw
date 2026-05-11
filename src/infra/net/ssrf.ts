@@ -157,6 +157,7 @@ function normalizeSsrFPolicyOrigin(value: string): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
     return parsed.origin.toLowerCase();
   } catch {
     return undefined;

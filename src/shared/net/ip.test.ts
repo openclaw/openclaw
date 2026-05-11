@@ -84,6 +84,7 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("0xa9fea9fe")).toBe(true);
     expect(isLinkLocalIpAddress("0xa9.0xfe.0xa9.0xfe")).toBe(true);
     expect(isLinkLocalIpAddress("fe80::1%lo0")).toBe(true);
+    expect(isLinkLocalIpAddress("[fe80::1]")).toBe(true);
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
     expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
     expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
@@ -93,8 +94,11 @@ describe("shared ip helpers", () => {
     expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
     expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
+    expect(isCloudMetadataIpAddress("fd00:ec2::254")).toBe(true);
+    expect(isCloudMetadataIpAddress("[fd00:ec2::254]")).toBe(true);
     expect(isCloudMetadataIpAddress("100.100.100.201")).toBe(false);
     expect(isCloudMetadataIpAddress("169.254.169.254")).toBe(false);
+    expect(isCloudMetadataIpAddress("fd00::1")).toBe(false);
   });
 
   it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {

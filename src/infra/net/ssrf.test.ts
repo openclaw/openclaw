@@ -192,6 +192,17 @@ describe("resolveSsrFPolicyForUrl", () => {
     });
   });
 
+  it("normalizes trailing hostname dots before trusting hosts", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://example.com:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://example.com.:11434/v1"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://example.com.:11434/v1"],
+      allowedHostnames: ["example.com"],
+    });
+  });
+
   it("does not trust the hostname when the port differs", () => {
     expect(
       resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:4321/v1/chat/completions"), {

@@ -12,7 +12,11 @@ import {
 } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveDebugProxySettings } from "../proxy-capture/env.js";
-import { isCloudMetadataIpAddress, isLinkLocalIpAddress } from "../shared/net/ip.js";
+import {
+  isCloudMetadataIpAddress,
+  isLinkLocalIpAddress,
+  parseCanonicalIpAddress,
+} from "../shared/net/ip.js";
 import { emitModelTransportDebug } from "./model-transport-debug.js";
 import { formatModelTransportDebugUrl } from "./model-transport-url.js";
 import {
@@ -405,6 +409,7 @@ function resolveHttpOrigin(value: unknown): string | undefined {
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
       return undefined;
     }
+    parsed.hostname = parsed.hostname.replace(/\.+$/, "");
     return parsed.origin.toLowerCase();
   } catch {
     return undefined;
@@ -443,6 +448,20 @@ function canImplicitlyTrustConfiguredBaseUrlOrigin(value: unknown): value is str
   );
 }
 
+function canApplyFakeIpHostnamePolicy(value: unknown): value is string {
+  const hostname = normalizeProviderOriginHostname(value);
+  if (!hostname) {
+    return false;
+  }
+  const labels = hostname.split(".").filter(Boolean);
+  return (
+    !labels.some(
+      (label) =>
+        label.includes("metadata") || BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS.has(label),
+    ) && !parseCanonicalIpAddress(hostname)
+  );
+}
+
 function resolveModelTransportSsrFPolicy(params: {
   model: Model<Api>;
   url: string;
@@ -461,10 +480,11 @@ function resolveModelTransportSsrFPolicy(params: {
       ? ssrfPolicyFromHttpBaseUrlAllowedOrigin(baseUrl)
       : undefined;
   // Fake-IP trust is hostname-scoped and orthogonal to exact-origin private-IP trust.
-  // It does not allow literal private IPs by itself.
-  const fakeIpPolicy = requestMatchesBaseOrigin
-    ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
-    : undefined;
+  // It is for DNS hostnames only and does not allow literal private IPs by itself.
+  const fakeIpPolicy =
+    requestMatchesBaseOrigin && canApplyFakeIpHostnamePolicy(baseUrl)
+      ? ssrfPolicyFromHttpBaseUrlFakeIpHostnameAllowlist(baseUrl)
+      : undefined;
   return mergeSsrFPolicies(
     baseUrlOriginPolicy,
     fakeIpPolicy,

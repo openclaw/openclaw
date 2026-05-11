@@ -257,9 +257,6 @@ describe("buildGuardedModelFetch", () => {
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
     expect(policy).toEqual({
       allowedOrigins: ["http://10.0.0.5:1234"],
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
     });
     expect(policy?.allowPrivateNetwork).toBeUndefined();
     expect(policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
@@ -283,9 +280,6 @@ describe("buildGuardedModelFetch", () => {
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
     expect(policy).toEqual({
       allowedOrigins: ["https://10.0.0.5:1234"],
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
     });
   });
 
@@ -306,14 +300,7 @@ describe("buildGuardedModelFetch", () => {
     await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
 
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
-    expect(policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
-    });
-    expect(policy?.allowedOrigins).toBeUndefined();
-    expect(policy?.allowedHostnames).toBeUndefined();
-    expect(policy?.allowPrivateNetwork).toBeUndefined();
+    expect(policy).toBeUndefined();
   });
 
   it("trusts exact configured local provider origins", async () => {
@@ -334,9 +321,6 @@ describe("buildGuardedModelFetch", () => {
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
     expect(policy).toEqual({
       allowedOrigins: ["http://127.0.0.1:1234"],
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["127.0.0.1"],
     });
   });
 
@@ -375,13 +359,7 @@ describe("buildGuardedModelFetch", () => {
     await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
 
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
-    expect(policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
-    });
-    expect(policy?.allowedOrigins).toBeUndefined();
-    expect(policy?.allowedHostnames).toBeUndefined();
+    expect(policy).toBeUndefined();
   });
 
   it.each([
@@ -389,43 +367,41 @@ describe("buildGuardedModelFetch", () => {
       label: "link-local metadata IP",
       baseUrl: "http://169.254.169.254/v1",
       requestUrl: "http://169.254.169.254/v1/chat/completions",
-      hostnameAllowlist: ["169.254.169.254"],
     },
     {
       label: "legacy link-local metadata IP",
       baseUrl: "http://2852039166/v1",
       requestUrl: "http://2852039166/v1/chat/completions",
-      hostnameAllowlist: ["169.254.169.254"],
     },
     {
       label: "non-link-local cloud metadata IP",
       baseUrl: "http://100.100.100.200/v1",
       requestUrl: "http://100.100.100.200/v1/chat/completions",
-      hostnameAllowlist: ["100.100.100.200"],
+    },
+    {
+      label: "IPv6 cloud metadata IP",
+      baseUrl: "http://[fd00:ec2::254]/v1",
+      requestUrl: "http://[fd00:ec2::254]/v1/chat/completions",
     },
     {
       label: "metadata hostname",
       baseUrl: "http://metadata.google.internal/v1",
       requestUrl: "http://metadata.google.internal/v1/chat/completions",
-      hostnameAllowlist: ["metadata.google.internal"],
     },
     {
       label: "metadata short hostname",
       baseUrl: "http://metadata/v1",
       requestUrl: "http://metadata/v1/chat/completions",
-      hostnameAllowlist: ["metadata"],
     },
     {
       label: "metadata compound hostname",
       baseUrl: "http://metadata-server.example/v1",
       requestUrl: "http://metadata-server.example/v1/chat/completions",
-      hostnameAllowlist: ["metadata-server.example"],
     },
     {
       label: "cloud instance-data hostname",
       baseUrl: "http://instance-data.ec2.internal/v1",
       requestUrl: "http://instance-data.ec2.internal/v1/chat/completions",
-      hostnameAllowlist: ["instance-data.ec2.internal"],
     },
   ])("does not add implicit exact-origin trust for $label", async (entry) => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
@@ -443,14 +419,7 @@ describe("buildGuardedModelFetch", () => {
     await fetcher(entry.requestUrl, { method: "POST" });
 
     const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
-    expect(policy).toEqual({
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: entry.hostnameAllowlist,
-    });
-    expect(policy?.allowedOrigins).toBeUndefined();
-    expect(policy?.allowedHostnames).toBeUndefined();
-    expect(policy?.allowPrivateNetwork).toBeUndefined();
+    expect(policy).toBeUndefined();
   });
 
   it("merges explicit private-network opt-in into the provider-host policies", async () => {
@@ -471,9 +440,6 @@ describe("buildGuardedModelFetch", () => {
     const policy = latestGuardedFetchParams().policy;
     expect(policy).toEqual({
       allowedOrigins: ["http://10.0.0.5:11434"],
-      allowRfc2544BenchmarkRange: true,
-      allowIpv6UniqueLocalRange: true,
-      hostnameAllowlist: ["10.0.0.5"],
       allowPrivateNetwork: true,
     });
   });
