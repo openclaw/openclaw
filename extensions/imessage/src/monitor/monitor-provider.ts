@@ -32,7 +32,6 @@ import {
 } from "openclaw/plugin-sdk/runtime-group-policy";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { readSessionUpdatedAt, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveIMessageAccount } from "../accounts.js";
@@ -67,6 +66,7 @@ import {
 } from "./inbound-processing.js";
 import { createLoopRateLimiter } from "./loop-rate-limiter.js";
 import { parseIMessageNotification } from "./parse-notification.js";
+import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 import { normalizeAllowList, resolveRuntime } from "./runtime.js";
 import { createSelfChatCache } from "./self-chat-cache.js";
 import type { IMessagePayload, MonitorIMessageOpts } from "./types.js";
@@ -468,17 +468,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     }
 
     if (decision.kind === "reaction") {
-      const queued = enqueueSystemEvent(decision.text, {
-        sessionKey: decision.route.sessionKey,
-        contextKey: decision.contextKey,
-        trusted: false,
-      });
-      runtime.log?.(
-        `imessage: reaction system event ${queued ? "queued" : "deduped"} session=${decision.route.sessionKey} target=${
-          decision.reaction.targetGuid ?? "unknown"
-        } action=${decision.reaction.action} emoji=${decision.reaction.emoji}`,
-      );
-      logVerbose(`imessage: reaction event enqueued: ${decision.text}`);
+      enqueueIMessageReactionSystemEvent({ decision, runtime, logVerbose });
       return;
     }
 
