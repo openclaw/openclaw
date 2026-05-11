@@ -229,6 +229,8 @@ function createResetAwareSessionStore(
 const OPENCLAW_BRIDGE_EXECUTABLE = "openclaw";
 const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
+const GEMINI_ACP_AGENT_ID = "gemini";
+const CLAUDE_ACP_AGENT_ID = "claude";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai-codex/";
 const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
@@ -248,6 +250,10 @@ const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
 type CodexAcpModelOverride = {
   model?: string;
   reasoningEffort?: string;
+};
+
+type AgentLaunchOverride = CodexAcpModelOverride & {
+  thinking?: string;
 };
 
 function normalizeAgentName(value: string | undefined): string | undefined {
@@ -390,6 +396,46 @@ function isCodexAcpCommand(command: string | undefined): boolean {
   return /^codex-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
 }
 
+function isGeminiAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  const commandName = basename(parts[0] ?? "");
+  return (
+    commandName === "gemini" && (parts.includes("--acp") || parts.includes("--experimental-acp"))
+  );
+}
+
+function isClaudeAcpPackageSpec(value: string): boolean {
+  return /^@agentclientprotocol\/claude-agent-acp(?:@.+)?$/i.test(value.trim());
+}
+
+function isClaudeAcpCommand(command: string | undefined): boolean {
+  if (!command) {
+    return false;
+  }
+  const parts = unwrapEnvCommand(splitCommandParts(command.trim()));
+  if (!parts.length) {
+    return false;
+  }
+  if (parts.some(isClaudeAcpPackageSpec)) {
+    return true;
+  }
+  const commandName = basename(parts[0] ?? "");
+  if (/^claude-agent-acp(?:\.exe)?$/i.test(commandName)) {
+    return true;
+  }
+  if (commandName !== "node") {
+    return false;
+  }
+  const scriptName = basename(parts[1] ?? "");
+  return /^claude-agent-acp(?:-wrapper)?(?:\.[cm]?js)?$/i.test(scriptName);
+}
+
 function failUnsupportedCodexAcpModel(rawModel: string, detail?: string): never {
   throw new AcpRuntimeError(
     "ACP_INVALID_RUNTIME_OPTION",
@@ -502,24 +548,66 @@ function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelO
   return `${command} ${configArgs.map((arg) => `-c ${quoteShellArg(arg)}`).join(" ")}`;
 }
 
+function appendGeminiAcpModelOverride(command: string, override: AgentLaunchOverride): string {
+  if (!override.model) {
+    return command;
+  }
+  return `${command} --model ${quoteShellArg(override.model)}`;
+}
+
+function appendClaudeAcpEnvOverrides(command: string, override: AgentLaunchOverride): string {
+  const entries: Array<[string, string]> = [];
+  if (override.model) {
+    entries.push(["ANTHROPIC_MODEL", override.model]);
+    entries.push(["CLAUDE_ACP_MODEL", override.model]);
+    entries.push(["CLAUDE_ACP_BAKE_MODEL", "1"]);
+    entries.push(["CLAUDE_AGENT_ACP_SKIP_INITIAL_SET_MODEL", "1"]);
+  }
+  if (override.model || override.thinking) {
+    entries.push(["CLAUDE_ACP_NO_EFFORT_APPLY", "1"]);
+  }
+  if (entries.length === 0) {
+    return command;
+  }
+  return `env ${entries.map(([key, value]) => `${key}=${quoteShellArg(value)}`).join(" ")} ${command}`;
+}
+
+function applyAgentLaunchOverride(params: {
+  agentName: string | undefined;
+  command: string | undefined;
+  override: AgentLaunchOverride | undefined;
+}): string | undefined {
+  if (!params.override || typeof params.command !== "string") {
+    return params.command;
+  }
+  if (params.agentName === CODEX_ACP_AGENT_ID && isCodexAcpCommand(params.command)) {
+    return appendCodexAcpConfigOverrides(params.command, params.override);
+  }
+  if (params.agentName === GEMINI_ACP_AGENT_ID && isGeminiAcpCommand(params.command)) {
+    return appendGeminiAcpModelOverride(params.command, params.override);
+  }
+  if (params.agentName === CLAUDE_ACP_AGENT_ID && isClaudeAcpCommand(params.command)) {
+    return appendClaudeAcpEnvOverrides(params.command, params.override);
+  }
+  return params.command;
+}
+
 function createModelScopedAgentRegistry(params: {
   agentRegistry: AcpAgentRegistry;
-  scope: AsyncLocalStorage<CodexAcpModelOverride | undefined>;
+  scope: AsyncLocalStorage<AgentLaunchOverride | undefined>;
   leaseCommand: (command: string | undefined) => string | undefined;
 }): AcpAgentRegistry {
   return {
     resolve(agentName: string): string | undefined {
       const command = params.agentRegistry.resolve(agentName);
       const override = params.scope.getStore();
-      if (
-        !override ||
-        normalizeAgentName(agentName) !== CODEX_ACP_AGENT_ID ||
-        typeof command !== "string" ||
-        !isCodexAcpCommand(command)
-      ) {
-        return params.leaseCommand(command);
-      }
-      return params.leaseCommand(appendCodexAcpConfigOverrides(command, override));
+      return params.leaseCommand(
+        applyAgentLaunchOverride({
+          agentName: normalizeAgentName(agentName),
+          command,
+          override,
+        }),
+      );
     },
     list(): string[] {
       return params.agentRegistry.list();
@@ -564,8 +652,8 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
   private readonly scopedAgentRegistry: AcpAgentRegistry;
-  private readonly codexAcpModelOverrideScope = new AsyncLocalStorage<
-    CodexAcpModelOverride | undefined
+  private readonly agentLaunchOverrideScope = new AsyncLocalStorage<
+    AgentLaunchOverride | undefined
   >();
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
@@ -592,7 +680,7 @@ export class AcpxRuntime implements AcpRuntime {
     this.agentRegistry = options.agentRegistry;
     this.scopedAgentRegistry = createModelScopedAgentRegistry({
       agentRegistry: this.agentRegistry,
-      scope: this.codexAcpModelOverrideScope,
+      scope: this.agentLaunchOverrideScope,
       leaseCommand: (command) => this.commandWithLaunchLease(command),
     });
     const sharedOptions = {
@@ -821,13 +909,29 @@ export class AcpxRuntime implements AcpRuntime {
       agentRegistry: this.agentRegistry,
     });
     const delegate = this.resolveDelegateForCommand(command);
+    const agentName = normalizeAgentName(input.agent);
     const codexModelOverride =
-      normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
+      agentName === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
         ? normalizeCodexAcpModelOverride(input.model, input.thinking)
         : undefined;
+    const geminiModelOverride =
+      agentName === GEMINI_ACP_AGENT_ID && isGeminiAcpCommand(command) && input.model
+        ? { model: input.model }
+        : undefined;
+    const claudeModelOverride =
+      agentName === CLAUDE_ACP_AGENT_ID &&
+      isClaudeAcpCommand(command) &&
+      (input.model || input.thinking)
+        ? { model: input.model, thinking: input.thinking }
+        : undefined;
+    const launchOverride = codexModelOverride ?? geminiModelOverride ?? claudeModelOverride;
     const stableLaunchCommand =
-      codexModelOverride && command
-        ? appendCodexAcpConfigOverrides(command, codexModelOverride)
+      launchOverride && command
+        ? applyAgentLaunchOverride({
+            agentName,
+            command,
+            override: launchOverride,
+          })
         : command;
     const shouldStartWithLease = !(await this.canReuseStablePersistentSession({
       sessionKey: input.sessionKey,
@@ -837,7 +941,7 @@ export class AcpxRuntime implements AcpRuntime {
       resumeSessionId: input.resumeSessionId,
     }));
 
-    if (!codexModelOverride) {
+    if (!launchOverride) {
       return await this.runWithLaunchLease({
         sessionKey: input.sessionKey,
         command: stableLaunchCommand,
@@ -846,18 +950,16 @@ export class AcpxRuntime implements AcpRuntime {
       });
     }
 
-    const normalizedInput = {
-      ...input,
-      ...(codexAcpSessionModelId(codexModelOverride)
-        ? { model: codexAcpSessionModelId(codexModelOverride) }
-        : {}),
-    };
+    const normalizedInput =
+      codexModelOverride && codexAcpSessionModelId(codexModelOverride)
+        ? { ...input, model: codexAcpSessionModelId(codexModelOverride) }
+        : input;
     return await this.runWithLaunchLease({
       sessionKey: input.sessionKey,
       command: stableLaunchCommand,
       enabled: shouldStartWithLease,
       run: () =>
-        this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+        this.agentLaunchOverrideScope.run(launchOverride, () =>
           delegate.ensureSession(normalizedInput),
         ),
     });
@@ -889,6 +991,29 @@ export class AcpxRuntime implements AcpRuntime {
     const delegate = await this.resolveDelegateForHandle(input.handle);
     const command = await this.resolveCommandForHandle(input.handle);
     const key = input.key.trim().toLowerCase();
+    if (
+      isGeminiAcpCommand(command) &&
+      (key === "model" ||
+        key === "thinking" ||
+        key === "thought_level" ||
+        key === "reasoning_effort" ||
+        key === "timeout" ||
+        key === "timeout_seconds")
+    ) {
+      return;
+    }
+    if (
+      isClaudeAcpCommand(command) &&
+      (key === "model" ||
+        key === "thinking" ||
+        key === "thought_level" ||
+        key === "reasoning_effort" ||
+        key === "effort" ||
+        key === "timeout" ||
+        key === "timeout_seconds")
+    ) {
+      return;
+    }
     if (isCodexAcpCommand(command)) {
       if (key === "timeout" || key === "timeout_seconds") {
         return;
@@ -972,9 +1097,13 @@ export {
 
 export const __testing = {
   appendCodexAcpConfigOverrides,
+  appendClaudeAcpEnvOverrides,
+  appendGeminiAcpModelOverride,
   assertSupportedRuntimeSessionMode,
   codexAcpSessionModelId,
+  isClaudeAcpCommand,
   isCodexAcpCommand,
+  isGeminiAcpCommand,
   normalizeCodexAcpModelOverride,
 };
 

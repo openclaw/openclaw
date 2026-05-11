@@ -417,6 +417,7 @@ export function createOpenClawTools(
         ]),
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      agentSessionKey: options?.agentSessionKey,
       onYield: options?.onYield,
     }),
     createSubagentsTool({

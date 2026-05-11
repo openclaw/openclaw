@@ -5,6 +5,7 @@ type SessionsYieldDetails = {
   status?: string;
   message?: string;
   error?: string;
+  note?: string;
 };
 
 describe("sessions_yield tool", () => {
@@ -40,11 +41,20 @@ describe("sessions_yield tool", () => {
     expect(onYield).toHaveBeenCalledWith("Waiting for fact-checker");
   });
 
-  it("returns error without onYield callback", async () => {
+  it("accepts yield for gateway agent session context without onYield callback", async () => {
+    const tool = createSessionsYieldTool({ agentSessionKey: "agent:foreman:discord:channel:123" });
+    const result = await tool.execute("call-1", {});
+    const details = result.details as SessionsYieldDetails;
+    expect(details.status).toBe("yielded");
+    expect(details.message).toBe("Turn yielded.");
+    expect(details.note).toContain("Yield accepted for this gateway session");
+  });
+
+  it("accepts yield for sessionId without onYield callback", async () => {
     const tool = createSessionsYieldTool({ sessionId: "test-session" });
     const result = await tool.execute("call-1", {});
     const details = result.details as SessionsYieldDetails;
-    expect(details.status).toBe("error");
-    expect(details.error).toBe("Yield not supported in this context");
+    expect(details.status).toBe("yielded");
+    expect(details.message).toBe("Turn yielded.");
   });
 });

@@ -11,6 +11,8 @@ type TestSessionStore = {
 const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
   "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
 const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
+const CLAUDE_ACP_COMMAND = "npx @agentclientprotocol/claude-agent-acp@0.33.1";
+const GEMINI_ACP_COMMAND = "gemini --acp";
 const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
 const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
 
@@ -278,6 +280,29 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(__testing.isCodexAcpCommand("openclaw acp")).toBe(false);
   });
 
+  it("injects Gemini ACP startup model into the scoped registry", () => {
+    expect(__testing.isGeminiAcpCommand(GEMINI_ACP_COMMAND)).toBe(true);
+    expect(
+      __testing.appendGeminiAcpModelOverride(GEMINI_ACP_COMMAND, {
+        model: "gemini-3.1-pro-preview",
+      }),
+    ).toBe("gemini --acp --model gemini-3.1-pro-preview");
+    expect(__testing.isGeminiAcpCommand("gemini chat")).toBe(false);
+  });
+
+  it("injects Claude ACP startup model through environment overrides", () => {
+    expect(__testing.isClaudeAcpCommand(CLAUDE_ACP_COMMAND)).toBe(true);
+    expect(
+      __testing.appendClaudeAcpEnvOverrides(CLAUDE_ACP_COMMAND, {
+        model: "opus",
+        thinking: "xhigh",
+      }),
+    ).toBe(
+      "env ANTHROPIC_MODEL=opus CLAUDE_ACP_MODEL=opus CLAUDE_ACP_BAKE_MODEL=1 CLAUDE_AGENT_ACP_SKIP_INITIAL_SET_MODEL=1 CLAUDE_ACP_NO_EFFORT_APPLY=1 npx @agentclientprotocol/claude-agent-acp@0.33.1",
+    );
+    expect(__testing.isClaudeAcpCommand("gemini --acp")).toBe(false);
+  });
+
   it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => undefined),
@@ -471,21 +496,54 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     expect(setConfigOption).not.toHaveBeenCalled();
   });
 
-  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+  it("ignores unsupported Claude and Gemini ACP runtime config replays", async () => {
+    const handleFor = (sessionKey: string) =>
+      ({
+        sessionKey,
+        backend: "acpx",
+        runtimeSessionName: sessionKey,
+        acpxRecordId: sessionKey,
+      }) satisfies Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"];
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async (sessionId: string) => ({
+        acpxRecordId: sessionId,
+        agentCommand: sessionId.includes(":claude:") ? CLAUDE_ACP_COMMAND : GEMINI_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+
+    for (const sessionKey of ["agent:claude:acp:test", "agent:gemini:acp:test"]) {
+      const handle = handleFor(sessionKey);
+      for (const [key, value] of [
+        ["model", "opus"],
+        ["thinking", "xhigh"],
+        ["timeout", "240"],
+        ["Timeout_Seconds", "240"],
+      ] as const) {
+        await runtime.setConfigOption({ handle, key, value });
+      }
+    }
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
+  it("forwards timeout config controls for generic non-Codex ACP agents", async () => {
     const baseStore: TestSessionStore = {
       load: vi.fn(async () => ({
-        acpxRecordId: "agent:claude:acp:test",
-        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+        acpxRecordId: "agent:custom:acp:test",
+        agentCommand: "custom-acp-agent",
       })),
       save: vi.fn(async () => {}),
     };
     const { runtime, delegate } = makeRuntime(baseStore);
     const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
     const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
-      sessionKey: "agent:claude:acp:test",
+      sessionKey: "agent:custom:acp:test",
       backend: "acpx",
-      runtimeSessionName: "agent:claude:acp:test",
-      acpxRecordId: "agent:claude:acp:test",
+      runtimeSessionName: "agent:custom:acp:test",
+      acpxRecordId: "agent:custom:acp:test",
     };
 
     await runtime.setConfigOption({

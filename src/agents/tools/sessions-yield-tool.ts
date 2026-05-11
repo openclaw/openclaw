@@ -8,6 +8,7 @@ const SessionsYieldToolSchema = Type.Object({
 
 export function createSessionsYieldTool(opts?: {
   sessionId?: string;
+  agentSessionKey?: string;
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool {
   return {
@@ -19,11 +20,15 @@ export function createSessionsYieldTool(opts?: {
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const message = readStringParam(params, "message") || "Turn yielded.";
-      if (!opts?.sessionId) {
+      if (!opts?.sessionId && !opts?.agentSessionKey) {
         return jsonResult({ status: "error", error: "No session context" });
       }
       if (!opts?.onYield) {
-        return jsonResult({ status: "error", error: "Yield not supported in this context" });
+        return jsonResult({
+          status: "yielded",
+          message,
+          note: "Yield accepted for this gateway session; this runtime cannot interrupt the current model turn, but queued follow-up events can resume the session after the turn ends.",
+        });
       }
       await opts.onYield(message);
       return jsonResult({ status: "yielded", message });
