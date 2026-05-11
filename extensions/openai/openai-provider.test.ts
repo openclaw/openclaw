@@ -129,9 +129,10 @@ describe("buildOpenAIProvider", () => {
 
     expectFields(apiKey?.wizard, {
       choiceLabel: "OpenAI API Key",
+      choiceHint: "Use your OpenAI API key directly",
       groupId: "openai",
       groupLabel: "OpenAI",
-      groupHint: "Direct API key",
+      groupHint: "ChatGPT subscription or API key",
     });
   });
 

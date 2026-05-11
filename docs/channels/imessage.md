@@ -539,6 +539,19 @@ When `imsg launch` is running and `openclaw channels status --probe` reports `pr
     Older `imsg` builds that pre-date the per-method capability list will gate off typing/read silently; OpenClaw logs a one-time warning per restart so the missing receipt is attributable.
 
   </Accordion>
+
+  <Accordion title="Inbound tapbacks">
+    OpenClaw subscribes to iMessage tapbacks and routes accepted reactions as system events instead of normal message text, so a user tapback does not trigger an ordinary reply loop.
+
+    Notification mode is controlled by `channels.imessage.reactionNotifications`:
+
+    - `"own"` (default): notify only when users react to bot-authored messages.
+    - `"all"`: notify for all inbound tapbacks from authorized senders.
+    - `"off"`: ignore inbound tapbacks.
+
+    Per-account overrides use `channels.imessage.accounts.<id>.reactionNotifications`.
+
+  </Accordion>
 </AccordionGroup>
 
 ## Config writes

@@ -374,9 +374,16 @@ describe("handleTelegramAction", () => {
     const options = requireRecord(call[2], "text message options");
     expect(options.token).toBe("tok");
     expect(options.mediaUrl).toBeUndefined();
-    expect(result.content).toContainEqual({
-      type: "text",
-      text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
+    expect(result.content).toStrictEqual([
+      {
+        type: "text",
+        text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
+      },
+    ]);
+    expect(result.details).toStrictEqual({
+      ok: true,
+      messageId: "789",
+      chatId: "123",
     });
   });
 
