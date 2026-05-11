@@ -11,7 +11,7 @@ import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { isDangerousHostInheritedEnvVarName } from "../infra/host-env-security.js";
 import { findPathKey, mergePathPrepend } from "../infra/path-prepend.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
-import { scopedHeartbeatWakeOptions } from "../routing/session-key.js";
+import { resolveEventSessionKey, scopedHeartbeatWakeOptions } from "../routing/session-key.js";
 import type { AgentToolResult } from "./agent-core-contract.js";
 import type { ProcessSession } from "./bash-process-registry.js";
 import type { ExecToolDetails } from "./bash-tools.exec-types.js";

@@ -1383,6 +1383,9 @@ export async function spawnAcpDirect(
       parentSessionKey,
       childSessionKey: sessionKey,
       agentId: targetAgentId,
+      mainKey: cfg.session?.mainKey,
+      sessionScope: cfg.session?.scope,
+      logPath: streamLogPath,
       deliveryContext: parentDeliveryCtx,
       emitStartNotice: false,
     });
@@ -1434,6 +1437,9 @@ export async function spawnAcpDirect(
         parentSessionKey,
         childSessionKey: sessionKey,
         agentId: targetAgentId,
+        mainKey: cfg.session?.mainKey,
+        sessionScope: cfg.session?.scope,
+        logPath: streamLogPath,
         deliveryContext: parentDeliveryCtx,
         emitStartNotice: false,
       });
