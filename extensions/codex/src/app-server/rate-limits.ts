@@ -105,7 +105,7 @@ export function resolveCodexUsageLimitResetAtMs(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): number | undefined {
-  return selectNextRateLimitReset(value, nowMs)?.resetsAtMs;
+  return selectBlockingRateLimitReset(value, nowMs)?.resetsAtMs;
 }
 
 export function summarizeCodexAccountUsage(
@@ -178,6 +178,17 @@ function selectNextRateLimitReset(
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
   return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
+}
+
+function selectBlockingRateLimitReset(
+  value: JsonValue | undefined,
+  nowMs: number,
+): RateLimitReset | undefined {
+  const snapshots = collectCodexRateLimitSnapshots(value);
+  const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
+  const blockingSnapshot =
+    blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
+  return blockingSnapshot ? selectSnapshotBlockingReset(blockingSnapshot, nowMs) : undefined;
 }
 
 function summarizeRateLimitSnapshot(snapshot: JsonObject, nowMs: number): string {
@@ -382,7 +393,11 @@ function selectSnapshotBlockingReset(
     (window) => window.usedPercent !== undefined && window.usedPercent >= 100,
   );
   const candidates = exhaustedWindows.length > 0 ? exhaustedWindows : futureWindows;
-  return candidates.toSorted((left, right) => left.resetsAtMs - right.resetsAtMs)[0];
+  const resetSort =
+    exhaustedWindows.length > 0
+      ? (left: RateLimitReset, right: RateLimitReset) => right.resetsAtMs - left.resetsAtMs
+      : (left: RateLimitReset, right: RateLimitReset) => left.resetsAtMs - right.resetsAtMs;
+  return candidates.toSorted(resetSort)[0];
 }
 
 function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
