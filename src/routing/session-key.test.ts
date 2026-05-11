@@ -3,7 +3,6 @@ import {
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
-  resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
   classifySessionKeyShape,
@@ -83,11 +82,6 @@ describe("thread session suffix parsing", () => {
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
-    expect(
-      resolveThreadParentSessionKey(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toBeNull();
   });
 
   it("does not treat telegram :topic: as a generic thread suffix", () => {
@@ -95,7 +89,6 @@ describe("thread session suffix parsing", () => {
       baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
       threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
   it("parses mixed-case :thread: markers without lowercasing the stored key", () => {

@@ -522,6 +522,10 @@ Completed consolidation/deletion highlights:
   `:thread:` or `:topic:` suffixes in `sessionKey`.
 - The old session thread-info wrapper and loaded-plugin thread parser are gone;
   no runtime code imports `config/sessions/thread-info`.
+- The channel conversation helper no longer exposes full-session-key parsing
+  bridges. Core still normalizes provider-owned raw conversation ids through
+  `resolveSessionConversation(...)`, but it does not reconstruct route facts
+  from `sessionKey`.
 - Completion delivery, send policy, and task maintenance no longer derive chat
   type from `session_key` shape. The old chat-type key parser has been deleted;
   these paths require typed session metadata, typed delivery context, or
