@@ -1,3 +1,4 @@
+import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
@@ -8,7 +9,7 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
 
 describe("enqueueIMessageReactionSystemEvent", () => {
   it("matches Discord by enqueueing inbound reactions as untrusted system events", () => {
-    const runtime = { log: vi.fn() };
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
     const logVerbose = vi.fn();
 
     const queued = enqueueIMessageReactionSystemEvent({

@@ -526,6 +526,9 @@ describe("resolveIMessageInboundDecision echo detection", () => {
       bodyText: "Disliked “tapback target”",
       echoCache: { has: () => false },
       isKnownFromMeMessageId: (messageId) => {
+        if (messageId === undefined) {
+          throw new Error("expected reaction target message id");
+        }
         checkedMessageIds.push(messageId);
         return messageId === "p:0/imsg-1";
       },
