@@ -105,12 +105,13 @@ describe("github-copilot model defaults", () => {
 
     it("uses static metadata overrides for gpt-5.5 fallback rows", () => {
       const def = buildCopilotModelDefinition("gpt-5.5");
-      expect(def).toMatchObject({
+      expect(def).toEqual({
         id: "gpt-5.5",
         name: "GPT-5.5",
         api: "openai-responses",
         reasoning: true,
         input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 400_000,
         maxTokens: 128_000,
       });
@@ -212,12 +213,14 @@ describe("resolveCopilotForwardCompatModel", () => {
 
   it("uses static metadata for gpt-5.5 when live discovery rows are unavailable", () => {
     const result = requireResolvedModel(createMockCtx("gpt-5.5"));
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       id: "gpt-5.5",
       name: "GPT-5.5",
+      provider: "github-copilot",
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400_000,
       maxTokens: 128_000,
     });
@@ -514,12 +517,13 @@ describe("fetchCopilotModelCatalog", () => {
     ]);
 
     const gpt55 = out.find((m) => m.id === "gpt-5.5");
-    expect(gpt55).toMatchObject({
+    expect(gpt55).toEqual({
       id: "gpt-5.5",
       name: "GPT-5.5",
       api: "openai-responses",
       reasoning: true,
       input: ["text", "image"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 400000,
       maxTokens: 128000,
     });
