@@ -317,7 +317,7 @@ describe("resolveAnnounceTarget", () => {
     expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
-  it("falls back to origin provider and accountId from sessions.list when legacy route fields are absent", async () => {
+  it("does not hydrate announce targets from legacy sessions.list route shadows", async () => {
     callGatewayMock.mockResolvedValueOnce({
       sessions: [
         {
@@ -338,9 +338,8 @@ describe("resolveAnnounceTarget", () => {
     });
     expect(target).toEqual({
       channel: "whatsapp",
-      to: "123@g.us",
-      accountId: "work",
-      threadId: "271",
+      to: "group:123@g.us",
+      threadId: undefined,
     });
   });
 

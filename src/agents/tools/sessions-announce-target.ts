@@ -2,7 +2,7 @@ import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/ind
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
-import { deliveryContextFromSession } from "../../utils/delivery-context.shared.js";
+import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
 import type { SessionListRow } from "./sessions-helpers.js";
 import type { AnnounceTarget } from "./sessions-send-helpers.js";
 import { resolveAnnounceTargetFromKey } from "./sessions-send-helpers.js";
@@ -46,7 +46,7 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.sessionKey) ??
       sessions.find((entry) => entry?.key === params.displayKey);
 
-    const context = deliveryContextFromSession(match);
+    const context = normalizeDeliveryContext(match?.deliveryContext);
     const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);
     if (context?.channel && context.to) {
       return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };

@@ -477,6 +477,9 @@ Completed consolidation/deletion highlights:
   `session_key` substrings.
 - Session display model resolution now receives the agent id from the SQLite
   session database target instead of splitting it out of `session_key`.
+- Agent-to-agent announce target hydration now uses typed `sessions.list`
+  `deliveryContext` only. It no longer recovers account/thread routing from
+  legacy `origin` or mirrored `last*` fields in list rows.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed
