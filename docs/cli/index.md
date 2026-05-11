@@ -378,6 +378,7 @@ Highlights:
 - `/status` — quick diagnostics.
 - `/trace` — session-scoped plugin trace/debug lines.
 - `/config` — persisted config changes.
+- `/experimental` — schema-derived experimental flag toggles (requires `commands.experimental: true`).
 - `/debug` — runtime-only config overrides (memory, not disk; requires `commands.debug: true`).
 
 ## Usage tracking

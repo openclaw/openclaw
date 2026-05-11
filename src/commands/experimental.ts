@@ -1,6 +1,9 @@
 import { readConfigFileSnapshot, replaceConfigFile } from "../config/config.js";
+import {
+  applyExperimentalConfigSelection,
+  readExperimentalConfigFlagStates,
+} from "../config/experimental-flags.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
-import { FIELD_LABELS } from "../config/schema.labels.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { danger, info, success } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -8,45 +11,6 @@ import { theme } from "../terminal/theme.js";
 import { shortenHomePath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-
-// Registry of experimental flags. Add a new entry when shipping a new
-// `experimental.*` config flag you want to expose in the picker.
-export const EXPERIMENTAL_FLAGS = [
-  {
-    path: "tools.experimental.planTool",
-    summary: "Structured update_plan tool for multi-step work outside strict-agentic runs.",
-  },
-  {
-    path: "agents.defaults.experimental.localModelLean",
-    summary: "Drop heavyweight default tools for weaker or smaller local model backends.",
-  },
-  {
-    path: "agents.defaults.memorySearch.experimental.sessionMemory",
-    summary: "Index session transcripts into memory search (larger index churn).",
-  },
-] as const;
-
-type FlagState = { path: string; segments: string[]; label: string; summary: string; on: boolean };
-
-function readBool(root: unknown, segments: readonly string[]): boolean {
-  let cur: unknown = root;
-  for (const s of segments) {
-    if (!cur || typeof cur !== "object" || Array.isArray(cur)) return false;
-    cur = (cur as Record<string, unknown>)[s];
-  }
-  return cur === true;
-}
-
-function setAt(root: Record<string, unknown>, segments: readonly string[], value: boolean): void {
-  let cur = root;
-  for (let i = 0; i < segments.length - 1; i += 1) {
-    const s = segments[i];
-    const next = cur[s];
-    if (!next || typeof next !== "object" || Array.isArray(next)) cur[s] = {};
-    cur = cur[s] as Record<string, unknown>;
-  }
-  cur[segments[segments.length - 1]] = value;
-}
 
 export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   const snapshot = await readConfigFileSnapshot();
@@ -69,16 +33,7 @@ export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   }
 
   const root = snapshot.resolved ?? snapshot.config ?? {};
-  const states: FlagState[] = EXPERIMENTAL_FLAGS.map((flag) => {
-    const segments = flag.path.split(".");
-    return {
-      path: flag.path,
-      segments,
-      label: FIELD_LABELS[flag.path] ?? flag.path,
-      summary: flag.summary,
-      on: readBool(root, segments),
-    };
-  });
+  const states = readExperimentalConfigFlagStates(root);
 
   const prompter = createClackPrompter();
   await prompter.intro("OpenClaw experimental flags");
@@ -99,17 +54,13 @@ export async function runExperimental(runtime: RuntimeEnv): Promise<void> {
   }
 
   const picked = new Set(selected);
-  const deltas = states.flatMap((s) =>
-    picked.has(s.path) === s.on ? [] : [{ ...s, next: picked.has(s.path) }],
+  const { nextConfig: next, deltas } = applyExperimentalConfigSelection(
+    root as Record<string, unknown>,
+    picked,
   );
   if (deltas.length === 0) {
     await prompter.outro(theme.muted("No changes."));
     return;
-  }
-
-  const next = structuredClone(root as Record<string, unknown>);
-  for (const d of deltas) {
-    setAt(next, d.segments, d.next);
   }
   await replaceConfigFile({
     nextConfig: next as unknown as OpenClawConfig,

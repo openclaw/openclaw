@@ -5,6 +5,10 @@ import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { buildAllowedModelSet, resolveThinkingDefault } from "../agents/model-selection.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { getRuntimeConfig } from "../config/config.js";
+import {
+  readExperimentalConfigFlagStatesFromFile,
+  writeExperimentalConfigFlagToFile,
+} from "../config/experimental-config-file.js";
 import { updateSessionStore } from "../config/sessions.js";
 import {
   projectRecentChatDisplayMessages,
@@ -52,6 +56,8 @@ import type {
   TuiAgentsList,
   TuiBackend,
   TuiEvent,
+  TuiExperimentalFlagState,
+  TuiExperimentalFlagUpdate,
   TuiModelChoice,
   TuiSessionList,
 } from "./tui-backend.js";
@@ -68,6 +74,13 @@ type LocalRunState = {
 };
 
 const LIFECYCLE_ERROR_RETRY_GRACE_MS = 15_000;
+
+function requireExperimentalCommandEnabled(): void {
+  const cfg = getRuntimeConfig();
+  if (cfg.commands?.experimental !== true) {
+    throw new Error("/experimental is disabled; set commands.experimental=true to enable it");
+  }
+}
 
 const silentRuntime = {
   log: (..._args: unknown[]) => undefined,
@@ -350,6 +363,30 @@ export class EmbeddedTuiBackend implements TuiBackend {
       contextWindow: entry.contextWindow,
       reasoning: entry.reasoning,
     }));
+  }
+
+  async listExperimentalFlags(): Promise<TuiExperimentalFlagState[]> {
+    requireExperimentalCommandEnabled();
+    return (await readExperimentalConfigFlagStatesFromFile()).map(
+      ({ path, label, summary, on }) => ({
+        path,
+        label,
+        summary,
+        on,
+      }),
+    );
+  }
+
+  async setExperimentalFlag(params: {
+    path: string;
+    value: boolean;
+  }): Promise<TuiExperimentalFlagUpdate> {
+    requireExperimentalCommandEnabled();
+    return writeExperimentalConfigFlagToFile({
+      path: params.path,
+      value: params.value,
+      afterWrite: { mode: "auto" },
+    });
   }
 
   private abortSessionRuns(sessionKey: string) {

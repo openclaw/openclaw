@@ -65,6 +65,19 @@ const formatMcpArgs: CommandArgsFormatter = (values) =>
     },
   });
 
+const formatExperimentalArgs: CommandArgsFormatter = (values) =>
+  formatActionArgs(values, {
+    formatKnownAction: (action, path) => {
+      if (action === "list" || action === "show" || action === "status") {
+        return action;
+      }
+      if (action === "on" || action === "off" || action === "enable" || action === "disable") {
+        return path ? `${action} ${path}` : action;
+      }
+      return undefined;
+    },
+  });
+
 const formatPluginsArgs: CommandArgsFormatter = (values) =>
   formatActionArgs(values, {
     formatKnownAction: (action, path) => {
@@ -154,6 +167,7 @@ const formatExecArgs: CommandArgsFormatter = (values) => {
 
 export const COMMAND_ARG_FORMATTERS: Record<string, CommandArgsFormatter> = {
   config: formatConfigArgs,
+  experimental: formatExperimentalArgs,
   mcp: formatMcpArgs,
   plugins: formatPluginsArgs,
   debug: formatDebugArgs,

@@ -95,6 +95,19 @@ export type TuiModelChoice = {
   reasoning?: boolean;
 };
 
+export type TuiExperimentalFlagState = {
+  path: string;
+  label: string;
+  summary: string;
+  on: boolean;
+};
+
+export type TuiExperimentalFlagUpdate = {
+  path: string;
+  value: boolean;
+  changed: boolean;
+};
+
 export type TuiBackend = {
   connection: {
     url: string;
@@ -119,4 +132,9 @@ export type TuiBackend = {
   resetSession: (key: string, reason?: "new" | "reset") => Promise<unknown>;
   getGatewayStatus: () => Promise<unknown>;
   listModels: () => Promise<TuiModelChoice[]>;
+  listExperimentalFlags?: () => Promise<TuiExperimentalFlagState[]>;
+  setExperimentalFlag?: (opts: {
+    path: string;
+    value: boolean;
+  }) => Promise<TuiExperimentalFlagUpdate>;
 };
