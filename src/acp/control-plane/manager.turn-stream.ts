@@ -3,8 +3,6 @@ import type { AcpRuntime, AcpRuntimeEvent, AcpRuntimeTurnInput } from "../runtim
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
-const TURN_STREAM_TIMEOUT_MS = 30_000;
-
 export type AcpTurnEventGate = {
   open: boolean;
 };
@@ -13,24 +11,6 @@ export type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   sawTerminalEvent: boolean;
 };
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  const timeoutToken = Symbol("timeout");
-  let timer: NodeJS.Timeout | undefined;
-  const timeoutPromise = new Promise<typeof timeoutToken>((resolve) => {
-    timer = setTimeout(() => resolve(timeoutToken), timeoutMs);
-    if (timer.unref) timer.unref();
-  });
-  try {
-    const result = await Promise.race([promise, timeoutPromise]);
-    if (result === timeoutToken) {
-      throw new AcpRuntimeError("ACP_TURN_FAILED", "ACP turn stream timed out waiting for events.");
-    }
-    return result;
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
 
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
@@ -68,7 +48,7 @@ export async function consumeAcpTurnStream(params: {
     streamCompleted = true;
   };
 
-  await withTimeout(runStream(), TURN_STREAM_TIMEOUT_MS);
+  await runStream();
 
   if (params.eventGate.open && streamError) {
     throw streamError;

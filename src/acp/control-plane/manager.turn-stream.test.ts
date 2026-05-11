@@ -1,9 +1,10 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, describe, it, expect, vi } from "vitest";
 import type { AcpRuntime, AcpRuntimeEvent } from "../../acp/runtime/types.js";
 import { consumeAcpTurnStream, type AcpTurnEventGate } from "./manager.turn-stream.js";
 
 function createMockRuntime(params: {
   events?: AcpRuntimeEvent[];
+  eventDelaysMs?: number[];
   throwOnRunTurn?: Error;
   delayMs?: number;
 }): AcpRuntime {
@@ -17,7 +18,11 @@ function createMockRuntime(params: {
         throw params.throwOnRunTurn;
       }
       if (params.events) {
-        for (const event of params.events) {
+        for (const [index, event] of params.events.entries()) {
+          const delayMs = params.eventDelaysMs?.[index] ?? 0;
+          if (delayMs > 0) {
+            await new Promise((r) => setTimeout(r, delayMs));
+          }
           yield event;
         }
       }
@@ -26,6 +31,10 @@ function createMockRuntime(params: {
     close: vi.fn(),
   } as unknown as AcpRuntime;
 }
+
+afterEach(() => {
+  vi.useRealTimers();
+});
 
 describe("consumeAcpTurnStream", () => {
   it("returns sawTerminalEvent=true when done event is emitted", async () => {
@@ -132,30 +141,33 @@ describe("consumeAcpTurnStream", () => {
     expect(result.sawOutput).toBe(false); // events skipped when gate closed
   });
 
-  it("times out when stream hangs without completing", async () => {
-    // Create a runtime that never yields any events (simulates hung child process)
+  it("allows a valid stream to emit done after more than 30 seconds", async () => {
+    vi.useFakeTimers();
     const runtime = createMockRuntime({
-      events: [],
-      delayMs: 60_000, // would delay forever
+      events: [
+        { type: "text_delta", text: "still working" },
+        { type: "done", stopReason: "end_turn" },
+      ],
+      eventDelaysMs: [0, 31_000],
     });
     const eventGate: AcpTurnEventGate = { open: true };
 
-    const start = Date.now();
-    await expect(
-      consumeAcpTurnStream({
-        runtime,
-        turn: {
-          handle: { sessionKey: "test", backend: "test", runtimeSessionName: "test" },
-          text: "hi",
-          mode: "prompt",
-          requestId: "1",
-        },
-        eventGate,
-      }),
-    ).rejects.toThrow("timed out");
-    const elapsed = Date.now() - start;
-    // Should timeout within the 30s window, not 60s
-    expect(elapsed).toBeLessThan(35_000);
-    expect(elapsed).toBeGreaterThan(28_000);
+    const resultPromise = consumeAcpTurnStream({
+      runtime,
+      turn: {
+        handle: { sessionKey: "test", backend: "test", runtimeSessionName: "test" },
+        text: "hi",
+        mode: "prompt",
+        requestId: "1",
+      },
+      eventGate,
+    });
+
+    await vi.advanceTimersByTimeAsync(31_000);
+
+    await expect(resultPromise).resolves.toEqual({
+      sawOutput: true,
+      sawTerminalEvent: true,
+    });
   });
 });
