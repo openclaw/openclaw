@@ -365,7 +365,7 @@ describe("timeout-triggered compaction", () => {
     expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
-  it("still attempts compaction for timed-out attempts that set aborted", async () => {
+  it("skips timeout compaction when run was aborted by user", async () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         timedOut: true,
@@ -375,20 +375,13 @@ describe("timeout-triggered compaction", () => {
         } as never,
       }),
     );
-    mockedCompactDirect.mockResolvedValueOnce(
-      makeCompactionSuccess({
-        summary: "timeout recovery compaction",
-        tokensBefore: 180000,
-        tokensAfter: 90000,
-      }),
-    );
-    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
 
     const result = await runEmbeddedPiAgent(overflowBaseRunParams);
 
-    expect(mockedCompactDirect).toHaveBeenCalledTimes(1);
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
-    expect(result.meta.error).toBeUndefined();
+    // Timeout compaction should NOT fire for intentionally aborted runs
+    expect(mockedCompactDirect).not.toHaveBeenCalled();
+    expect(result.payloads?.[0]?.isError).toBe(true);
+    expect(result.payloads?.[0]?.text).toContain("timed out");
   });
 
   it("does not attempt compaction when timedOutDuringCompaction is true", async () => {
@@ -531,7 +524,6 @@ describe("timeout-triggered compaction", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
-          aborted: true,
           lastAssistant: {
             usage: { input: 150000 },
           } as never,
@@ -541,7 +533,6 @@ describe("timeout-triggered compaction", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
-          aborted: true,
           lastAssistant: {
             usage: { input: 150000 },
           } as never,
@@ -582,7 +573,6 @@ describe("timeout-triggered compaction", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
-          aborted: true,
           lastAssistant: {
             usage: { input: 150000 },
           } as never,
@@ -592,7 +582,6 @@ describe("timeout-triggered compaction", () => {
       .mockResolvedValueOnce(
         makeAttemptResult({
           timedOut: true,
-          aborted: true,
           lastAssistant: {
             usage: { input: 150000 },
           } as never,
