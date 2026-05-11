@@ -59,6 +59,19 @@ describe("Control UI mount fallback", () => {
     );
     expect(fallback?.textContent).toContain("Control UI did not start");
     expect(fallback?.textContent).toContain("Control UI troubleshooting");
+    expect(frameWindow.document.activeElement?.classList.contains("mount-fallback__panel")).toBe(
+      true,
+    );
+
+    const waitButton = frameWindow.document.getElementById("openclaw-mount-wait");
+    waitButton?.click();
+    expect(fallback?.hidden).toBe(true);
+    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
+      false,
+    );
+
+    await waitForWindowTimeout(frameWindow, 10);
+    expect(fallback?.hidden).toBe(false);
   });
 
   it("keeps the fallback hidden when the app element registers before the timeout", async () => {

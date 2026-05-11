@@ -164,6 +164,10 @@
         background: #8bd3ff;
       }
 
+      .mount-fallback__panel:focus {
+        outline: none;
+      }
+
       .mount-fallback__button:focus-visible,
       .mount-fallback__panel a:focus-visible {
         outline: 3px solid #f9c74f;
@@ -202,7 +206,7 @@
       aria-labelledby="openclaw-mount-fallback-title"
       hidden
     >
-      <div class="mount-fallback__panel">
+      <div class="mount-fallback__panel" tabindex="-1">
         <p class="mount-fallback__eyebrow">OpenClaw Control UI</p>
         <h1 id="openclaw-mount-fallback-title">Control UI did not start</h1>
         <p>
@@ -218,7 +222,7 @@
             <a
               href="https://docs.openclaw.ai/web/control-ui#blank-control-ui-page"
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
               >Control UI troubleshooting</a
             >.
           </li>
@@ -231,8 +235,8 @@
           >
             Try again
           </button>
-          <button type="button" id="openclaw-mount-dismiss" class="mount-fallback__button">
-            Hide message
+          <button type="button" id="openclaw-mount-wait" class="mount-fallback__button">
+            Keep waiting
           </button>
         </div>
       </div>
@@ -244,11 +248,12 @@
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
 
-        var dismissed = false;
+        var panel = fallback.querySelector(".mount-fallback__panel");
         var retry = document.getElementById("openclaw-mount-retry");
-        var dismiss = document.getElementById("openclaw-mount-dismiss");
+        var wait = document.getElementById("openclaw-mount-wait");
         var rawDelay = Number(fallback.getAttribute("data-openclaw-mount-timeout-ms"));
         var delay = Number.isFinite(rawDelay) && rawDelay > 0 ? rawDelay : 12000;
+        var timer;
 
         function appMounted() {
           try {
@@ -269,12 +274,24 @@
         }
 
         function showFallback() {
-          if (dismissed || appMounted()) return;
+          if (appMounted()) return;
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
+          if (panel && typeof panel.focus === "function") {
+            try {
+              panel.focus({ preventScroll: true });
+            } catch (e) {
+              panel.focus();
+            }
+          }
         }
 
-        var timer = window.setTimeout(showFallback, delay);
+        function armFallbackTimer() {
+          window.clearTimeout(timer);
+          timer = window.setTimeout(showFallback, delay);
+        }
+
+        armFallbackTimer();
 
         if (window.customElements && typeof window.customElements.whenDefined === "function") {
           window.customElements.whenDefined(tagName).then(
@@ -291,11 +308,10 @@
             window.location.reload();
           });
         }
-        if (dismiss) {
-          dismiss.addEventListener("click", function () {
-            dismissed = true;
-            window.clearTimeout(timer);
+        if (wait) {
+          wait.addEventListener("click", function () {
             hideFallback();
+            armFallbackTimer();
           });
         }
       })();
