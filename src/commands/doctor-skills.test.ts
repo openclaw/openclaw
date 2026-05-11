@@ -124,6 +124,40 @@ describe("doctor skills", () => {
     expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
   });
 
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is disabled", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: false,
+      disabled: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
+  it("does not surface the GH_CONFIG_DIR hint when the github skill is filtered out for the agent", () => {
+    const githubSkill = createSkill({
+      name: "github",
+      skillKey: "github",
+      eligible: true,
+      blockedByAgentFilter: true,
+      missing: { bins: [], anyBins: [], env: [], config: [], os: [] },
+    });
+    const discovery: GhConfigDiscoveryInput = {
+      platform: "linux",
+      env: { HOME: "/agent/home" },
+      fileExists: (p) => p === "/root/.config/gh/hosts.yml",
+    };
+
+    expect(describeGhConfigDirHintFromDiscovery([githubSkill], discovery)).toEqual([]);
+  });
+
   it("does not surface the GH_CONFIG_DIR hint when GH_CONFIG_DIR is already set", () => {
     const githubSkill = createSkill({
       name: "github",

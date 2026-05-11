@@ -55,14 +55,15 @@ export type GhConfigDiscoveryResult =
 
 const HOSTS_FILE = "hosts.yml";
 
-// gh config-dir lookup order, matching the documented behavior of `gh
-// help environment` for each platform. macOS uses Library/Application Support,
-// Windows uses %AppData%\GitHub CLI, Linux/other uses XDG_CONFIG_HOME or
-// $HOME/.config/gh.
+// gh config-dir lookup order, matching `gh help environment`.
 function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | undefined {
   const env = input.env;
   if (env.GH_CONFIG_DIR && env.GH_CONFIG_DIR.trim()) {
     return env.GH_CONFIG_DIR.trim();
+  }
+  const xdg = env.XDG_CONFIG_HOME?.trim();
+  if (xdg) {
+    return pathFor(input.platform).join(xdg, "gh");
   }
   if (input.platform === "win32") {
     const appData = env.APPDATA?.trim();
@@ -73,19 +74,6 @@ function resolveEffectiveGhConfigDir(input: GhConfigDiscoveryInput): string | un
     if (profile) {
       return pathFor(input.platform).join(profile, "AppData", "Roaming", "GitHub CLI");
     }
-    return undefined;
-  }
-  if (input.platform === "darwin") {
-    const home = env.HOME?.trim();
-    if (!home) {
-      return undefined;
-    }
-    return pathFor(input.platform).join(home, ".config", "gh");
-  }
-  // Linux and POSIX-like default
-  const xdg = env.XDG_CONFIG_HOME?.trim();
-  if (xdg) {
-    return pathFor(input.platform).join(xdg, "gh");
   }
   const home = env.HOME?.trim();
   if (!home) {

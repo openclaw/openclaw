@@ -60,6 +60,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - Cron: keep long manual cron runs active in the task registry until completion, preventing transient `lost` markers before durable recovery reconciles. Fixes #78233. (#78243) Thanks @Feelw00.
+- Doctor/GitHub CLI: surface a `GH_CONFIG_DIR` hint when the GitHub skill is usable but `gh` auth lives under a different operator HOME than the agent process, without warning for disabled or filtered skills. Fixes #78063. (#78095) Thanks @tmimmanuel.
 - Gateway: clear speculative node wake state when APNs registration is missing, preventing unregistered or mistyped node IDs from retaining wake throttle entries. Fixes #68847. (#68848) Thanks @Feelw00.
 - Auto-reply: keep late follow-up queue drain finalizers from deleting a replacement queue registered after `/stop`, preventing immediate follow-up messages from being orphaned. Fixes #68838. (#68839) Thanks @Feelw00.
 - Feishu: make manual App ID/App Secret setup the default channel-binding path while keeping QR scan-to-create as an optional best-effort flow, and document the manual fallback for domestic Feishu mobile clients that do not react to the QR code. Fixes #80591. Thanks @wei-wei-zhao.

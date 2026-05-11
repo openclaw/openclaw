@@ -142,6 +142,20 @@ describe("detectGhConfigDirMismatch", () => {
     });
   });
 
+  it("respects XDG_CONFIG_HOME before HOME on darwin", () => {
+    const result = detectGhConfigDirMismatch(
+      makeInput({
+        platform: "darwin",
+        env: { HOME: "/Users/agent", XDG_CONFIG_HOME: "/Users/agent/Library/XDG" },
+        fileExists: fileSet("/Users/agent/Library/XDG/gh/hosts.yml"),
+      }),
+    );
+    expect(result).toEqual({
+      kind: "auth-discoverable",
+      effectiveConfigDir: "/Users/agent/Library/XDG/gh",
+    });
+  });
+
   it("uses HOME/.config/gh on darwin (matches gh's documented macOS lookup)", () => {
     const result = detectGhConfigDirMismatch(
       makeInput({
@@ -170,6 +184,37 @@ describe("detectGhConfigDirMismatch", () => {
     expect(result).toMatchObject({
       kind: "auth-discoverable",
       effectiveConfigDir: "C:\\Users\\agent\\AppData\\Roaming\\GitHub CLI",
+    });
+  });
+
+  it("respects XDG_CONFIG_HOME before APPDATA on win32", () => {
+    const result = detectGhConfigDirMismatch(
+      makeInput({
+        platform: "win32",
+        env: {
+          XDG_CONFIG_HOME: "C:\\Users\\agent\\XDG",
+          APPDATA: "C:\\Users\\agent\\AppData\\Roaming",
+        },
+        fileExists: fileSet("C:\\Users\\agent\\XDG\\gh\\hosts.yml"),
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "auth-discoverable",
+      effectiveConfigDir: "C:\\Users\\agent\\XDG\\gh",
+    });
+  });
+
+  it("falls back to HOME/.config/gh on win32 when APPDATA and USERPROFILE are missing", () => {
+    const result = detectGhConfigDirMismatch(
+      makeInput({
+        platform: "win32",
+        env: { HOME: "C:\\Users\\agent" },
+        fileExists: fileSet("C:\\Users\\agent\\.config\\gh\\hosts.yml"),
+      }),
+    );
+    expect(result).toMatchObject({
+      kind: "auth-discoverable",
+      effectiveConfigDir: "C:\\Users\\agent\\.config\\gh",
     });
   });
 

@@ -70,9 +70,12 @@ export function describeGhConfigDirHintFromDiscovery(
   if (!githubSkill) {
     return [];
   }
-  // The github skill only requires the `gh` binary; if it is not installed we
-  // do not surface a config-dir hint (the bin install hint covers it).
-  if (githubSkill.missing.bins.includes("gh")) {
+  if (
+    !githubSkill.eligible ||
+    githubSkill.blockedByAgentFilter ||
+    githubSkill.disabled ||
+    githubSkill.blockedByAllowlist
+  ) {
     return [];
   }
   const result: GhConfigDiscoveryResult = detectGhConfigDirMismatch(discoveryInput);
