@@ -100,8 +100,6 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   isWSL2Sync: () => false,
 }));
 
-// No agent-harness-runtime mock needed; stampUserAgent reads process.env.OPENCLAW_VERSION
-
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
@@ -284,6 +282,20 @@ function expectCallerDispatcherPreserved(callIndexes: number[], dispatcher: unkn
   }
 }
 
+function loggerHasMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): boolean {
+  return logger.mock.calls.some(
+    ([message]) => typeof message === "string" && message.includes(fragment),
+  );
+}
+
+function expectLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(loggerHasMessageContaining(logger, fragment)).toBe(true);
+}
+
+function expectNoLoggerMessageContaining(logger: ReturnType<typeof vi.fn>, fragment: string): void {
+  expect(loggerHasMessageContaining(logger, fragment)).toBe(false);
+}
+
 async function expectNoStickyRetryWithSameDispatcher(params: {
   resolved: ReturnType<typeof resolveTelegramFetchOrThrow>;
   expectedAgentCtor: typeof ProxyAgentCtor | typeof EnvHttpProxyAgentCtor;
@@ -340,10 +352,7 @@ describe("resolveTelegramFetch", () => {
 
     const resolved = resolveTelegramFetch(wrapped);
 
-    // stampUserAgent is a thin UA-stamping wrapper; the underlying call still
-    // delegates to the caller-provided fetch, not to undiciFetch.
-    expect(resolved).not.toBe(undiciFetch);
-    expect(typeof resolved).toBe("function");
+    expect(resolved).toBe(wrapped);
   });
 
   it("uses resolver-scoped Agent dispatcher with configured transport policy", async () => {
@@ -547,11 +556,9 @@ describe("resolveTelegramFetch", () => {
     await expect(
       transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
     ).resolves.toEqual({ ok: true });
-    expect(undiciFetch).toHaveBeenCalledTimes(1);
-    const [calledUrl, calledInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
-    expect(calledUrl).toBe("https://api.telegram.org/botTOKEN/getFile");
-    expect((calledInit?.headers as Headers | undefined)?.get("User-Agent")).toMatch(
-      /^OpenClawBot\//u,
+    expect(undiciFetch).toHaveBeenCalledWith(
+      "https://api.telegram.org/botTOKEN/getFile",
+      undefined,
     );
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
@@ -772,14 +779,17 @@ describe("resolveTelegramFetch", () => {
     expectStickyAutoSelectDispatcher(firstDispatcher);
     expect(secondDispatcher?.options?.connect?.family).toBe(4);
     expect(secondDispatcher?.options?.connect?.autoSelectFamily).toBe(false);
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: enabling sticky IPv4-only dispatcher",
     );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: recovered from attempt 1 to attempt 0"),
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: recovered from attempt 1 to attempt 0",
     );
-    expect(loggerWarn).not.toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: enabling sticky IPv4-only dispatcher"),
+    expectNoLoggerMessageContaining(
+      loggerWarn,
+      "fetch fallback: enabling sticky IPv4-only dispatcher",
     );
   });
 
@@ -819,11 +829,10 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
-    expect(loggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: DNS-resolved IP unreachable"),
-    );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: recovered from attempt 2 to attempt 0"),
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(
+      loggerDebug,
+      "fetch fallback: recovered from attempt 2 to attempt 0",
     );
   });
 
@@ -862,9 +871,7 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(7)).toBe(firstDispatcher);
     expect(getDispatcherFromUndiciCall(8)).toBe(secondDispatcher);
     expect(getDispatcherFromUndiciCall(9)).toBe(secondDispatcher);
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
-    );
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
   });
 
   it("keeps the armed fallback sticky when all attempts fail", async () => {
@@ -940,12 +947,11 @@ describe("resolveTelegramFetch", () => {
     expect(getDispatcherFromUndiciCall(7)).toBe(getDispatcherFromUndiciCall(3));
     expect(getDispatcherFromUndiciCall(8)).toBe(getDispatcherFromUndiciCall(1));
     expect(getDispatcherFromUndiciCall(9)).toBe(getDispatcherFromUndiciCall(2));
-    expect(loggerWarn).toHaveBeenCalledWith(
-      expect.stringContaining("telegram transport attempt marked temporarily unhealthy"),
+    expectLoggerMessageContaining(
+      loggerWarn,
+      "telegram transport attempt marked temporarily unhealthy",
     );
-    expect(loggerDebug).toHaveBeenCalledWith(
-      expect.stringContaining("fetch fallback: re-probing primary dispatcher"),
-    );
+    expectLoggerMessageContaining(loggerDebug, "fetch fallback: re-probing primary dispatcher");
   });
 
   it("preserves caller-provided dispatcher across fallback retry", async () => {
@@ -1040,45 +1046,6 @@ describe("resolveTelegramFetch", () => {
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(setDefaultResultOrder).not.toHaveBeenCalled();
     expect(setDefaultAutoSelectFamily).not.toHaveBeenCalled();
-  });
-
-  it("stamps OpenClawBot User-Agent on all outbound requests", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await transport.sourceFetch("https://api.telegram.org/botTOKEN/getMe");
-
-    expect(undiciFetch).toHaveBeenCalledTimes(1);
-    const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
-    const headers = callInit?.headers as Headers | undefined;
-    expect(headers?.get("User-Agent")).toBe("OpenClawBot/2026.5.10-test");
-  });
-
-  it("does not overwrite a caller-provided User-Agent header", async () => {
-    vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
-    undiciFetch.mockResolvedValue({ ok: true } as Response);
-
-    const transport = resolveTelegramTransport(undefined, {
-      network: {
-        autoSelectFamily: false,
-        dnsResultOrder: "ipv4first",
-      },
-    });
-
-    await transport.sourceFetch("https://api.telegram.org/botTOKEN/getMe", {
-      headers: { "User-Agent": "CustomBot/1.0" },
-    } as RequestInit);
-
-    const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
-    const headers = callInit?.headers as Headers | undefined;
-    expect(headers?.get("User-Agent")).toBe("CustomBot/1.0");
   });
 
   describe("transport lifecycle", () => {

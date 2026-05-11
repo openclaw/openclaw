@@ -383,18 +383,6 @@ function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
   return resolveFetch(fetchImpl) ?? fetchImpl;
 }
 
-function stampUserAgent(fetchImpl: typeof fetch): typeof fetch {
-  const version = process.env["OPENCLAW_VERSION"]?.trim() || "unknown";
-  const ua = `OpenClawBot/${version}`;
-  return (input, init) => {
-    const headers = new Headers(init?.headers);
-    if (!headers.has("User-Agent")) {
-      headers.set("User-Agent", ua);
-    }
-    return fetchImpl(input, { ...init, headers });
-  };
-}
-
 function logResolverNetworkDecisions(params: {
   autoSelectDecision: ReturnType<typeof resolveTelegramAutoSelectFamilyDecision>;
   dnsDecision: ReturnType<typeof resolveTelegramDnsResultOrderDecision>;
@@ -612,13 +600,11 @@ export function resolveTelegramTransport(
     !effectiveProxyFetch && !hasEnvProxy ? resolveOpenClawProxyUrlForTelegram() : undefined;
   const resolvedExplicitProxyUrl = explicitProxyUrl ?? managedProxyUrl;
   const undiciSourceFetch = resolveWrappedFetch(undiciFetch as unknown as typeof fetch);
-  const sourceFetch = stampUserAgent(
-    resolvedExplicitProxyUrl
-      ? undiciSourceFetch
-      : effectiveProxyFetch
-        ? resolveWrappedFetch(effectiveProxyFetch)
-        : undiciSourceFetch,
-  );
+  const sourceFetch = resolvedExplicitProxyUrl
+    ? undiciSourceFetch
+    : effectiveProxyFetch
+      ? resolveWrappedFetch(effectiveProxyFetch)
+      : undiciSourceFetch;
   const dnsResultOrder = normalizeDnsResultOrder(dnsDecision.value);
   if (effectiveProxyFetch && !explicitProxyUrl) {
     // The caller owns the underlying dispatcher lifecycle; nothing to close here.
