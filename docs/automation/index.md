@@ -131,4 +131,5 @@ See [Heartbeat](/gateway/heartbeat).
 - [Plugin hooks](/plugins/hooks) — in-process tool, prompt, message, and lifecycle hooks
 - [Standing Orders](/automation/standing-orders) — persistent agent instructions
 - [Heartbeat](/gateway/heartbeat) — periodic main-session turns
+- [Cron resilience audit](/automation/cron-resilience-audit) — schedules, retries, and alerting gaps
 - [Configuration Reference](/gateway/configuration-reference) — all config keys
