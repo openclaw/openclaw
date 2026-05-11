@@ -8,6 +8,7 @@ Docs: https://docs.openclaw.ai
 
 - CI: add a non-blocking `plugin-inspector-advisory` artifact to Plugin Prerelease so release runs capture bundled plugin compatibility triage without changing the blocking gate.
 - Providers/fal: route GPT Image 2 and Nano Banana 2 reference-image edit requests to `/edit` with `image_urls` array, enforce NB2 edit geometry using `aspect_ratio` and `resolution` params, lift Fal edit mode input-image caps to 10 for GPT Image 2 and 14 for Nano Banana 2, and allow aspect-ratio hints in edit mode. (#77295) Thanks @leoge007.
+- Control UI: show a plain HTML recovery panel when the app module never registers, giving blank dashboard pages a retry path and browser-extension troubleshooting link. Fixes #44107. Thanks @BunsDev.
 
 - Build: enable additional low-churn oxlint rules for promise, TypeScript, and runtime footgun checks.
 - Build: enable stricter Vitest lint rules for focused, disabled, conditional, hook, matcher, and expectation hazards.
