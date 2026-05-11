@@ -346,7 +346,8 @@ jobs:
         run: |
           set -euo pipefail
           sudo useradd --create-home --shell /bin/bash codex
-          sudo install -d -m 0770 -o codex -g sudo /home/codex/.codex
+          sudo setfacl -m u:runner:rwx,u:codex:rwx /home/codex
+          sudo setfacl -d -m u:runner:rwx,u:codex:rwx /home/codex
           sudo chown -R codex:codex "$GITHUB_WORKSPACE"
 
       - name: Run Codex Mantis Telegram agent
