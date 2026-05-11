@@ -74,7 +74,7 @@ async function raceWithTimeout<T>(params: {
   timeoutMs: number;
   run: () => Promise<T> | T;
 }): Promise<TimeoutRaceResult<T>> {
-  const timeoutMs = Math.max(1, params.timeoutMs);
+  const timeoutMs = params.timeoutMs;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<{ kind: "timeout" }>((resolve) => {
     timer = setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
