@@ -44,6 +44,11 @@ export type CodexPluginThreadConfigProvider = {
   build: () => Promise<CodexPluginThreadConfig>;
 };
 
+const CODEX_CODE_MODE_THREAD_CONFIG: JsonObject = {
+  "features.code_mode": true,
+  "features.code_mode_only": true,
+};
+
 export async function startOrResumeThread(params: {
   client: CodexAppServerClient;
   params: EmbeddedRunAttemptParams;
@@ -304,7 +309,7 @@ export function buildThreadStartParams(
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
     serviceName: "OpenClaw",
-    ...(options.config ? { config: options.config } : {}),
+    config: buildCodexRuntimeThreadConfig(options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     dynamicTools: options.dynamicTools,
     experimentalRawEvents: true,
@@ -337,10 +342,18 @@ export function buildThreadResumeParams(
     approvalsReviewer: options.appServer.approvalsReviewer,
     sandbox: options.appServer.sandbox,
     ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
-    ...(options.config ? { config: options.config } : {}),
+    config: buildCodexRuntimeThreadConfig(options.config),
     developerInstructions: options.developerInstructions ?? buildDeveloperInstructions(params),
     persistExtendedHistory: true,
   };
+}
+
+function buildCodexRuntimeThreadConfig(config: JsonObject | undefined): JsonObject {
+  return (
+    mergeCodexThreadConfigs(config, CODEX_CODE_MODE_THREAD_CONFIG) ?? {
+      ...CODEX_CODE_MODE_THREAD_CONFIG,
+    }
+  );
 }
 
 export function buildTurnStartParams(

@@ -96,22 +96,18 @@ describe("createIMessageTestPlugin", () => {
   });
 
   it("declares durable final delivery capabilities", () => {
-    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toEqual(
-      expect.objectContaining({
-        text: true,
-        media: true,
-        replyTo: true,
-        messageSendingHooks: true,
-      }),
-    );
-    expect(createIMessageTestPlugin().outbound?.deliveryCapabilities?.durableFinal).toEqual(
-      expect.objectContaining({
-        text: true,
-        media: true,
-        replyTo: true,
-        messageSendingHooks: true,
-      }),
-    );
+    expect(imessagePlugin.outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
+      text: true,
+      media: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    });
+    expect(createIMessageTestPlugin().outbound?.deliveryCapabilities?.durableFinal).toStrictEqual({
+      text: true,
+      media: true,
+      replyTo: true,
+      messageSendingHooks: true,
+    });
   });
 
   it("backs declared durable final capabilities with delivery proofs", async () => {

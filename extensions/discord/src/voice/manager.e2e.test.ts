@@ -1451,6 +1451,77 @@ describe("DiscordVoiceManager", () => {
     expectUserMessageIncludes("third answer");
   });
 
+  it("does not interrupt active exact speech for a later forced agent-proxy consult", async () => {
+    agentCommandMock
+      .mockResolvedValueOnce({ payloads: [{ text: "first answer" }] })
+      .mockResolvedValueOnce({ payloads: [{ text: "second answer" }] });
+    const manager = createManager({
+      groupPolicy: "open",
+      voice: {
+        enabled: true,
+        mode: "agent-proxy",
+        realtime: { provider: "openai" },
+      },
+    });
+
+    await manager.join({ guildId: "g1", channelId: "1001" });
+    const entry = getSessionEntry(manager) as {
+      realtime?: {
+        beginSpeakerTurn: (
+          context: { extraSystemPrompt?: string; senderIsOwner: boolean; speakerLabel: string },
+          userId: string,
+        ) => { close: () => void; sendInputAudio: (audio: Buffer) => void };
+      };
+    };
+    const player = getLastAudioPlayer();
+    const bridgeParams = createRealtimeVoiceBridgeSessionMock.mock.calls.at(-1)?.[0] as
+      | {
+          audioSink?: { sendAudio: (audio: Buffer) => void };
+          onEvent?: (event: { direction: "server"; type: string }) => void;
+          onTranscript?: (role: "user" | "assistant", text: string, isFinal: boolean) => void;
+        }
+      | undefined;
+
+    const firstTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    firstTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "first question", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await vi.waitFor(() => expectUserMessageIncludes("first answer"));
+    bridgeParams?.audioSink?.sendAudio(Buffer.alloc(480));
+
+    const secondTurn = entry.realtime?.beginSpeakerTurn(
+      { extraSystemPrompt: undefined, senderIsOwner: true, speakerLabel: "Owner" },
+      "u-owner",
+    );
+    secondTurn?.sendInputAudio(Buffer.alloc(8));
+    bridgeParams?.onTranscript?.("user", "second question", true);
+
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    expect(
+      realtimeSessionMock.handleBargeIn.mock.calls.some(([arg]) => {
+        return (arg as { force?: boolean } | undefined)?.force === true;
+      }),
+    ).toBe(false);
+    expect(player.stop).not.toHaveBeenCalled();
+    expectUserMessageNotIncludes("second answer");
+
+    bridgeParams?.onEvent?.({ direction: "server", type: "response.done" });
+    const firstStream = createAudioResourceMock.mock.calls.at(-1)?.[0] as PassThrough | undefined;
+    await vi.waitFor(() => expect(firstStream?.writableEnded).toBe(true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expectUserMessageNotIncludes("second answer");
+
+    const idleHandler = player.on.mock.calls.find(([event]) => event === "idle")?.[1] as
+      | (() => void)
+      | undefined;
+    idleHandler?.();
+    expectUserMessageIncludes("second answer");
+  });
+
   it("matches agent-proxy consult tool calls to the pending transcript", async () => {
     agentCommandMock
       .mockResolvedValueOnce({ payloads: [{ text: "owner answer" }] })

@@ -138,6 +138,19 @@ function requireMockCallArg(mock: ReturnType<typeof vi.fn>, callIndex: number, a
   return requireRecord(mock.mock.calls[callIndex]?.[argIndex], "mock call argument");
 }
 
+function findSchemaEntry(
+  schema: unknown,
+  actions: string[],
+  label: string,
+): Record<string, unknown> {
+  const entries = requireArray(schema, label);
+  const entry = entries.find((candidate) => {
+    const record = requireRecord(candidate, `${label} entry`);
+    return JSON.stringify(record.actions) === JSON.stringify(actions);
+  });
+  return requireRecord(entry, `${label} ${actions.join(",")} entry`);
+}
+
 describe("slackPlugin actions", () => {
   it("prefers session lookup for announce target routing", () => {
     expect(slackPlugin.meta.preferSessionLookupForAnnounceTarget).toBe(true);
@@ -158,16 +171,9 @@ describe("slackPlugin actions", () => {
 
     expect(discovery?.actions).toContain("send");
     expect(discovery?.capabilities).toContain("presentation");
-    expect(discovery?.schema).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          actions: ["download-file"],
-          properties: expect.objectContaining({
-            fileId: expect.any(Object),
-          }),
-        }),
-      ]),
-    );
+    const downloadFile = findSchemaEntry(discovery?.schema, ["download-file"], "Slack schema");
+    const downloadProperties = requireRecord(downloadFile.properties, "download-file properties");
+    expect(isRecord(downloadProperties.fileId)).toBe(true);
   });
 
   it("honors the selected Slack account during message tool discovery", () => {
@@ -296,23 +302,18 @@ describe("slackPlugin actions", () => {
         },
       } as OpenClawConfig,
     });
-    expect(discovery?.schema).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          actions: ["download-file"],
-          properties: expect.objectContaining({
-            fileId: expect.any(Object),
-          }),
-        }),
-        expect.objectContaining({
-          actions: ["react", "reactions", "edit", "delete", "pin", "unpin"],
-          properties: expect.objectContaining({
-            messageId: expect.any(Object),
-            message_id: expect.any(Object),
-          }),
-        }),
-      ]),
+    const downloadFile = findSchemaEntry(discovery?.schema, ["download-file"], "Slack schema");
+    const downloadProperties = requireRecord(downloadFile.properties, "download-file properties");
+    expect(isRecord(downloadProperties.fileId)).toBe(true);
+
+    const messageActions = findSchemaEntry(
+      discovery?.schema,
+      ["react", "reactions", "edit", "delete", "pin", "unpin"],
+      "Slack schema",
     );
+    const messageProperties = requireRecord(messageActions.properties, "message properties");
+    expect(isRecord(messageProperties.messageId)).toBe(true);
+    expect(isRecord(messageProperties.message_id)).toBe(true);
   });
 
   it("treats interactive reply payloads as structured Slack payloads", () => {
@@ -486,14 +487,17 @@ describe("slackPlugin status", () => {
       prevent_creation: true,
       return_im: true,
     });
-    expect(route).toMatchObject({
+    expectRecordFields(route, "Slack direct route", {
       sessionKey: "agent:main:slack:direct:u09g2dj0275:thread:1778110574.653649",
       baseSessionKey: "agent:main:slack:direct:u09g2dj0275",
-      peer: { kind: "direct", id: "U09G2DJ0275" },
       chatType: "direct",
       from: "slack:U09G2DJ0275",
       to: "user:U09G2DJ0275",
       threadId: "1778110574.653649",
+    });
+    expectRecordFields(requireRecord(route?.peer, "Slack direct peer"), "Slack direct peer", {
+      kind: "direct",
+      id: "U09G2DJ0275",
     });
   });
 
@@ -524,10 +528,17 @@ describe("slackPlugin status", () => {
       target: "channel:D123",
     });
 
-    expect(route).toMatchObject({
+    expectRecordFields(route, "Slack explicit IM route", {
       sessionKey: "agent:main:slack:direct:u123",
-      peer: { kind: "direct", id: "U123" },
     });
+    expectRecordFields(
+      requireRecord(route?.peer, "Slack explicit IM peer"),
+      "Slack explicit IM peer",
+      {
+        kind: "direct",
+        id: "U123",
+      },
+    );
   });
 
   it("skips mirror routing for unresolved Slack IM channel targets", async () => {
@@ -560,12 +571,15 @@ describe("slackPlugin status", () => {
       target: "G123",
     });
 
-    expect(route).toMatchObject({
+    expectRecordFields(route, "Slack MPIM route", {
       sessionKey: "agent:main:slack:group:g123",
-      peer: { kind: "group", id: "G123" },
       chatType: "channel",
       from: "slack:group:G123",
       to: "channel:G123",
+    });
+    expectRecordFields(requireRecord(route?.peer, "Slack MPIM peer"), "Slack MPIM peer", {
+      kind: "group",
+      id: "G123",
     });
   });
 });

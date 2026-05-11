@@ -455,9 +455,9 @@ describe("getMemorySearchManager caching", () => {
     requireManager(second);
     expect(first.manager).toBe(second.manager);
     expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
-    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId: "main-agent" }),
-    );
+    const createParams = createQmdManagerMock.mock.calls[0]?.[0];
+    expect(createParams?.agentId).toBe("main-agent");
+    expect(createParams?.mode).toBe("full");
   });
 
   it("replaces cached full qmd manager across different workspaces", async () => {
@@ -702,12 +702,12 @@ describe("getMemorySearchManager caching", () => {
 
     expect(cliManager).toBe(cliPrimary);
     expect(cliManager).not.toBe(fullManager);
-    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId, mode: "full" }),
-    );
-    expect(createQmdManagerMock.mock.calls[1]?.[0]).toEqual(
-      expect.objectContaining({ agentId, mode: "cli" }),
-    );
+    const fullCreateParams = createQmdManagerMock.mock.calls[0]?.[0];
+    const cliCreateParams = createQmdManagerMock.mock.calls[1]?.[0];
+    expect(fullCreateParams?.agentId).toBe(agentId);
+    expect(fullCreateParams?.mode).toBe("full");
+    expect(cliCreateParams?.agentId).toBe(agentId);
+    expect(cliCreateParams?.mode).toBe("cli");
 
     await cli.manager?.close?.();
     expect(cliPrimary.close).toHaveBeenCalledTimes(1);
@@ -775,9 +775,9 @@ describe("getMemorySearchManager caching", () => {
       chunks: 42,
       sourceCounts: [{ source: "memory", files: 10, chunks: 42 }],
     });
-    expect(createQmdManagerMock.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ agentId, mode: "status" }),
-    );
+    const createParams = createQmdManagerMock.mock.calls[0]?.[0];
+    expect(createParams?.agentId).toBe(agentId);
+    expect(createParams?.mode).toBe("status");
   });
 
   it("reuses cached full qmd manager for status-only requests", async () => {

@@ -142,9 +142,7 @@ describe("discord component registry", () => {
       throw new Error("expected cancel entry");
     }
     expect(cancel.consumptionGroupId).toBe(confirm.consumptionGroupId);
-    expect(confirm?.consumptionGroupEntryIds).toEqual(
-      expect.arrayContaining([confirm.id, cancel.id]),
-    );
+    expect(confirm.consumptionGroupEntryIds).toEqual([confirm.id, cancel.id]);
 
     registerDiscordComponentEntries({
       entries: result.entries,
@@ -218,21 +216,45 @@ describe("discord component registry", () => {
       logging: { getChildLogger: () => ({ warn: vi.fn() }) },
     } as never);
 
-    registerDiscordComponentEntries({
-      entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
-      modals: [{ id: "mdl_1", title: "Details", fields: [] }],
-      ttlMs: 1000,
-    });
+    const now = 1_700_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      registerDiscordComponentEntries({
+        entries: [{ id: "btn_1", kind: "button", label: "Confirm" }],
+        modals: [{ id: "mdl_1", title: "Details", fields: [] }],
+        ttlMs: 1000,
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
 
     await vi.waitFor(() => expect(componentRegister).toHaveBeenCalledTimes(1));
     expect(componentRegister).toHaveBeenCalledWith(
       "btn_1",
-      { version: 1, entry: expect.objectContaining({ id: "btn_1" }) },
+      {
+        version: 1,
+        entry: {
+          id: "btn_1",
+          kind: "button",
+          label: "Confirm",
+          createdAt: now,
+          expiresAt: now + 1000,
+        },
+      },
       { ttlMs: 1000 },
     );
     expect(modalRegister).toHaveBeenCalledWith(
       "mdl_1",
-      { version: 1, entry: expect.objectContaining({ id: "mdl_1" }) },
+      {
+        version: 1,
+        entry: {
+          id: "mdl_1",
+          title: "Details",
+          fields: [],
+          createdAt: now,
+          expiresAt: now + 1000,
+        },
+      },
       { ttlMs: 1000 },
     );
 

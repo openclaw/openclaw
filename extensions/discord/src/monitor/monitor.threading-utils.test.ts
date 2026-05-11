@@ -253,15 +253,17 @@ describe("resolveDiscordPresenceUpdate", () => {
 
   it("defaults to custom activity type when activity is set without type", () => {
     const presence = resolveDiscordPresenceUpdate({ activity: "Focus time" });
-    expect(presence).toMatchObject({
+    expect(presence).toEqual({
+      since: null,
       status: "online",
       activities: [
-        expect.objectContaining({
+        {
           type: 4,
           name: "Custom Status",
           state: "Focus time",
-        }),
+        },
       ],
+      afk: false,
     });
   });
 
@@ -271,14 +273,17 @@ describe("resolveDiscordPresenceUpdate", () => {
       activityType: 1,
       activityUrl: "https://twitch.tv/openclaw",
     });
-    expect(presence).toMatchObject({
+    expect(presence).toEqual({
+      since: null,
       activities: [
-        expect.objectContaining({
+        {
           type: 1,
           name: "Live",
           url: "https://twitch.tv/openclaw",
-        }),
+        },
       ],
+      status: "online",
+      afk: false,
     });
   });
 });

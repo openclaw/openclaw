@@ -47,6 +47,24 @@ describe("inspectMatrixDirectRooms", () => {
     ]);
   });
 
+  it("still surfaces joined strict rooms when an older mapped room is strict", async () => {
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!older:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+    });
+
+    const result = await inspectMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!older:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+  });
+
   it("falls back to discovered strict joined rooms when m.direct is stale", async () => {
     const client = createClient({
       getAccountData: vi.fn(async () => ({
@@ -188,6 +206,37 @@ describe("repairMatrixDirectRooms", () => {
       EventType.Direct,
       expect.objectContaining({
         "@alice:example.org": ["!created:example.org"],
+      }),
+    );
+  });
+
+  it("persists discovered strict rooms alongside an older strict mapped room", async () => {
+    const setAccountData = vi.fn(async () => undefined);
+    const client = createClient({
+      getAccountData: vi.fn(async () => ({
+        "@alice:example.org": ["!older:example.org"],
+      })),
+      getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
+      getJoinedRoomMembers: vi.fn(async () => ["@bot:example.org", "@alice:example.org"]),
+      setAccountData,
+    });
+
+    const result = await repairMatrixDirectRooms({
+      client,
+      remoteUserId: "@alice:example.org",
+    });
+
+    expect(result.activeRoomId).toBe("!older:example.org");
+    expect(result.discoveredStrictRoomIds).toEqual(["!fresh:example.org"]);
+    expect(result.changed).toBe(true);
+    expect(result.directContentAfter["@alice:example.org"]).toEqual([
+      "!older:example.org",
+      "!fresh:example.org",
+    ]);
+    expect(setAccountData).toHaveBeenCalledWith(
+      EventType.Direct,
+      expect.objectContaining({
+        "@alice:example.org": ["!older:example.org", "!fresh:example.org"],
       }),
     );
   });

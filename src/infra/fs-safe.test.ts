@@ -201,9 +201,10 @@ describe("fs-safe", () => {
     const file = path.join(outside, "outside.txt");
     await fs.writeFile(file, "outside");
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).open(path.join("..", path.basename(outside), "outside.txt")),
-    ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "outside-workspace");
+      "outside-workspace",
+    );
   });
 
   it("rejects directory path within root without leaking EISDIR (issue #31186)", async () => {
@@ -268,11 +269,12 @@ describe("fs-safe", () => {
         },
       });
 
-      await expect(
+      await expectRejectCode(
         (await openRoot(root)).read("link.txt", {
           symlinks: "follow-within-root",
         }),
-      ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "path-mismatch");
+        "path-mismatch",
+      );
     },
   );
 
@@ -410,11 +412,12 @@ describe("fs-safe", () => {
     const sourcePath = path.join(sourceDir, "big.bin");
     await fs.writeFile(sourcePath, Buffer.alloc(8));
 
-    await expect(
+    await expectRejectCode(
       (await openRoot(root)).copyIn("nested/big.bin", sourcePath, {
         maxBytes: 4,
       }),
-    ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "too-large");
+      "too-large",
+    );
     await expectRejectCode(fs.stat(path.join(root, "nested", "big.bin")), "ENOENT");
   });
 
@@ -451,11 +454,12 @@ describe("fs-safe", () => {
     await withOutsideHardlinkAlias({
       aliasPath: hardlinkPath,
       run: async (outsideFile) => {
-        await expect(
+        await expectRejectCode(
           (await openRoot(root)).append("alias.txt", "pwned", {
             prependNewlineIfNeeded: true,
           }),
-        ).rejects.toSatisfy((err: NodeJS.ErrnoException) => err.code === "path-alias");
+          "path-alias",
+        );
         await expect(fs.readFile(outsideFile, "utf8")).resolves.toBe("outside");
       },
     });

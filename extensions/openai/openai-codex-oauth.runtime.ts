@@ -1,5 +1,5 @@
 import path from "node:path";
-import { loginOpenAICodex, type OAuthCredentials } from "@mariozechner/pi-ai/oauth";
+import { loginOpenAICodex, type OAuthCredentials } from "@earendil-works/pi-ai/oauth";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { ensureGlobalUndiciEnvProxyDispatcher } from "openclaw/plugin-sdk/runtime-env";

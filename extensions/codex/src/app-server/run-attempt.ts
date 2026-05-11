@@ -54,6 +54,7 @@ import {
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
+import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import {
   defaultCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
@@ -103,7 +104,10 @@ import {
   type JsonValue,
 } from "./protocol.js";
 import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
-import { formatCodexUsageLimitErrorMessage } from "./rate-limits.js";
+import {
+  formatCodexUsageLimitErrorMessage,
+  shouldRefreshCodexRateLimitsForUsageLimitMessage,
+} from "./rate-limits.js";
 import { readCodexAppServerBinding, type CodexAppServerThreadBinding } from "./session-binding.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
@@ -135,6 +139,7 @@ const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
@@ -1300,7 +1305,13 @@ export async function runCodexAppServerAttempt(
       ),
     );
   } catch (error) {
-    const usageLimitError = formatCodexTurnStartUsageLimitError(error, pendingNotifications);
+    const usageLimitError = await formatCodexTurnStartUsageLimitError({
+      client,
+      error,
+      pendingNotifications,
+      timeoutMs: appServer.requestTimeoutMs,
+      signal: runAbortController.signal,
+    });
     const turnStartErrorMessage = usageLimitError ?? formatErrorMessage(error);
     emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
@@ -1435,11 +1446,29 @@ export async function runCodexAppServerAttempt(
     await completion;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
     const finalAborted = result.aborted || runAbortController.signal.aborted;
-    const finalPromptError = turnCompletionIdleTimedOut
+    let finalPromptError = turnCompletionIdleTimedOut
       ? turnCompletionIdleTimeoutMessage
       : timedOut
         ? "codex app-server attempt timed out"
         : result.promptError;
+    const finalPromptErrorMessage =
+      typeof finalPromptError === "string"
+        ? finalPromptError
+        : finalPromptError
+          ? formatErrorMessage(finalPromptError)
+          : undefined;
+    if (shouldRefreshCodexRateLimitsForUsageLimitMessage(finalPromptErrorMessage)) {
+      finalPromptError = await refreshCodexUsageLimitErrorMessage({
+        client,
+        source: {
+          message: finalPromptErrorMessage,
+          codexErrorInfo: "usageLimitExceeded",
+          rateLimits: readRecentCodexRateLimits(),
+        },
+        timeoutMs: appServer.requestTimeoutMs,
+        signal: runAbortController.signal,
+      });
+    }
     const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
@@ -2047,20 +2076,97 @@ function readDynamicToolCallParams(
   return readCodexDynamicToolCallParams(value);
 }
 
-function formatCodexTurnStartUsageLimitError(
+type CodexUsageLimitErrorSource = {
+  message?: string | null;
+  codexErrorInfo?: JsonValue | null;
+  rateLimits?: JsonValue;
+};
+
+async function formatCodexTurnStartUsageLimitError(params: {
+  client: CodexAppServerClient;
+  error: unknown;
+  pendingNotifications: CodexServerNotification[];
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  return refreshCodexUsageLimitErrorMessage({
+    client: params.client,
+    source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
+}
+
+async function refreshCodexUsageLimitErrorMessage(params: {
+  client: CodexAppServerClient;
+  source: CodexUsageLimitErrorSource;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
+  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
+    return initialMessage ?? undefined;
+  }
+  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
+    client: params.client,
+    timeoutMs: params.timeoutMs,
+    signal: params.signal,
+  });
+  if (!rateLimits) {
+    return initialMessage;
+  }
+  const refreshedMessage = formatCodexUsageLimitErrorMessage({
+    message: params.source.message,
+    codexErrorInfo: params.source.codexErrorInfo,
+    rateLimits,
+  });
+  return refreshedMessage ?? initialMessage;
+}
+
+async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
+  client: CodexAppServerClient;
+  timeoutMs?: number;
+  signal?: AbortSignal;
+}): Promise<JsonValue | undefined> {
+  if (params.signal?.aborted) {
+    return undefined;
+  }
+  try {
+    const rateLimits = await params.client.request(CODEX_CONTROL_METHODS.rateLimits, undefined, {
+      timeoutMs: resolveCodexUsageLimitRateLimitRefreshTimeoutMs(params.timeoutMs),
+      signal: params.signal,
+    });
+    rememberCodexRateLimits(rateLimits);
+    return rateLimits;
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server rate-limit refresh failed after usage-limit error", {
+      error: formatErrorMessage(error),
+    });
+    return undefined;
+  }
+}
+
+function resolveCodexUsageLimitRateLimitRefreshTimeoutMs(timeoutMs: number | undefined): number {
+  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    return CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS;
+  }
+  return Math.max(100, Math.min(timeoutMs, CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS));
+}
+
+function readCodexTurnStartUsageLimitErrorSource(
   error: unknown,
   pendingNotifications: CodexServerNotification[],
-): string | undefined {
+): CodexUsageLimitErrorSource {
   const notificationError = readLatestCodexErrorNotification(pendingNotifications);
   const errorPayload = readCodexErrorPayload(error);
-  return formatCodexUsageLimitErrorMessage({
+  return {
     message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
     codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
     rateLimits:
       readLatestRateLimitNotificationPayload(pendingNotifications) ??
       errorPayload.rateLimits ??
       readRecentCodexRateLimits(),
-  });
+  };
 }
 
 function readLatestRateLimitNotificationPayload(
