@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -57,6 +57,11 @@ beforeEach(async () => {
   ({ deliverGoogleChatReply } = await import("./monitor-reply-delivery.js"));
 });
 
+afterAll(() => {
+  vi.doUnmock("./api.js");
+  vi.resetModules();
+});
+
 describe("Google Chat reply delivery", () => {
   it("resends the first text chunk as a new message when typing update fails", async () => {
     const core = createCore({ chunks: ["first chunk", "second chunk"] });
@@ -96,7 +101,7 @@ describe("Google Chat reply delivery", () => {
     });
     expect(statusSink).toHaveBeenCalledTimes(2);
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Google Chat message send failed"),
+      "Google Chat message send failed: Error: message not found",
     );
   });
 

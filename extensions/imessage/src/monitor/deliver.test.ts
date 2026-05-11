@@ -1,5 +1,5 @@
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageIMessageMock = vi.hoisted(() =>
   vi.fn().mockImplementation(async (_to: string, message: string) => ({
@@ -25,6 +25,7 @@ vi.mock("./deliver.runtime.js", () => ({
 }));
 
 let deliverReplies: typeof import("./deliver.js").deliverReplies;
+let createIMessageEchoCachingSend: typeof import("./deliver.js").createIMessageEchoCachingSend;
 
 describe("deliverReplies", () => {
   const IMESSAGE_TEST_CFG = { channels: { imessage: { accounts: { default: {} } } } };
@@ -32,12 +33,18 @@ describe("deliverReplies", () => {
   const client = {} as Awaited<ReturnType<typeof import("../client.js").createIMessageRpcClient>>;
 
   beforeAll(async () => {
-    ({ deliverReplies } = await import("./deliver.js"));
+    ({ createIMessageEchoCachingSend, deliverReplies } = await import("./deliver.js"));
   });
 
   beforeEach(() => {
     vi.clearAllMocks();
     chunkTextWithModeMock.mockImplementation((text: string) => [text]);
+  });
+
+  afterAll(() => {
+    vi.doUnmock("../send.js");
+    vi.doUnmock("./deliver.runtime.js");
+    vi.resetModules();
   });
 
   it("propagates payload replyToId through all text chunks", async () => {
@@ -55,30 +62,30 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock).toHaveBeenNthCalledWith(
-      1,
-      "chat_id:10",
-      "first",
-      expect.objectContaining({
-        client,
-        config: IMESSAGE_TEST_CFG,
-        maxBytes: 4096,
-        accountId: "default",
-        replyToId: "reply-1",
-      }),
-    );
-    expect(sendMessageIMessageMock).toHaveBeenNthCalledWith(
-      2,
-      "chat_id:10",
-      "second",
-      expect.objectContaining({
-        client,
-        config: IMESSAGE_TEST_CFG,
-        maxBytes: 4096,
-        accountId: "default",
-        replyToId: "reply-1",
-      }),
-    );
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:10",
+        "first",
+        {
+          config: IMESSAGE_TEST_CFG,
+          maxBytes: 4096,
+          client,
+          accountId: "default",
+          replyToId: "reply-1",
+        },
+      ],
+      [
+        "chat_id:10",
+        "second",
+        {
+          config: IMESSAGE_TEST_CFG,
+          maxBytes: 4096,
+          client,
+          accountId: "default",
+          replyToId: "reply-1",
+        },
+      ],
+    ]);
   });
 
   it("propagates payload replyToId through media sends", async () => {
@@ -100,32 +107,100 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessageIMessageMock).toHaveBeenCalledTimes(2);
-    expect(sendMessageIMessageMock).toHaveBeenNthCalledWith(
-      1,
-      "chat_id:20",
-      "caption",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/a.jpg",
-        client,
-        config: IMESSAGE_TEST_CFG,
-        maxBytes: 8192,
-        accountId: "acct-2",
-        replyToId: "reply-2",
-      }),
-    );
-    expect(sendMessageIMessageMock).toHaveBeenNthCalledWith(
-      2,
-      "chat_id:20",
-      "",
-      expect.objectContaining({
-        mediaUrl: "https://example.com/b.jpg",
-        client,
-        config: IMESSAGE_TEST_CFG,
-        maxBytes: 8192,
-        accountId: "acct-2",
-        replyToId: "reply-2",
-      }),
-    );
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:20",
+        "caption",
+        {
+          config: IMESSAGE_TEST_CFG,
+          mediaUrl: "https://example.com/a.jpg",
+          maxBytes: 8192,
+          client,
+          accountId: "acct-2",
+          replyToId: "reply-2",
+        },
+      ],
+      [
+        "chat_id:20",
+        "",
+        {
+          config: IMESSAGE_TEST_CFG,
+          mediaUrl: "https://example.com/b.jpg",
+          maxBytes: 8192,
+          client,
+          accountId: "acct-2",
+          replyToId: "reply-2",
+        },
+      ],
+    ]);
+  });
+
+  it("records durable outbound sends in the sent-message cache", async () => {
+    const remember = vi.fn();
+    const send = createIMessageEchoCachingSend({
+      client,
+      accountId: "acct-5",
+      sentMessageCache: { remember },
+    });
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-durable-1",
+      sentText: "durable hello",
+    });
+
+    await send("chat_id:50", "durable hello", {
+      config: IMESSAGE_TEST_CFG,
+      accountId: "acct-ignored",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:50",
+        "durable hello",
+        {
+          config: IMESSAGE_TEST_CFG,
+          accountId: "acct-ignored",
+          client,
+        },
+      ],
+    ]);
+    expect(remember).toHaveBeenCalledWith("acct-5:chat_id:50", {
+      text: "durable hello",
+      messageId: "imsg-durable-1",
+    });
+  });
+
+  it("sanitizes durable outbound text before sending", async () => {
+    const remember = vi.fn();
+    const send = createIMessageEchoCachingSend({
+      client,
+      accountId: "acct-6",
+      sentMessageCache: { remember },
+    });
+    sendMessageIMessageMock.mockResolvedValueOnce({
+      messageId: "imsg-durable-2",
+      sentText: "Visible reply",
+    });
+
+    await send("chat_id:60", "<thinking>hidden</thinking>\nVisible reply\nassistant:", {
+      config: IMESSAGE_TEST_CFG,
+      accountId: "acct-ignored",
+    });
+
+    expect(sendMessageIMessageMock.mock.calls).toStrictEqual([
+      [
+        "chat_id:60",
+        "Visible reply",
+        {
+          config: IMESSAGE_TEST_CFG,
+          accountId: "acct-ignored",
+          client,
+        },
+      ],
+    ]);
+    expect(remember).toHaveBeenCalledWith("acct-6:chat_id:60", {
+      text: "Visible reply",
+      messageId: "imsg-durable-2",
+    });
   });
 
   it("records outbound text and message ids in sent-message cache (post-send only)", async () => {

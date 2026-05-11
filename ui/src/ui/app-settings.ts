@@ -357,7 +357,7 @@ export async function refreshActiveTab(host: SettingsHost) {
       case "automation":
       case "infrastructure":
       case "aiAgents":
-        await loadConfigSchema(app);
+        void loadConfigSchema(app).finally(() => host.requestUpdate?.());
         await loadConfig(app);
         break;
       case "overview":
@@ -550,10 +550,14 @@ export function setTabFromRoute(host: SettingsHost, next: Tab) {
 }
 
 function updateBrowserHistory(url: URL, replace: boolean) {
-  if (replace) {
-    return window.history.replaceState({}, "", url.toString());
+  const history = typeof window === "undefined" ? undefined : window.history;
+  if (!history) {
+    return;
   }
-  return window.history.pushState({}, "", url.toString());
+  if (replace) {
+    return history.replaceState({}, "", url.toString());
+  }
+  return history.pushState({}, "", url.toString());
 }
 
 function applyTabSelection(
@@ -592,12 +596,14 @@ function applyTabSelection(
 }
 
 export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
-  if (typeof window === "undefined") {
+  const href = typeof window === "undefined" ? undefined : window.location?.href;
+  const pathname = typeof window === "undefined" ? undefined : window.location?.pathname;
+  if (!href || !pathname) {
     return;
   }
   const targetPath = normalizePath(pathForTab(tab, host.basePath));
-  const currentPath = normalizePath(window.location.pathname);
-  const url = new URL(window.location.href);
+  const currentPath = normalizePath(pathname);
+  const url = new URL(href);
 
   if (tab === "chat" && host.sessionKey) {
     url.searchParams.set("session", host.sessionKey);
@@ -612,7 +618,7 @@ export function syncUrlWithTab(host: SettingsHost, tab: Tab, replace: boolean) {
   updateBrowserHistory(url, replace);
 }
 
-export function syncUrlWithSessionKey(host: SettingsHost, sessionKey: string, replace: boolean) {
+export function syncUrlWithSessionKey(_host: SettingsHost, sessionKey: string, replace: boolean) {
   const href = typeof window === "undefined" ? undefined : window.location?.href;
   if (!href) {
     return;
@@ -831,7 +837,9 @@ function buildAttentionItems(host: SettingsAppHost) {
 
 export async function loadChannelsTab(host: SettingsHost) {
   const app = host as unknown as SettingsAppHost;
-  await Promise.all([loadChannels(app, true), loadConfigSchema(app), loadConfig(app)]);
+  void loadConfigSchema(app).finally(() => host.requestUpdate?.());
+  await Promise.all([loadChannels(app, false), loadConfig(app)]);
+  void loadChannels(app, true).finally(() => host.requestUpdate?.());
 }
 
 export async function loadCron(host: SettingsHost) {

@@ -74,8 +74,6 @@ function createGatewayCloseTestDeps(
   return {
     bonjourStop: null,
     tailscaleCleanup: null,
-    canvasHost: null,
-    canvasHostServer: null,
     stopChannel: vi.fn(async () => undefined),
     pluginServices: null,
     cron: { stop: vi.fn() },
@@ -134,7 +132,7 @@ describe("createGatewayCloseHandler", () => {
 
     const result = await close({ reason: "test" });
 
-    expect(result.warnings).toEqual([]);
+    expect(result.warnings).toStrictEqual([]);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
     expect(deps.cron.stop).toHaveBeenCalledTimes(1);
     expect(deps.heartbeatRunner.stop).toHaveBeenCalledTimes(1);
@@ -156,14 +154,10 @@ describe("createGatewayCloseHandler", () => {
       ([event]) => event?.type === "gateway" && event?.action === "pre-restart",
     )?.[0];
 
-    expect(shutdownEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
-    expect(preRestartEvent?.context).toMatchObject({
-      reason: "gateway restarting",
-      restartExpectedMs: 123,
-    });
+    expect(shutdownEvent?.context?.reason).toBe("gateway restarting");
+    expect(shutdownEvent?.context?.restartExpectedMs).toBe(123);
+    expect(preRestartEvent?.context?.reason).toBe("gateway restarting");
+    expect(preRestartEvent?.context?.restartExpectedMs).toBe(123);
   });
 
   it("continues shutdown and records a warning when gateway shutdown hook stalls", async () => {
@@ -226,11 +220,6 @@ describe("createGatewayCloseHandler", () => {
         bonjourStop: vi.fn(async () => {
           throw new Error("mdns unavailable");
         }),
-        canvasHost: {
-          close: vi.fn(async () => {
-            throw new Error("canvas error");
-          }),
-        } as never,
         lifecycleUnsub,
         stopChannel,
       }),
@@ -238,12 +227,27 @@ describe("createGatewayCloseHandler", () => {
 
     const result = await close({ reason: "test shutdown" });
 
-    expect(result.warnings).toEqual(
-      expect.arrayContaining(["bonjour", "canvas-host", "channel/telegram"]),
-    );
+    expect(result.warnings).toContain("bonjour");
+    expect(result.warnings).toContain("channel/telegram");
     expect(result.warnings).not.toContain("channel/discord");
     expect(lifecycleUnsub).toHaveBeenCalledTimes(1);
     expect(stopChannel).toHaveBeenCalledTimes(2);
+  });
+
+  it("uses caller-provided channel ids instead of the local channel registry", async () => {
+    mocks.listChannelPlugins.mockReturnValue([]);
+    const stopChannel = vi.fn(async (_id: string) => undefined);
+    const close = createGatewayCloseHandler(
+      createGatewayCloseTestDeps({
+        channelIds: ["telegram", "discord"],
+        stopChannel,
+      }),
+    );
+
+    await close({ reason: "test shutdown" });
+
+    expect(mocks.listChannelPlugins).not.toHaveBeenCalled();
+    expect(stopChannel.mock.calls.map(([id]) => id)).toEqual(["telegram", "discord"]);
   });
 
   it("unsubscribes lifecycle listeners and disposes bundle runtimes during shutdown", async () => {
@@ -507,9 +511,8 @@ describe("createGatewayCloseHandler", () => {
       }),
     );
 
-    await expect(close({ reason: "startup failed before bind" })).resolves.toMatchObject({
-      warnings: [],
-    });
+    const result = await close({ reason: "startup failed before bind" });
+    expect(result.warnings).toStrictEqual([]);
   });
 
   it("broadcasts normalized shutdown metadata", async () => {

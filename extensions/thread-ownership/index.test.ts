@@ -6,6 +6,8 @@ describe("thread-ownership plugin", () => {
   const hooks: Record<string, Function> = {};
   const fetchMock = vi.fn() as unknown as typeof globalThis.fetch;
   let configFile: Record<string, unknown> = {};
+  const originalSlackForwarderUrl = process.env.SLACK_FORWARDER_URL;
+  const originalSlackBotUserId = process.env.SLACK_BOT_USER_ID;
   const api = {
     pluginConfig: {},
     config: {
@@ -26,6 +28,17 @@ describe("thread-ownership plugin", () => {
     }),
   };
 
+  function expectOwnershipFetchCall(index: number, url: string, agentId: string) {
+    const call = vi.mocked(globalThis.fetch).mock.calls[index];
+    if (!call) {
+      throw new Error(`expected ownership fetch call ${index}`);
+    }
+    expect(call[0]).toBe(url);
+    const init = call[1];
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe(JSON.stringify({ agent_id: agentId }));
+  }
+
   beforeEach(() => {
     vi.clearAllMocks();
     for (const key of Object.keys(hooks)) {
@@ -44,8 +57,16 @@ describe("thread-ownership plugin", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
-    delete process.env.SLACK_FORWARDER_URL;
-    delete process.env.SLACK_BOT_USER_ID;
+    if (originalSlackForwarderUrl === undefined) {
+      delete process.env.SLACK_FORWARDER_URL;
+    } else {
+      process.env.SLACK_FORWARDER_URL = originalSlackForwarderUrl;
+    }
+    if (originalSlackBotUserId === undefined) {
+      delete process.env.SLACK_BOT_USER_ID;
+    } else {
+      process.env.SLACK_BOT_USER_ID = originalSlackBotUserId;
+    }
     vi.restoreAllMocks();
   });
 
@@ -99,12 +120,10 @@ describe("thread-ownership plugin", () => {
       const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C123/1234.5678",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "test-agent" }),
-        }),
+        "test-agent",
       );
     });
 
@@ -123,12 +142,10 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(result).toBeUndefined();
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C123/1234.5678",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "test-agent" }),
-        }),
+        "test-agent",
       );
     });
 
@@ -147,12 +164,10 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(result).toBeUndefined();
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C123/1234.5678",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "test-agent" }),
-        }),
+        "test-agent",
       );
     });
 
@@ -173,12 +188,10 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(result).toBeUndefined();
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C123/1234.5678",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "test-agent" }),
-        }),
+        "test-agent",
       );
     });
 
@@ -228,12 +241,10 @@ describe("thread-ownership plugin", () => {
       );
 
       expect(result).toBeUndefined();
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C123/1234.5678",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "test-agent" }),
-        }),
+        "test-agent",
       );
     });
 
@@ -245,7 +256,9 @@ describe("thread-ownership plugin", () => {
       const result = await sendSlackThreadMessage();
 
       expect(result).toEqual({ cancel: true });
-      expect(api.logger.info).toHaveBeenCalledWith(expect.stringContaining("cancelled send"));
+      const infoMessage = vi.mocked(api.logger.info).mock.calls[0]?.[0];
+      expect(typeof infoMessage).toBe("string");
+      expect(infoMessage).toContain("cancelled send");
     });
 
     it("fails open on network error", async () => {
@@ -254,9 +267,9 @@ describe("thread-ownership plugin", () => {
       const result = await sendSlackThreadMessage();
 
       expect(result).toBeUndefined();
-      expect(api.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("ownership check failed"),
-      );
+      const warningMessage = vi.mocked(api.logger.warn).mock.calls[0]?.[0];
+      expect(typeof warningMessage).toBe("string");
+      expect(warningMessage).toContain("ownership check failed");
     });
   });
 
@@ -406,12 +419,10 @@ describe("thread-ownership plugin", () => {
         { channelId: "slack", conversationId: "C789" },
       );
 
-      expect(globalThis.fetch).toHaveBeenCalledWith(
+      expectOwnershipFetchCall(
+        0,
         "http://localhost:8750/api/v1/ownership/C789/8888.0005",
-        expect.objectContaining({
-          method: "POST",
-          body: JSON.stringify({ agent_id: "live-agent" }),
-        }),
+        "live-agent",
       );
     });
 

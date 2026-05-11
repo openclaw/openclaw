@@ -57,6 +57,69 @@ function expectThrownFailoverError(outcome: Outcome): FailoverError {
 }
 
 describe("handleAssistantFailover", () => {
+  describe("rotate_profile branch", () => {
+    it("rotates before waiting on auth profile failure marking", async () => {
+      const events: string[] = [];
+      let releaseMark: (() => void) | undefined;
+      const markFinished = new Promise<void>((resolve) => {
+        releaseMark = resolve;
+      });
+      const markSettled = new Promise<void>((resolve) => {
+        void markFinished.then(() => resolve());
+      });
+      const maybeMarkAuthProfileFailure = vi.fn(async () => {
+        events.push("mark-start");
+        await markFinished;
+        events.push("mark-finish");
+      });
+
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "rate_limit" },
+          failoverReason: "rate_limit",
+          assistantProfileFailureReason: "rate_limit",
+          lastProfileId: "openai:p1",
+          billingFailure: false,
+          rateLimitFailure: true,
+          maybeMarkAuthProfileFailure,
+          advanceAuthProfile: vi.fn(async () => {
+            events.push("advance");
+            return true;
+          }),
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(events).toEqual(["advance", "mark-start"]);
+      if (!releaseMark) {
+        throw new Error("Expected auth profile failure mark release callback to be initialized");
+      }
+      releaseMark();
+      await markSettled;
+      await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
+      expect(events).toEqual(["advance", "mark-start", "mark-finish"]);
+    });
+
+    it("does not log profile-specific warnings without a failed profile id", async () => {
+      const warn = vi.fn();
+      const outcome = await handleAssistantFailover(
+        makeParams({
+          initialDecision: { action: "rotate_profile", reason: "timeout" },
+          failoverReason: "timeout",
+          timedOut: true,
+          cloudCodeAssistFormatError: true,
+          lastProfileId: undefined,
+          billingFailure: false,
+          advanceAuthProfile: vi.fn(async () => true),
+          warn,
+        }),
+      );
+
+      expect(outcome.action).toBe("retry");
+      expect(warn).not.toHaveBeenCalled();
+    });
+  });
+
   describe("surface_error branch (openclaw#70124)", () => {
     it("throws a billing FailoverError so the webchat can render the provider failure", async () => {
       const logDecision = vi.fn();
@@ -170,10 +233,9 @@ describe("handleAssistantFailover", () => {
 
     it("leaves plain timeouts on the continue_normal path for the runner's timeout-payload synthesis", async () => {
       // `run.ts` already emits an explicit timeout payload when
-      // `buildEmbeddedRunPayloads` produces no assistant content (see
-      // the `timedOut && !timedOutDuringCompaction &&
-      // !payloadsWithToolMedia.length` block). Throwing a FailoverError
-      // here would short-circuit that synthesis and break
+      // `buildEmbeddedRunPayloads` produces no assistant content or only a
+      // partial prompt-timeout fragment. Throwing a FailoverError here would
+      // short-circuit that synthesis and break
       // timeout-compaction retry coverage in
       // `run.timeout-triggered-compaction.test.ts`. The throw path is
       // reserved for concrete provider failures that have no other

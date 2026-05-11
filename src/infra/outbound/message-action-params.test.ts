@@ -43,7 +43,7 @@ describe("message action media helpers", () => {
           media: "https://example.com/photo.png",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
     expect(resolveChannelMessageToolMediaSourceParamKeysMock).not.toHaveBeenCalled();
   });
 
@@ -148,10 +148,8 @@ describe("message action media helpers", () => {
         },
       });
 
-      expect(args).toMatchObject({
-        mediaUrl: path.join(sandboxRoot, "assets", "photo.png"),
-        fileUrl: path.join(sandboxRoot, "docs", "report.pdf"),
-      });
+      expect(args.mediaUrl).toBe(path.join(sandboxRoot, "assets", "photo.png"));
+      expect(args.fileUrl).toBe(path.join(sandboxRoot, "docs", "report.pdf"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -172,9 +170,7 @@ describe("message action media helpers", () => {
         },
       });
 
-      expect(args).toMatchObject({
-        image: path.join(sandboxRoot, "assets", "event-cover.png"),
-      });
+      expect(args.image).toBe(path.join(sandboxRoot, "assets", "event-cover.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -197,10 +193,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatarUrl: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
-      });
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatarUrl).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -244,10 +238,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatar_path: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatar_url: path.join(sandboxRoot, "avatars", "remote-avatar.jpg"),
-      });
+      expect(args.avatar_path).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatar_url).toBe(path.join(sandboxRoot, "avatars", "remote-avatar.jpg"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -272,12 +264,10 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "https://example.com/avatars/profile.png",
-        avatarPath: path.join(sandboxRoot, "avatars", "profile.png"),
-        avatar_url: "data:text/plain;base64,QQ==",
-        avatar_path: "data:text/plain;base64,QQ==",
-      });
+      expect(args.avatarUrl).toBe("https://example.com/avatars/profile.png");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "profile.png"));
+      expect(args.avatar_url).toBe("data:text/plain;base64,QQ==");
+      expect(args.avatar_path).toBe("data:text/plain;base64,QQ==");
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -300,10 +290,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "https://example.com/avatars/profile.png",
-        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
-      });
+      expect(args.avatarUrl).toBe("https://example.com/avatars/profile.png");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -326,10 +314,8 @@ describe("message action media helpers", () => {
         extraParamKeys: matrixMediaSourceParamKeys,
       });
 
-      expect(args).toMatchObject({
-        avatarUrl: "mxc://matrix.org/abc123def456",
-        avatarPath: path.join(sandboxRoot, "avatars", "local.png"),
-      });
+      expect(args.avatarUrl).toBe("mxc://matrix.org/abc123def456");
+      expect(args.avatarPath).toBe(path.join(sandboxRoot, "avatars", "local.png"));
     } finally {
       await fs.rm(sandboxRoot, { recursive: true, force: true });
     }
@@ -353,10 +339,8 @@ describe("message action media helpers", () => {
           },
         });
 
-        expect(args).toMatchObject({
-          mediaUrl: "https://example.com/assets/photo.png?sig=1",
-          fileUrl: "https://example.com/docs/report.pdf?sig=2",
-        });
+        expect(args.mediaUrl).toBe("https://example.com/assets/photo.png?sig=1");
+        expect(args.fileUrl).toBe("https://example.com/docs/report.pdf?sig=2");
       } finally {
         await fs.rm(sandboxRoot, { recursive: true, force: true });
       }
@@ -406,6 +390,50 @@ describe("message action media helpers", () => {
     });
 
     expect(args.filename).toBe("attachment");
+  });
+
+  it("hydrates reply attachments through the resolver so threaded sends don't bypass mediaLocalRoots", async () => {
+    // Locks in coverage for the reply-with-attachment path: when an agent
+    // calls message(action: "reply") with a `path`/`media`/etc., the
+    // resolver — not the channel runtime — must run. Pre-PR this was
+    // gated only on sendAttachment/setGroupIcon/upload-file, letting
+    // imessage reply forward an arbitrary host path to imsg.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.filename).toBe("cute.png");
+  });
+
+  it("does not fall back caption->message on reply (reply has its own text field)", async () => {
+    // sendAttachment uses caption as the body text and falls back from
+    // message -> caption when the agent only supplied `message`. Reply has
+    // its own `text`/`message` field, so caption fallback would invent a
+    // bogus caption param on the reply payload.
+    const args: Record<string, unknown> = {
+      mediaUrl: "https://example.com/cute.png",
+      message: "🦞",
+    };
+
+    await hydrateAttachmentParamsForAction({
+      cfg,
+      channel: "imessage",
+      args,
+      action: "reply",
+      dryRun: true,
+      mediaPolicy: { mode: "host" },
+    });
+
+    expect(args.caption).toBeUndefined();
   });
 });
 

@@ -14,6 +14,17 @@ const isGatewaySigusr1RestartExternallyAllowed = vi.fn(() => false);
 const markGatewaySigusr1RestartHandled = vi.fn();
 const peekGatewaySigusr1RestartReason = vi.fn<() => string | undefined>(() => undefined);
 const resetGatewayRestartStateForInProcessRestart = vi.fn();
+const writeGatewayRestartHandoffSync = vi.fn((_opts: unknown) => ({
+  kind: "gateway-supervisor-restart-handoff" as const,
+  version: 1 as const,
+  intentId: "test-intent",
+  pid: process.pid,
+  createdAt: Date.now(),
+  expiresAt: Date.now() + 60_000,
+  source: "unknown" as const,
+  restartKind: "full-process" as const,
+  supervisorMode: "external" as const,
+}));
 const scheduleGatewaySigusr1Restart = vi.fn((_opts?: { delayMs?: number; reason?: string }) => ({
   ok: true,
   pid: process.pid,
@@ -105,6 +116,10 @@ vi.mock("../../infra/process-respawn.js", () => ({
 
 vi.mock("../../infra/restart-sentinel.js", () => ({
   markUpdateRestartSentinelFailure: (reason: string) => markUpdateRestartSentinelFailure(reason),
+}));
+
+vi.mock("../../infra/restart-handoff.js", () => ({
+  writeGatewayRestartHandoffSync: (opts: unknown) => writeGatewayRestartHandoffSync(opts),
 }));
 
 vi.mock("../../process/command-queue.js", () => ({
@@ -390,7 +405,9 @@ describe("runGatewayLoop", () => {
       expect(waitForActiveEmbeddedRuns).not.toHaveBeenCalled();
       expect(abortEmbeddedPiRun).toHaveBeenCalledWith(undefined, { mode: "all" });
       expect(gatewayLog.warn).toHaveBeenCalledWith(
-        expect.stringContaining("restart blocked by active task run(s): taskId=task-force"),
+        expect.stringContaining(
+          "restart blocked by active background task run(s): taskId=task-force",
+        ),
       );
       expect(gatewayLog.warn).toHaveBeenCalledWith(
         "forced restart requested; skipping active work drain",
@@ -543,7 +560,7 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it("routes external SIGUSR1 through the restart scheduler before draining", async () => {
+  it("clears stale restart state before routing external SIGUSR1 through the scheduler", async () => {
     vi.clearAllMocks();
     consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
     isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(true);
@@ -559,11 +576,37 @@ describe("runGatewayLoop", () => {
         delayMs: 0,
         reason: "SIGUSR1",
       });
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(markGatewaySigusr1RestartHandled.mock.invocationCallOrder[0]).toBeLessThan(
+        scheduleGatewaySigusr1Restart.mock.invocationCallOrder[0] ?? 0,
+      );
       expect(close).not.toHaveBeenCalled();
       expect(start).toHaveBeenCalledTimes(1);
-      expect(markGatewaySigusr1RestartHandled).not.toHaveBeenCalled();
     });
   });
+
+  it("clears the in-flight restart token when an unauthorized SIGUSR1 is ignored", async () => {
+    vi.clearAllMocks();
+    consumeGatewaySigusr1RestartAuthorization.mockReturnValueOnce(false);
+    isGatewaySigusr1RestartExternallyAllowed.mockReturnValueOnce(false);
+
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const { close, start } = await createSignaledLoopHarness();
+      const sigusr1 = captureSignal("SIGUSR1");
+
+      sigusr1();
+      await new Promise<void>((resolve) => setImmediate(resolve));
+
+      expect(markGatewaySigusr1RestartHandled).toHaveBeenCalledTimes(1);
+      expect(scheduleGatewaySigusr1Restart).not.toHaveBeenCalled();
+      expect(close).not.toHaveBeenCalled();
+      expect(start).toHaveBeenCalledTimes(1);
+      expect(gatewayLog.warn).toHaveBeenCalledWith(
+        "SIGUSR1 restart ignored (not authorized; commands.restart=false or use gateway tool).",
+      );
+    });
+  });
+
   it("releases the lock before exiting on spawned restart", async () => {
     vi.clearAllMocks();
     peekGatewaySigusr1RestartReason.mockReturnValue(undefined);
@@ -593,6 +636,7 @@ describe("runGatewayLoop", () => {
       expect(lockRelease).toHaveBeenCalled();
       expect(runtime.exit).toHaveBeenCalledWith(0);
       expect(exitCallOrder).toEqual(["lockRelease", "exit"]);
+      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
     });
   });
 
@@ -609,14 +653,24 @@ describe("runGatewayLoop", () => {
       await withIsolatedSignals(async ({ captureSignal }) => {
         const { runtime, exited } = await createSignaledLoopHarness();
         const sigusr1 = captureSignal("SIGUSR1");
-        const startedAt = Date.now();
 
+        vi.useFakeTimers();
         sigusr1();
+        await vi.advanceTimersByTimeAsync(1499);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+
         await expect(exited).resolves.toBe(0);
         expect(runtime.exit).toHaveBeenCalledWith(0);
-        expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1400);
+        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+          restartKind: "full-process",
+          reason: undefined,
+          processInstanceId: expect.any(String),
+          supervisorMode: "launchd",
+        });
       });
     } finally {
+      vi.useRealTimers();
       delete process.env.LAUNCH_JOB_LABEL;
       if (originalPlatformDescriptor) {
         Object.defineProperty(process, "platform", originalPlatformDescriptor);
@@ -717,7 +771,38 @@ describe("runGatewayLoop", () => {
       expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
       expect(start).toHaveBeenCalledTimes(1);
       expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+      expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
     });
+  });
+
+  it("writes a handoff before exiting for supervised update restarts", async () => {
+    vi.clearAllMocks();
+    peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
+    respawnGatewayProcessForUpdate.mockReturnValueOnce({
+      mode: "supervised",
+    });
+    try {
+      setPlatform("freebsd");
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const { runtime, exited } = await createSignaledLoopHarness();
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        sigusr1();
+
+        await expect(exited).resolves.toBe(0);
+        expect(runtime.exit).toHaveBeenCalledWith(0);
+        expect(writeGatewayRestartHandoffSync).toHaveBeenCalledWith({
+          restartKind: "update-process",
+          reason: "update.run",
+          processInstanceId: expect.any(String),
+          supervisorMode: "external",
+        });
+      });
+    } finally {
+      if (originalPlatformDescriptor) {
+        Object.defineProperty(process, "platform", originalPlatformDescriptor);
+      }
+    }
   });
 
   it("probes the configured gateway host for update respawn health", async () => {

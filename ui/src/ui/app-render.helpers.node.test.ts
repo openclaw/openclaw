@@ -36,9 +36,12 @@ vi.mock("./controllers/sessions.ts", () => ({
 
 import {
   createChatSession,
+  dismissChatError,
+  handleChatManualRefresh,
   isCronSessionKey,
   parseSessionKey,
   resolveAssistantAttachmentAuthToken,
+  resolveDashboardHeaderContext,
   resolveSessionOptionGroups,
   resolveSessionDisplayName,
   switchChatSession,
@@ -132,6 +135,7 @@ function createChatSessionState(overrides: Partial<AppViewState> = {}) {
     client: { request: vi.fn() },
     sessionsLoading: false,
     sessionsError: null,
+    sessionsShowArchived: false,
     sessionsResult: {
       ts: 0,
       path: "",
@@ -187,7 +191,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies direct chat with known channel", () => {
-    expect(parseSessionKey("agent:main:bluebubbles:direct:+19257864429")).toEqual({
+    expect(parseSessionKey("agent:main:imessage:direct:+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage · +19257864429",
     });
@@ -215,7 +219,7 @@ describe("parseSessionKey", () => {
   });
 
   it("identifies channel-prefixed legacy keys", () => {
-    expect(parseSessionKey("bluebubbles:g-agent-main-bluebubbles-direct-+19257864429")).toEqual({
+    expect(parseSessionKey("imessage:g-agent-main-imessage-direct-+19257864429")).toEqual({
       prefix: "",
       fallbackName: "iMessage Session",
     });
@@ -232,7 +236,7 @@ describe("parseSessionKey", () => {
     });
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown parse patterns", () => {
     expect(parseSessionKey("something-unknown")).toEqual({
       prefix: "",
       fallbackName: "something-unknown",
@@ -306,7 +310,7 @@ describe("resolveSessionDisplayName", () => {
   });
 
   it("parses direct chat key with channel", () => {
-    expect(resolveSessionDisplayName("agent:main:bluebubbles:direct:+19257864429")).toBe(
+    expect(resolveSessionDisplayName("agent:main:imessage:direct:+19257864429")).toBe(
       "iMessage · +19257864429",
     );
   });
@@ -315,7 +319,7 @@ describe("resolveSessionDisplayName", () => {
     expect(resolveSessionDisplayName("discord:123:456")).toBe("Discord Session");
   });
 
-  it("returns raw key for unknown patterns", () => {
+  it("returns raw key for unknown display-name patterns", () => {
     expect(resolveSessionDisplayName("something-custom")).toBe("something-custom");
   });
 
@@ -445,10 +449,54 @@ describe("resolveSessionDisplayName", () => {
   it("does not prefix non-typed sessions with labels", () => {
     expect(
       resolveSessionDisplayName(
-        "agent:main:bluebubbles:direct:+19257864429",
-        row({ key: "agent:main:bluebubbles:direct:+19257864429", label: "Tyler" }),
+        "agent:main:imessage:direct:+19257864429",
+        row({ key: "agent:main:imessage:direct:+19257864429", label: "Tyler" }),
       ),
     ).toBe("Tyler");
+  });
+});
+
+describe("resolveDashboardHeaderContext", () => {
+  it("uses the active agent identity name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:deep-chat:imessage:sample-thread",
+        agentsList: {
+          defaultId: "deep-chat",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "deep-chat", identity: { name: "Deep Chat" } }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Deep Chat" });
+  });
+
+  it("falls back to the configured agent name", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:main",
+        agentsList: {
+          defaultId: "beta",
+          mainKey: "main",
+          scope: "user",
+          agents: [{ id: "beta", name: "Coding" }],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "Coding" });
+  });
+
+  it("falls back to the agent id", () => {
+    expect(
+      resolveDashboardHeaderContext({
+        sessionKey: "agent:beta:subagent:maintainer-v2",
+        agentsList: {
+          defaultId: "main",
+          mainKey: "main",
+          scope: "user",
+          agents: [],
+        },
+      } as unknown as AppViewState),
+    ).toEqual({ agentLabel: "beta" });
   });
 });
 
@@ -488,18 +536,20 @@ describe("resolveSessionOptionGroups", () => {
     );
   });
 
-  it("keeps scoped fallbacks for active grouped sessions without useful row metadata", () => {
+  it("does not synthesize active grouped sessions without a listed row", () => {
     const sessionKey = "agent:main:subagent:4f2146de-887b-4176-9abe-91140082959b";
 
-    expect(labelsForSessionOptions({ sessionKey })).toContain(
-      "subagent:4f2146de-887b-4176-9abe-91140082959b",
-    );
+    expect(labelsForSessionOptions({ sessionKey })).toStrictEqual([]);
     expect(
       labelsForSessionOptions({
         sessionKey,
         sessions: [row({ key: sessionKey })],
       }),
     ).toContain("subagent:4f2146de-887b-4176-9abe-91140082959b");
+  });
+
+  it("keeps the active agent main session visible when no row exists yet", () => {
+    expect(labelsForSessionOptions({ sessionKey: "agent:main:main" })).toEqual(["main"]);
   });
 
   it("disambiguates duplicate grouped labels with scoped suffixes", () => {
@@ -526,7 +576,7 @@ describe("resolveSessionOptionGroups", () => {
     expect(labels).not.toContain("Subagent: cron-config-check");
   });
 
-  it("uses agent group labels to keep duplicate main sessions unique", () => {
+  it("filters the chat session options to the active agent", () => {
     const labels = labelsForSessionOptions({
       sessionKey: "agent:alpha:main",
       agentsList: {
@@ -548,10 +598,120 @@ describe("resolveSessionOptionGroups", () => {
       ],
     });
 
-    expect(labels.filter((label) => label === "Deep Chat (alpha) / main")).toHaveLength(1);
-    expect(labels).toContain("Deep Chat (alpha) / main · named-main");
-    expect(labels).toContain("Coding (beta) / main");
-    expect(labels).not.toContain("main");
+    expect(labels).toContain("main");
+    expect(labels).toContain("Deep Chat (alpha) / main");
+    expect(labels).not.toContain("Coding (beta) / main");
+  });
+
+  it("shows sessions for the selected agent after switching agent scope", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "agent:alpha:main" }),
+        row({ key: "agent:beta:main" }),
+        row({ key: "agent:beta:dashboard:recent", label: "Bug triage" }),
+      ],
+    });
+
+    expect(labels).toEqual(["main", "Bug triage"]);
+  });
+
+  it("keeps bare legacy sessions scoped to the default agent only", () => {
+    const labels = labelsForSessionOptions({
+      sessionKey: "agent:beta:main",
+      agentsList: {
+        defaultId: "alpha",
+        mainKey: "agent:alpha:main",
+        scope: "all",
+        agents: [
+          { id: "alpha", name: "Deep Chat" },
+          { id: "beta", name: "Coding" },
+        ],
+      },
+      sessions: [
+        row({ key: "main", label: "Legacy main" }),
+        row({ key: "agent:alpha:main", label: "Alpha main" }),
+        row({ key: "agent:beta:main", label: "Beta main" }),
+      ],
+    });
+
+    expect(labels).toEqual(["Beta main"]);
+  });
+});
+
+describe("handleChatManualRefresh", () => {
+  it("waits for chat history before scrolling and clearing refresh state", async () => {
+    const animationFrame = { callback: undefined as FrameRequestCallback | undefined };
+    const previousRequestAnimationFrame = globalThis.requestAnimationFrame;
+    Object.defineProperty(globalThis, "requestAnimationFrame", {
+      configurable: true,
+      writable: true,
+      value: vi.fn((callback: FrameRequestCallback) => {
+        animationFrame.callback = callback;
+        return 1;
+      }),
+    });
+    try {
+      let resolveRefresh: (() => void) | undefined;
+      refreshChatMock.mockReturnValueOnce(
+        new Promise<void>((resolve) => {
+          resolveRefresh = resolve;
+        }),
+      );
+      const state = {
+        chatManualRefreshInFlight: false,
+        chatNewMessagesBelow: true,
+        updateComplete: Promise.resolve(),
+        resetToolStream: vi.fn(),
+        scrollToBottom: vi.fn(),
+      } as unknown as Parameters<typeof handleChatManualRefresh>[0];
+
+      const run = handleChatManualRefresh(state);
+      await Promise.resolve();
+
+      expect(state.scrollToBottom).not.toHaveBeenCalled();
+      if (!resolveRefresh) {
+        throw new Error("Expected chat refresh resolver to be initialized");
+      }
+      resolveRefresh();
+      await run;
+
+      expect(refreshChatMock).toHaveBeenCalledWith(state, {
+        awaitHistory: true,
+        scheduleScroll: false,
+      });
+      expect(state.scrollToBottom).toHaveBeenCalledWith({ smooth: true });
+      expect(state.chatManualRefreshInFlight).toBe(true);
+      expect(animationFrame.callback).toBeTypeOf("function");
+
+      const callback = animationFrame.callback;
+      if (!callback) {
+        throw new Error("expected manual refresh to schedule a frame callback");
+      }
+      callback(0);
+
+      expect(state.chatManualRefreshInFlight).toBe(false);
+      expect(state.chatNewMessagesBelow).toBe(false);
+    } finally {
+      if (previousRequestAnimationFrame === undefined) {
+        Reflect.deleteProperty(globalThis, "requestAnimationFrame");
+      } else {
+        Object.defineProperty(globalThis, "requestAnimationFrame", {
+          configurable: true,
+          writable: true,
+          value: previousRequestAnimationFrame,
+        });
+      }
+    }
   });
 });
 
@@ -571,12 +731,15 @@ describe("createChatSession", () => {
       {
         agentId: "ops",
         parentSessionKey: "agent:ops:main",
+        emitCommandHooks: true,
       },
       {
         activeMinutes: 0,
         limit: 0,
         includeGlobal: true,
         includeUnknown: true,
+        showArchived: false,
+        agentId: "ops",
       },
     );
     expect(state.sessionKey).toBe("agent:ops:dashboard:new-chat");
@@ -585,7 +748,7 @@ describe("createChatSession", () => {
     expect(state.chatAttachments).toEqual([
       { id: "att-1", mimeType: "image/png", dataUrl: "data:image/png;base64,AAA" },
     ]);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(loadChatHistoryMock).toHaveBeenCalledWith(state);
   });
 
@@ -724,9 +887,21 @@ describe("switchChatSession", () => {
       chatQueue: [{ id: "queued", text: "message B", createdAt: 1 }],
       chatQueueBySession: {},
       chatRunId: "run-1",
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set(["btw-run-1"]),
       chatStreamStartedAt: 1,
+      sessionsResult: {
+        ts: 0,
+        path: "",
+        count: 2,
+        defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
+        sessions: [
+          row({ key: "main" }),
+          row({ key: "agent:main:test-b", label: "Review Session" }),
+        ],
+      },
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -744,7 +919,7 @@ describe("switchChatSession", () => {
     switchChatSession(state, "agent:main:test-b");
     await Promise.resolve();
 
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
     expect(state.chatQueueBySession.main).toEqual([
       { id: "queued", text: "message B", createdAt: 1 },
     ]);
@@ -765,10 +940,16 @@ describe("switchChatSession", () => {
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      showArchived: false,
+      agentId: "main",
     });
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).toHaveBeenCalledWith("agent:main:test-b", "Review Session");
   });
 
-  it("restores queued messages when switching back to their session", async () => {
+  it("restores queued messages when switching back to their session", () => {
     const settings = createSettings();
     const state = {
       sessionKey: "main",
@@ -787,9 +968,11 @@ describe("switchChatSession", () => {
       chatQueue: [{ id: "queued-1", text: "message B", createdAt: 1 }],
       chatQueueBySession: {},
       chatRunId: "run-1",
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: 1,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -805,7 +988,7 @@ describe("switchChatSession", () => {
     loadSessionsMock.mockResolvedValue(undefined);
 
     switchChatSession(state, "agent:main:other");
-    expect(state.chatQueue).toEqual([]);
+    expect(state.chatQueue).toStrictEqual([]);
 
     switchChatSession(state, "main");
 
@@ -831,9 +1014,11 @@ describe("switchChatSession", () => {
       chatQueue: [],
       chatQueueBySession: {},
       chatRunId: null,
+      sessionsShowArchived: false,
       chatSideResultTerminalRuns: new Set<string>(),
       chatStreamStartedAt: null,
       settings,
+      announceSessionSwitch: vi.fn(),
       applySettings(next: typeof settings) {
         state.settings = next;
       },
@@ -852,9 +1037,39 @@ describe("switchChatSession", () => {
     switchChatSession(state, "main");
     await Promise.resolve();
 
+    expect(
+      (state as unknown as { announceSessionSwitch: ReturnType<typeof vi.fn> })
+        .announceSessionSwitch,
+    ).not.toHaveBeenCalled();
     expect(refreshSlashCommandsMock).toHaveBeenCalledWith({
       client: state.client,
       agentId: undefined,
     });
+  });
+});
+
+describe("dismissChatError", () => {
+  it("clears persistent Talk error state", () => {
+    const stop = vi.fn();
+    const state = {
+      lastError: 'Realtime voice provider "openai" is not configured',
+      lastErrorCode: "UNAVAILABLE",
+      realtimeTalkActive: true,
+      realtimeTalkSession: { stop },
+      realtimeTalkStatus: "error",
+      realtimeTalkDetail: 'Realtime voice provider "openai" is not configured',
+      realtimeTalkTranscript: "partial transcript",
+    } as unknown as AppViewState & { realtimeTalkSession: { stop(): void } | null };
+
+    dismissChatError(state);
+
+    expect(state.lastError).toBeNull();
+    expect(state.lastErrorCode).toBeNull();
+    expect(stop).toHaveBeenCalledOnce();
+    expect(state.realtimeTalkSession).toBeNull();
+    expect(state.realtimeTalkActive).toBe(false);
+    expect(state.realtimeTalkStatus).toBe("idle");
+    expect(state.realtimeTalkDetail).toBeNull();
+    expect(state.realtimeTalkTranscript).toBeNull();
   });
 });

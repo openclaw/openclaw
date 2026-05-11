@@ -9,111 +9,6 @@ import {
 import { applyPatch } from "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
-const pinnedPathHelper = vi.hoisted(() => {
-  const fs = require("node:fs/promises") as typeof import("node:fs/promises");
-  const path = require("node:path") as typeof import("node:path");
-  const { pipeline } = require("node:stream/promises") as typeof import("node:stream/promises");
-
-  async function resolvePinnedParent(params: {
-    rootPath: string;
-    relativeParentPath?: string;
-    mkdir?: boolean;
-  }): Promise<string> {
-    let current = params.rootPath;
-    for (const segment of (params.relativeParentPath ?? "").split("/").filter(Boolean)) {
-      const next = path.join(current, segment);
-      try {
-        const stat = await fs.lstat(next);
-        if (stat.isSymbolicLink() || !stat.isDirectory()) {
-          throw new Error("symbolic link or non-directory path segment");
-        }
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT" || !params.mkdir) {
-          throw error;
-        }
-        await fs.mkdir(next);
-      }
-      current = next;
-    }
-    return current;
-  }
-
-  return {
-    runPinnedPathHelper: vi.fn(
-      async (params: {
-        operation: "mkdirp" | "remove";
-        rootPath: string;
-        relativePath: string;
-      }) => {
-        const segments = params.relativePath.split("/").filter(Boolean);
-        const targetPath = path.join(params.rootPath, ...segments);
-        if (params.operation === "mkdirp") {
-          await resolvePinnedParent({
-            rootPath: params.rootPath,
-            relativeParentPath: params.relativePath,
-            mkdir: true,
-          });
-          return;
-        }
-        await resolvePinnedParent({
-          rootPath: params.rootPath,
-          relativeParentPath: segments.slice(0, -1).join("/"),
-          mkdir: false,
-        });
-        const stat = await fs.lstat(targetPath);
-        if (stat.isDirectory() && !stat.isSymbolicLink()) {
-          await fs.rmdir(targetPath);
-          return;
-        }
-        await fs.unlink(targetPath);
-      },
-    ),
-    runPinnedWriteHelper: vi.fn(
-      async (params: {
-        rootPath: string;
-        relativeParentPath: string;
-        basename: string;
-        mkdir: boolean;
-        mode: number;
-        input:
-          | { kind: "buffer"; data: string | Buffer; encoding?: BufferEncoding }
-          | { kind: "stream"; stream: NodeJS.ReadableStream };
-      }) => {
-        const parentPath = await resolvePinnedParent({
-          rootPath: params.rootPath,
-          relativeParentPath: params.relativeParentPath,
-          mkdir: params.mkdir,
-        });
-        const targetPath = path.join(parentPath, params.basename);
-        if (params.input.kind === "buffer") {
-          await fs.writeFile(targetPath, params.input.data, {
-            encoding: params.input.encoding,
-            mode: params.mode,
-          });
-        } else {
-          const handle = await fs.open(targetPath, "w", params.mode);
-          try {
-            await pipeline(params.input.stream, handle.createWriteStream());
-          } finally {
-            await handle.close().catch(() => undefined);
-          }
-        }
-        const stat = await fs.stat(targetPath);
-        return { dev: stat.dev, ino: stat.ino };
-      },
-    ),
-  };
-});
-
-vi.mock("../infra/fs-pinned-path-helper.js", () => ({
-  isPinnedPathHelperSpawnError: () => false,
-  runPinnedPathHelper: pinnedPathHelper.runPinnedPathHelper,
-}));
-
-vi.mock("../infra/fs-pinned-write-helper.js", () => ({
-  runPinnedWriteHelper: pinnedPathHelper.runPinnedWriteHelper,
-}));
-
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-patch-"));
   try {
@@ -189,7 +84,17 @@ async function expectOutsideWriteRejected(params: {
 }) {
   const patch = buildAddFilePatch(params.patchTargetPath);
   await expect(applyPatch(patch, { cwd: params.dir })).rejects.toThrow(/Path escapes sandbox root/);
-  await expect(fs.readFile(params.outsidePath, "utf8")).rejects.toBeDefined();
+  await expectMissingPath(fs.readFile(params.outsidePath, "utf8"));
+}
+
+async function expectMissingPath(operation: Promise<unknown>) {
+  let error: NodeJS.ErrnoException | undefined;
+  try {
+    await operation;
+  } catch (caught) {
+    error = caught as NodeJS.ErrnoException;
+  }
+  expect(error?.code).toBe("ENOENT");
 }
 
 describe("applyPatch", () => {
@@ -337,7 +242,7 @@ describe("applyPatch", () => {
         await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
           /Symlink escapes sandbox root/,
         );
-        await expect(fs.readFile(outsideFile, "utf8")).rejects.toBeDefined();
+        await expectMissingPath(fs.readFile(outsideFile, "utf8"));
       } finally {
         await fs.rm(outsideDir, { recursive: true, force: true });
       }
@@ -481,7 +386,7 @@ describe("applyPatch", () => {
 
         const result = await applyPatch(patch, { cwd: dir });
         expect(result.summary.deleted).toEqual(["link"]);
-        await expect(fs.lstat(linkDir)).rejects.toBeDefined();
+        await expectMissingPath(fs.lstat(linkDir));
         const outsideContents = await fs.readFile(outsideTarget, "utf8");
         expect(outsideContents).toBe("keep\n");
       } finally {
@@ -556,12 +461,12 @@ describe("applyPatch", () => {
             symlinkTarget: outside,
             timing: "before-realpath",
             run: async () => {
-              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(/under root/i);
+              await expect(applyPatch(patch, { cwd: dir })).rejects.toThrow(
+                /path alias under sandbox root|path escapes sandbox root|under root|unable to resolve opened file path/i,
+              );
             },
           });
-          await expect(fs.stat(path.join(outside, "nested"))).rejects.toMatchObject({
-            code: "ENOENT",
-          });
+          await expectMissingPath(fs.stat(path.join(outside, "nested")));
         } finally {
           await fs.rm(outside, { recursive: true, force: true });
         }

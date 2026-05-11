@@ -11,6 +11,8 @@ import {
   toTrajectoryToolDefinitions,
 } from "./runtime.js";
 
+type TrajectoryRuntimeRecorder = NonNullable<ReturnType<typeof createTrajectoryRuntimeRecorder>>;
+
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -24,6 +26,16 @@ afterEach(() => {
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+function expectTrajectoryRuntimeRecorder(
+  recorder: ReturnType<typeof createTrajectoryRuntimeRecorder>,
+): TrajectoryRuntimeRecorder {
+  if (recorder === null) {
+    throw new Error("Expected trajectory runtime recorder");
+  }
+  expect(typeof recorder.recordEvent).toBe("function");
+  return recorder;
+}
 
 describe("trajectory runtime", () => {
   it("resolves a session-adjacent trajectory file by default", () => {
@@ -63,11 +75,13 @@ describe("trajectory runtime", () => {
       },
     });
 
-    expect(recorder).not.toBeNull();
-    recorder?.recordEvent("context.compiled", {
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
       systemPrompt: "system prompt",
       headers: [{ name: "Authorization", value: "Bearer sk-test-secret-token" }],
       command: "curl -H 'Authorization: Bearer sk-other-secret-token'",
+      oauth: "ya29.fake-access-token-with-enough-length",
+      apple: "abcd-efgh-ijkl-mnop",
       tools: toTrajectoryToolDefinitions([
         { name: "z-tool", parameters: { z: 1 } },
         { name: "a-tool", description: "alpha", parameters: { a: 1 } },
@@ -86,9 +100,11 @@ describe("trajectory runtime", () => {
     ]);
     expect(JSON.stringify(parsed.data)).not.toContain("sk-test-secret-token");
     expect(JSON.stringify(parsed.data)).not.toContain("sk-other-secret-token");
+    expect(JSON.stringify(parsed.data)).not.toContain("ya29.fake-access-token");
+    expect(JSON.stringify(parsed.data)).not.toContain("abcd-efgh-ijkl-mnop");
   });
 
-  it("truncates events that exceed the runtime event byte limit", () => {
+  it("bounds large runtime event fields before serialization", () => {
     const writes: string[] = [];
     const recorder = createTrajectoryRuntimeRecorder({
       sessionId: "session-1",
@@ -102,19 +118,55 @@ describe("trajectory runtime", () => {
       },
     });
 
-    recorder?.recordEvent("context.compiled", {
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
       prompt: "x".repeat(TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1),
     });
 
     expect(writes).toHaveLength(1);
     const parsed = JSON.parse(writes[0]);
-    expect(parsed.data).toMatchObject({
-      truncated: true,
-      reason: "trajectory-event-size-limit",
-    });
+    expect(parsed.data.prompt.truncated).toBe(true);
+    expect(parsed.data.prompt.reason).toBe("trajectory-field-size-limit");
     expect(Buffer.byteLength(writes[0], "utf8")).toBeLessThanOrEqual(
       TRAJECTORY_RUNTIME_EVENT_MAX_BYTES + 1,
     );
+  });
+
+  it("stops runtime capture at the file budget and records a truncation event", async () => {
+    const writes: string[] = [];
+    const recorder = createTrajectoryRuntimeRecorder({
+      sessionId: "session-1",
+      sessionFile: "/tmp/session.jsonl",
+      maxRuntimeFileBytes: 900,
+      writer: {
+        filePath: "/tmp/session.trajectory.jsonl",
+        write: (line) => {
+          writes.push(line);
+        },
+        flush: async () => undefined,
+      },
+    });
+
+    const runtimeRecorder = expectTrajectoryRuntimeRecorder(recorder);
+    runtimeRecorder.recordEvent("context.compiled", {
+      prompt: "x".repeat(180),
+    });
+    runtimeRecorder.recordEvent("prompt.submitted", {
+      prompt: "y".repeat(180),
+    });
+    runtimeRecorder.recordEvent("model.completed", {
+      get prompt() {
+        throw new Error("stopped recorder should not read dropped payloads");
+      },
+    });
+    await runtimeRecorder.flush();
+
+    const parsed = writes.map((line) => JSON.parse(line));
+    expect(parsed.map((event) => event.type)).toContain("trace.truncated");
+    const truncated = parsed.find((event) => event.type === "trace.truncated");
+    expect(truncated?.data.reason).toBe("trajectory-runtime-file-size-limit");
+    expect(truncated?.data.limitBytes).toBe(900);
+    expect(truncated?.data.droppedEvents).toBeGreaterThan(0);
   });
 
   it("writes a session-adjacent pointer when using an override directory", () => {
@@ -132,7 +184,7 @@ describe("trajectory runtime", () => {
       },
     });
 
-    expect(recorder).not.toBeNull();
+    expectTrajectoryRuntimeRecorder(recorder);
     const pointer = JSON.parse(
       fs.readFileSync(resolveTrajectoryPointerFilePath(sessionFile), "utf8"),
     ) as { runtimeFile?: string };

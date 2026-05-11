@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata } from "../reply-payload.js";
 import type { TemplateContext } from "../templating.js";
 import { createTestFollowupRun } from "./agent-runner.test-fixtures.js";
 import type { QueueSettings } from "./queue.js";
@@ -114,6 +115,43 @@ function createDirectRuntimeReplyParams({
   return { followupRun, resolvedQueue, replyParams };
 }
 
+function requireResolveQueuedReplyExecutionConfigCall(index = 0) {
+  const call = resolveQueuedReplyExecutionConfigMock.mock.calls[index] as
+    | [
+        unknown,
+        {
+          originatingChannel?: string;
+          messageProvider?: string;
+        },
+      ]
+    | undefined;
+  if (!call) {
+    throw new Error(`resolveQueuedReplyExecutionConfig call ${index} missing`);
+  }
+  return call;
+}
+
+type MockCallSource = {
+  mock: {
+    calls: unknown[][];
+  };
+};
+
+function requireMaintenanceCall(mock: MockCallSource, name: string, index = 0) {
+  const call = mock.mock.calls[index]?.[0] as
+    | {
+        cfg?: unknown;
+        followupRun?: unknown;
+        sessionKey?: string;
+        runtimePolicySessionKey?: string;
+      }
+    | undefined;
+  if (!call) {
+    throw new Error(`${name} call ${index} missing`);
+  }
+  return call;
+}
+
 describe("runReplyAgent runtime config", () => {
   beforeEach(() => {
     resolveQueuedReplyExecutionConfigMock.mockReset();
@@ -142,13 +180,11 @@ describe("runReplyAgent runtime config", () => {
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
     expect(followupRun.run.config).toBe(freshCfg);
-    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledWith(
-      staleCfg,
-      expect.objectContaining({
-        originatingChannel: "telegram",
-        messageProvider: "telegram",
-      }),
-    );
+    expect(resolveQueuedReplyExecutionConfigMock).toHaveBeenCalledTimes(1);
+    const [configArg, configContextArg] = requireResolveQueuedReplyExecutionConfigCall();
+    expect(configArg).toBe(staleCfg);
+    expect(configContextArg.originatingChannel).toBe("telegram");
+    expect(configContextArg.messageProvider).toBe("telegram");
     expect(resolveReplyToModeMock).toHaveBeenCalledWith(freshCfg, "telegram", "default", "dm");
     expect(createReplyMediaContextMock).toHaveBeenCalledWith({
       cfg: freshCfg,
@@ -164,12 +200,13 @@ describe("runReplyAgent runtime config", () => {
       requesterSenderUsername: undefined,
       requesterSenderE164: undefined,
     });
-    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: freshCfg,
-        followupRun,
-      }),
+    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledTimes(1);
+    const preflightCall = requireMaintenanceCall(
+      runPreflightCompactionIfNeededMock,
+      "runPreflightCompactionIfNeeded",
     );
+    expect(preflightCall.cfg).toBe(freshCfg);
+    expect(preflightCall.followupRun).toBe(followupRun);
   });
 
   it("passes the derived runtime-policy key to pre-run maintenance", async () => {
@@ -187,18 +224,35 @@ describe("runReplyAgent runtime config", () => {
 
     await expect(runReplyAgent(replyParams)).rejects.toBe(sentinelError);
 
-    expect(runPreflightCompactionIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        runtimePolicySessionKey,
-      }),
+    const preflightCall = requireMaintenanceCall(
+      runPreflightCompactionIfNeededMock,
+      "runPreflightCompactionIfNeeded",
     );
-    expect(runMemoryFlushIfNeededMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        runtimePolicySessionKey,
-      }),
-    );
+    expect(preflightCall.sessionKey).toBe("agent:main:main");
+    expect(preflightCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
+    const memoryCall = requireMaintenanceCall(runMemoryFlushIfNeededMock, "runMemoryFlushIfNeeded");
+    expect(memoryCall.sessionKey).toBe("agent:main:main");
+    expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
+  });
+
+  it("surfaces known pre-run Codex usage-limit failures instead of dropping the reply", async () => {
+    const { replyParams } = createDirectRuntimeReplyParams({
+      shouldFollowup: false,
+      isActive: false,
+    });
+    const codexMessage =
+      "You've reached your Codex subscription usage limit. Codex did not return a reset time for this limit. Run /codex account for current usage details.";
+    runPreflightCompactionIfNeededMock.mockRejectedValue(new Error(codexMessage));
+    runMemoryFlushIfNeededMock.mockResolvedValue(undefined);
+
+    const result = await runReplyAgent(replyParams);
+
+    if (!result || Array.isArray(result)) {
+      throw new Error("expected a single usage-limit reply payload");
+    }
+    expect(result.text).toBe(`⚠️ ${codexMessage}`);
+    const metadata = getReplyPayloadMetadata(result);
+    expect(metadata?.deliverDespiteSourceReplySuppression).toBe(true);
   });
 
   it("does not resolve secrets before the enqueue-followup queue path", async () => {
@@ -210,13 +264,13 @@ describe("runReplyAgent runtime config", () => {
     await expect(runReplyAgent(replyParams)).resolves.toBeUndefined();
 
     expect(resolveQueuedReplyExecutionConfigMock).not.toHaveBeenCalled();
-    expect(enqueueFollowupRunMock).toHaveBeenCalledWith(
-      "main",
-      followupRun,
-      resolvedQueue,
-      "message-id",
-      expect.any(Function),
-      false,
-    );
+    expect(enqueueFollowupRunMock).toHaveBeenCalledTimes(1);
+    const enqueueCall = enqueueFollowupRunMock.mock.calls[0];
+    expect(enqueueCall?.[0]).toBe("main");
+    expect(enqueueCall?.[1]).toBe(followupRun);
+    expect(enqueueCall?.[2]).toBe(resolvedQueue);
+    expect(enqueueCall?.[3]).toBe("message-id");
+    expect(typeof enqueueCall?.[4]).toBe("function");
+    expect(enqueueCall?.[5]).toBe(false);
   });
 });

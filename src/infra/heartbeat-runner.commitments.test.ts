@@ -61,12 +61,23 @@ describe("runHeartbeatOnce commitments", () => {
     };
   }
 
+  function expectCommitmentFields(
+    commitment: CommitmentRecord | undefined,
+    expected: Partial<CommitmentRecord>,
+  ) {
+    expect(commitment).toBeDefined();
+    for (const [key, value] of Object.entries(expected)) {
+      expect(commitment?.[key as keyof CommitmentRecord]).toEqual(value);
+    }
+  }
+
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
     sourceUserText?: string;
     sourceAssistantText?: string;
     legacyRawSourceText?: boolean;
+    visibleReplies?: "automatic" | "message_tool";
   }) {
     return await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
@@ -81,6 +92,7 @@ describe("runHeartbeatOnce commitments", () => {
             },
           },
         },
+        ...(params?.visibleReplies ? { messages: { visibleReplies: params.visibleReplies } } : {}),
         channels: { telegram: { allowFrom: ["*"] } },
         session: { store: storePath },
         commitments: { enabled: true },
@@ -125,10 +137,12 @@ describe("runHeartbeatOnce commitments", () => {
           expect(ctx.Body).not.toContain(
             params?.sourceAssistantText ?? "Good luck, I hope it goes well.",
           );
+          expect(ctx.Body).toContain(HEARTBEAT_TOKEN);
+          expect(ctx.Body).not.toContain("heartbeat_respond");
           expect(ctx.OriginatingChannel).toBe("telegram");
           expect(ctx.OriginatingTo).toBe("155462274");
           expect(opts?.disableTools).toBe(true);
-          expect(opts?.skillFilter).toEqual([]);
+          expect(opts?.skillFilter).toStrictEqual([]);
           return { text: params?.replyText ?? "How did the interview go?" };
         },
       );
@@ -233,7 +247,7 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
-    expect(store.commitments[0]).toMatchObject({
+    expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "pending",
       attempts: 0,
@@ -310,7 +324,7 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();
-    expect(store.commitments[0]).toMatchObject({
+    expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "pending",
       attempts: 0,
@@ -353,13 +367,12 @@ describe("runHeartbeatOnce commitments", () => {
       runner.stop();
 
       expect(runOnce).toHaveBeenCalledTimes(1);
-      expect(runOnce).toHaveBeenCalledWith(
-        expect.objectContaining({
-          agentId: "main",
-          heartbeat: expect.objectContaining({ target: "none" }),
-        }),
-      );
-      expect(runOnce.mock.calls[0]?.[0]).not.toHaveProperty("sessionKey", dueSessionKey);
+      const runOptions = runOnce.mock.calls[0]?.[0] as
+        | { agentId?: string; heartbeat?: { target?: string }; sessionKey?: string }
+        | undefined;
+      expect(runOptions?.agentId).toBe("main");
+      expect(runOptions?.heartbeat?.target).toBe("none");
+      expect(runOptions?.sessionKey).not.toBe(dueSessionKey);
     });
   });
 
@@ -368,7 +381,7 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
-    expect(store.commitments[0]).toMatchObject({
+    expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "sent",
       attempts: 1,
@@ -383,7 +396,23 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).not.toHaveBeenCalled();
-    expect(store.commitments[0]).toMatchObject({
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "dismissed",
+      attempts: 1,
+      dismissedAtMs: nowMs,
+    });
+  });
+
+  it("keeps due commitment heartbeats on the text ack while tools are disabled", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      visibleReplies: "message_tool",
+      replyText: HEARTBEAT_TOKEN,
+    });
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).not.toHaveBeenCalled();
+    expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "dismissed",
       attempts: 1,
@@ -404,7 +433,7 @@ describe("runHeartbeatOnce commitments", () => {
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
-    expect(store.commitments[0]).toMatchObject({
+    expectCommitmentFields(store.commitments[0], {
       id: "cm_interview",
       status: "sent",
       attempts: 1,

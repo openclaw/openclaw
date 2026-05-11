@@ -2,7 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const nodeRequire = createRequire(import.meta.url);
 const childProcessModule = nodeRequire("node:child_process") as {
@@ -40,6 +40,14 @@ function expectDnsLabelByteLength(value: string, expected: number) {
 
 function expectDnsLabelWithinLimit(value: string) {
   expect(dnsLabelEncoder.encode(value).byteLength).toBeLessThanOrEqual(63);
+}
+
+function warnMessages(): string[] {
+  return logger.warn.mock.calls.map(([message]) => String(message));
+}
+
+function expectWarnContaining(fragment: string) {
+  expect(warnMessages().some((message) => message.includes(fragment))).toBe(true);
 }
 
 function enableAdvertiserUnitMode(hostname = "test-host") {
@@ -94,6 +102,11 @@ vi.mock("@homebridge/ciao", () => {
 });
 
 const { startGatewayBonjourAdvertiser } = await import("./advertiser.js");
+
+afterAll(() => {
+  vi.doUnmock("@homebridge/ciao");
+  vi.resetModules();
+});
 
 type StartGatewayBonjourAdvertiser = typeof startGatewayBonjourAdvertiser;
 
@@ -277,16 +290,18 @@ describe("gateway bonjour advertiser", () => {
       const started = await startAdvertiser({ gatewayPort: 18789 });
       childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
 
-      expect(execMock).toHaveBeenCalledWith(
-        'arp -a | findstr /C:"---"',
-        { windowsHide: true },
-        expect.any(Function),
-      );
+      const execCall = execMock.mock.calls[0];
+      expect(execCall?.[0]).toBe('arp -a | findstr /C:"---"');
+      expect(execCall?.[1]).toEqual({ windowsHide: true });
+      expect(execCall?.[2]).toBeTypeOf("function");
 
       await started.stop();
       childProcessModule.exec('arp -a | findstr /C:"---"', () => {});
-      const afterStopOptions = execMock.mock.calls.at(-1)?.[1];
-      expect(afterStopOptions).toEqual(expect.any(Function));
+      const afterStopCallback = execMock.mock.calls.at(-1)?.[1];
+      if (typeof afterStopCallback !== "function") {
+        throw new Error("expected restored exec callback overload");
+      }
+      afterStopCallback(null, "", "");
     } finally {
       childProcessModule.exec = originalExec;
     }
@@ -331,8 +346,11 @@ describe("gateway bonjour advertiser", () => {
       { logger },
     );
 
-    expect(processOn).toHaveBeenCalledWith("unhandledRejection", expect.any(Function));
-    expect(processOn).not.toHaveBeenCalledWith("uncaughtException", expect.any(Function));
+    const unhandledRejectionRegistration = processOn.mock.calls.find(
+      ([event]) => event === "unhandledRejection",
+    );
+    expect(unhandledRejectionRegistration?.[1]).toBeTypeOf("function");
+    expect(processOn.mock.calls.some(([event]) => event === "uncaughtException")).toBe(false);
 
     await started.stop();
   });
@@ -393,17 +411,13 @@ describe("gateway bonjour advertiser", () => {
     expect(exceptionHandler).toBeTypeOf("function");
 
     expect(handler?.(new Error("CIAO PROBING CANCELLED"))).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
+    expectWarnContaining("suppressing ciao cancellation");
 
     logger.warn.mockClear();
     expect(
       handler?.(new Error("Reached illegal state! IPV4 address change from defined to undefined!")),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao interface assertion"),
-    );
+    expectWarnContaining("suppressing ciao interface assertion");
 
     logger.warn.mockClear();
     expect(
@@ -416,9 +430,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao netmask assertion"),
-    );
+    expectWarnContaining("suppressing ciao netmask assertion");
 
     logger.warn.mockClear();
     expect(
@@ -428,9 +440,7 @@ describe("gateway bonjour advertiser", () => {
         ),
       ),
     ).toBe(true);
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao self-probe race"),
-    );
+    expectWarnContaining("suppressing ciao self-probe race");
 
     await started.stop();
   });
@@ -456,10 +466,8 @@ describe("gateway bonjour advertiser", () => {
       expect(createService).toHaveBeenCalledTimes(2);
     });
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("suppressing ciao cancellation"),
-    );
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expectWarnContaining("suppressing ciao cancellation");
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(destroy).toHaveBeenCalledTimes(1);
     expect(advertise).toHaveBeenCalledTimes(2);
 
@@ -487,7 +495,7 @@ describe("gateway bonjour advertiser", () => {
 
     // allow promise rejection handler to run
     await Promise.resolve();
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise failed"));
+    expect(warnMessages().some((message) => message.includes("advertise failed"))).toBe(true);
 
     // watchdog first retries, then recreates the advertiser after the service
     // stays unhealthy across multiple 5s ticks.
@@ -516,7 +524,7 @@ describe("gateway bonjour advertiser", () => {
     });
 
     expect(advertise).toHaveBeenCalledTimes(1);
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("advertise threw"));
+    expect(warnMessages().some((message) => message.includes("advertise threw"))).toBe(true);
 
     await started.stop();
   });
@@ -650,7 +658,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(expect.stringContaining("restarting advertiser"));
+    expect(warnMessages().some((message) => message.includes("restarting advertiser"))).toBe(true);
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -695,9 +703,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(25_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("service stuck in announcing"),
-    );
+    expectWarnContaining("service stuck in announcing");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(3);
     expect(destroy).toHaveBeenCalledTimes(1);
@@ -723,9 +729,7 @@ describe("gateway bonjour advertiser", () => {
 
     await vi.advanceTimersByTimeAsync(55_000);
 
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("disabling advertiser after 1 stuck-state restart"),
-    );
+    expectWarnContaining("disabling advertiser after 1 stuck-state restart");
     expect(createService).toHaveBeenCalledTimes(2);
     expect(advertise).toHaveBeenCalledTimes(2);
     expect(destroy).toHaveBeenCalledTimes(2);
@@ -770,8 +774,10 @@ describe("gateway bonjour advertiser", () => {
     const disableLog = logger.warn.mock.calls.find(
       (call) => typeof call[0] === "string" && call[0].includes("disabling advertiser after"),
     );
-    expect(disableLog).toBeDefined();
-    expect(String(disableLog?.[0])).toMatch(/restarts within \d+ minutes/);
+    if (!disableLog) {
+      throw new Error("expected advertiser disable warning after repeated restarts");
+    }
+    expect(String(disableLog[0])).toMatch(/restarts within \d+ minutes/);
 
     const advertiseCallsAtDisable = advertise.mock.calls.length;
     const createServiceCallsAtDisable = createService.mock.calls.length;

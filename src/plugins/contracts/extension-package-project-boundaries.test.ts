@@ -56,16 +56,16 @@ const MEMORY_HOST_SDK_EXPORTS = [
   "./status",
 ] as const;
 const MEMORY_HOST_SDK_ALLOWED_CORE_BRIDGE_FILES = [
+  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
+  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime.ts",
 ] as const;
 const MEMORY_HOST_SDK_RUNTIME_ADAPTER_FILES = [
   "packages/memory-host-sdk/src/host/openclaw-runtime-agent.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-auth.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-cli.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-config.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-io.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-memory.ts",
-  "packages/memory-host-sdk/src/host/openclaw-runtime-network.ts",
   "packages/memory-host-sdk/src/host/openclaw-runtime-session.ts",
 ] as const;
 
@@ -218,14 +218,30 @@ describe("opt-in extension package boundaries", () => {
     expect(packageJson.exports?.["./ssrf-runtime"]?.types).toBe(
       "./dist/src/plugin-sdk/ssrf-runtime.d.ts",
     );
-    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
-      "./dist/src/plugin-sdk/text-runtime.d.ts",
+    expect(packageJson.exports?.["./config-contracts"]?.types).toBe(
+      "./dist/src/plugin-sdk/config-contracts.d.ts",
+    );
+    expect(packageJson.exports?.["./text-utility-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-utility-runtime.d.ts",
     );
     expect(packageJson.exports?.["./video-generation"]?.types).toBe(
       "./dist/src/plugin-sdk/video-generation.d.ts",
     );
     expect(packageJson.exports?.["./provider-model-types"]?.types).toBe(
       "./dist/src/plugin-sdk/provider-model-types.d.ts",
+    );
+    expect(packageJson.exports?.["./channel-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/channel-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./compat"]?.types).toBe("./dist/src/plugin-sdk/compat.d.ts");
+    expect(packageJson.exports?.["./config-types"]?.types).toBe(
+      "./dist/src/plugin-sdk/config-types.d.ts",
+    );
+    expect(packageJson.exports?.["./infra-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/infra-runtime.d.ts",
+    );
+    expect(packageJson.exports?.["./text-runtime"]?.types).toBe(
+      "./dist/src/plugin-sdk/text-runtime.d.ts",
     );
     expect(packageJson.exports?.["./zod"]?.types).toBe("./dist/src/plugin-sdk/zod.d.ts");
     expect(existsSync(resolve(REPO_ROOT, "packages/plugin-sdk/types/plugin-entry.d.ts"))).toBe(
@@ -262,6 +278,6 @@ describe("opt-in extension package boundaries", () => {
   });
 
   it("keeps plugin-package-contract independent from core internals", () => {
-    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toEqual([]);
+    expect(collectCoreReferenceFiles("packages/plugin-package-contract/src")).toStrictEqual([]);
   });
 });

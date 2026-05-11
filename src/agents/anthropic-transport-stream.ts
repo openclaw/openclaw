@@ -1,4 +1,4 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
   getEnvApiKey,
@@ -8,7 +8,7 @@ import {
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
-} from "@mariozechner/pi-ai";
+} from "@earendil-works/pi-ai";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import {
@@ -201,6 +201,10 @@ function isDirectAnthropicModel(model: Pick<AnthropicTransportModel, "provider" 
   return endpointClass === "default" || endpointClass === "anthropic-public";
 }
 
+function isKimiAnthropicProvider(provider: string | undefined): boolean {
+  return /^kimi(?:-|$)/.test(normalizeLowercaseStringOrEmpty(provider ?? ""));
+}
+
 function buildAnthropicBetaHeader(
   model: AnthropicTransportModel,
   betaFeatures: readonly string[],
@@ -249,11 +253,13 @@ function convertContentBlocks(
         source: { type: "base64"; media_type: string; data: string };
       }
   > = [];
+  let hasTextBlock = false;
   for (const block of content) {
     if (block.type === "text") {
       const text = sanitizeTransportPayloadText(block.text);
       if (text.trim().length > 0) {
         blocks.push({ type: "text", text });
+        hasTextBlock = true;
       }
     } else {
       blocks.push({
@@ -266,11 +272,8 @@ function convertContentBlocks(
       });
     }
   }
-  if (!blocks.some((block) => block.type === "text")) {
-    blocks.unshift({
-      type: "text",
-      text: "(see attached image)",
-    });
+  if (!hasTextBlock) {
+    return [{ type: "text", text: "(see attached image)" }, ...blocks];
   }
   return blocks;
 }
@@ -426,7 +429,16 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
   if (!tools) {
     return [];
   }
-  return tools.flatMap((tool) => {
+  const converted: Array<{
+    name: string;
+    description?: string;
+    input_schema: {
+      type: "object";
+      properties: unknown;
+      required: unknown;
+    };
+  }> = [];
+  for (const tool of tools) {
     // Main quarantine happens when plugin tools materialize; this keeps Anthropic
     // safe for direct/custom tool arrays that bypass the plugin registry.
     const parameters =
@@ -434,20 +446,19 @@ function convertAnthropicTools(tools: Context["tools"], isOAuthToken: boolean) {
         ? (tool.parameters as Record<string, unknown>)
         : undefined;
     if (!parameters) {
-      return [];
+      continue;
     }
-    return [
-      {
-        name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
-        description: tool.description,
-        input_schema: {
-          type: "object",
-          properties: parameters.properties || {},
-          required: parameters.required || [],
-        },
+    converted.push({
+      name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name,
+      description: tool.description,
+      input_schema: {
+        type: "object",
+        properties: parameters.properties || {},
+        required: parameters.required || [],
       },
-    ];
-  });
+    });
+  }
+  return converted;
 }
 
 function mapStopReason(reason: string | undefined): string {
@@ -641,7 +652,12 @@ function createAnthropicTransportClient(params: {
   const { model, context, apiKey, options } = params;
   const needsInterleavedBeta =
     (options?.interleavedThinking ?? true) && !supportsAdaptiveThinking(model.id);
-  const fetch = buildGuardedModelFetch(model);
+  // Kimi's Anthropic thinking SSE is already well-formed for this parser, but
+  // the OpenAI SDK compatibility sanitizer can stall before the text block.
+  const fetch =
+    isKimiAnthropicProvider(model.provider) && options?.thinkingEnabled === true
+      ? buildGuardedModelFetch(model, undefined, { sanitizeSse: false })
+      : buildGuardedModelFetch(model);
   if (model.provider === "github-copilot") {
     const betaFeatures = needsInterleavedBeta ? ["interleaved-thinking-2025-05-14"] : [];
     return {

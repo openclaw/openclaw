@@ -329,6 +329,89 @@ describe("server-channels auto restart", () => {
     expect(account?.lastError).toContain("channel stop timed out");
   });
 
+  it("does not poison auto-restart state when recovery stop times out", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const stopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await stopTask;
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+
+    const snapshot = manager.getRuntimeSnapshot();
+    const account = snapshot.channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(true);
+    expect(account?.lastError).toContain("channel stop timed out");
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(false);
+
+    releaseFirstTask.resolve();
+    await flushMicrotasks();
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+
+    expect(startAccount).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets manual stops cancel recovery backoff after recovery stop times out", async () => {
+    const releaseFirstTask = createDeferred();
+    const startAccount = vi.fn(
+      async ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        await new Promise<void>((resolve) => {
+          abortSignal.addEventListener("abort", () => {}, { once: true });
+          void releaseFirstTask.promise.then(resolve);
+        }),
+    );
+    installTestRegistry(
+      createTestPlugin({
+        startAccount,
+      }),
+    );
+    const manager = createManager();
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, {
+      manual: false,
+    });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+
+    releaseFirstTask.resolve();
+    await waitForMicrotaskCondition(
+      () => hoisted.sleepWithAbort.mock.calls.length > 0,
+      "expected recovery restart backoff to be scheduled",
+    );
+    const sleepCall = hoisted.sleepWithAbort.mock.calls[0] as
+      | [number, AbortSignal | undefined]
+      | undefined;
+    expect(sleepCall?.[0]).toBe(10);
+    expect(sleepCall?.[1]).toBeInstanceOf(AbortSignal);
+
+    await manager.stopChannel("discord", DEFAULT_ACCOUNT_ID);
+    await vi.advanceTimersByTimeAsync(10);
+    await flushMicrotasks();
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(account?.running).toBe(false);
+    expect(account?.restartPending).toBe(false);
+    expect(manager.isManuallyStopped("discord", DEFAULT_ACCOUNT_ID)).toBe(true);
+  });
+
   it("marks enabled/configured when account descriptors omit them", () => {
     installTestRegistry(
       createTestPlugin({
@@ -373,7 +456,9 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
     expect(startAccount).toHaveBeenCalledTimes(1);
     const [ctx] = startAccount.mock.calls[0] ?? [];
-    expect(ctx?.channelRuntime).toMatchObject({ marker: "channel-runtime" });
+    expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "channel-runtime",
+    );
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
@@ -464,7 +549,9 @@ describe("server-channels auto restart", () => {
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     expect(startAccount).toHaveBeenCalledTimes(1);
     const [ctx] = startAccount.mock.calls[0] ?? [];
-    expect(ctx?.channelRuntime).toMatchObject({ marker: "lazy-channel-runtime" });
+    expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "lazy-channel-runtime",
+    );
     expect(ctx?.channelRuntime).not.toBe(channelRuntime);
   });
 
@@ -490,7 +577,9 @@ describe("server-channels auto restart", () => {
     expect(resolveChannelRuntime).not.toHaveBeenCalled();
     expect(startAccount).toHaveBeenCalledTimes(1);
     const [ctx] = startAccount.mock.calls[0] ?? [];
-    expect(ctx?.channelRuntime).toMatchObject({ marker: "startup-channel-runtime" });
+    expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "startup-channel-runtime",
+    );
     expect(ctx?.channelRuntime).not.toBe(startupRuntime);
   });
 
@@ -515,7 +604,9 @@ describe("server-channels auto restart", () => {
     expect(resolveStartupChannelRuntime).not.toHaveBeenCalled();
     expect(resolveChannelRuntime).toHaveBeenCalledTimes(1);
     const [ctx] = startAccount.mock.calls[0] ?? [];
-    expect(ctx?.channelRuntime).toMatchObject({ marker: "full-channel-runtime" });
+    expect((ctx?.channelRuntime as { marker?: string } | undefined)?.marker).toBe(
+      "full-channel-runtime",
+    );
   });
 
   it("does not resolve channelRuntime for disabled accounts", async () => {
@@ -628,14 +719,10 @@ describe("server-channels auto restart", () => {
     await manager.startChannels();
 
     const names = measureMock.mock.calls.map(([name]) => name);
-    expect(names).toEqual(
-      expect.arrayContaining([
-        "channels.discord.start",
-        "channels.discord.list-accounts",
-        "channels.discord.runtime",
-        "channels.discord.approval-bootstrap",
-      ]),
-    );
+    expect(names).toContain("channels.discord.start");
+    expect(names).toContain("channels.discord.list-accounts");
+    expect(names).toContain("channels.discord.runtime");
+    expect(names).toContain("channels.discord.approval-bootstrap");
   });
 
   it("limits whole-channel account startup fanout to four", async () => {

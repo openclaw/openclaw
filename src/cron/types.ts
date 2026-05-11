@@ -88,6 +88,32 @@ export type CronRunTelemetry = {
   usage?: CronUsageSummary;
 };
 
+export type CronRunDiagnosticSeverity = "info" | "warn" | "error";
+
+export type CronRunDiagnosticSource =
+  | "cron-preflight"
+  | "cron-setup"
+  | "model-preflight"
+  | "agent-run"
+  | "tool"
+  | "exec"
+  | "delivery";
+
+export type CronRunDiagnostic = {
+  ts: number;
+  source: CronRunDiagnosticSource;
+  severity: CronRunDiagnosticSeverity;
+  message: string;
+  toolName?: string;
+  exitCode?: number | null;
+  truncated?: boolean;
+};
+
+export type CronRunDiagnostics = {
+  summary?: string;
+  entries: CronRunDiagnostic[];
+};
+
 export type CronRunOutcome = {
   status: CronRunStatus;
   error?: string;
@@ -96,13 +122,43 @@ export type CronRunOutcome = {
   summary?: string;
   sessionId?: string;
   sessionKey?: string;
+  diagnostics?: CronRunDiagnostics;
 };
+
+export type CronAgentExecutionPhase =
+  | "runner_entered"
+  | "workspace"
+  | "runtime_plugins"
+  | "model_resolution"
+  | "auth"
+  | "context_engine"
+  | "attempt_dispatch"
+  | "context_assembled"
+  | "turn_accepted"
+  | "process_spawned"
+  | "tool_execution_started"
+  | "assistant_output_started"
+  | "model_call_started";
 
 export type CronAgentExecutionStarted = {
   jobId: string;
   agentId?: string;
   sessionId?: string;
   sessionKey?: string;
+  phase?: CronAgentExecutionPhase;
+  provider?: string;
+  model?: string;
+  backend?: string;
+  source?: string;
+  tool?: string;
+  toolCallId?: string;
+  itemId?: string;
+  /** @deprecated Use phase-specific execution milestones for watchdog progress. */
+  firstModelCallStarted?: boolean;
+};
+
+export type CronAgentExecutionPhaseUpdate = CronAgentExecutionStarted & {
+  phase: CronAgentExecutionPhase;
 };
 
 export type CronFailureAlert = {
@@ -157,6 +213,8 @@ export type CronJobState = {
   /** @deprecated Use lastRunStatus. */
   lastStatus?: "ok" | "error" | "skipped";
   lastError?: string;
+  lastDiagnostics?: CronRunDiagnostics;
+  lastDiagnosticSummary?: string;
   /** Classified reason for the last error (when available). */
   lastErrorReason?: FailoverReason;
   lastDurationMs?: number;

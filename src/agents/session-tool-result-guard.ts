@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
   boundedJsonUtf8Bytes,
   firstEnumerableOwnKeys,
@@ -42,6 +42,12 @@ function capToolResultSize(msg: AgentMessage, maxChars: number): AgentMessage {
 
 function resolveMaxToolResultChars(opts?: { maxToolResultChars?: number }): number {
   return Math.max(1, opts?.maxToolResultChars ?? DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
+}
+
+type UserAgentMessage = Extract<AgentMessage, { role: "user" }>;
+
+function isUserAgentMessage(message: AgentMessage): message is UserAgentMessage {
+  return message.role === "user";
 }
 
 // `details` is runtime/UI metadata, not model-visible tool output. Keep the
@@ -302,6 +308,10 @@ export function installSessionToolResultGuard(
       event: PluginHookBeforeMessageWriteEvent,
     ) => PluginHookBeforeMessageWriteResult | undefined;
     maxToolResultChars?: number;
+    suppressNextUserMessagePersistence?: boolean;
+    onUserMessagePersisted?: (
+      message: Extract<AgentMessage, { role: "user" }>,
+    ) => void | Promise<void>;
   },
 ): {
   flushPendingToolResults: () => void;
@@ -328,6 +338,7 @@ export function installSessionToolResultGuard(
   const missingToolResultText = opts?.missingToolResultText;
   const beforeWrite = opts?.beforeMessageWriteHook;
   const maxToolResultChars = resolveMaxToolResultChars(opts);
+  let suppressNextUserMessagePersistence = opts?.suppressNextUserMessagePersistence === true;
 
   /**
    * Run the before_message_write hook. Returns the (possibly modified) message,
@@ -450,6 +461,10 @@ export function installSessionToolResultGuard(
     if (!finalMessage) {
       return undefined;
     }
+    if (isUserAgentMessage(finalMessage) && suppressNextUserMessagePersistence) {
+      suppressNextUserMessagePersistence = false;
+      return undefined;
+    }
     const result = originalAppend(finalMessage as never);
 
     const sessionFile = (
@@ -466,6 +481,9 @@ export function installSessionToolResultGuard(
 
     if (toolCalls.length > 0) {
       pendingState.trackToolCalls(toolCalls);
+    }
+    if (isUserAgentMessage(finalMessage)) {
+      void opts?.onUserMessagePersisted?.(finalMessage);
     }
 
     return result;

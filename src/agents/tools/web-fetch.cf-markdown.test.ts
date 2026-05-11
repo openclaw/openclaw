@@ -72,11 +72,9 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const details = result?.details as
       | { status?: number; extractor?: string; contentType?: string; text?: string }
       | undefined;
-    expect(details).toMatchObject({
-      status: 200,
-      extractor: "cf-markdown",
-      contentType: "text/markdown",
-    });
+    expect(details?.status).toBe(200);
+    expect(details?.extractor).toBe("cf-markdown");
+    expect(details?.contentType).toBe("text/markdown");
     // The body should contain the original markdown (wrapped with security markers)
     expect(details?.text).toContain("CF Markdown");
     expect(details?.text).toContain("server-rendered markdown");
@@ -157,13 +155,10 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
 
     await tool?.execute?.("call", { url: "https://example.com/tokens/private?token=secret" });
 
-    expect(logSpy).toHaveBeenCalledWith(
-      expect.stringContaining("x-markdown-tokens: 1500 (https://example.com/...)"),
-    );
     const tokenLogs = logSpy.mock.calls
       .map(([message]) => message)
       .filter((message) => message.includes("x-markdown-tokens"));
-    expect(tokenLogs).toHaveLength(1);
+    expect(tokenLogs).toEqual(["[web-fetch] x-markdown-tokens: 1500 (https://example.com/...)"]);
     expect(tokenLogs[0]).not.toContain("token=secret");
     expect(tokenLogs[0]).not.toContain("/tokens/private");
   });
@@ -182,10 +177,8 @@ describe("web_fetch Cloudflare Markdown for Agents", () => {
     const details = result?.details as
       | { extractor?: string; extractMode?: string; text?: string }
       | undefined;
-    expect(details).toMatchObject({
-      extractor: "cf-markdown",
-      extractMode: "text",
-    });
+    expect(details?.extractor).toBe("cf-markdown");
+    expect(details?.extractMode).toBe("text");
     // Text mode strips header markers (#) and link syntax
     expect(details?.text).not.toContain("# Heading");
     expect(details?.text).toContain("Heading");

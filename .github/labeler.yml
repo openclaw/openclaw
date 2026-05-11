@@ -1,8 +1,3 @@
-"channel: bluebubbles":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/bluebubbles/**"
-          - "docs/channels/bluebubbles.md"
 "plugin: azure-speech":
   - changed-files:
       - any-glob-to-any-file:
@@ -195,7 +190,6 @@
   - changed-files:
       - any-glob-to-any-file:
           - "docs/**"
-          - "docs.acp.md"
 
 "cli":
   - changed-files:
@@ -218,10 +212,10 @@
           - "Dockerfile"
           - "Dockerfile.*"
           - "docker-compose.yml"
-          - "docker-setup.sh"
-          - "setup-podman.sh"
           - ".dockerignore"
+          - "deploy/fly.private.toml"
           - "scripts/docker/setup.sh"
+          - "scripts/docker/sandbox/Dockerfile*"
           - "scripts/podman/setup.sh"
           - "scripts/**/*docker*"
           - "scripts/**/Dockerfile*"
@@ -282,6 +276,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-wiki/**"
+"extensions: oc-path":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/oc-path/**"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:

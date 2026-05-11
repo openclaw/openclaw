@@ -1,6 +1,7 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   ProviderAuthContext,
+  ProviderAuthResult,
   ProviderResolveDynamicModelContext,
   ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
@@ -11,7 +12,6 @@ import {
   type OAuthCredential,
 } from "openclaw/plugin-sdk/provider-auth";
 import { buildOauthProviderAuthResult } from "openclaw/plugin-sdk/provider-auth";
-import { loginOpenAICodexOAuth } from "openclaw/plugin-sdk/provider-auth-login";
 import {
   DEFAULT_CONTEXT_TOKENS,
   normalizeModelCompat,
@@ -19,7 +19,10 @@ import {
   type ProviderPlugin,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { fetchCodexUsage } from "openclaw/plugin-sdk/provider-usage";
-import { normalizeLowercaseStringOrEmpty, readStringValue } from "openclaw/plugin-sdk/text-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
@@ -36,6 +39,7 @@ import { OPENAI_CODEX_DEFAULT_MODEL } from "./default-models.js";
 import { resolveCodexAuthIdentity } from "./openai-codex-auth-identity.js";
 import { buildOpenAICodexProvider } from "./openai-codex-catalog.js";
 import { loginOpenAICodexDeviceCode } from "./openai-codex-device-code.js";
+import { loginOpenAICodexOAuth } from "./openai-codex-oauth.runtime.js";
 import {
   buildOpenAIResponsesProviderHooks,
   buildOpenAISyntheticCatalogEntry,
@@ -98,17 +102,12 @@ const OPENAI_CODEX_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   ...OPENAI_CODEX_GPT_54_TEMPLATE_MODEL_IDS,
 ] as const;
-const OPENAI_CODEX_GPT_53_MODEL_ID = "gpt-5.3-codex";
-const OPENAI_CODEX_TEMPLATE_MODEL_IDS = ["gpt-5.2-codex"] as const;
 const OPENAI_CODEX_MODERN_MODEL_IDS = [
   OPENAI_CODEX_GPT_55_MODEL_ID,
   OPENAI_CODEX_GPT_55_PRO_MODEL_ID,
   OPENAI_CODEX_GPT_54_MODEL_ID,
   OPENAI_CODEX_GPT_54_PRO_MODEL_ID,
   OPENAI_CODEX_GPT_54_MINI_MODEL_ID,
-  "gpt-5.2",
-  "gpt-5.2-codex",
-  OPENAI_CODEX_GPT_53_MODEL_ID,
 ] as const;
 
 function isLegacyCodexCompatBaseUrl(baseUrl?: string): boolean {
@@ -237,8 +236,6 @@ function resolveCodexForwardCompatModel(ctx: ProviderResolveDynamicModelContext)
       maxTokens: OPENAI_CODEX_GPT_54_MAX_TOKENS,
       cost: OPENAI_CODEX_GPT_54_MINI_COST,
     };
-  } else if (lower === OPENAI_CODEX_GPT_53_MODEL_ID) {
-    templateIds = OPENAI_CODEX_TEMPLATE_MODEL_IDS;
   } else {
     return undefined;
   }
@@ -308,6 +305,18 @@ function buildCodexCredentialExtra(identity: {
   return Object.keys(extra).length > 0 ? extra : undefined;
 }
 
+function buildOpenAICodexAuthConfigPatch(): NonNullable<ProviderAuthResult["configPatch"]> {
+  return {
+    agents: {
+      defaults: {
+        models: {
+          [OPENAI_CODEX_DEFAULT_MODEL]: {},
+        },
+      },
+    },
+  };
+}
+
 async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
   try {
     const { refreshOpenAICodexToken } = await import("./openai-codex-provider.runtime.js");
@@ -339,18 +348,14 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
 }
 
 async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
-  let creds;
-  try {
-    creds = await loginOpenAICodexOAuth({
-      prompter: ctx.prompter,
-      runtime: ctx.runtime,
-      isRemote: ctx.isRemote,
-      openUrl: ctx.openUrl,
-      localBrowserMessage: "Complete sign-in in browser…",
-    });
-  } catch {
-    return { profiles: [] };
-  }
+  const creds = await loginOpenAICodexOAuth({
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
+    oauth: ctx.oauth,
+    isRemote: ctx.isRemote,
+    openUrl: ctx.openUrl,
+    localBrowserMessage: "Complete sign-in in browser…",
+  });
   if (!creds) {
     return { profiles: [] };
   }
@@ -363,6 +368,7 @@ async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
   return buildOauthProviderAuthResult({
     providerId: PROVIDER_ID,
     defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+    configPatch: buildOpenAICodexAuthConfigPatch(),
     access: creds.access,
     refresh: creds.refresh,
     expires: creds.expires,
@@ -413,6 +419,7 @@ async function runOpenAICodexDeviceCode(ctx: ProviderAuthContext) {
     return buildOauthProviderAuthResult({
       providerId: PROVIDER_ID,
       defaultModel: OPENAI_CODEX_DEFAULT_MODEL,
+      configPatch: buildOpenAICodexAuthConfigPatch(),
       access: creds.access,
       refresh: creds.refresh,
       expires: creds.expires,
@@ -476,13 +483,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           assistantPriority: OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY,
           ...OPENAI_CODEX_WIZARD_GROUP,
         },
-        run: async (ctx) => {
-          try {
-            return await runOpenAICodexDeviceCode(ctx);
-          } catch {
-            return { profiles: [] };
-          }
-        },
+        run: async (ctx) => await runOpenAICodexDeviceCode(ctx),
       },
     ],
     catalog: {

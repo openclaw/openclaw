@@ -1,11 +1,13 @@
 import { enqueueCommandInLane } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
+import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
 import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
+import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "../types.js";
 import {
@@ -29,6 +31,7 @@ import type {
   CronSortDir,
 } from "./list-page-types.js";
 import { locked } from "./locked.js";
+import { normalizeOptionalAgentId } from "./normalize.js";
 import type { CronServiceState } from "./state.js";
 import { ensureLoaded, persist, warnIfDisabled } from "./store.js";
 import {
@@ -160,8 +163,8 @@ export async function start(state: CronServiceState) {
         markedAnyInterruptedRun = true;
       }
     }
-    if (markedAnyInterruptedRun) {
-      await persist(state);
+    if (markedAnyInterruptedRun || jobs.length > 0) {
+      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
     }
   });
 
@@ -271,6 +274,14 @@ function sortJobs(jobs: CronJob[], sortBy: CronJobsSortBy, sortDir: CronSortDir)
   });
 }
 
+function resolveEffectiveJobAgentId(job: CronJob, defaultAgentId: string | undefined) {
+  return (
+    normalizeOptionalAgentId(job.agentId) ??
+    normalizeOptionalAgentId(defaultAgentId) ??
+    DEFAULT_AGENT_ID
+  );
+}
+
 export async function listPage(state: CronServiceState, opts?: CronListPageOptions) {
   return await locked(state, async () => {
     await ensureLoadedForRead(state);
@@ -278,12 +289,19 @@ export async function listPage(state: CronServiceState, opts?: CronListPageOptio
     const enabledFilter = resolveEnabledFilter(opts);
     const sortBy = opts?.sortBy ?? "nextRunAtMs";
     const sortDir = opts?.sortDir ?? "asc";
+    const requestedAgentId = normalizeOptionalAgentId(opts?.agentId);
     const source = state.store?.jobs ?? [];
     const filtered = source.filter((job) => {
       if (enabledFilter === "enabled" && !isJobEnabled(job)) {
         return false;
       }
       if (enabledFilter === "disabled" && isJobEnabled(job)) {
+        return false;
+      }
+      if (
+        requestedAgentId &&
+        resolveEffectiveJobAgentId(job, state.deps.defaultAgentId) !== requestedAgentId
+      ) {
         return false;
       }
       if (!query) {
@@ -470,12 +488,17 @@ async function skipInvalidPersistedManualRun(params: {
 }) {
   const endedAt = params.state.deps.nowMs();
   const errorText = normalizeCronRunErrorText(params.error);
+  const diagnostics = createCronRunDiagnosticsFromError("cron-preflight", errorText, {
+    severity: "warn",
+    nowMs: params.state.deps.nowMs,
+  });
   const shouldDelete = applyJobResult(
     params.state,
     params.job,
     {
       status: "skipped",
       error: errorText,
+      diagnostics,
       startedAt: endedAt,
       endedAt,
     },
@@ -487,6 +510,7 @@ async function skipInvalidPersistedManualRun(params: {
     action: "finished",
     status: "skipped",
     error: errorText,
+    diagnostics,
     runAtMs: endedAt,
     durationMs: params.job.state.lastDurationMs,
     nextRunAtMs: params.job.state.nextRunAtMs,
@@ -712,6 +736,7 @@ async function finishPreparedManualRun(
       {
         status: coreResult.status,
         error: coreResult.error,
+        diagnostics: coreResult.diagnostics,
         delivered: coreResult.delivered,
         startedAt,
         endedAt,
@@ -726,6 +751,7 @@ async function finishPreparedManualRun(
       status: coreResult.status,
       error: coreResult.error,
       summary: coreResult.summary,
+      diagnostics: coreResult.diagnostics,
       delivered: coreResult.delivered,
       deliveryStatus: job.state.lastDeliveryStatus,
       deliveryError: job.state.lastDeliveryError,

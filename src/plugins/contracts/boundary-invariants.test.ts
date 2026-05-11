@@ -77,6 +77,11 @@ const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
     "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
     "const currentGuardrail = resolveCurrentPluginConfig(config)?.guardrail;",
   ],
+  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
+    "resolvePluginConfigObject(",
+    "const startupPluginConfig = (api.pluginConfig ?? {})",
+    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
+  ],
   "extensions/codex/provider.ts": [
     "resolvePluginConfigObject(",
     "const runtimePluginConfig = resolvePluginConfigObject(ctx.config, CODEX_PROVIDER_ID);",
@@ -228,7 +233,7 @@ describe("plugin contract boundary invariants", () => {
       }
       return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps the bundled contract inventory out of non-test runtime code", () => {
@@ -236,7 +241,7 @@ describe("plugin contract boundary invariants", () => {
     const offenders = files.filter((file) => {
       return readRepoSource(file).includes("contracts/inventory/bundled-capability-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps core tests off bundled extension deep imports", () => {
@@ -246,7 +251,7 @@ describe("plugin contract boundary invariants", () => {
         (specifier) => !isAllowedBundledExtensionImport(specifier),
       );
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps plugin contract tests off bundled path helpers unless the test is explicitly about paths", () => {
@@ -263,7 +268,7 @@ describe("plugin contract boundary invariants", () => {
         )
       );
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps channel production code off bundled-plugin-metadata helpers", () => {
@@ -271,7 +276,7 @@ describe("plugin contract boundary invariants", () => {
     const offenders = files.filter((file) => {
       return readRepoSource(file).includes("plugins/bundled-plugin-metadata");
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps contract loaders off hand-built bundled extension paths", () => {
@@ -283,13 +288,13 @@ describe("plugin contract boundary invariants", () => {
       const source = readRepoSource(file);
       return /extensions\/\$\{|\.\.\/\.\.\/\.\.\/\.\.\/extensions\//u.test(source);
     });
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin production code off legacy before_agent_start hooks", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => readRepoSource(file).includes("before_agent_start"));
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled plugin typed hook registrations on an explicit allowlist", () => {
@@ -312,7 +317,7 @@ describe("plugin contract boundary invariants", () => {
   it("keeps bundled plugin production code off raw registerHook calls", () => {
     const files = listTsFiles("extensions", { excludeTests: true });
     const offenders = files.filter((file) => /\bregisterHook\(/u.test(readRepoSource(file)));
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps long-lived bundled hook handlers on live runtime config lookups", () => {
@@ -324,7 +329,7 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(missingGuards).toEqual([]);
+    expect(missingGuards).toStrictEqual([]);
   });
 
   it("keeps live provider config surfaces on runtime config lookups", () => {
@@ -336,7 +341,7 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(missingGuards).toEqual([]);
+    expect(missingGuards).toStrictEqual([]);
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {
@@ -348,6 +353,6 @@ describe("plugin contract boundary invariants", () => {
           .map((snippet) => `${file}: ${snippet}`);
       },
     );
-    expect(offenders).toEqual([]);
+    expect(offenders).toStrictEqual([]);
   });
 });

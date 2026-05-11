@@ -1,4 +1,6 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { describeInterpreterInlineEval } from "../infra/command-analysis/inline-eval.js";
+import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
   addDurableCommandApproval,
   type ExecAsk,
@@ -12,10 +14,6 @@ import {
   resolveApprovalAuditCandidatePath,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
-import {
-  describeInterpreterInlineEval,
-  detectInterpreterInlineEvalArgv,
-} from "../infra/exec-inline-eval.js";
 import type { SafeBinProfile } from "../infra/exec-safe-bin-policy.js";
 import { markBackgrounded, tail } from "./bash-process-registry.js";
 import {
@@ -43,6 +41,7 @@ import {
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import type {
+  ExecElevatedDefaults,
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
@@ -64,6 +63,7 @@ export type ProcessGatewayAllowlistParams = {
   trigger?: string;
   agentId?: string;
   sessionKey?: string;
+  bashElevated?: ExecElevatedDefaults;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;
@@ -292,13 +292,7 @@ export async function processGatewayAllowlist(
     commandText: params.command,
   });
   const inlineEvalHit =
-    params.strictInlineEval === true
-      ? (allowlistEval.segments
-          .map((segment) =>
-            detectInterpreterInlineEvalArgv(segment.resolution?.effectiveArgv ?? segment.argv),
-          )
-          .find((entry) => entry !== null) ?? null)
-      : null;
+    params.strictInlineEval === true ? detectPolicyInlineEval(allowlistEval.segments) : null;
   if (inlineEvalHit) {
     params.warnings.push(
       `Warning: strict inline-eval mode requires explicit approval for ${describeInterpreterInlineEval(
@@ -453,6 +447,7 @@ export async function processGatewayAllowlist(
     const followupTarget = buildExecApprovalFollowupTarget({
       approvalId,
       sessionKey: params.notifySessionKey ?? params.sessionKey,
+      bashElevated: params.bashElevated,
       turnSourceChannel: params.turnSourceChannel,
       turnSourceTo: params.turnSourceTo,
       turnSourceAccountId: params.turnSourceAccountId,

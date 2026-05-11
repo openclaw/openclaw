@@ -22,11 +22,19 @@ export type NormalizedPluginsConfig = {
       hooks?: {
         allowPromptInjection?: boolean;
         allowConversationAccess?: boolean;
+        timeoutMs?: number;
+        timeouts?: Record<string, number>;
       };
       subagent?: {
         allowModelOverride?: boolean;
         allowedModels?: string[];
         hasAllowedModelsConfig?: boolean;
+      };
+      llm?: {
+        allowModelOverride?: boolean;
+        allowedModels?: string[];
+        hasAllowedModelsConfig?: boolean;
+        allowAgentIdOverride?: boolean;
       };
       config?: unknown;
     }
@@ -57,6 +65,33 @@ function normalizeSlotValue(value: unknown): string | null | undefined {
   return trimmed;
 }
 
+function normalizeHookTimeoutMs(value: unknown): number | undefined {
+  if (
+    typeof value !== "number" ||
+    !Number.isInteger(value) ||
+    !Number.isFinite(value) ||
+    value <= 0 ||
+    value > 600_000
+  ) {
+    return undefined;
+  }
+  return value;
+}
+
+function normalizeHookTimeouts(value: unknown): Record<string, number> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const normalized: Record<string, number> = {};
+  for (const [hookName, timeoutMs] of Object.entries(value)) {
+    const normalizedTimeoutMs = normalizeHookTimeoutMs(timeoutMs);
+    if (normalizedTimeoutMs !== undefined) {
+      normalized[hookName] = normalizedTimeoutMs;
+    }
+  }
+  return Object.keys(normalized).length > 0 ? normalized : undefined;
+}
+
 function normalizePluginEntries(
   entries: unknown,
   normalizePluginId: NormalizePluginId,
@@ -83,12 +118,16 @@ function normalizePluginEntries(
               .allowPromptInjection,
             allowConversationAccess: (hooksRaw as { allowConversationAccess?: unknown })
               .allowConversationAccess,
+            timeoutMs: normalizeHookTimeoutMs((hooksRaw as { timeoutMs?: unknown }).timeoutMs),
+            timeouts: normalizeHookTimeouts((hooksRaw as { timeouts?: unknown }).timeouts),
           }
         : undefined;
     const normalizedHooks =
       hooks &&
       (typeof hooks.allowPromptInjection === "boolean" ||
-        typeof hooks.allowConversationAccess === "boolean")
+        typeof hooks.allowConversationAccess === "boolean" ||
+        hooks.timeoutMs !== undefined ||
+        hooks.timeouts !== undefined)
         ? {
             ...(typeof hooks.allowPromptInjection === "boolean"
               ? { allowPromptInjection: hooks.allowPromptInjection }
@@ -96,6 +135,8 @@ function normalizePluginEntries(
             ...(typeof hooks.allowConversationAccess === "boolean"
               ? { allowConversationAccess: hooks.allowConversationAccess }
               : {}),
+            ...(hooks.timeoutMs !== undefined ? { timeoutMs: hooks.timeoutMs } : {}),
+            ...(hooks.timeouts !== undefined ? { timeouts: hooks.timeouts } : {}),
           }
         : undefined;
     const subagentRaw = entry.subagent;
@@ -129,12 +170,49 @@ function normalizePluginEntries(
               : {}),
           }
         : undefined;
+    const llmRaw = entry.llm;
+    const llm =
+      llmRaw && typeof llmRaw === "object" && !Array.isArray(llmRaw)
+        ? {
+            allowModelOverride: (llmRaw as { allowModelOverride?: unknown }).allowModelOverride,
+            hasAllowedModelsConfig: Array.isArray(
+              (llmRaw as { allowedModels?: unknown }).allowedModels,
+            ),
+            allowedModels: Array.isArray((llmRaw as { allowedModels?: unknown }).allowedModels)
+              ? ((llmRaw as { allowedModels?: unknown }).allowedModels as unknown[])
+                  .map((model) => normalizeOptionalString(model))
+                  .filter((model): model is string => Boolean(model))
+              : undefined,
+            allowAgentIdOverride: (llmRaw as { allowAgentIdOverride?: unknown })
+              .allowAgentIdOverride,
+          }
+        : undefined;
+    const normalizedLlm =
+      llm &&
+      (typeof llm.allowModelOverride === "boolean" ||
+        llm.hasAllowedModelsConfig ||
+        (Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0) ||
+        typeof llm.allowAgentIdOverride === "boolean")
+        ? {
+            ...(typeof llm.allowModelOverride === "boolean"
+              ? { allowModelOverride: llm.allowModelOverride }
+              : {}),
+            ...(llm.hasAllowedModelsConfig ? { hasAllowedModelsConfig: true } : {}),
+            ...(Array.isArray(llm.allowedModels) && llm.allowedModels.length > 0
+              ? { allowedModels: llm.allowedModels }
+              : {}),
+            ...(typeof llm.allowAgentIdOverride === "boolean"
+              ? { allowAgentIdOverride: llm.allowAgentIdOverride }
+              : {}),
+          }
+        : undefined;
     normalized[normalizedKey] = {
       ...normalized[normalizedKey],
       enabled:
         typeof entry.enabled === "boolean" ? entry.enabled : normalized[normalizedKey]?.enabled,
       hooks: normalizedHooks ?? normalized[normalizedKey]?.hooks,
       subagent: normalizedSubagent ?? normalized[normalizedKey]?.subagent,
+      llm: normalizedLlm ?? normalized[normalizedKey]?.llm,
       config: "config" in entry ? entry.config : normalized[normalizedKey]?.config,
     };
   }

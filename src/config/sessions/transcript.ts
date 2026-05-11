@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { SessionWriteLockAcquireTimeoutConfig } from "../../agents/session-write-lock.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
@@ -18,11 +18,13 @@ import { appendSessionTranscriptMessage } from "./transcript-append.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import type { SessionEntry } from "./types.js";
 
-let piCodingAgentModulePromise: Promise<typeof import("@mariozechner/pi-coding-agent")> | null =
+let piCodingAgentModulePromise: Promise<typeof import("@earendil-works/pi-coding-agent")> | null =
   null;
 
-async function loadPiCodingAgentModule(): Promise<typeof import("@mariozechner/pi-coding-agent")> {
-  piCodingAgentModulePromise ??= import("@mariozechner/pi-coding-agent");
+async function loadPiCodingAgentModule(): Promise<
+  typeof import("@earendil-works/pi-coding-agent")
+> {
+  piCodingAgentModulePromise ??= import("@earendil-works/pi-coding-agent");
   return await piCodingAgentModulePromise;
 }
 
@@ -58,11 +60,36 @@ export type SessionTranscriptAssistantMessage = Parameters<SessionManager["appen
   role: "assistant";
 };
 
-export type LatestAssistantTranscriptText = {
+type AssistantTranscriptText = {
   id?: string;
   text: string;
   timestamp?: number;
 };
+
+export type LatestAssistantTranscriptText = AssistantTranscriptText;
+export type TailAssistantTranscriptText = AssistantTranscriptText;
+
+function parseAssistantTranscriptText(line: string): AssistantTranscriptText | undefined {
+  const parsed = JSON.parse(line) as {
+    id?: unknown;
+    message?: unknown;
+  };
+  const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
+  if (!message || message.role !== "assistant") {
+    return undefined;
+  }
+  const text = extractAssistantVisibleText(message)?.trim();
+  if (!text) {
+    return undefined;
+  }
+  return {
+    ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
+    text,
+    ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
+      ? { timestamp: message.timestamp }
+      : {}),
+  };
+}
 
 export async function resolveSessionTranscriptFile(params: {
   sessionId: string;
@@ -123,34 +150,44 @@ export async function readLatestAssistantTextFromSessionTranscript(
     return undefined;
   }
 
-  const lines = raw.split(/\r?\n/);
-  for (let index = lines.length - 1; index >= 0; index -= 1) {
-    const line = lines[index];
+  for (const line of raw.split(/\r?\n/).toReversed()) {
     if (!line.trim()) {
       continue;
     }
     try {
-      const parsed = JSON.parse(line) as {
-        id?: unknown;
-        message?: unknown;
-      };
-      const message = parsed.message as { role?: unknown; timestamp?: unknown } | undefined;
-      if (!message || message.role !== "assistant") {
-        continue;
+      const assistantText = parseAssistantTranscriptText(line);
+      if (assistantText) {
+        return assistantText;
       }
-      const text = extractAssistantVisibleText(message)?.trim();
-      if (!text) {
-        continue;
-      }
-      return {
-        ...(typeof parsed.id === "string" && parsed.id ? { id: parsed.id } : {}),
-        text,
-        ...(typeof message.timestamp === "number" && Number.isFinite(message.timestamp)
-          ? { timestamp: message.timestamp }
-          : {}),
-      };
     } catch {
       continue;
+    }
+  }
+  return undefined;
+}
+
+export async function readTailAssistantTextFromSessionTranscript(
+  sessionFile: string | undefined,
+): Promise<TailAssistantTranscriptText | undefined> {
+  if (!sessionFile?.trim()) {
+    return undefined;
+  }
+
+  let raw: string;
+  try {
+    raw = await fs.promises.readFile(sessionFile, "utf-8");
+  } catch {
+    return undefined;
+  }
+
+  for (const line of raw.split(/\r?\n/).toReversed()) {
+    if (!line.trim()) {
+      continue;
+    }
+    try {
+      return parseAssistantTranscriptText(line);
+    } catch {
+      return undefined;
     }
   }
   return undefined;

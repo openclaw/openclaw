@@ -12,12 +12,39 @@ type TestPluginWebSearchConfig = {
   };
 };
 
-const { resolvePluginWebSearchProvidersMock, resolveRuntimeWebSearchProvidersMock } = vi.hoisted(
-  () => ({
-    resolvePluginWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-    resolveRuntimeWebSearchProvidersMock: vi.fn<() => PluginWebSearchProviderEntry[]>(() => []),
-  }),
-);
+type WebSearchProviderResolverParams = {
+  bundledAllowlistCompat?: boolean;
+  config?: OpenClawConfig;
+  onlyPluginIds?: readonly string[];
+  origin?: string;
+};
+
+type ManifestContractOwnerParams = {
+  config?: OpenClawConfig;
+  contract?: string;
+  origin?: string;
+  value?: string;
+};
+
+const {
+  resolveManifestContractOwnerPluginIdMock,
+  resolvePluginWebSearchProvidersMock,
+  resolveRuntimeWebSearchProvidersMock,
+} = vi.hoisted(() => ({
+  resolveManifestContractOwnerPluginIdMock: vi.fn(
+    (_params: ManifestContractOwnerParams): string | undefined => undefined,
+  ),
+  resolvePluginWebSearchProvidersMock: vi.fn(
+    (_params?: WebSearchProviderResolverParams): PluginWebSearchProviderEntry[] => [],
+  ),
+  resolveRuntimeWebSearchProvidersMock: vi.fn(
+    (_params?: WebSearchProviderResolverParams): PluginWebSearchProviderEntry[] => [],
+  ),
+}));
+
+vi.mock("../plugins/plugin-registry-contributions.js", () => ({
+  resolveManifestContractOwnerPluginId: resolveManifestContractOwnerPluginIdMock,
+}));
 
 vi.mock("../plugins/web-search-providers.runtime.js", () => ({
   resolvePluginWebSearchProviders: resolvePluginWebSearchProvidersMock,
@@ -83,6 +110,17 @@ function createGoogleSearchProvider(
   });
 }
 
+function requireRecord(value: unknown): Record<string, unknown> {
+  expect(value).toBeTruthy();
+  expect(typeof value).toBe("object");
+  expect(Array.isArray(value)).toBe(false);
+  return value as Record<string, unknown>;
+}
+
+function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
+  return requireRecord(mock.mock.calls[index]?.[0]);
+}
+
 function createDuckDuckGoSearchProvider(
   overrides: Partial<WebSearchTestProviderParams> = {},
 ): PluginWebSearchProviderEntry {
@@ -108,8 +146,10 @@ describe("web search runtime", () => {
   });
 
   beforeEach(() => {
+    resolveManifestContractOwnerPluginIdMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
+    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
     resolvePluginWebSearchProvidersMock.mockReturnValue([]);
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([]);
   });
@@ -533,6 +573,88 @@ describe("web search runtime", () => {
     ).rejects.toThrow("google aborted");
   });
 
+  it("scopes runtime provider loading to the configured bundled web_search provider", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+      value === "duckduckgo" ? "duckduckgo" : undefined,
+    );
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([createDuckDuckGoSearchProvider()]);
+
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "duckduckgo",
+            },
+          },
+        },
+      },
+      args: { query: "configured-duck" },
+    });
+    expect(result.provider).toBe("duckduckgo");
+
+    const ownerCall = mockCallParam(resolveManifestContractOwnerPluginIdMock);
+    expect(ownerCall.contract).toBe("webSearchProviders");
+    expect(ownerCall.origin).toBe("bundled");
+    expect(ownerCall.value).toBe("duckduckgo");
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual([
+      "duckduckgo",
+    ]);
+  });
+
+  it("scopes runtime provider loading through manifest ownership when provider id differs from plugin id", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+      value === "gemini" ? "google" : undefined,
+    );
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createGoogleSearchProvider({
+        id: "gemini",
+        pluginId: "google",
+      }),
+    ]);
+
+    const result = await runWebSearch({
+      config: {},
+      runtimeWebSearch: {
+        providerConfigured: "gemini",
+        selectedProvider: "gemini",
+        providerSource: "configured",
+        diagnostics: [],
+      },
+      args: { query: "configured-gemini" },
+    });
+    expect(result.provider).toBe("gemini");
+
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual(["google"]);
+  });
+
+  it("keeps runtime provider loading unscoped when configured provider ownership is unknown", async () => {
+    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
+    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+      createCustomSearchProvider({
+        id: "external-search",
+        pluginId: "external-search",
+        requiresCredential: false,
+      }),
+    ]);
+
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "external-search",
+            },
+          },
+        },
+      },
+      args: { query: "external-provider" },
+    });
+    expect(result.provider).toBe("external-search");
+
+    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toBeUndefined();
+  });
+
   it("does not fall back when the caller explicitly selects a provider", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([
       createGoogleSearchProvider({
@@ -598,26 +720,22 @@ describe("web search runtime", () => {
       createDuckDuckGoSearchProvider(),
     ]);
 
-    await expect(
-      runWebSearch({
-        config: {
-          tools: {
-            web: {
-              search: {
-                provider: "missing-id",
-              },
+    const result = await runWebSearch({
+      config: {
+        tools: {
+          web: {
+            search: {
+              provider: "missing-id",
             },
           },
         },
-        args: { query: "config-typo" },
-      }),
-    ).resolves.toMatchObject({
-      provider: "duckduckgo",
-      result: expect.objectContaining({
-        provider: "duckduckgo",
-        query: "config-typo",
-      }),
+      },
+      args: { query: "config-typo" },
     });
+    expect(result.provider).toBe("duckduckgo");
+    const searchResult = requireRecord(result.result);
+    expect(searchResult.provider).toBe("duckduckgo");
+    expect(searchResult.query).toBe("config-typo");
   });
 
   it("honors preferRuntimeProviders during execution", async () => {

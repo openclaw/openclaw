@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { __testing, createOpenClawTools } from "./openclaw-tools.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -35,10 +36,6 @@ vi.mock("./openclaw-tools.nodes-workspace-guard.js", () => ({
 
 vi.mock("./tools/agents-list-tool.js", () => ({
   createAgentsListTool: () => mocks.stubTool("agents_list"),
-}));
-
-vi.mock("./tools/canvas-tool.js", () => ({
-  createCanvasTool: () => mocks.stubTool("canvas"),
 }));
 
 vi.mock("./tools/cron-tool.js", () => ({
@@ -121,6 +118,19 @@ vi.mock("../tts/tts.js", () => ({
   textToSpeech: mocks.textToSpeech,
 }));
 
+function getTextToSpeechParams() {
+  const calls = (mocks.textToSpeech as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  return calls[0]?.[0] as
+    | {
+        text?: string;
+        cfg?: OpenClawConfig;
+        agentId?: string;
+        channel?: string;
+        accountId?: string;
+      }
+    | undefined;
+}
+
 describe("createOpenClawTools TTS config wiring", () => {
   beforeEach(() => {
     mocks.createCronToolOptions.mockClear();
@@ -142,7 +152,6 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
     __testing.setDepsForTest({ config: injectedConfig });
 
     try {
@@ -157,19 +166,15 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from config" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from config",
-          cfg: injectedConfig,
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from config");
+      expect(ttsParams?.cfg).toBe(injectedConfig);
     } finally {
       __testing.setDepsForTest();
     }
   });
 
   it("keeps direct TTS tool guidance explicit even when the tool is available", async () => {
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
     __testing.setDepsForTest({ config: {} });
 
     try {
@@ -196,7 +201,6 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
     __testing.setDepsForTest({ config: injectedConfig });
 
     try {
@@ -212,12 +216,9 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from reader" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from reader",
-          agentId: "reader",
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from reader");
+      expect(ttsParams?.agentId).toBe("reader");
     } finally {
       __testing.setDepsForTest();
     }
@@ -238,7 +239,6 @@ describe("createOpenClawTools TTS config wiring", () => {
       },
     } satisfies OpenClawConfig;
 
-    const { __testing, createOpenClawTools } = await import("./openclaw-tools.js");
     __testing.setDepsForTest({ config: injectedConfig });
 
     try {
@@ -255,14 +255,11 @@ describe("createOpenClawTools TTS config wiring", () => {
 
       await tool.execute("call-1", { text: "hello from account" });
 
-      expect(mocks.textToSpeech).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: "hello from account",
-          cfg: injectedConfig,
-          channel: "feishu",
-          accountId: "feishu-main",
-        }),
-      );
+      const ttsParams = getTextToSpeechParams();
+      expect(ttsParams?.text).toBe("hello from account");
+      expect(ttsParams?.cfg).toBe(injectedConfig);
+      expect(ttsParams?.channel).toBe("feishu");
+      expect(ttsParams?.accountId).toBe("feishu-main");
     } finally {
       __testing.setDepsForTest();
     }
@@ -275,8 +272,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("passes preserved channel delivery context into the cron tool", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       agentChannel: "matrix",
@@ -301,8 +296,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("uses agent route context when auto-threading context is unavailable", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:matrix:channel:!abcdef1234567890:example.org",
       agentChannel: "matrix",
@@ -325,8 +318,6 @@ describe("createOpenClawTools cron context wiring", () => {
   });
 
   it("passes self-remove scope into the cron tool", async () => {
-    const { createOpenClawTools } = await import("./openclaw-tools.js");
-
     createOpenClawTools({
       agentSessionKey: "agent:main:cron:job-current",
       cronSelfRemoveOnlyJobId: "job-current",

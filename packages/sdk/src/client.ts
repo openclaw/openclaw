@@ -8,6 +8,8 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsGetResult,
   ArtifactsListResult,
+  EnvironmentSummary,
+  EnvironmentsListResult,
   GatewayEvent,
   GatewayRequestOptions,
   OpenClawEvent,
@@ -18,6 +20,10 @@ import type {
   SessionCreateParams,
   SessionSendParams,
   SessionTarget,
+  TasksCancelResult,
+  TasksGetResult,
+  TasksListParams,
+  TasksListResult,
   ToolInvokeParams,
   ToolInvokeResult,
 } from "./types.js";
@@ -723,19 +729,19 @@ export class TasksNamespace extends RpcNamespace {
     super(client, "tasks");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.tasks.list");
+  async list(params?: TasksListParams): Promise<TasksListResult> {
+    return await this.call("list", params);
   }
 
-  async get(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.get");
+  async get(taskId: string): Promise<TasksGetResult> {
+    return await this.call("get", { taskId });
   }
 
-  async cancel(taskId: string): Promise<unknown> {
-    void taskId;
-    return unsupportedGatewayApi("oc.tasks.cancel");
+  async cancel(taskId: string, options?: { reason?: string }): Promise<TasksCancelResult> {
+    return await this.call("cancel", {
+      taskId,
+      ...(options?.reason ? { reason: options.reason } : {}),
+    });
   }
 }
 
@@ -819,9 +825,8 @@ export class EnvironmentsNamespace extends RpcNamespace {
     super(client, "environments");
   }
 
-  async list(params?: unknown): Promise<unknown> {
-    void params;
-    return unsupportedGatewayApi("oc.environments.list");
+  async list(params?: unknown): Promise<EnvironmentsListResult> {
+    return await this.call("list", params ?? {});
   }
 
   async create(params?: unknown): Promise<unknown> {
@@ -829,9 +834,8 @@ export class EnvironmentsNamespace extends RpcNamespace {
     return unsupportedGatewayApi("oc.environments.create");
   }
 
-  async status(environmentId: string): Promise<unknown> {
-    void environmentId;
-    return unsupportedGatewayApi("oc.environments.status");
+  async status(environmentId: string): Promise<EnvironmentSummary> {
+    return await this.call("status", { environmentId });
   }
 
   async delete(environmentId: string): Promise<unknown> {

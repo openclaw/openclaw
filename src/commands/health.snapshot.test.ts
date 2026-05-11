@@ -95,7 +95,12 @@ function getTelegramChannelConfig(cfg: Record<string, unknown>) {
 function listTelegramAccountIdsForTest(cfg: Record<string, unknown>): string[] {
   const telegram = getTelegramChannelConfig(cfg);
   const accounts = telegram.accounts as Record<string, unknown> | undefined;
-  const ids = Object.keys(accounts ?? {}).filter(Boolean);
+  const ids: string[] = [];
+  for (const accountId of Object.keys(accounts ?? {})) {
+    if (accountId) {
+      ids.push(accountId);
+    }
+  }
   return ids.length > 0 ? ids : ["default"];
 }
 
@@ -299,6 +304,8 @@ function createTelegramHealthPlugin(): HealthTestPlugin {
     config: {
       listAccountIds: (cfg) => listTelegramAccountIdsForTest(cfg as Record<string, unknown>),
       resolveAccount: (cfg, accountId) =>
+        resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
+      inspectAccount: (cfg, accountId) =>
         resolveTelegramAccountForTest({ cfg: cfg as Record<string, unknown>, accountId }),
       isConfigured: (account) => Boolean((account as TelegramHealthAccount).token.trim()),
     },
@@ -507,8 +514,8 @@ describe("getHealthSnapshot", () => {
     expect(telegram.probe?.ok).toBe(true);
     expect(telegram.probe?.bot?.username).toBe("bot");
     expect(telegram.probe?.webhook?.url).toMatch(/^https:/);
-    expect(calls.some((c) => c.includes("/getMe"))).toBe(true);
-    expect(calls.some((c) => c.includes("/getWebhookInfo"))).toBe(true);
+    expect(calls.some((call) => call.includes("/getMe"))).toBe(true);
+    expect(calls.some((call) => call.includes("/getWebhookInfo"))).toBe(true);
 
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-health-"));
     const tokenFile = path.join(tmpDir, "telegram-token");
@@ -520,7 +527,7 @@ describe("getHealthSnapshot", () => {
       );
       expect(tokenFileProbe.telegram.configured).toBe(true);
       expect(tokenFileProbe.telegram.probe?.ok).toBe(true);
-      expect(tokenFileProbe.calls.some((c) => c.includes("bott-file/getMe"))).toBe(true);
+      expect(tokenFileProbe.calls.some((call) => call.includes("bott-file/getMe"))).toBe(true);
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -616,13 +623,11 @@ describe("getHealthSnapshot", () => {
     expect(discord.connected).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("available");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      running: true,
-      connected: true,
-      tokenSource: "config",
-      tokenStatus: "available",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.running).toBe(true);
+    expect(discord.accounts?.default?.connected).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("available");
   });
 
   it("preserves plugin-derived configured state for unavailable SecretRef credentials", async () => {
@@ -671,11 +676,9 @@ describe("getHealthSnapshot", () => {
     expect(discord.configured).toBe(true);
     expect(discord.tokenSource).toBe("config");
     expect(discord.tokenStatus).toBe("configured_unavailable");
-    expect(discord.accounts?.default).toMatchObject({
-      configured: true,
-      tokenSource: "config",
-      tokenStatus: "configured_unavailable",
-    });
+    expect(discord.accounts?.default?.configured).toBe(true);
+    expect(discord.accounts?.default?.tokenSource).toBe("config");
+    expect(discord.accounts?.default?.tokenStatus).toBe("configured_unavailable");
   });
 
   it("omits secret runtime fields and raw probe payloads from non-sensitive health snapshots", async () => {
@@ -815,7 +818,7 @@ describe("getHealthSnapshot", () => {
 
     expect(main?.heartbeat.everyMs).toBeNull();
     expect(main?.heartbeat.every).toBe("disabled");
-    expect(ops?.heartbeat.everyMs).toBeTruthy();
+    expect(ops?.heartbeat.everyMs).toBe(60 * 60 * 1000);
     expect(ops?.heartbeat.every).toBe("1h");
   });
 });

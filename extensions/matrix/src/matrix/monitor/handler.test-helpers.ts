@@ -1,6 +1,11 @@
 import { vi } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
-import type { MatrixRoomConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
+import type {
+  MatrixConfig,
+  MatrixRoomConfig,
+  MatrixStreamingMode,
+  ReplyToMode,
+} from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { createMatrixRoomMessageHandler, type MatrixMonitorHandlerParams } from "./handler.js";
 import { EventType, type MatrixRawEvent, type RoomMessageEventContent } from "./types.js";
@@ -16,10 +21,13 @@ const DEFAULT_ROUTE = {
 
 type MatrixHandlerTestHarnessOptions = {
   accountId?: string;
+  accountConfig?: MatrixConfig;
   cfg?: unknown;
+  liveCfg?: unknown;
   client?: Partial<MatrixClient>;
   runtime?: RuntimeEnv;
   logger?: RuntimeLogger;
+  currentConfig?: () => unknown;
   logVerboseMessage?: (message: string) => void;
   allowFrom?: string[];
   allowFromResolvedEntries?: MatrixMonitorHandlerParams["allowFromResolvedEntries"];
@@ -186,7 +194,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     core: {
       config: {
-        current: () => cfgForHandler,
+        current: options.currentConfig ?? (() => options.liveCfg ?? cfgForHandler),
       },
       channel: {
         pairing: {
@@ -264,6 +272,7 @@ export function createMatrixHandlerTestHarness(
     } as never,
     cfg: cfgForHandler as never,
     accountId: options.accountId ?? "ops",
+    accountConfig: options.accountConfig,
     runtime:
       options.runtime ??
       ({
