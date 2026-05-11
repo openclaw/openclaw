@@ -38,6 +38,15 @@ async function waitFor(condition: () => boolean, timeoutMs = 1500) {
   throw new Error("timeout waiting for condition");
 }
 
+async function createTinyPngFile() {
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-media-"));
+  const filePath = path.join(tmpDir, "dot.png");
+  const pngB64 =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+  await fs.writeFile(filePath, Buffer.from(pngB64, "base64"));
+  return { tmpDir, filePath };
+}
+
 describe("gateway server chat", () => {
   test("sanitizes inbound chat.send message text and rejects null bytes", async () => {
     const nullByteRes = await rpcReq(ws, "chat.send", {
@@ -100,9 +109,8 @@ describe("gateway server chat", () => {
 
       const spy = vi.mocked(getReplyFromConfig);
       spy.mockClear();
-      const spyCalls = spy.mock.calls as unknown[][];
       testState.agentConfig = { timeoutSeconds: 123 };
-      const callsBeforeTimeout = spyCalls.length;
+      const callsBeforeTimeout = spy.mock.calls.length;
       const timeoutRes = await rpcReq(ws, "chat.send", {
         sessionKey: "main",
         message: "hello",
@@ -110,13 +118,13 @@ describe("gateway server chat", () => {
       });
       expect(timeoutRes.ok).toBe(true);
 
-      await waitFor(() => spyCalls.length > callsBeforeTimeout);
-      const timeoutCall = spyCalls.at(-1)?.[1] as { runId?: string } | undefined;
+      await waitFor(() => spy.mock.calls.length > callsBeforeTimeout);
+      const timeoutCall = spy.mock.calls.at(-1)?.[1] as { runId?: string } | undefined;
       expect(timeoutCall?.runId).toBe("idem-timeout-1");
       testState.agentConfig = undefined;
 
       spy.mockClear();
-      const callsBeforeSession = spyCalls.length;
+      const callsBeforeSession = spy.mock.calls.length;
       const sessionRes = await rpcReq(ws, "chat.send", {
         sessionKey: "agent:main:subagent:abc",
         message: "hello",
@@ -124,8 +132,8 @@ describe("gateway server chat", () => {
       });
       expect(sessionRes.ok).toBe(true);
 
-      await waitFor(() => spyCalls.length > callsBeforeSession);
-      const sessionCall = spyCalls.at(-1)?.[0] as { SessionKey?: string } | undefined;
+      await waitFor(() => spy.mock.calls.length > callsBeforeSession);
+      const sessionCall = spy.mock.calls.at(-1)?.[0] as { SessionKey?: string } | undefined;
       expect(sessionCall?.SessionKey).toBe("agent:main:subagent:abc");
 
       const sendPolicyDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
@@ -200,7 +208,7 @@ describe("gateway server chat", () => {
       testState.sessionConfig = undefined;
 
       spy.mockClear();
-      const callsBeforeImage = spyCalls.length;
+      const callsBeforeImage = spy.mock.calls.length;
       const pngB64 =
         "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
 
@@ -230,13 +238,13 @@ describe("gateway server chat", () => {
       expect(imgRes.ok).toBe(true);
       expect(imgRes.payload?.runId).toBeDefined();
 
-      await waitFor(() => spyCalls.length > callsBeforeImage, 8000);
-      const imgOpts = spyCalls.at(-1)?.[1] as
+      await waitFor(() => spy.mock.calls.length > callsBeforeImage, 8000);
+      const imgOpts = spy.mock.calls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
         | undefined;
       expect(imgOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
 
-      const callsBeforeImageOnly = spyCalls.length;
+      const callsBeforeImageOnly = spy.mock.calls.length;
       const reqIdOnly = "chat-img-only";
       ws.send(
         JSON.stringify({
@@ -263,8 +271,8 @@ describe("gateway server chat", () => {
       expect(imgOnlyRes.ok).toBe(true);
       expect(imgOnlyRes.payload?.runId).toBeDefined();
 
-      await waitFor(() => spyCalls.length > callsBeforeImageOnly, 8000);
-      const imgOnlyOpts = spyCalls.at(-1)?.[1] as
+      await waitFor(() => spy.mock.calls.length > callsBeforeImageOnly, 8000);
+      const imgOnlyOpts = spy.mock.calls.at(-1)?.[1] as
         | { images?: Array<{ type: string; data: string; mimeType: string }> }
         | undefined;
       expect(imgOnlyOpts?.images).toEqual([{ type: "image", data: pngB64, mimeType: "image/png" }]);
@@ -363,6 +371,172 @@ describe("gateway server chat", () => {
     } finally {
       testState.sessionStorePath = undefined;
       await fs.rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("aggregates tool media + final text into one assistant message and persists to history", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const { tmpDir, filePath } = await createTinyPngFile();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const spy = vi.mocked(getReplyFromConfig);
+      spy.mockReset();
+      spy.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onToolResult?.({ mediaUrls: [filePath] });
+        return { text: "final answer" };
+      });
+
+      const runId = "idem-tool-media-final";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "show me the result",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const finalEvt = await onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === runId,
+        8000,
+      );
+      const finalMessage = finalEvt.payload?.message as
+        | { content?: Array<Record<string, unknown>> }
+        | undefined;
+      const finalContent = finalMessage?.content ?? [];
+      expect(finalContent.some((block) => block.type === "image")).toBe(true);
+      expect(finalContent).toContainEqual({ type: "text", text: "final answer" });
+
+      const historyRes = await rpcReq<{ messages?: Array<Record<string, unknown>> }>(
+        ws,
+        "chat.history",
+        {
+          sessionKey: "main",
+        },
+      );
+      expect(historyRes.ok).toBe(true);
+      const messages = historyRes.payload?.messages ?? [];
+      const assistantMessage = [...messages]
+        .toReversed()
+        .find((message) => message.role === "assistant");
+      const assistantContent = Array.isArray(assistantMessage?.content)
+        ? (assistantMessage?.content as Array<Record<string, unknown>>)
+        : [];
+      expect(assistantContent.some((block) => block.type === "image")).toBe(true);
+      expect(assistantContent).toContainEqual({ type: "text", text: "final answer" });
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("supports image-only final assistant messages for non-agent chat.send flows", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    const { tmpDir, filePath } = await createTinyPngFile();
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const spy = vi.mocked(getReplyFromConfig);
+      spy.mockReset();
+      spy.mockResolvedValueOnce({ mediaUrls: [filePath] });
+
+      const runId = "idem-image-only-final";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "show image only",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const finalEvt = await onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === runId,
+        8000,
+      );
+      const finalMessage = finalEvt.payload?.message as
+        | { content?: Array<Record<string, unknown>> }
+        | undefined;
+      const finalContent = finalMessage?.content ?? [];
+      expect(finalContent.some((block) => block.type === "image")).toBe(true);
+      expect(finalContent.some((block) => block.type === "text")).toBe(false);
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  test("rejects unauthorized local media paths without breaking final assistant output", async () => {
+    const sessionDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-"));
+    try {
+      testState.sessionStorePath = path.join(sessionDir, "sessions.json");
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const spy = vi.mocked(getReplyFromConfig);
+      spy.mockReset();
+      spy.mockImplementationOnce(async (_ctx, opts) => {
+        await opts?.onToolResult?.({ mediaUrls: [path.join(process.cwd(), "AGENTS.md")] });
+        return { text: "safe final" };
+      });
+
+      const runId = "idem-unauthorized-media";
+      const sendRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "media please",
+        idempotencyKey: runId,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const finalEvt = await onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === runId,
+        8000,
+      );
+      const finalMessage = finalEvt.payload?.message as
+        | { content?: Array<Record<string, unknown>> }
+        | undefined;
+      const finalContent = finalMessage?.content ?? [];
+      expect(finalContent.some((block) => block.type === "image")).toBe(false);
+      expect(finalContent).toContainEqual({ type: "text", text: "safe final" });
+    } finally {
+      testState.sessionStorePath = undefined;
+      await fs.rm(sessionDir, { recursive: true, force: true });
     }
   });
 
@@ -478,8 +652,9 @@ describe("gateway server chat", () => {
 
         const res = await waitP;
         expect(res.ok).toBe(true);
-        expect(res.payload?.status).toBe("error");
-        expect(res.payload?.error).toBe("boom");
+        // agent.wait keeps lifecycle errors in a grace window to allow retries.
+        // With a 1s timeout here, we should see timeout rather than immediate error.
+        expect(res.payload?.status).toBe("timeout");
       }
 
       {

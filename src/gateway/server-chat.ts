@@ -1,9 +1,18 @@
+import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { loadConfig } from "../config/config.js";
 import { type AgentEventPayload, getAgentRunContext } from "../infra/agent-events.js";
 import { resolveHeartbeatVisibility } from "../infra/heartbeat-visibility.js";
 import { loadSessionEntry } from "./session-utils.js";
+import {
+  appendAssistantTextBlock,
+  buildAssistantMessageFromContent,
+  normalizeMediaUrls,
+  type AssistantContentBlock,
+  resolveAssistantImageBlocks,
+  resolveWebchatMediaLocalRoots,
+} from "./webchat-assistant-content.js";
 import { formatForLog } from "./ws-log.js";
 
 /**
@@ -94,6 +103,7 @@ export function createChatRunRegistry(): ChatRunRegistry {
 export type ChatRunState = {
   registry: ChatRunRegistry;
   buffers: Map<string, string>;
+  mediaUrls: Map<string, string[]>;
   deltaSentAt: Map<string, number>;
   abortedRuns: Map<string, number>;
   clear: () => void;
@@ -102,12 +112,14 @@ export type ChatRunState = {
 export function createChatRunState(): ChatRunState {
   const registry = createChatRunRegistry();
   const buffers = new Map<string, string>();
+  const mediaUrls = new Map<string, string[]>();
   const deltaSentAt = new Map<string, number>();
   const abortedRuns = new Map<string, number>();
 
   const clear = () => {
     registry.clear();
     buffers.clear();
+    mediaUrls.clear();
     deltaSentAt.clear();
     abortedRuns.clear();
   };
@@ -115,6 +127,7 @@ export function createChatRunState(): ChatRunState {
   return {
     registry,
     buffers,
+    mediaUrls,
     deltaSentAt,
     abortedRuns,
     clear,
@@ -228,6 +241,41 @@ export function createAgentEventHandler({
   clearAgentRunContext,
   toolEventRecipients,
 }: AgentEventHandlerOptions) {
+  const resolveMediaLocalRootsForSession = (sessionKey: string): readonly string[] => {
+    try {
+      const { cfg } = loadSessionEntry(sessionKey);
+      const agentId = resolveSessionAgentId({ sessionKey, config: cfg });
+      return resolveWebchatMediaLocalRoots(cfg, agentId);
+    } catch {
+      try {
+        return resolveWebchatMediaLocalRoots(loadConfig());
+      } catch {
+        return [];
+      }
+    }
+  };
+
+  const collectAssistantMediaUrls = (clientRunId: string, data: Record<string, unknown>) => {
+    const incoming = normalizeMediaUrls({ mediaUrls: data.mediaUrls, mediaUrl: data.mediaUrl });
+    if (incoming.length === 0) {
+      return;
+    }
+    const current = chatRunState.mediaUrls.get(clientRunId) ?? [];
+    const seen = new Set(current);
+    let changed = false;
+    for (const url of incoming) {
+      if (seen.has(url)) {
+        continue;
+      }
+      seen.add(url);
+      current.push(url);
+      changed = true;
+    }
+    if (changed) {
+      chatRunState.mediaUrls.set(clientRunId, current);
+    }
+  };
+
   const emitChatDelta = (sessionKey: string, clientRunId: string, seq: number, text: string) => {
     if (isSilentReplyText(text, SILENT_REPLY_TOKEN)) {
       return;
@@ -257,7 +305,7 @@ export function createAgentEventHandler({
     nodeSendToSession(sessionKey, "chat", payload);
   };
 
-  const emitChatFinal = (
+  const emitChatFinal = async (
     sessionKey: string,
     clientRunId: string,
     seq: number,
@@ -265,23 +313,30 @@ export function createAgentEventHandler({
     error?: unknown,
   ) => {
     const text = chatRunState.buffers.get(clientRunId)?.trim() ?? "";
+    const mediaUrls = chatRunState.mediaUrls.get(clientRunId) ?? [];
     const shouldSuppressSilent = isSilentReplyText(text, SILENT_REPLY_TOKEN);
     chatRunState.buffers.delete(clientRunId);
+    chatRunState.mediaUrls.delete(clientRunId);
     chatRunState.deltaSentAt.delete(clientRunId);
     if (jobState === "done") {
+      const blocks: AssistantContentBlock[] = [];
+      if (mediaUrls.length > 0) {
+        const imageBlocks = await resolveAssistantImageBlocks({
+          mediaUrls,
+          localRoots: resolveMediaLocalRootsForSession(sessionKey),
+          logWarn: () => {},
+        });
+        blocks.push(...imageBlocks);
+      }
+      if (!shouldSuppressSilent) {
+        appendAssistantTextBlock(blocks, text);
+      }
       const payload = {
         runId: clientRunId,
         sessionKey,
         seq,
         state: "final" as const,
-        message:
-          text && !shouldSuppressSilent
-            ? {
-                role: "assistant",
-                content: [{ type: "text", text }],
-                timestamp: Date.now(),
-              }
-            : undefined,
+        message: buildAssistantMessageFromContent(blocks),
       };
       // Suppress webchat broadcast for heartbeat runs when showOk is false
       if (!shouldSuppressHeartbeatBroadcast(clientRunId)) {
@@ -387,8 +442,11 @@ export function createAgentEventHandler({
       if (!isToolEvent || toolVerbose !== "off") {
         nodeSendToSession(sessionKey, "agent", isToolEvent ? toolPayload : agentPayload);
       }
-      if (!isAborted && evt.stream === "assistant" && typeof evt.data?.text === "string") {
-        emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
+      if (!isAborted && evt.stream === "assistant") {
+        collectAssistantMediaUrls(clientRunId, evt.data);
+        if (typeof evt.data?.text === "string") {
+          emitChatDelta(sessionKey, clientRunId, evt.seq, evt.data.text);
+        }
       } else if (!isAborted && (lifecyclePhase === "end" || lifecyclePhase === "error")) {
         if (chatLink) {
           const finished = chatRunState.registry.shift(evt.runId);
@@ -396,7 +454,7 @@ export function createAgentEventHandler({
             clearAgentRunContext(evt.runId);
             return;
           }
-          emitChatFinal(
+          void emitChatFinal(
             finished.sessionKey,
             finished.clientRunId,
             evt.seq,
@@ -404,7 +462,7 @@ export function createAgentEventHandler({
             evt.data?.error,
           );
         } else {
-          emitChatFinal(
+          void emitChatFinal(
             sessionKey,
             eventRunId,
             evt.seq,
@@ -416,6 +474,7 @@ export function createAgentEventHandler({
         chatRunState.abortedRuns.delete(clientRunId);
         chatRunState.abortedRuns.delete(evt.runId);
         chatRunState.buffers.delete(clientRunId);
+        chatRunState.mediaUrls.delete(clientRunId);
         chatRunState.deltaSentAt.delete(clientRunId);
         if (chatLink) {
           chatRunState.registry.remove(evt.runId, clientRunId, sessionKey);

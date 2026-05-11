@@ -1,3 +1,6 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
@@ -69,6 +72,15 @@ describe("agent event handler", () => {
     return nodeSendToSession.mock.calls.filter(([, event]) => event === "chat");
   }
 
+  async function createTinyPngFile() {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-chat-media-"));
+    const filePath = path.join(tmpDir, "dot.png");
+    const pngB64 =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+    await fs.writeFile(filePath, Buffer.from(pngB64, "base64"));
+    return { tmpDir, filePath };
+  }
+
   it("emits chat delta for assistant text-only events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),
@@ -124,6 +136,157 @@ describe("agent event handler", () => {
     expect(payload.message).toBeUndefined();
     expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
     nowSpy?.mockRestore();
+  });
+
+  it("includes media blocks with final assistant text when assistant events carry mediaUrls", async () => {
+    const { tmpDir, filePath } = await createTinyPngFile();
+    try {
+      const { broadcast, nodeSendToSession, chatRunState, handler, nowSpy } = createHarness({
+        now: 3_000,
+      });
+      chatRunState.registry.add("run-media-1", {
+        sessionKey: "session-media-1",
+        clientRunId: "client-media-1",
+      });
+
+      handler({
+        runId: "run-media-1",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { text: "Answer text", mediaUrls: [filePath] },
+      });
+      handler({
+        runId: "run-media-1",
+        seq: 2,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "end" },
+      });
+
+      await vi.waitFor(() => {
+        const finals = chatBroadcastCalls(broadcast).filter(
+          (call) => (call[1] as { state?: string }).state === "final",
+        );
+        expect(finals).toHaveLength(1);
+      });
+
+      const finalPayload = chatBroadcastCalls(broadcast).find(
+        (call) => (call[1] as { state?: string }).state === "final",
+      )?.[1] as
+        | {
+            message?: { content?: Array<Record<string, unknown>> };
+          }
+        | undefined;
+      const content = finalPayload?.message?.content ?? [];
+      const imageBlock = content.find((block) => block.type === "image");
+      const textBlock = content.find((block) => block.type === "text");
+      expect(imageBlock).toMatchObject({
+        type: "image",
+        source: {
+          type: "base64",
+        },
+      });
+      expect((textBlock as { text?: string } | undefined)?.text).toBe("Answer text");
+      expect(sessionChatCalls(nodeSendToSession).length).toBeGreaterThanOrEqual(1);
+      nowSpy?.mockRestore();
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("emits image-only final message when assistant stream has media without text", async () => {
+    const { tmpDir, filePath } = await createTinyPngFile();
+    try {
+      const { broadcast, chatRunState, handler } = createHarness({
+        now: 3_500,
+      });
+      chatRunState.registry.add("run-media-only", {
+        sessionKey: "session-media-only",
+        clientRunId: "client-media-only",
+      });
+
+      handler({
+        runId: "run-media-only",
+        seq: 1,
+        stream: "assistant",
+        ts: Date.now(),
+        data: { mediaUrls: [filePath] },
+      });
+      handler({
+        runId: "run-media-only",
+        seq: 2,
+        stream: "lifecycle",
+        ts: Date.now(),
+        data: { phase: "end" },
+      });
+
+      await vi.waitFor(() => {
+        const finals = chatBroadcastCalls(broadcast).filter(
+          (call) => (call[1] as { state?: string }).state === "final",
+        );
+        expect(finals).toHaveLength(1);
+      });
+
+      const finalPayload = chatBroadcastCalls(broadcast).find(
+        (call) => (call[1] as { state?: string }).state === "final",
+      )?.[1] as
+        | {
+            message?: { content?: Array<Record<string, unknown>> };
+          }
+        | undefined;
+      const content = finalPayload?.message?.content ?? [];
+      expect(content.some((block) => block.type === "image")).toBe(true);
+      expect(content.some((block) => block.type === "text")).toBe(false);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("skips unauthorized local media paths in final assistant message", async () => {
+    const { broadcast, chatRunState, handler } = createHarness({
+      now: 4_000,
+    });
+    chatRunState.registry.add("run-media-deny", {
+      sessionKey: "session-media-deny",
+      clientRunId: "client-media-deny",
+    });
+
+    handler({
+      runId: "run-media-deny",
+      seq: 1,
+      stream: "assistant",
+      ts: Date.now(),
+      data: {
+        text: "safe text",
+        mediaUrls: [path.join(process.cwd(), "AGENTS.md")],
+      },
+    });
+    handler({
+      runId: "run-media-deny",
+      seq: 2,
+      stream: "lifecycle",
+      ts: Date.now(),
+      data: { phase: "end" },
+    });
+
+    await vi.waitFor(() => {
+      const finals = chatBroadcastCalls(broadcast).filter(
+        (call) => (call[1] as { state?: string }).state === "final",
+      );
+      expect(finals).toHaveLength(1);
+    });
+
+    const finalPayload = chatBroadcastCalls(broadcast).find(
+      (call) => (call[1] as { state?: string }).state === "final",
+    )?.[1] as
+      | {
+          message?: { content?: Array<Record<string, unknown>> };
+        }
+      | undefined;
+    const content = finalPayload?.message?.content ?? [];
+    expect(content.some((block) => block.type === "image")).toBe(false);
+    expect(content).toContainEqual({ type: "text", text: "safe text" });
   });
 
   it("cleans up agent run sequence tracking when lifecycle completes", () => {

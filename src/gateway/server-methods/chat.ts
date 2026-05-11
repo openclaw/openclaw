@@ -38,6 +38,13 @@ import {
   readSessionMessages,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import {
+  appendAssistantTextBlock,
+  appendMediaBlocksFromPayload,
+  buildAssistantMessageFromContent,
+  type AssistantContentBlock,
+  resolveWebchatMediaLocalRoots,
+} from "../webchat-assistant-content.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
@@ -328,7 +335,8 @@ function transcriptHasIdempotencyKey(transcriptPath: string, idempotencyKey: str
 }
 
 function appendAssistantTranscriptMessage(params: {
-  message: string;
+  message?: string;
+  content?: AssistantContentBlock[];
   label?: string;
   sessionId: string;
   storePath: string | undefined;
@@ -371,6 +379,27 @@ function appendAssistantTranscriptMessage(params: {
 
   const now = Date.now();
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  const contentBlocks: Array<Record<string, unknown>> = Array.isArray(params.content)
+    ? params.content.map((block) => ({ ...block }))
+    : [];
+  if (labelPrefix) {
+    const firstTextBlock = contentBlocks.find(
+      (block): block is Record<string, unknown> & { text: string } =>
+        block.type === "text" && typeof block.text === "string",
+    );
+    if (firstTextBlock) {
+      firstTextBlock.text = `${labelPrefix}${firstTextBlock.text}`;
+    } else {
+      contentBlocks.unshift({ type: "text", text: labelPrefix.trimEnd() });
+    }
+  }
+  if (contentBlocks.length === 0) {
+    const text = `${labelPrefix}${params.message ?? ""}`;
+    if (!text.trim()) {
+      return { ok: false, error: "assistant content required" };
+    }
+    contentBlocks.push({ type: "text", text });
+  }
   const usage = {
     input: 0,
     output: 0,
@@ -387,7 +416,7 @@ function appendAssistantTranscriptMessage(params: {
   };
   const messageBody: AppendMessageArg & Record<string, unknown> = {
     role: "assistant",
-    content: [{ type: "text", text: `${labelPrefix}${params.message}` }],
+    content: contentBlocks,
     timestamp: now,
     // Pi stopReason is a strict enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
@@ -872,12 +901,22 @@ export const chatHandlers: GatewayRequestHandlers = {
         channel: INTERNAL_MESSAGE_CHANNEL,
       });
       const finalReplyParts: string[] = [];
+      const finalReplyBlocks: AssistantContentBlock[] = [];
+      const seenMediaUrls = new Set<string>();
+      const mediaLocalRoots = resolveWebchatMediaLocalRoots(cfg, agentId);
       const dispatcher = createReplyDispatcher({
         ...prefixOptions,
         onError: (err) => {
           context.logGateway.warn(`webchat dispatch failed: ${formatForLog(err)}`);
         },
         deliver: async (payload, info) => {
+          await appendMediaBlocksFromPayload({
+            payload,
+            localRoots: mediaLocalRoots,
+            seenMediaUrls,
+            blocks: finalReplyBlocks,
+            logWarn: (message) => context.logGateway.warn(message),
+          });
           if (info.kind !== "final") {
             return;
           }
@@ -927,13 +966,14 @@ export const chatHandlers: GatewayRequestHandlers = {
               .filter(Boolean)
               .join("\n\n")
               .trim();
+            appendAssistantTextBlock(finalReplyBlocks, combinedReply);
             let message: Record<string, unknown> | undefined;
-            if (combinedReply) {
+            if (finalReplyBlocks.length > 0) {
               const { storePath: latestStorePath, entry: latestEntry } =
                 loadSessionEntry(sessionKey);
               const sessionId = latestEntry?.sessionId ?? entry?.sessionId ?? clientRunId;
               const appended = appendAssistantTranscriptMessage({
-                message: combinedReply,
+                content: finalReplyBlocks,
                 sessionId,
                 storePath: latestStorePath,
                 sessionFile: latestEntry?.sessionFile,
@@ -946,16 +986,16 @@ export const chatHandlers: GatewayRequestHandlers = {
                 context.logGateway.warn(
                   `webchat transcript append failed: ${appended.error ?? "unknown error"}`,
                 );
-                const now = Date.now();
-                message = {
-                  role: "assistant",
-                  content: [{ type: "text", text: combinedReply }],
-                  timestamp: now,
-                  // Keep this compatible with Pi stopReason enums even though this message isn't
-                  // persisted to the transcript due to the append failure.
-                  stopReason: "stop",
-                  usage: { input: 0, output: 0, totalTokens: 0 },
-                };
+                const fallbackMessage = buildAssistantMessageFromContent(finalReplyBlocks);
+                if (fallbackMessage) {
+                  message = {
+                    ...fallbackMessage,
+                    // Keep this compatible with Pi stopReason enums even though this message isn't
+                    // persisted to the transcript due to the append failure.
+                    stopReason: "stop",
+                    usage: { input: 0, output: 0, totalTokens: 0 },
+                  };
+                }
               }
             }
             broadcastChatFinal({

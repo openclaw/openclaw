@@ -1,7 +1,7 @@
 import type { ModelDefinitionConfig } from "../config/types.js";
 
 export const VENICE_BASE_URL = "https://api.venice.ai/api/v1";
-export const VENICE_DEFAULT_MODEL_ID = "llama-3.3-70b";
+export const VENICE_DEFAULT_MODEL_ID = "qwen3-5-9b";
 export const VENICE_DEFAULT_MODEL_REF = `venice/${VENICE_DEFAULT_MODEL_ID}`;
 
 // Venice uses credit-based pricing, not per-token costs.
