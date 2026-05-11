@@ -10,6 +10,7 @@ export type {
   WizardSelectParams,
 } from "../wizard/prompts.js";
 export { WizardCancelledError } from "../wizard/prompts.js";
+export { t, wizardT } from "../wizard/i18n/index.js";
 export type { ChannelSetupAdapter } from "../channels/plugins/types.adapters.js";
 export type { ChannelSetupInput } from "../channels/plugins/types.core.js";
 export type {
