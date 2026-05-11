@@ -97,7 +97,7 @@ import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../pi-bundle-mcp-tools.js";
-import { createAgentSession } from "../../pi-coding-agent-contract.js";
+import { createAgentSession, DefaultResourceLoader } from "../../pi-coding-agent-contract.js";
 import type { EmbeddedContextFile } from "../../pi-embedded-helpers.js";
 import {
   downgradeOpenAIFunctionCallReasoningPairs,
