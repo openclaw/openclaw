@@ -12,7 +12,10 @@ import {
   setHeartbeatWakeHandler,
 } from "../../infra/heartbeat-wake.js";
 import * as execModule from "../../process/exec.js";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import {
+  emitSessionTranscriptUpdate,
+  onSessionTranscriptUpdate,
+} from "../../sessions/transcript-events.js";
 import { VERSION } from "../../version.js";
 
 const runtimeModelAuthMocks = vi.hoisted(() => ({
@@ -163,6 +166,12 @@ describe("plugin runtime command execution", () => {
       readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
         runtime.events.onSessionTranscriptUpdate,
       expected: onSessionTranscriptUpdate,
+    },
+    {
+      name: "exposes runtime.events.emitSessionTranscriptUpdate",
+      readValue: (runtime: ReturnType<typeof createPluginRuntime>) =>
+        runtime.events.emitSessionTranscriptUpdate,
+      expected: emitSessionTranscriptUpdate,
     },
     {
       name: "exposes runtime.system.requestHeartbeat",
