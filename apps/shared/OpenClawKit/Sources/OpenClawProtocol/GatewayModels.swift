@@ -3627,18 +3627,22 @@ public struct TalkSpeakResult: Codable, Sendable {
 public struct ChannelsStatusParams: Codable, Sendable {
     public let probe: Bool?
     public let timeoutms: Int?
+    public let channel: String?
 
     public init(
         probe: Bool?,
-        timeoutms: Int?)
+        timeoutms: Int?,
+        channel: String?)
     {
         self.probe = probe
         self.timeoutms = timeoutms
+        self.channel = channel
     }
 
     private enum CodingKeys: String, CodingKey {
         case probe
         case timeoutms = "timeoutMs"
+        case channel
     }
 }
 
