@@ -6,11 +6,14 @@
 
 ## Final state
 
+> **Amendment (post-ship):** The shipped layout is **4+1**, not the 3+1 in the design spec. `OPS.md` was added as a fourth companion pillar to absorb apps/platform, Mac gateway, GitHub/CI wait matrix, Testbox/Blacksmith routing, Gates, Footguns, ClawSweeper, Memory/wiki, Remote install, and Security pointers — material that the original plan had either kept inline in `AGENTS.md` or pushed to `.agents/notes/local-platform.md`. Rule-relocation rows below that read "kept in `AGENTS.md`" or "moved to `local-platform.md`" for those topics should be read as "moved to `OPS.md`" instead. The Pointers table in the shipped `AGENTS.md` is the authoritative map.
+
 | File | Before | After | Delta |
 |---|---|---|---|
 | `AGENTS.md` (= `CLAUDE.md` symlink target) | 345 lines / 42K | 185 lines / 15K | **−46%** |
 | `CHARTER.md` | — | 85 lines / 7.3K | NEW |
 | `CHITTY.md` | — | 95 lines / 4.9K | NEW |
+| `OPS.md` | — | 154 lines / ~9K | NEW (fourth pillar, not in original spec) |
 | `SECURITY.md` | 323 lines / 26K | 353 lines / 28K | +9% (append-only) |
 | `.agents/notes/exe-dev.md` | — | 32 lines / 822B | NEW |
 | `.agents/notes/local-platform.md` | — | 116 lines / 5.7K | NEW |

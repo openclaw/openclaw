@@ -63,13 +63,9 @@ Commits: `scripts/committer "<msg>" <file...>` (avoid manual `git add` / `git co
 - Don't mix `await import("x")` and static `import ... from "x"` for the same module in production paths. For lazy loading, create a dedicated `*.runtime.ts` boundary (re-exports from `x`) and dynamically import that boundary from lazy callers.
 - After refactors touching lazy-loading/module boundaries, run `pnpm build` and check for `[INEFFECTIVE_DYNAMIC_IMPORT]` warnings before submitting.
 
-### Import-boundary cheat sheet
+### Import boundaries
 
-Full rules in `CHARTER.md`. Quick version:
-- Extension production code → only `openclaw/plugin-sdk/*` + local `./api.ts` / `./runtime-api.ts`. No `src/**`, no `src/plugin-sdk-internal/**`, no other extension's `src/**`.
-- Inside an extension, don't import yourself via `openclaw/plugin-sdk/<self>` — use the local barrel.
-- Inside a bundled plugin package, no relative imports/exports that escape the package root.
-- Core code never deep-imports bundled plugin internals; reach via the plugin's `api.ts` or `src/plugin-sdk/<id>.ts`.
+Canonical rules: `CHARTER.md` (Import boundaries). Don't duplicate here — read CHARTER on doubt.
 
 ## Testing
 
