@@ -589,6 +589,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       groupId?: string;
       groupChannel?: string;
       groupSpace?: string;
+      spawnedByRunId?: string;
       lane?: string;
       extraSystemPrompt?: string;
       modelRun?: boolean;

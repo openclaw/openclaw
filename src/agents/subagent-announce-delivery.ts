@@ -854,6 +854,7 @@ export async function deliverSubagentAnnouncement(params: {
   expectsCompletionMessage: boolean;
   bestEffortDeliver?: boolean;
   directIdempotencyKey: string;
+  requesterRunId?: string;
   signal?: AbortSignal;
 }): Promise<SubagentAnnounceDeliveryResult> {
   return await runSubagentAnnounceDispatch({
