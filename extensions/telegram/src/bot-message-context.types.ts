@@ -63,7 +63,7 @@ type TelegramMessageContextRuntimeOverrides = Partial<
 export type TelegramMessageContextSessionRuntimeOverrides = Partial<
   Pick<
     typeof import("./bot-message-context.session.runtime.js"),
-    | "finalizeInboundContext"
+    | "buildChannelTurnContext"
     | "readSessionUpdatedAt"
     | "recordInboundSession"
     | "resolveInboundLastRouteSessionKey"

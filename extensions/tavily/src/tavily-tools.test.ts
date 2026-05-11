@@ -132,24 +132,23 @@ describe("tavily tools", () => {
       includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
       excludeDomains: ["bad.example"],
     });
-    expect(result).toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "best docs",
-          searchDepth: "advanced",
-          topic: "news",
-          maxResults: 5,
-          includeAnswer: true,
-          timeRange: "week",
-          includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
-          excludeDomains: ["bad.example"],
-        },
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "best docs",
+        searchDepth: "advanced",
+        topic: "news",
+        maxResults: 5,
+        includeAnswer: true,
+        timeRange: "week",
+        includeDomains: ["docs.openclaw.ai", "openclaw.ai"],
+        excludeDomains: ["bad.example"],
       },
-    });
-    expect(result.content[0]).toMatchObject({
-      type: "text",
+    };
+    expect(result).toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
     });
   });
 
@@ -235,21 +234,23 @@ describe("tavily tools", () => {
       config: { env: "test" },
     } as never);
 
+    const expectedResult = {
+      ok: true,
+      params: {
+        cfg: { env: "test" },
+        query: "simple",
+        includeAnswer: false,
+      },
+    };
     await expect(
       searchTool.execute("call-2", {
         query: "simple",
         include_domains: [""],
         exclude_domains: [],
       }),
-    ).resolves.toMatchObject({
-      details: {
-        ok: true,
-        params: {
-          cfg: { env: "test" },
-          query: "simple",
-          includeAnswer: false,
-        },
-      },
+    ).resolves.toEqual({
+      content: [{ type: "text", text: JSON.stringify(expectedResult, null, 2) }],
+      details: expectedResult,
     });
 
     const extractTool = createTavilyExtractTool(fakeApi());

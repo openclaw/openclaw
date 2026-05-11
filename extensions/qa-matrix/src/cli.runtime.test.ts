@@ -19,6 +19,17 @@ import { runQaMatrixCommand } from "./cli.runtime.js";
 
 const tmpDirs: string[] = [];
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let error: unknown;
+  try {
+    await readFile(targetPath, "utf8");
+  } catch (caught) {
+    error = caught;
+  }
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 describe("matrix qa cli runtime", () => {
   const originalRunNodeOutputLog = process.env.OPENCLAW_RUN_NODE_OUTPUT_LOG;
 
@@ -104,7 +115,7 @@ describe("matrix qa cli runtime", () => {
     }
 
     expect(runMatrixQaLive).toHaveBeenCalledOnce();
-    await expect(readFile(outputPath, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(outputPath);
   });
 
   it("preserves the Matrix QA failure when output log cleanup also fails", async () => {

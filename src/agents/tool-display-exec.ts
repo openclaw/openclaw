@@ -301,7 +301,9 @@ function normalizePathForDisplay(path: string): string {
   return path.replace(/\\/g, "/").replace(/\/+$/g, "");
 }
 
-function classifyWorkspacePath(path: string): "agent" | "repo" | "workspace" | undefined {
+function classifyWorkspacePath(
+  path: string,
+): "agent" | "repo" | "sandbox" | "workspace" | undefined {
   const normalized = normalizePathForDisplay(path);
   const segments = normalized.split("/").filter(Boolean);
   if (segments.length === 0) {
@@ -315,6 +317,9 @@ function classifyWorkspacePath(path: string): "agent" | "repo" | "workspace" | u
     }
     if (segment === ".openclaw" && segments[index + 1] === "workspace") {
       return "agent";
+    }
+    if (segment === ".openclaw" && segments[index + 1] === "sandboxes") {
+      return "sandbox";
     }
     if (/[-_]workspace$/i.test(segment) && segment.toLowerCase() !== "workspace") {
       return "agent";

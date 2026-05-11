@@ -186,6 +186,19 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe("check git status (repo)");
+
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "bash",
+          args: {
+            command: "command -v discrawl",
+            workdir: "/root/.openclaw/sandboxes/agent-clawsweeper-sandbox-discor-766423d0",
+          },
+          detailMode: "explain",
+        }),
+      ),
+    ).toBe("command -v discrawl (sandbox)");
   });
 
   it("omits bash and exec names from compact tool summaries", () => {

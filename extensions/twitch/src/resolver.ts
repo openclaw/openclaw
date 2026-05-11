@@ -48,7 +48,7 @@ function createLogger(logger?: ChannelLogSink): ChannelLogSink {
 export async function resolveTwitchTargets(
   inputs: string[],
   account: TwitchAccountConfig,
-  kind: ChannelResolveKind,
+  _kind: ChannelResolveKind,
   logger?: ChannelLogSink,
 ): Promise<ChannelResolveResult[]> {
   const log = createLogger(logger);

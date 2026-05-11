@@ -24,20 +24,34 @@ function requireSchemaProperty(
 
 describe("Slack message tools", () => {
   it("describes configured Slack message actions without loading channel runtime", () => {
-    expect(
-      describeSlackMessageTool({
-        cfg: {
-          channels: {
-            slack: {
-              botToken: "xoxb-test",
-            },
+    const discovery = describeSlackMessageTool({
+      cfg: {
+        channels: {
+          slack: {
+            botToken: "xoxb-test",
           },
         },
-      }),
-    ).toMatchObject({
-      actions: expect.arrayContaining(["send", "upload-file", "read"]),
-      capabilities: expect.arrayContaining(["presentation"]),
+      },
     });
+
+    expect(Object.keys(discovery).toSorted()).toEqual(["actions", "capabilities", "schema"]);
+    expect(discovery.actions).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
+    expect(discovery.capabilities).toEqual(["presentation"]);
+    expect(Array.isArray(discovery.schema)).toBe(true);
   });
 
   it("honors account-scoped action gates", () => {
@@ -75,9 +89,21 @@ describe("Slack message tools", () => {
       },
     } as OpenClawConfig;
 
-    expect(listSlackMessageActions(cfg)).toEqual(
-      expect.arrayContaining(["read", "edit", "delete", "download-file", "upload-file"]),
-    );
+    expect(listSlackMessageActions(cfg)).toEqual([
+      "send",
+      "react",
+      "reactions",
+      "read",
+      "edit",
+      "delete",
+      "download-file",
+      "upload-file",
+      "pin",
+      "unpin",
+      "list-pins",
+      "member-info",
+      "emoji-list",
+    ]);
   });
 
   it("honors the selected Slack account during discovery", () => {

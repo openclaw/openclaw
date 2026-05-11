@@ -402,6 +402,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       replyToId?: string;
       threadId?: string;
+      forceDocument?: boolean;
+      silent?: boolean;
+      parseMode?: "HTML";
       sessionKey?: string;
       idempotencyKey: string;
     };
@@ -552,9 +555,12 @@ export const sendHandlers: GatewayRequestHandlers = {
           replyToId: replyToId ?? null,
           session: outboundSession,
           gifPlayback: request.gifPlayback,
+          forceDocument: request.forceDocument,
           threadId: outboundRoute?.threadId ?? threadId ?? null,
           deps: outboundDeps,
           gatewayClientScopes: client?.connect?.scopes ?? [],
+          silent: request.silent,
+          formatting: request.parseMode ? { parseMode: request.parseMode } : undefined,
           mirror: outboundSessionKey
             ? {
                 sessionKey: outboundSessionKey,

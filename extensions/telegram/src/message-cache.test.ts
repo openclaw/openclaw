@@ -1,4 +1,4 @@
-import { readFile, rm } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import type { Message } from "@grammyjs/types";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -7,6 +7,28 @@ import {
   createTelegramMessageCache,
   resolveTelegramMessageCachePath,
 } from "./message-cache.js";
+
+type PersistedCacheEntry = {
+  key: string;
+  node: {
+    sourceMessage: Message;
+  };
+};
+
+function persistedCacheEntry(messageId: number, text: string): PersistedCacheEntry {
+  return {
+    key: `default:7:${messageId}`,
+    node: {
+      sourceMessage: {
+        chat: { id: 7, type: "group", title: "Ops" },
+        message_id: messageId,
+        date: 1736380000 + messageId,
+        text,
+        from: { id: messageId, is_bot: false, first_name: `User ${messageId}` },
+      } as Message,
+    },
+  };
+}
 
 describe("telegram message cache", () => {
   it("hydrates reply chains from persisted cached messages", async () => {
@@ -72,16 +94,48 @@ describe("telegram message cache", () => {
       });
 
       expect(chain).toEqual([
-        expect.objectContaining({
+        {
           messageId: "9001",
+          sender: "Ada",
+          senderId: "2",
+          timestamp: 1736380750000,
           body: "The cache warmer is the piece I meant",
           replyToId: "9000",
-        }),
-        expect.objectContaining({
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Ada" },
+            message_id: 9001,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ada" },
+            reply_to_message: {
+              chat: { id: 7, type: "private", first_name: "Kesava" },
+              message_id: 9000,
+              date: 1736380700,
+              from: { id: 1, is_bot: false, first_name: "Kesava" },
+              photo: [
+                { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+              ],
+            },
+          },
+        },
+        {
           messageId: "9000",
+          sender: "Kesava",
+          senderId: "1",
+          timestamp: 1736380700000,
           mediaRef: "telegram:file/photo-1",
           mediaType: "image",
-        }),
+          body: "<media:image>",
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Kesava" },
+            message_id: 9000,
+            date: 1736380700,
+            from: { id: 1, is_bot: false, first_name: "Kesava" },
+            photo: [
+              { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+            ],
+          },
+        },
       ]);
     } finally {
       await rm(persistedPath, { force: true });
@@ -216,6 +270,54 @@ describe("telegram message cache", () => {
           return entry.node.sourceMessage.message_id;
         }),
       ).toEqual([9204, 9205, 9206]);
+    } finally {
+      await rm(persistedPath, { force: true });
+    }
+  });
+
+  it("loads mixed legacy array caches and rewrites them as line-delimited entries", async () => {
+    const storePath = `/tmp/openclaw-telegram-message-cache-legacy-${process.pid}-${Date.now()}.json`;
+    const persistedPath = resolveTelegramMessageCachePath(storePath);
+    await rm(persistedPath, { force: true });
+    try {
+      const legacyEntries = [
+        persistedCacheEntry(35033, "ocdbg-5818 one"),
+        persistedCacheEntry(35034, "ocdbg-5818 two"),
+        persistedCacheEntry(35035, "ocdbg-5818 three"),
+      ];
+      const appendedEntries = [
+        persistedCacheEntry(35036, "ocdbg-5818 four"),
+        persistedCacheEntry(35037, "ocdbg-5818 five"),
+      ];
+      await writeFile(
+        persistedPath,
+        `${JSON.stringify(legacyEntries)}${appendedEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
+      );
+
+      const cache = createTelegramMessageCache({ persistedPath });
+
+      expect(
+        cache
+          .around({
+            accountId: "default",
+            chatId: 7,
+            messageId: "35035",
+            before: 2,
+            after: 2,
+          })
+          .map((entry) => entry.messageId),
+      ).toEqual(["35033", "35034", "35035", "35036", "35037"]);
+
+      const canonical = await readFile(persistedPath, "utf-8");
+      expect(canonical.startsWith("[")).toBe(false);
+      const lines = canonical.trim().split("\n");
+      expect(lines).toHaveLength(5);
+      expect(
+        lines.map((line) => {
+          const entry = JSON.parse(line) as PersistedCacheEntry;
+          return entry.node.sourceMessage.message_id;
+        }),
+      ).toEqual([35033, 35034, 35035, 35036, 35037]);
     } finally {
       await rm(persistedPath, { force: true });
     }
