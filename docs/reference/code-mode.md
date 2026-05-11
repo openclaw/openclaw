@@ -15,9 +15,11 @@ instead of exposing every enabled tool schema directly, the model sees only
 
 This page documents OpenClaw code mode. It is not Codex Code mode. Codex Code
 mode is part of the Codex coding harness and has its own project workspace,
-runtime, tools, and execution semantics. OpenClaw code mode is an OpenClaw-owned
-tool-surface adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden
-OpenClaw tool catalog, and the normal OpenClaw tool executor.
+runtime, tools, and execution semantics. Codex Code mode and Codex-native
+dynamic tool search are stable Codex harness surfaces. OpenClaw code mode is an
+OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs. It
+uses `quickjs-wasi`, a hidden OpenClaw tool catalog, and the normal OpenClaw
+tool executor.
 
 ## What is this?
 
@@ -131,6 +133,8 @@ operators validating high-risk deployments.
 
 - Runtime: [`quickjs-wasi`](https://github.com/vercel-labs/quickjs-wasi).
 - Default state: disabled.
+- Stability: experimental OpenClaw surface; Codex Code mode is a separate stable
+  Codex harness surface.
 - Target surface: generic OpenClaw agent runs.
 - Security posture: model code is hostile.
 - User-facing promise: enabling code mode never silently falls back to broad
