@@ -996,6 +996,11 @@
           "enum": ["delete", "keep"],
           "type": "string"
         },
+        "completionOwner": {
+          "description": "Native subagent-only. Controls which surface owns the complete final summary for background completion: requester-session-final, work-thread-final, origin-bridge-final, or none. Currently rejected for runtime=\"acp\".",
+          "enum": ["requester-session-final", "work-thread-final", "origin-bridge-final", "none"],
+          "type": "string"
+        },
         "context": {
           "description": "Native context. Omit/\"isolated\" for clean child; \"fork\" only when child needs requester transcript.",
           "enum": ["isolated", "fork"],
