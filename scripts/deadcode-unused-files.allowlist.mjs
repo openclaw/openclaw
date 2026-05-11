@@ -27,6 +27,7 @@ export const KNIP_UNUSED_FILE_ALLOWLIST = [
   "src/mcp/plugin-tools-serve.ts",
   "src/mcp/tools-stdio-server.ts",
   "src/plugins/build-smoke-entry.ts",
+  "src/plugins/contracts/advanced-workflow-fixtures.ts",
   "src/plugins/contracts/host-hook-fixture.ts",
   "src/plugins/contracts/rootdir-boundary-canary.ts",
   "src/plugins/contracts/tts-contract-suites.ts",
