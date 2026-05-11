@@ -176,6 +176,58 @@ describe("channelsHandlers channels.status", () => {
     expect(probeArgs.cfg).toBe(autoEnabledConfig);
   });
 
+  it("filters channel status to a requested channel", async () => {
+    const autoEnabledConfig = { autoEnabled: true };
+    const whatsappProbe = vi.fn(async () => ({ ok: true }));
+    const imessageProbe = vi.fn(async () => ({ ok: true }));
+    mocks.applyPluginAutoEnable.mockReturnValue({ config: autoEnabledConfig, changes: [] });
+    mocks.buildChannelUiCatalog.mockImplementation((plugins: Array<{ id: string }>) => ({
+      order: plugins.map((plugin) => plugin.id),
+      labels: Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.id])),
+      detailLabels: Object.fromEntries(plugins.map((plugin) => [plugin.id, plugin.id])),
+      systemImages: {},
+      entries: Object.fromEntries(plugins.map((plugin) => [plugin.id, { id: plugin.id }])),
+    }));
+    mocks.listChannelPlugins.mockReturnValue([
+      {
+        id: "whatsapp",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: { probeAccount: whatsappProbe },
+      },
+      {
+        id: "imessage",
+        config: {
+          listAccountIds: () => ["default"],
+          resolveAccount: () => ({}),
+          isEnabled: () => true,
+          isConfigured: async () => true,
+        },
+        status: { probeAccount: imessageProbe },
+      },
+    ]);
+    const respond = vi.fn();
+
+    await channelsHandlers["channels.status"](
+      createOptions({ channel: "imessage", probe: true, timeoutMs: 1000 }, { respond }),
+    );
+
+    expect(whatsappProbe).not.toHaveBeenCalled();
+    expect(imessageProbe).toHaveBeenCalledOnce();
+    const payload = requireRespondPayload(respond);
+    expect(payload.channelOrder).toEqual(["imessage"]);
+    expect(payload.channels).toEqual({
+      imessage: expect.any(Object),
+    });
+    expect(payload.channelAccounts).toEqual({
+      imessage: [expect.objectContaining({ accountId: "default" })],
+    });
+  });
+
   it("preserves channel account rows when a live probe throws", async () => {
     const autoEnabledConfig = { autoEnabled: true };
     const probeAccount = vi.fn(async () => {
