@@ -61,6 +61,135 @@ describe("deleteTelegramUpdateOffset", () => {
     });
   });
 
+  it("invokes onRotationDetected when the stored bot id no longer matches", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 1500,
+        botToken: "111111:token-a",
+      });
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "222222:token-b",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "bot-id-changed",
+          previousBotId: "111111",
+          currentBotId: "222222",
+          staleLastUpdateId: 1500,
+        },
+      ]);
+    });
+  });
+
+  it("invokes onRotationDetected for legacy offsets without bot identity", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 1, lastUpdateId: 777 }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "333333:token-c",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "legacy-state",
+          previousBotId: null,
+          currentBotId: "333333",
+          staleLastUpdateId: 777,
+        },
+      ]);
+    });
+  });
+
+  it("detects same-bot token rotation via the persisted fingerprint", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async () => {
+      const original = "111111:original-secret";
+      const rotated = "111111:rotated-secret";
+
+      await writeTelegramUpdateOffset({
+        accountId: "default",
+        updateId: 42,
+        botToken: original,
+      });
+
+      // Original token still observes the persisted offset.
+      expect(
+        await readTelegramUpdateOffset({
+          accountId: "default",
+          botToken: original,
+        }),
+      ).toBe(42);
+
+      // After BotFather /revoke the bot id is unchanged but the secret differs;
+      // the persisted offset must not be trusted across that rotation.
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: rotated,
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBeNull();
+      expect(rotations).toEqual([
+        {
+          reason: "token-rotated",
+          previousBotId: "111111",
+          currentBotId: "111111",
+          staleLastUpdateId: 42,
+        },
+      ]);
+    });
+  });
+
+  it("preserves v2 bot-id-only offsets when the bot id still matches", async () => {
+    await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
+      // Simulate an offset file written by an older version that scoped by
+      // bot id only (no token fingerprint). Upgrading should keep the offset
+      // for the same bot until the next write upgrades the format.
+      const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify({ version: 2, lastUpdateId: 999, botId: "111111" }, null, 2)}\n`,
+        "utf-8",
+      );
+
+      const rotations: Array<Record<string, unknown>> = [];
+      const offset = await readTelegramUpdateOffset({
+        accountId: "default",
+        botToken: "111111:any-secret",
+        onRotationDetected: (info) => {
+          rotations.push({ ...info });
+        },
+      });
+
+      expect(offset).toBe(999);
+      expect(rotations).toEqual([]);
+    });
+  });
+
   it("treats legacy offset records without bot identity as stale when token is provided", async () => {
     await withStateDirEnv("openclaw-tg-offset-", async ({ stateDir }) => {
       const legacyPath = path.join(stateDir, "telegram", "update-offset-default.json");

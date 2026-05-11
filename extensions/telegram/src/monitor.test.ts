@@ -375,6 +375,7 @@ vi.mock("./fetch.js", () => ({
 vi.mock("./update-offset-store.js", () => ({
   readTelegramUpdateOffset: readTelegramUpdateOffsetSpy,
   writeTelegramUpdateOffset: vi.fn(async () => undefined),
+  deleteTelegramUpdateOffset: vi.fn(async () => undefined),
 }));
 
 describe("monitorTelegramProvider (grammY)", () => {
