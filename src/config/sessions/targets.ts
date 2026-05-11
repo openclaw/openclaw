@@ -46,7 +46,7 @@ function shouldSkipDatabaseDiscoveryError(err: unknown): boolean {
   return typeof code === "string" && NON_FATAL_DATABASE_DISCOVERY_ERROR_CODES.has(code);
 }
 
-function configuredAgentTargets(
+function resolveSessionStoreDiscoveryState(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
 ): SessionDatabaseTarget[] {
@@ -79,13 +79,13 @@ export function resolveAllAgentSessionDatabaseTargetsSync(
 ): SessionDatabaseTarget[] {
   const env = params.env ?? process.env;
   return dedupeTargetsByAgentId([
-    ...configuredAgentTargets(cfg, env),
+    ...resolveSessionStoreDiscoveryState(cfg, env),
     ...resolveRegisteredAgentDatabaseTargets(env),
   ]);
 }
 
 export function resolveAgentSessionDatabaseTargetsSync(
-  cfg: OpenClawConfig,
+  _cfg: OpenClawConfig,
   agentId: string,
   params: { env?: NodeJS.ProcessEnv } = {},
 ): SessionDatabaseTarget[] {
