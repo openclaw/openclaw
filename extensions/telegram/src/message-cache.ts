@@ -59,6 +59,10 @@ type TelegramMessageCacheBucket = {
   persistedEntryCount: number;
 };
 
+type PersistedMessageReadResult = TelegramMessageCacheBucket & {
+  needsRewrite: boolean;
+};
+
 const DEFAULT_MAX_MESSAGES = 5000;
 const COMPACT_THRESHOLD_RATIO = 2;
 const persistedMessageCacheBuckets = new Map<string, TelegramMessageCacheBucket>();
@@ -173,6 +177,85 @@ function parsePersistedEntry(value: unknown): {
   return node ? { key: value.key, node } : null;
 }
 
+function findJsonArrayEnd(text: string): number {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  let started = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (!started) {
+      if (char.trim() === "") {
+        continue;
+      }
+      if (char !== "[") {
+        return -1;
+      }
+      started = true;
+      depth = 1;
+      continue;
+    }
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+    } else if (char === "[") {
+      depth++;
+    } else if (char === "]") {
+      depth--;
+      if (depth === 0) {
+        return index + 1;
+      }
+    }
+  }
+  return -1;
+}
+
+function readPersistedEntryValues(raw: string): { values: unknown[]; needsRewrite: boolean } {
+  const values: unknown[] = [];
+  let needsRewrite = false;
+  const readLines = (text: string) => {
+    for (const line of text.split("\n")) {
+      if (!line.trim()) {
+        continue;
+      }
+      try {
+        const value: unknown = JSON.parse(line);
+        values.push(value);
+      } catch {
+        needsRewrite = true;
+      }
+    }
+  };
+  const trimmedStart = raw.trimStart();
+  if (trimmedStart.startsWith("[")) {
+    const startOffset = raw.length - trimmedStart.length;
+    const arrayEnd = findJsonArrayEnd(raw.slice(startOffset));
+    if (arrayEnd === -1) {
+      needsRewrite = true;
+      readLines(raw);
+      return { values, needsRewrite };
+    }
+    const legacyValue: unknown = JSON.parse(raw.slice(startOffset, startOffset + arrayEnd));
+    if (Array.isArray(legacyValue)) {
+      values.push(...legacyValue);
+    }
+    needsRewrite = true;
+    readLines(raw.slice(startOffset + arrayEnd));
+    return { values, needsRewrite };
+  }
+  readLines(raw);
+  return { values, needsRewrite };
+}
+
 function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessages: number): void {
   while (messages.size > maxMessages) {
     const oldest = messages.keys().next().value;
@@ -183,18 +266,18 @@ function trimMessages(messages: Map<string, TelegramCachedMessageNode>, maxMessa
   }
 }
 
-function readPersistedMessages(filePath: string, maxMessages: number) {
+function readPersistedMessages(filePath: string, maxMessages: number): PersistedMessageReadResult {
   const messages = new Map<string, TelegramCachedMessageNode>();
   let persistedEntryCount = 0;
+  let needsRewrite = false;
   if (!fs.existsSync(filePath)) {
-    return { messages, persistedEntryCount };
+    return { messages, persistedEntryCount, needsRewrite };
   }
   try {
-    for (const line of fs.readFileSync(filePath, "utf-8").split("\n")) {
-      if (!line.trim()) {
-        continue;
-      }
-      const entry = parsePersistedEntry(JSON.parse(line));
+    const persisted = readPersistedEntryValues(fs.readFileSync(filePath, "utf-8"));
+    needsRewrite = persisted.needsRewrite;
+    for (const value of persisted.values) {
+      const entry = parsePersistedEntry(value);
       if (!entry) {
         continue;
       }
@@ -205,8 +288,9 @@ function readPersistedMessages(filePath: string, maxMessages: number) {
     }
   } catch (error) {
     logVerbose(`telegram: failed to read message cache: ${String(error)}`);
+    needsRewrite = true;
   }
-  return { messages, persistedEntryCount };
+  return { messages, persistedEntryCount, needsRewrite };
 }
 
 function serializePersistedEntry(key: string, node: TelegramCachedMessageNode): string {
@@ -279,6 +363,16 @@ function resolveMessageCacheBucket(params: {
     messages: persisted.messages,
     persistedEntryCount: persisted.persistedEntryCount,
   };
+  if (persisted.needsRewrite) {
+    try {
+      bucket.persistedEntryCount = replacePersistedMessages({
+        messages: bucket.messages,
+        persistedPath,
+      });
+    } catch (error) {
+      logVerbose(`telegram: failed to compact message cache: ${String(error)}`);
+    }
+  }
   persistedMessageCacheBuckets.set(persistedPath, bucket);
   return bucket;
 }

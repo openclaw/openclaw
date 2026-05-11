@@ -450,7 +450,7 @@ describe("resolveReactionSyntheticEvent", () => {
     });
     expect(result).toBeNull();
     expect(log).toHaveBeenCalledWith(
-      expect.stringContaining("ignoring reaction on non-bot/unverified message om_msg1"),
+      "feishu[acct1]: ignoring reaction on non-bot/unverified message om_msg1 (sender: unknown)",
     );
   });
 });

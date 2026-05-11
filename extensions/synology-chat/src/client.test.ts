@@ -125,7 +125,7 @@ describe("Synology Chat TLS verification defaults", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });
 
@@ -161,7 +161,7 @@ describe("sendMessage", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS request");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: false });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(false);
   });
 });
 
@@ -390,6 +390,6 @@ describe("fetchChatUsers", () => {
     if (!firstCall) {
       throw new Error("expected Synology Chat HTTPS get");
     }
-    expect(firstCall[1]).toMatchObject({ rejectUnauthorized: true });
+    expect(firstCall[1]?.rejectUnauthorized).toBe(true);
   });
 });

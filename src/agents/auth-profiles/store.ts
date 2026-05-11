@@ -3,7 +3,7 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withFileLock } from "../../infra/file-lock.js";
-import { saveJsonFile } from "../../infra/json-file.js";
+import { loadJsonFile, saveJsonFile } from "../../infra/json-file.js";
 import { cloneAuthProfileStore } from "./clone.js";
 import {
   AUTH_STORE_LOCK_OPTIONS,
@@ -31,6 +31,7 @@ import {
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
   mergeOAuthFileIntoStore,
+  removeDetachedOAuthProfileSecrets,
 } from "./persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots as clearRuntimeAuthProfileStoreSnapshotsImpl,
@@ -478,7 +479,9 @@ export async function updateAuthProfileStoreWithLock(params: {
 }
 
 export function loadAuthProfileStore(): AuthProfileStore {
-  const asStore = loadPersistedAuthProfileStore();
+  const asStore = loadPersistedAuthProfileStore(undefined, {
+    rewriteInlineOAuthSecrets: process.env.OPENCLAW_AUTH_STORE_READONLY !== "1",
+  });
   if (asStore) {
     return overlayExternalAuthProfiles(asStore);
   }
@@ -515,7 +518,9 @@ function loadAuthProfileStoreForAgent(
       return cached;
     }
   }
-  const asStore = loadPersistedAuthProfileStore(agentDir);
+  const asStore = loadPersistedAuthProfileStore(agentDir, {
+    rewriteInlineOAuthSecrets: !readOnly && process.env.OPENCLAW_AUTH_STORE_READONLY !== "1",
+  });
   if (asStore) {
     const synced = maybeSyncPersistedExternalCliAuthProfiles({
       store: asStore,
@@ -745,8 +750,10 @@ export function saveAuthProfileStore(
   const authPath = resolveAuthStorePath(agentDir);
   const statePath = resolveAuthStatePath(agentDir);
   const localStore = buildLocalAuthProfileStoreForSave({ store, agentDir, options });
-  const payload = buildPersistedAuthProfileSecretsStore(localStore);
+  const previousRaw = loadJsonFile(authPath);
+  const payload = buildPersistedAuthProfileSecretsStore(localStore, undefined, { agentDir });
   saveJsonFile(authPath, payload);
+  removeDetachedOAuthProfileSecrets({ previousRaw, nextStore: payload });
   savePersistedAuthProfileState(localStore, agentDir);
   writeCachedAuthProfileStore({
     authPath,

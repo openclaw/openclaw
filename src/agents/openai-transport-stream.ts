@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import {
   calculateCost,
   createAssistantMessageEventStream,
@@ -8,8 +8,8 @@ import {
   type Api,
   type Context,
   type Model,
-} from "@mariozechner/pi-ai";
-import { convertMessages } from "@mariozechner/pi-ai/openai-completions";
+} from "@earendil-works/pi-ai";
+import { convertMessages } from "@earendil-works/pi-ai/openai-completions";
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import type {

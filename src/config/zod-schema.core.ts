@@ -225,11 +225,11 @@ const ModelCompatSchema = z
   .optional();
 
 type AssertAssignable<_T extends U, U> = true;
-type _ModelCompatSchemaAssignableToType = AssertAssignable<
+export type _ModelCompatSchemaAssignableToType = AssertAssignable<
   z.infer<typeof ModelCompatSchema>,
   ModelCompatConfig | undefined
 >;
-type _ModelCompatTypeAssignableToSchema = AssertAssignable<
+export type _ModelCompatTypeAssignableToSchema = AssertAssignable<
   ModelCompatConfig | undefined,
   z.infer<typeof ModelCompatSchema>
 >;
@@ -889,11 +889,11 @@ export const ToolsMediaSchema = z
   .optional();
 
 type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
+export type _ToolsMediaAsyncCompletionSchemaAssignableToType = AssertAssignable<
   ToolsMediaConfigFromSchema["asyncCompletion"],
   MediaToolsConfig["asyncCompletion"]
 >;
-type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
+export type _ToolsMediaAsyncCompletionTypeAssignableToSchema = AssertAssignable<
   MediaToolsConfig["asyncCompletion"],
   ToolsMediaConfigFromSchema["asyncCompletion"]
 >;

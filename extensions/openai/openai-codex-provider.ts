@@ -348,19 +348,14 @@ async function refreshOpenAICodexOAuthCredential(cred: OAuthCredential) {
 }
 
 async function runOpenAICodexOAuth(ctx: ProviderAuthContext) {
-  let creds;
-  try {
-    creds = await loginOpenAICodexOAuth({
-      prompter: ctx.prompter,
-      runtime: ctx.runtime,
-      oauth: ctx.oauth,
-      isRemote: ctx.isRemote,
-      openUrl: ctx.openUrl,
-      localBrowserMessage: "Complete sign-in in browser…",
-    });
-  } catch {
-    return { profiles: [] };
-  }
+  const creds = await loginOpenAICodexOAuth({
+    prompter: ctx.prompter,
+    runtime: ctx.runtime,
+    oauth: ctx.oauth,
+    isRemote: ctx.isRemote,
+    openUrl: ctx.openUrl,
+    localBrowserMessage: "Complete sign-in in browser…",
+  });
   if (!creds) {
     return { profiles: [] };
   }
@@ -488,13 +483,7 @@ export function buildOpenAICodexProviderPlugin(): ProviderPlugin {
           assistantPriority: OPENAI_CODEX_DEVICE_PAIRING_ASSISTANT_PRIORITY,
           ...OPENAI_CODEX_WIZARD_GROUP,
         },
-        run: async (ctx) => {
-          try {
-            return await runOpenAICodexDeviceCode(ctx);
-          } catch {
-            return { profiles: [] };
-          }
-        },
+        run: async (ctx) => await runOpenAICodexDeviceCode(ctx),
       },
     ],
     catalog: {

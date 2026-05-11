@@ -345,13 +345,15 @@ describe("openai codex provider", () => {
     const { note } = await runRemoteDeviceCodeAuthFlow();
 
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining("Code: CODE-12345"),
+      [
+        "Open this URL in your LOCAL browser and enter the code below.",
+        "URL: https://auth.openai.com/codex/device",
+        "Code: CODE-12345",
+        "Code expires in 15 minutes. Never share it.",
+      ].join("\n"),
       "OpenAI Codex device code",
     );
-    expect(note).not.toHaveBeenCalledWith(
-      expect.stringContaining("Code: [shown on the local device only]"),
-      "OpenAI Codex device code",
-    );
+    expect(note).toHaveBeenCalledTimes(1);
   });
 
   it("does not write the device pairing code to the runtime log in remote mode", async () => {
