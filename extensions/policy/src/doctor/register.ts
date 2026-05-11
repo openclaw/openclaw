@@ -1,13 +1,7 @@
 import { basename, isAbsolute, resolve } from "node:path";
+import { parseOcDocument, type Diagnostic, type JsoncAst } from "@openclaw/oc-path/api.js";
 import {
-  parseOcDocument,
-  parseOcPath,
-  resolveOcPath,
-  type Diagnostic,
-  type JsoncAst,
-} from "@openclaw/oc-path/api.js";
-import {
-  registerHealthCheck,
+  registerHealthCheck as registerPluginHealthCheck,
   type HealthCheck,
   type HealthCheckContext,
   type HealthFinding,
@@ -18,17 +12,23 @@ import { collectPolicyEvidence, policyDocumentHash, type PolicyEvidence } from "
 const CHECK_IDS = {
   policyDeniedChannelProvider: "policy/channels-denied-provider",
   policyHashMismatch: "policy/policy-hash-mismatch",
+  policyInvalidFile: "policy/policy-jsonc-invalid",
   policyMissingFile: "policy/policy-jsonc-missing",
 } as const;
 
 export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyMissingFile,
+  CHECK_IDS.policyInvalidFile,
   CHECK_IDS.policyHashMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
 ] as const;
 
 let registered = false;
 const policyEvaluationCache = new WeakMap<HealthCheckContext, Promise<PolicyEvaluation>>();
+
+export type PolicyDoctorRegistrationHost = {
+  readonly registerHealthCheck: (check: HealthCheck) => void;
+};
 
 export type PolicyEvaluation = {
   readonly policyPath: string;
@@ -40,11 +40,13 @@ export type PolicyEvaluation = {
   readonly findings: readonly HealthFinding[];
 };
 
-export function registerPolicyDoctorChecks(): void {
+export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost): void {
   if (registered) {
     return;
   }
+  const registerHealthCheck = host?.registerHealthCheck ?? registerPluginHealthCheck;
   registerHealthCheck(policyMissingFileCheck);
+  registerHealthCheck(policyInvalidFileCheck);
   registerHealthCheck(policyHashMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
   registered = true;
@@ -84,6 +86,16 @@ const policyHashMismatchCheck: HealthCheck = {
   },
 };
 
+const policyInvalidFileCheck: HealthCheck = {
+  id: CHECK_IDS.policyInvalidFile,
+  kind: "plugin",
+  description: "The enabled policy file parses before policy checks run.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyInvalidFile);
+  },
+};
+
 const policyChannelsDeniedProviderCheck: HealthCheck = {
   id: CHECK_IDS.policyDeniedChannelProvider,
   kind: "plugin",
@@ -93,7 +105,7 @@ const policyChannelsDeniedProviderCheck: HealthCheck = {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyDeniedChannelProvider);
   },
   async repair(ctx, findings) {
-    if (!(await workspaceRepairsEnabled(ctx))) {
+    if (!workspaceRepairsEnabled(ctx)) {
       return workspaceRepairsDisabledResult("channel config");
     }
     const channelIds = channelIdsFromFindings(findings);
@@ -144,6 +156,13 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
 
   const parsedPolicy = parsePolicyFile(policyFile.raw, policyFile.displayName);
   if (parsedPolicy.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
+    findings.push(
+      ...policyParseFindings(
+        policyFile.displayName,
+        policyFile.ocDocName,
+        parsedPolicy.diagnostics,
+      ),
+    );
     return { policyPath, evidence, findings };
   }
 
@@ -167,9 +186,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     });
   }
 
-  if (policyRuleEnabledFromSnapshot(settings, policy, "checkChannels")) {
-    findings.push(...channelFindings(policy, policyFile.ocDocName, evidence));
-  }
+  findings.push(...channelFindings(policy, policyFile.ocDocName, evidence));
 
   return {
     policyPath,
@@ -177,6 +194,28 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
     evidence,
     findings,
   };
+}
+
+function policyParseFindings(
+  policyPath: string,
+  policyDocName: string,
+  diagnostics: readonly Diagnostic[],
+): readonly HealthFinding[] {
+  const diagnostic = diagnostics.find((entry) => entry.severity === "error");
+  return diagnostic === undefined
+    ? []
+    : [
+        {
+          checkId: CHECK_IDS.policyInvalidFile,
+          severity: "error" as const,
+          message: `${policyPath} could not be parsed: ${diagnostic.message}`,
+          source: "policy",
+          path: policyPath,
+          line: diagnostic.line,
+          target: `oc://${policyDocName}`,
+          fixHint: `Fix ${policyPath} so policy conformance checks can run.`,
+        },
+      ];
 }
 
 function findingsForCheck(
@@ -191,6 +230,10 @@ function channelFindings(
   policyDocName: string,
   evidence: PolicyEvidence,
 ): readonly HealthFinding[] {
+  const invalidRules = invalidChannelDenyRuleFindings(policy, policyDocName);
+  if (invalidRules.length > 0) {
+    return invalidRules;
+  }
   const denyRules = readChannelDenyRules(policy, policyDocName);
   if (denyRules.length === 0) {
     return [];
@@ -210,8 +253,8 @@ function channelFindings(
         message: `Channel '${channel.id}' uses denied provider '${channel.provider}'.`,
         source: "policy",
         path: "openclaw config",
-        ocPath: channel.ocPath,
-        target: channel.ocPath,
+        ocPath: channel.source,
+        target: channel.source,
         requirement: rule.requirement,
         fixHint:
           rule.reason ??
@@ -219,6 +262,43 @@ function channelFindings(
       },
     ];
   });
+}
+
+function invalidChannelDenyRuleFindings(
+  policy: unknown,
+  policyDocName: string,
+): readonly HealthFinding[] {
+  if (!isRecord(policy) || !isRecord(policy.channels) || policy.channels.denyRules === undefined) {
+    return [];
+  }
+  if (!Array.isArray(policy.channels.denyRules)) {
+    return [
+      {
+        checkId: CHECK_IDS.policyInvalidFile,
+        severity: "error",
+        message: "policy.jsonc channels.denyRules must be an array.",
+        source: "policy",
+        path: "policy.jsonc",
+        target: `oc://${policyDocName}/channels/denyRules`,
+        fixHint: "Fix policy.jsonc so channel deny rules are an array.",
+      },
+    ];
+  }
+  const invalid = policy.channels.denyRules.findIndex((rule) => !isChannelDenyRule(rule));
+  if (invalid < 0) {
+    return [];
+  }
+  return [
+    {
+      checkId: CHECK_IDS.policyInvalidFile,
+      severity: "error",
+      message: `policy.jsonc channels.denyRules[${invalid}] must define when.provider as a string.`,
+      source: "policy",
+      path: "policy.jsonc",
+      target: `oc://${policyDocName}/channels/denyRules/#${invalid}`,
+      fixHint: "Fix policy.jsonc so each channel deny rule has a provider match.",
+    },
+  ];
 }
 
 async function readPolicyFile(
@@ -267,8 +347,8 @@ function parsePolicyFile(
   return { ast: parsed.ast, diagnostics: parsed.diagnostics };
 }
 
-async function workspaceRepairsEnabled(ctx: HealthCheckContext): Promise<boolean> {
-  return (await resolvePolicyBooleanSetting(ctx, "workspaceRepairs")) === true;
+function workspaceRepairsEnabled(ctx: HealthCheckContext): boolean {
+  return policySettings(ctx).workspaceRepairs === true;
 }
 
 function workspaceRepairsDisabledResult(fileName: string): {
@@ -316,17 +396,40 @@ function readChannelDenyRules(
           readonly when?: { readonly provider?: string };
           readonly reason?: string;
         };
-      } =>
-        isRecord(entry.rule) &&
-        (entry.rule.id === undefined || typeof entry.rule.id === "string") &&
-        (entry.rule.reason === undefined || typeof entry.rule.reason === "string") &&
-        isRecord(entry.rule.when) &&
-        typeof entry.rule.when.provider === "string",
+      } => isChannelDenyRule(entry.rule),
     )
-    .map(({ rule, index }) => ({
-      ...rule,
-      requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
-    }));
+    .map(({ rule, index }) => {
+      const next: {
+        id?: string;
+        when?: { readonly provider?: string };
+        reason?: string;
+        requirement: string;
+      } = {
+        when: rule.when,
+        requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
+      };
+      if (rule.id !== undefined) {
+        next.id = rule.id;
+      }
+      if (rule.reason !== undefined) {
+        next.reason = rule.reason;
+      }
+      return next;
+    });
+}
+
+function isChannelDenyRule(value: unknown): value is {
+  readonly id?: string;
+  readonly when?: { readonly provider?: string };
+  readonly reason?: string;
+} {
+  return (
+    isRecord(value) &&
+    (value.id === undefined || typeof value.id === "string") &&
+    (value.reason === undefined || typeof value.reason === "string") &&
+    isRecord(value.when) &&
+    typeof value.when.provider === "string"
+  );
 }
 
 function channelIdsFromFindings(findings: readonly HealthFinding[]): readonly string[] {
@@ -363,33 +466,8 @@ function disableChannels(
   return { config: { ...cfg, channels }, changed };
 }
 
-async function resolvePolicyBooleanSetting(
-  ctx: HealthCheckContext,
-  setting: "enabled" | "checkChannels" | "workspaceRepairs",
-): Promise<boolean | undefined> {
-  const configured = policySettings(ctx)[setting];
-  if (typeof configured === "boolean") {
-    return configured;
-  }
-  const file = await readPolicyFile(ctx);
-  if (file === null) {
-    return undefined;
-  }
-  const parsed = parsePolicyFile(file.raw, file.displayName);
-  if (parsed.diagnostics.some((diagnostic) => diagnostic.severity === "error")) {
-    return undefined;
-  }
-  return (
-    readJsoncBoolean(parsed.ast, file.ocDocName, `channels.settings.${setting}`) ??
-    readJsoncBoolean(parsed.ast, file.ocDocName, `settings.${setting}`) ??
-    readJsoncBoolean(parsed.ast, file.ocDocName, `policy.${setting}`) ??
-    readJsoncBoolean(parsed.ast, file.ocDocName, setting)
-  );
-}
-
 function policySettings(ctx: HealthCheckContext): {
   readonly enabled?: boolean;
-  readonly checkChannels?: boolean;
   readonly workspaceRepairs?: boolean;
   readonly expectedHash?: string;
   readonly path?: string;
@@ -399,37 +477,6 @@ function policySettings(ctx: HealthCheckContext): {
     return {};
   }
   return pluginConfig;
-}
-
-function policyRuleEnabledFromSnapshot(
-  settings: ReturnType<typeof policySettings>,
-  policy: unknown,
-  setting: "checkChannels",
-): boolean {
-  const configured = settings[setting];
-  if (typeof configured === "boolean") {
-    return configured;
-  }
-  const policyConfigured =
-    readPolicyBoolean(policy, ["channels", "settings", setting]) ??
-    readPolicyBoolean(policy, ["settings", setting]) ??
-    readPolicyBoolean(policy, ["policy", setting]) ??
-    readPolicyBoolean(policy, [setting]);
-  if (policyConfigured !== undefined) {
-    return policyConfigured;
-  }
-  return (isRecord(policy) && isRecord(policy.channels)) || settings.enabled === true;
-}
-
-function readPolicyBoolean(policy: unknown, path: readonly string[]): boolean | undefined {
-  let current: unknown = policy;
-  for (const part of path) {
-    if (!isRecord(current)) {
-      return undefined;
-    }
-    current = current[part];
-  }
-  return typeof current === "boolean" ? current : undefined;
 }
 
 function policyPathSetting(ctx: HealthCheckContext): string {
@@ -446,12 +493,4 @@ function policyDisplayName(ctx: HealthCheckContext): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
-}
-
-function readJsoncBoolean(ast: JsoncAst, docName: string, path: string): boolean | undefined {
-  const match = resolveOcPath(ast, parseOcPath(`oc://${docName}/${path}`));
-  if (match?.kind !== "leaf" || match.leafType !== "boolean") {
-    return undefined;
-  }
-  return match.valueText === "true";
 }

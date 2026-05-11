@@ -20,10 +20,6 @@
         "type": "boolean",
         "description": "Enable policy doctor checks even before policy.jsonc exists."
       },
-      "checkChannels": {
-        "type": "boolean",
-        "description": "Check whether configured channels satisfy policy.jsonc channel rules."
-      },
       "workspaceRepairs": {
         "type": "boolean",
         "description": "Allow doctor --fix to repair policy-managed workspace settings."

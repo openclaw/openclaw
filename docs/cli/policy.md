@@ -14,15 +14,17 @@ enterprise conformance feature: it lets an operator express required workspace
 posture in `policy.jsonc`, checks existing OpenClaw settings against those
 requirements, and emits audit evidence that can be recorded.
 
+Policy is a conformance layer over existing OpenClaw settings. It does not add
+a second configuration system. `policy.jsonc` defines authored requirements,
+OpenClaw observes current settings as evidence, and policy registers health
+checks that report drift. The final conformance signal is a clean
+`doctor --lint` run; policy contributes findings to that shared lint surface
+instead of creating a separate health gate.
+
 This first policy slice manages configured channels. For example, IT or a
 workspace operator can record that Telegram is not an approved channel
 provider, then use `doctor --lint` to report any enabled Telegram channel and
 `doctor --fix` to turn it off when workspace repairs are explicitly enabled.
-
-Policy is a conformance layer over existing OpenClaw settings. It does not add
-a second channel configuration system. The final conformance signal is a clean
-`doctor --lint` run; policy contributes findings to that shared lint surface
-instead of creating a separate health gate.
 
 Use policy when a workspace needs a durable statement such as "these channels
 must not be enabled" and a repeatable way to prove that OpenClaw still conforms
@@ -50,9 +52,6 @@ channel policy looks like this:
 ```jsonc
 {
   "channels": {
-    "settings": {
-      "checkChannels": true,
-    },
     "denyRules": [
       {
         "id": "no-telegram",
@@ -64,8 +63,9 @@ channel policy looks like this:
 }
 ```
 
-The rules are the authority. OpenClaw reads current `channels.*` settings and
-reports settings that do not conform.
+The rules are the authority. A category block is only a namespace; checks run
+when a concrete rule is present. OpenClaw reads current `channels.*` settings
+and reports settings that do not conform.
 
 ## Commands
 
@@ -76,9 +76,9 @@ openclaw policy check --severity-min error
 ```
 
 `policy check` runs only the policy check set and emits the observed workspace
-evidence plus policy and evidence hashes. The same findings also appear in
-`openclaw doctor --lint` when the policy extension is enabled, and
-`doctor --lint` is the workspace-level gate.
+evidence plus policy, evidence, findings, and attestation hashes. The same
+findings also appear in `openclaw doctor --lint` when the policy extension is
+enabled, and `doctor --lint` is the workspace-level gate.
 
 Example JSON output:
 
@@ -92,7 +92,7 @@ Example JSON output:
       "hash": "sha256:..."
     },
     "workspace": {
-      "scope": "channels",
+      "scope": "policy",
       "hash": "sha256:..."
     },
     "findingsHash": "sha256:...",
@@ -103,7 +103,7 @@ Example JSON output:
       {
         "id": "telegram",
         "provider": "telegram",
-        "ocPath": "oc://openclaw.config/channels/telegram",
+        "source": "oc://openclaw.config/channels/telegram",
         "enabled": false
       }
     ]
@@ -145,7 +145,6 @@ Policy config lives under `plugins.entries.policy.config`:
         "enabled": true,
         "config": {
           "enabled": true,
-          "checkChannels": true,
           "workspaceRepairs": false,
           "expectedHash": "sha256:...",
           "path": "policy.jsonc",
@@ -159,13 +158,9 @@ Policy config lives under `plugins.entries.policy.config`:
 | Setting            | Purpose                                                         |
 | ------------------ | --------------------------------------------------------------- |
 | `enabled`          | Enable policy checks even before `policy.jsonc` exists.         |
-| `checkChannels`    | Check configured channels against `policy.jsonc` channel rules. |
 | `workspaceRepairs` | Allow `doctor --fix` to edit policy-managed workspace settings. |
 | `expectedHash`     | Optional hash-lock for the approved policy artifact.            |
 | `path`             | Workspace-relative location of the policy artifact.             |
-
-The same booleans can also live under `channels.settings` in `policy.jsonc`.
-Config wins when both places set the same value.
 
 Set `plugins.entries.policy.config.enabled` to `false` to disable policy
 checks for a workspace.
@@ -177,6 +172,7 @@ Policy currently verifies:
 | Check id                          | Finding                                          |
 | --------------------------------- | ------------------------------------------------ |
 | `policy/policy-jsonc-missing`     | Policy is enabled but `policy.jsonc` is missing. |
+| `policy/policy-jsonc-invalid`     | Policy cannot be parsed or has malformed rules.  |
 | `policy/policy-hash-mismatch`     | Policy does not match configured `expectedHash`. |
 | `policy/channels-denied-provider` | An enabled channel matches a channel deny rule.  |
 

@@ -1,8 +1,9 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
+import { registerHealthCheck } from "./health-check-registry.js";
 
 type BundledHealthApi = {
-  registerPolicyDoctorChecks?: () => void;
+  registerPolicyDoctorChecks?: (host: { registerHealthCheck: typeof registerHealthCheck }) => void;
 };
 
 export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?: string }): void {
@@ -12,7 +13,7 @@ export function registerBundledHealthChecks(params: { cfg: OpenClawConfig; cwd?:
   loadBundledPluginPublicArtifactModuleSync<BundledHealthApi>({
     dirName: "policy",
     artifactBasename: "api.js",
-  }).registerPolicyDoctorChecks?.();
+  }).registerPolicyDoctorChecks?.({ registerHealthCheck });
 }
 
 function shouldRegisterPolicyHealth(params: { cfg: OpenClawConfig; cwd?: string }): boolean {

@@ -29,7 +29,6 @@ describe("policy commands", () => {
   it("checks policy rules and emits an attestation", async () => {
     const policy = {
       channels: {
-        settings: { checkChannels: true },
         denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
       },
     };
@@ -64,7 +63,7 @@ describe("policy commands", () => {
           hash: policyHash,
         },
         workspace: {
-          scope: "channels",
+          scope: "policy",
           hash: workspaceHash,
         },
         findingsHash,
@@ -86,7 +85,6 @@ describe("policy commands", () => {
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
         channels: {
-          settings: { checkChannels: true },
           denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
         },
       }),
@@ -116,6 +114,38 @@ describe("policy commands", () => {
     });
   });
 
+  it("reports malformed policy rules in policy check output", async () => {
+    await fs.writeFile(
+      join(workspaceDir, "policy.jsonc"),
+      JSON.stringify({ channels: { denyRules: [{ when: {} }] } }),
+      "utf-8",
+    );
+    const output: string[] = [];
+
+    const exitCode = await policyCheckCommand(
+      { cwd: workspaceDir, json: true },
+      {
+        writeStdout(value) {
+          output.push(value);
+        },
+        error(value) {
+          output.push(value);
+        },
+      },
+    );
+
+    expect(exitCode).toBe(1);
+    expect(JSON.parse(output.at(-1) ?? "{}")).toMatchObject({
+      ok: false,
+      findings: [
+        {
+          checkId: "policy/policy-jsonc-invalid",
+          target: "oc://policy.jsonc/channels/denyRules/#0",
+        },
+      ],
+    });
+  });
+
   it("links policy findings to both evidence and policy oc-paths", async () => {
     const configPath = join(workspaceDir, "openclaw.jsonc");
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
@@ -135,7 +165,6 @@ describe("policy commands", () => {
       join(workspaceDir, "policy.jsonc"),
       JSON.stringify({
         channels: {
-          settings: { checkChannels: true },
           denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
         },
       }),
@@ -161,7 +190,7 @@ describe("policy commands", () => {
         channels: [
           {
             id: "telegram",
-            ocPath: "oc://openclaw.config/channels/telegram",
+            source: "oc://openclaw.config/channels/telegram",
           },
         ],
       },
@@ -174,5 +203,17 @@ describe("policy commands", () => {
         },
       ],
     });
+  });
+
+  it("rejects invalid severity thresholds", async () => {
+    await expect(
+      policyCheckCommand(
+        { cwd: workspaceDir, severityMin: "warnng" },
+        {
+          writeStdout() {},
+          error() {},
+        },
+      ),
+    ).rejects.toThrow("Invalid --severity-min value");
   });
 });

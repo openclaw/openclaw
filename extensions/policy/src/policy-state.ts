@@ -7,7 +7,7 @@ export type PolicyAttestation = {
     readonly hash: string;
   };
   readonly workspace: {
-    readonly scope: "channels";
+    readonly scope: "policy";
     readonly hash: string;
   };
   readonly findingsHash?: string;
@@ -21,7 +21,7 @@ export type PolicyEvidence = {
 export type PolicyChannelEvidence = {
   readonly id: string;
   readonly provider: string;
-  readonly ocPath: string;
+  readonly source: string;
   readonly enabled?: boolean;
 };
 
@@ -60,12 +60,12 @@ export function scanPolicyChannels(cfg: Record<string, unknown>): readonly Polic
       const entry: {
         id: string;
         provider: string;
-        ocPath: string;
+        source: string;
         enabled?: boolean;
       } = {
         id,
         provider: id,
-        ocPath: `oc://openclaw.config/channels/${id}`,
+        source: `oc://openclaw.config/channels/${id}`,
       };
       if (isRecord(value) && typeof value.enabled === "boolean") {
         entry.enabled = value.enabled;
