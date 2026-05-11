@@ -17,6 +17,9 @@ mkdir -p "$TMPDIR_STAGE"
 # Rebuild working tree from current source HEAD only, never from source history.
 git -C "$SRC" archive HEAD | tar -x -C "$TMPDIR_STAGE"
 
+# Backup snapshots must not carry executable GitHub Actions workflows.
+rm -rf "$TMPDIR_STAGE/.github/workflows"
+
 # Sync snapshot into clean backup workspace.
 rsync -a --delete --exclude ".git/" "$TMPDIR_STAGE"/ "$DEST"/
 
