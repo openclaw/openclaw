@@ -44,6 +44,11 @@ function asMutableRecord(value: unknown): MutableRecord | undefined {
     : undefined;
 }
 
+function asAgentRuntimePolicyConfig(value: unknown): AgentRuntimePolicyConfig | undefined {
+  const record = asMutableRecord(value);
+  return record ? { id: typeof record.id === "string" ? record.id : undefined } : undefined;
+}
+
 function isOpenAICodexModelRef(model: string | undefined): model is string {
   return normalizeString(model)?.startsWith("openai-codex/") === true;
 }
@@ -253,7 +258,7 @@ function collectConfigModelRefs(cfg: OpenClawConfig, env?: NodeJS.ProcessEnv): C
       path: `agents.list.${id}`,
       runtime: resolveRuntime({
         env,
-        agentRuntime: agentRecord.agentRuntime,
+        agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
     });
@@ -862,7 +867,7 @@ function rewriteConfigModelRefs(params: {
       agentId: id,
       currentRuntime: resolveRuntime({
         env: params.env,
-        agentRuntime: agentRecord.agentRuntime,
+        agentRuntime: asAgentRuntimePolicyConfig(agentRecord.agentRuntime),
         defaultsRuntime,
       }),
       runtimePolicyChanges,
