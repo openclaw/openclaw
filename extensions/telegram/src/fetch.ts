@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import * as dns from "node:dns";
-import { OPENCLAW_VERSION } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -385,13 +384,14 @@ function resolveWrappedFetch(fetchImpl: typeof fetch): typeof fetch {
 }
 
 function stampUserAgent(fetchImpl: typeof fetch): typeof fetch {
-  const ua = `OpenClawBot/${OPENCLAW_VERSION}`;
+  const version = process.env["OPENCLAW_VERSION"]?.trim() || "unknown";
+  const ua = `OpenClawBot/${version}`;
   return (input, init) => {
-    const headers = new Headers((init as RequestInit | undefined)?.headers);
+    const headers = new Headers(init?.headers);
     if (!headers.has("User-Agent")) {
       headers.set("User-Agent", ua);
     }
-    return fetchImpl(input, { ...(init ?? {}), headers });
+    return fetchImpl(input, { ...init, headers });
   };
 }
 

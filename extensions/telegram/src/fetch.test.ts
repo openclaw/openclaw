@@ -100,9 +100,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   isWSL2Sync: () => false,
 }));
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
-  OPENCLAW_VERSION: "2026.5.10-test",
-}));
+// No agent-harness-runtime mock needed; stampUserAgent reads process.env.OPENCLAW_VERSION
 
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
@@ -552,8 +550,8 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
     const [calledUrl, calledInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
     expect(calledUrl).toBe("https://api.telegram.org/botTOKEN/getFile");
-    expect((calledInit?.headers as Headers | undefined)?.get("User-Agent")).toBe(
-      "OpenClawBot/2026.5.10-test",
+    expect((calledInit?.headers as Headers | undefined)?.get("User-Agent")).toMatch(
+      /^OpenClawBot\//u,
     );
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
@@ -1045,6 +1043,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("stamps OpenClawBot User-Agent on all outbound requests", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const transport = resolveTelegramTransport(undefined, {
@@ -1063,6 +1062,7 @@ describe("resolveTelegramFetch", () => {
   });
 
   it("does not overwrite a caller-provided User-Agent header", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
     const transport = resolveTelegramTransport(undefined, {
