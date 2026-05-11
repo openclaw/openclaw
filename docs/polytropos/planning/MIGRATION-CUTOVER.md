@@ -6,7 +6,7 @@ This document captures the one-time operational change required to switch the ru
 
 - Make a **single** update to the gateway systemd unit so it executes the core from:
   - `~/polytropos/releases/current/index.js`
-- After cutover, core version changes are performed by updating the `current` symlink (see `docs/polytropos/CORE-RELEASES.md`).
+- After cutover, core version changes are performed by updating the `current` symlink (see [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)).
 
 ## Current state (reference)
 
@@ -28,7 +28,7 @@ Update `ExecStart` to:
 
 Before changing `ExecStart`, perform the initial release setup described in:
 
-- `docs/polytropos/CORE-RELEASES.md`
+- [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 
 Minimum setup required:
 

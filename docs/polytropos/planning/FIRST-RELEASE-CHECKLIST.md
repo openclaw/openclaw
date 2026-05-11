@@ -2,7 +2,7 @@
 
 This checklist produces the first versioned release directory under `~/polytropos/releases/<tag>/`.
 
-**Release definition:** for OpenClaw/Polytropos core, a release is a **byte-for-byte copy of a `dist/` directory** (see `docs/polytropos/CORE-RELEASES.md`).
+**Release definition:** for OpenClaw/Polytropos core, a release is a **byte-for-byte copy of a `dist/` directory** (see [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)).
 
 ## Inputs
 
@@ -66,7 +66,7 @@ Do **not** cutover during release creation unless explicitly intended.
 
 When ready, follow:
 
-- `docs/polytropos/planning/MIGRATION-CUTOVER.md`
+- [`docs/polytropos/planning/MIGRATION-CUTOVER.md`](./MIGRATION-CUTOVER.md)
 
 ## 4) Post-cutover verification (after you switch ExecStart)
 

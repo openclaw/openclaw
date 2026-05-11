@@ -29,7 +29,7 @@ This roadmap turns the OpenClaw → Polytropos fork into a plugin-first architec
 - [ ] Create minimal fork deltas: Polytropos namespace + extension loading seams
 - [ ] Document the compatibility model (what stays hook-only vs capability registration)
 - [ ] CI / local dev loop documented
-- [ ] Maintain canonical docs under `docs/polytropos/`
+- [ ] Maintain canonical docs under [`docs/polytropos/`](../../polytropos/)
 
 **Acceptance:** fork runs with existing `~/.openclaw/openclaw.json`.
 

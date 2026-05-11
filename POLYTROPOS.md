@@ -14,7 +14,7 @@ This repository is the *core fork* (the runtime + loader). Plugins live in a sep
 For Polytropos-specific documentation, treat **this file** as the canonical readme.
 
 - `README.md` is retained primarily as the upstream OpenClaw README (with a small Polytropos header).
-- Polytropos docs live under `docs/polytropos/`.
+- Polytropos docs live under [`docs/polytropos/`](docs/polytropos/).
 
 ---
 
@@ -79,15 +79,15 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 1) Implement the capability in `polytropos-plugins` (new plugin or change an existing plugin).
 2) If the plugin cannot do the job with existing hooks/config/logs:
    - add the smallest possible **allowed** core change
-   - document any new events/hooks in `docs/polytropos/POLYTROPOS-EVENTS.md`
+   - document any new events/hooks in [`docs/polytropos/POLYTROPOS-EVENTS.md`](docs/polytropos/POLYTROPOS-EVENTS.md)
 3) Verify in runtime.
 
 ---
 
 ## Where to put things
 
-- Long-lived fork docs: `docs/polytropos/` (with this overview kept at repo root)
-- Work-in-progress plans: `docs/polytropos/planning/`
+- Long-lived fork docs: [`docs/polytropos/`](docs/polytropos/) (with this overview kept at repo root)
+- Work-in-progress plans: [`docs/polytropos/planning/`](docs/polytropos/planning/)
 - Plugins: **do not** land in this repo; they live in `polytropos-plugins`
 
 ---
@@ -96,7 +96,7 @@ If a change doesn’t fit one of those buckets, it doesn’t belong in the fork.
 
 See:
 
-- `docs/polytropos/planning/ROADMAP.md`
-- `docs/polytropos/planning/PLUGIN-CONTRACT.md`
+- [`docs/polytropos/planning/ROADMAP.md`](docs/polytropos/planning/ROADMAP.md)
+- [`docs/polytropos/planning/PLUGIN-CONTRACT.md`](docs/polytropos/planning/PLUGIN-CONTRACT.md)
 
 M0/M2 are complete (plugin pipeline + migration workflow). Next major milestone is **M1: fork skeleton** (core seams + minimal namespace / structure for Polytropos-specific behavior).

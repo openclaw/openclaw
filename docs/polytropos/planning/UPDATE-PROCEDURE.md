@@ -4,7 +4,7 @@
 
 See also:
 
-- Release mechanism: `docs/polytropos/CORE-RELEASES.md`
+- Release mechanism: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 
 ## Inputs
 
@@ -48,7 +48,7 @@ Output: `<repo>/dist/`.
 
 Release is the act of taking a built `dist/` and creating a runnable versioned directory under `~/polytropos/releases/<forkTag>/` (and optionally switching `current`).
 
-Follow `docs/polytropos/CORE-RELEASES.md` to:
+Follow [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md) to:
 
 - copy `<repo>/dist/` into `~/polytropos/releases/<forkTag>/`
 - update `previous` then `current`
