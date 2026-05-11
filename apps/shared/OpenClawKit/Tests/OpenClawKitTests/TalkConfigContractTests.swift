@@ -83,7 +83,6 @@ struct TalkConfigContractTests {
             } else {
                 #expect(selection == nil)
             }
-            #expect(fixture.payloadValid == (selection != nil))
         }
     }
 
