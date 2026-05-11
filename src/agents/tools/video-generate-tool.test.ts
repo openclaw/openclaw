@@ -361,6 +361,45 @@ describe("createVideoGenerateTool", () => {
     expect(taskExecutorMocks.completeTaskRunByRunId).not.toHaveBeenCalled();
   });
 
+  it("uses configured timeoutMs for video generation and lets calls override it", async () => {
+    mockVideoPluginProvider();
+    const generateSpy = mockSavedVideoResult();
+    const tool = createVideoGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            videoGenerationModel: {
+              primary: "video-plugin/vid-v1",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected video_generate tool");
+    }
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "friendly lobster surfing",
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValueOnce({
+      path: "/tmp/out-override.mp4",
+      id: "out-override.mp4",
+      size: 11,
+      contentType: "video/mp4",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "friendly lobster surfing",
+      timeoutMs: 12_345,
+    });
+
+    expect((firstMockCallArg(generateSpy) as { timeoutMs?: number }).timeoutMs).toBe(180_000);
+    expect((generateSpy.mock.calls[1]?.[0] as { timeoutMs?: number }).timeoutMs).toBe(12_345);
+    expect(resultDetails(defaultResult).timeoutMs).toBe(180_000);
+    expect(resultDetails(overrideResult).timeoutMs).toBe(12_345);
+  });
+
   it("uses the video media cap when mediaMaxMb is not configured", async () => {
     vi.spyOn(videoGenerationRuntime, "generateVideo").mockResolvedValue({
       provider: "qwen",

@@ -638,7 +638,8 @@ export function createMusicGenerateTool(options?: {
       });
       const format = normalizeOutputFormat(readStringParam(args, "format"));
       const filename = readStringParam(args, "filename");
-      const requestedTimeoutMs = readGenerationTimeoutMs(args);
+      const requestedTimeoutMs =
+        readGenerationTimeoutMs(args) ?? musicGenerationModelConfig.timeoutMs;
       const timeout = normalizeMusicGenerationTimeoutMs(requestedTimeoutMs);
       const timeoutMs = timeout.timeoutMs;
       const imageInputs = normalizeReferenceImageInputs(args);

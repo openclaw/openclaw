@@ -408,6 +408,57 @@ describe("createMusicGenerateTool", () => {
     });
   });
 
+  it("uses configured timeoutMs for music generation and lets calls override it", async () => {
+    vi.spyOn(musicGenerationRuntime, "generateMusic").mockResolvedValue({
+      provider: "google",
+      model: "lyria-3-clip-preview",
+      attempts: [],
+      ignoredOverrides: [],
+      tracks: [
+        {
+          buffer: Buffer.from("music-bytes"),
+          mimeType: "audio/mpeg",
+          fileName: "night-drive.mp3",
+        },
+      ],
+    });
+    vi.spyOn(mediaStore, "saveMediaBuffer").mockResolvedValue({
+      path: "/tmp/generated-night-drive.mp3",
+      id: "generated-night-drive.mp3",
+      size: 11,
+      contentType: "audio/mpeg",
+    });
+
+    const tool = createMusicGenerateTool({
+      config: asConfig({
+        agents: {
+          defaults: {
+            musicGenerationModel: {
+              primary: "google/lyria-3-clip-preview",
+              timeoutMs: 180_000,
+            },
+          },
+        },
+      }),
+    });
+    if (!tool) {
+      throw new Error("expected music_generate tool");
+    }
+
+    const defaultResult = await tool.execute("call-timeout-default", {
+      prompt: "night-drive synthwave",
+    });
+    const overrideResult = await tool.execute("call-timeout-override", {
+      prompt: "night-drive synthwave",
+      timeoutMs: 12_345,
+    });
+
+    expect(generateMusicOptions(0).timeoutMs).toBe(180_000);
+    expect(generateMusicOptions(1).timeoutMs).toBe(12_345);
+    expect(detailsOf(defaultResult).timeoutMs).toBe(180_000);
+    expect(detailsOf(overrideResult).timeoutMs).toBe(12_345);
+  });
+
   it("starts background generation and wakes the session with MEDIA lines", async () => {
     taskExecutorMocks.createRunningTaskRun.mockReturnValue({
       taskId: "task-123",
