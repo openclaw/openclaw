@@ -276,7 +276,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     override name = "list";
     override description = "List active voice sessions with details";
     override defer = true;
-    ephemeral = params.ephemeralDefault;
+    override ephemeral = params.ephemeralDefault;
 
     async run(interaction: CommandInteraction) {
       const runtimeContext = await resolveVoiceCommandRuntimeContext(interaction, params);
@@ -303,7 +303,7 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
     override name = "chat";
     override description = "Show or set voice chat mode";
     override defer = true;
-    ephemeral = params.ephemeralDefault;
+    override ephemeral = params.ephemeralDefault;
     options: CommandOptions = [
       {
         name: "mode",
