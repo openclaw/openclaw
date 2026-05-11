@@ -43,15 +43,21 @@ function formatListTop(
   return { lines, omitted };
 }
 
+function resolveRunContextReport(params: HandleCommandsParams): SessionSystemPromptReport | null {
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
+  const existing = targetSessionEntry?.systemPromptReport;
+  return existing?.source === "run" ? existing : null;
+}
+
 async function resolveContextReport(
   params: HandleCommandsParams,
 ): Promise<SessionSystemPromptReport> {
-  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
-  const existing = targetSessionEntry?.systemPromptReport;
-  if (existing && existing.source === "run") {
-    return existing;
+  const runReport = resolveRunContextReport(params);
+  if (runReport) {
+    return runReport;
   }
 
+  const targetSessionEntry = params.sessionStore?.[params.sessionKey] ?? params.sessionEntry;
   const bootstrapMaxChars = resolveBootstrapMaxChars(params.cfg);
   const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.cfg);
   const { resolveCommandsSystemPromptBundle } = await import("./commands-system-prompt.js");
@@ -100,7 +106,6 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     };
   }
 
-  const report = await resolveContextReport(params);
   const cachedContextUsageTokens = resolveFreshSessionTotalTokens(targetSessionEntry);
   const session = {
     totalTokens: targetSessionEntry?.totalTokens ?? null,
@@ -110,11 +115,17 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
     contextTokens: params.contextTokens ?? null,
   } as const;
 
-  if (sub === "json") {
-    return { text: JSON.stringify({ report, session }, null, 2) };
-  }
-
   if (sub === "map") {
+    const report = resolveRunContextReport(params);
+    if (!report) {
+      return {
+        text: [
+          "Context treemap unavailable.",
+          "No actual run context is cached for this session yet.",
+          "Send a normal message, then run /context map again.",
+        ].join("\n"),
+      };
+    }
     const treemap = await renderContextTreemapPng({
       report,
       session: {
@@ -128,6 +139,12 @@ export async function buildContextReply(params: HandleCommandsParams): Promise<R
       trustedLocalMedia: true,
       sensitiveMedia: true,
     };
+  }
+
+  const report = await resolveContextReport(params);
+
+  if (sub === "json") {
+    return { text: JSON.stringify({ report, session }, null, 2) };
   }
 
   if (sub !== "list" && sub !== "show" && sub !== "detail" && sub !== "deep") {

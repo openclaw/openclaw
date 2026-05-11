@@ -201,12 +201,19 @@ describe("resolveDiscordDmCommandAccess", () => {
       readStoreAllowFrom: async () => [],
     });
 
-    expect(canViewDiscordGuildChannelMock).toHaveBeenCalledWith(
-      "guild-1",
-      "channel-1",
-      "123",
-      expect.objectContaining({ accountId: "default", token: "token" }),
-    );
+    expect(canViewDiscordGuildChannelMock).toHaveBeenCalledWith("guild-1", "channel-1", "123", {
+      accountId: "default",
+      cfg: {
+        accessGroups: {
+          maintainers: {
+            type: "discord.channelAudience",
+            guildId: "guild-1",
+            channelId: "channel-1",
+          },
+        },
+      },
+      token: "token",
+    });
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
   });

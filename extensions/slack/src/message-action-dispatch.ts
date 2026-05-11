@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import {
   normalizeInteractiveReply,
@@ -58,8 +59,14 @@ export async function handleSlackMessageAction(params: {
     if (!content && !mediaUrl && !blocks) {
       throw new Error("Slack send requires message, blocks, or media.");
     }
+    const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
+    if (replyBroadcast && mediaUrl) {
+      throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
+    }
     const threadId = readStringParam(actionParams, "threadId");
     const replyTo = readStringParam(actionParams, "replyTo");
+    const topLevel =
+      readBooleanParam(actionParams, "topLevel") === true || actionParams.threadId === null;
     return await invoke(
       {
         action: "sendMessage",
@@ -68,6 +75,8 @@ export async function handleSlackMessageAction(params: {
         mediaUrl: mediaUrl ?? undefined,
         accountId,
         threadTs: threadId ?? replyTo ?? undefined,
+        ...(topLevel ? { topLevel: true } : {}),
+        ...(replyBroadcast ? { replyBroadcast } : {}),
         ...(blocks ? { blocks } : {}),
       },
       cfg,
@@ -219,6 +228,10 @@ export async function handleSlackMessageAction(params: {
   }
 
   if (action === "upload-file") {
+    const replyBroadcast = readBooleanParam(actionParams, "replyBroadcast");
+    if (replyBroadcast) {
+      throw new Error("Slack replyBroadcast is only supported for text or block thread replies.");
+    }
     const to = readStringParam(actionParams, "to") ?? resolveChannelId();
     const filePath =
       readStringParam(actionParams, "filePath", { trim: false }) ??
@@ -229,6 +242,8 @@ export async function handleSlackMessageAction(params: {
     }
     const threadId =
       readStringParam(actionParams, "threadId") ?? readStringParam(actionParams, "replyTo");
+    const topLevel =
+      readBooleanParam(actionParams, "topLevel") === true || actionParams.threadId === null;
     return await invoke(
       {
         action: "uploadFile",
@@ -241,6 +256,7 @@ export async function handleSlackMessageAction(params: {
         filename: readStringParam(actionParams, "filename"),
         title: readStringParam(actionParams, "title"),
         threadTs: threadId ?? undefined,
+        ...(topLevel ? { topLevel: true } : {}),
         accountId,
       },
       cfg,

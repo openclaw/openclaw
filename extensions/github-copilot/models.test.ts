@@ -3,9 +3,9 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildCopilotModelDefinition, getDefaultCopilotModelIds } from "./models-defaults.js";
 import { fetchCopilotUsage } from "./usage.js";
 
-vi.mock("@mariozechner/pi-ai/oauth", async () => {
-  const actual = await vi.importActual<typeof import("@mariozechner/pi-ai/oauth")>(
-    "@mariozechner/pi-ai/oauth",
+vi.mock("@earendil-works/pi-ai/oauth", async () => {
+  const actual = await vi.importActual<typeof import("@earendil-works/pi-ai/oauth")>(
+    "@earendil-works/pi-ai/oauth",
   );
   return {
     ...actual,
@@ -41,7 +41,7 @@ import type { ProviderResolveDynamicModelContext } from "openclaw/plugin-sdk/cor
 import { fetchCopilotModelCatalog, resolveCopilotForwardCompatModel } from "./models.js";
 
 afterAll(() => {
-  vi.doUnmock("@mariozechner/pi-ai/oauth");
+  vi.doUnmock("@earendil-works/pi-ai/oauth");
   vi.doUnmock("openclaw/plugin-sdk/provider-model-shared");
   vi.doUnmock("openclaw/plugin-sdk/json-store");
   vi.doUnmock("openclaw/plugin-sdk/state-paths");

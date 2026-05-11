@@ -10,13 +10,17 @@ import {
 } from "openclaw/plugin-sdk/text-chunking";
 import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
 
-type TelegramFormattedChunk = {
+export type TelegramFormattedChunk = {
   html: string;
   text: string;
 };
 
-function escapeHtml(text: string): string {
+export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeHtml(text: string): string {
+  return escapeTelegramHtml(text);
 }
 
 function escapeHtmlAttr(text: string): string {

@@ -56,6 +56,10 @@ describe("inbound dedupe", () => {
   });
 
   it("shares claim/release state across distinct module instances", async () => {
+    const expectedKey = buildInboundDedupeKey(sharedInboundContext);
+    if (!expectedKey) {
+      throw new Error("expected inbound dedupe key");
+    }
     const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
       import.meta.url,
       "./inbound-dedupe.js?scope=claim-a",
@@ -70,16 +74,15 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toMatchObject({ status: "claimed" });
-      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+      expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "inflight",
+        key: expectedKey,
       });
-      if (firstClaim.status !== "claimed") {
-        throw new Error("expected claimed inbound dedupe result");
-      }
       inboundB.releaseInboundDedupe(firstClaim.key);
-      expect(inboundA.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+      expect(inboundA.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "claimed",
+        key: expectedKey,
       });
     } finally {
       inboundA.resetInboundDedupe();
@@ -88,6 +91,10 @@ describe("inbound dedupe", () => {
   });
 
   it("shares claim/commit state across distinct module instances", async () => {
+    const expectedKey = buildInboundDedupeKey(sharedInboundContext);
+    if (!expectedKey) {
+      throw new Error("expected inbound dedupe key");
+    }
     const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
       import.meta.url,
       "./inbound-dedupe.js?scope=commit-a",
@@ -102,13 +109,11 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toMatchObject({ status: "claimed" });
-      if (firstClaim.status !== "claimed") {
-        throw new Error("expected claimed inbound dedupe result");
-      }
+      expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
       inboundA.commitInboundDedupe(firstClaim.key);
-      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toMatchObject({
+      expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "duplicate",
+        key: expectedKey,
       });
     } finally {
       inboundA.resetInboundDedupe();

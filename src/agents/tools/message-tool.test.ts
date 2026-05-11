@@ -240,7 +240,7 @@ function getActionEnum(properties: Record<string, unknown>) {
 function expectStringSchema(
   schema: unknown,
   expected?: {
-    descriptionIncludes?: string;
+    description?: string;
   },
 ) {
   expect(schema).toBeTruthy();
@@ -249,8 +249,8 @@ function expectStringSchema(
   }
   const record = schema as Record<string, unknown>;
   expect(record.type).toBe("string");
-  if (expected?.descriptionIncludes) {
-    expect(record.description).toEqual(expect.stringContaining(expected.descriptionIncludes));
+  if (expected?.description) {
+    expect(record.description).toBe(expected.description);
   }
 }
 
@@ -858,6 +858,36 @@ describe("message tool schema scoping", () => {
     expect(getToolProperties(unscopedTool).presentation).toBeUndefined();
   });
 
+  it("keeps send-only scoped schemas small", () => {
+    const sendOnlyPlugin = createChannelPlugin({
+      id: "telegram",
+      label: "Telegram",
+      docsPath: "/channels/telegram",
+      blurb: "Telegram send plugin.",
+      actions: ["send"],
+    });
+
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "telegram", source: "test", plugin: sendOnlyPlugin }]),
+    );
+
+    const tool = createMessageTool({
+      config: {} as never,
+      currentChannelProvider: "telegram",
+    });
+    const properties = getToolProperties(tool);
+
+    expect(getActionEnum(properties)).toEqual(["send"]);
+    expect(properties).toHaveProperty("message");
+    expect(properties).toHaveProperty("target");
+    expect(properties).toHaveProperty("media");
+    expect(properties).not.toHaveProperty("pollId");
+    expect(properties).not.toHaveProperty("messageId");
+    expect(properties).not.toHaveProperty("channelId");
+    expect(properties).not.toHaveProperty("activityName");
+    expect(properties).not.toHaveProperty("eventName");
+  });
+
   it("uses discovery account scope for other configured channel actions", () => {
     const currentPlugin = createChannelPlugin({
       id: "discord",
@@ -1035,7 +1065,10 @@ describe("message tool schema scoping", () => {
     const properties = getToolProperties(tool);
 
     expect(getActionEnum(properties)).toContain("read");
-    expectStringSchema(properties.messageId, { descriptionIncludes: "read" });
+    expectStringSchema(properties.messageId, {
+      description:
+        "Target message id for read, reaction, edit, delete, pin, or unpin. If omitted for reaction-like actions, defaults to the current inbound message id when available.",
+    });
   });
 });
 

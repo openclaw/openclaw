@@ -81,9 +81,11 @@ describe("google web search provider", () => {
         throw new Error("Expected tool definition");
       }
 
-      await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toMatchObject({
+      await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
+        docs: "https://docs.openclaw.ai/tools/web",
         error: "missing_gemini_api_key",
-        message: expect.stringContaining("use web_fetch for a specific URL or the browser tool"),
+        message:
+          "web_search (gemini) needs an API key. Set GEMINI_API_KEY in the Gateway environment, configure plugins.entries.google.config.webSearch.apiKey, or reuse models.providers.google.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
       });
     });
   });

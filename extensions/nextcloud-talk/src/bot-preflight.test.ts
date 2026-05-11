@@ -90,7 +90,8 @@ describe("probeNextcloudTalkBotResponseFeature", () => {
       code: "missing_response_feature",
       botId: "7",
       features: 9,
-      message: expect.stringContaining("--feature response"),
+      message:
+        'Nextcloud Talk bot "OpenClaw" (7) is missing the response feature (features=9); outbound replies will fail. Run ./occ talk:bot:state --feature webhook --feature response --feature reaction 7 1 or reinstall the bot with --feature response.',
     });
   });
 
