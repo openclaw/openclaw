@@ -570,15 +570,16 @@ describe("runCli exit behavior", () => {
     ["tools", ["node", "openclaw", "tools", "effective"]],
   ])("keeps reserved %s command roots out of plugin command discovery", async (_name, argv) => {
     const parseAsync = vi.fn().mockResolvedValueOnce(undefined);
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [],
       parseAsync,
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
 
     await runCli(argv);
 
     expect(startProxyMock).not.toHaveBeenCalled();
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), argv[2], argv);
+    expect(registerSubCliByNameMock.mock.calls).toEqual([[program, argv[2], argv]]);
     expect(registerPluginCliCommandsFromValidatedConfigMock).not.toHaveBeenCalled();
     expect(parseAsync).toHaveBeenCalledWith(argv);
   });
@@ -801,47 +802,41 @@ describe("runCli exit behavior", () => {
 
   it("swallows Commander parse exits after recording the exit code", async () => {
     const exitCode = process.exitCode;
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [{ name: () => "status" }],
       parseAsync: vi
         .fn()
         .mockRejectedValueOnce(
           new CommanderError(1, "commander.excessArguments", "too many arguments for 'status'"),
         ),
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
 
     await expect(runCli(["node", "openclaw", "status"])).resolves.toBeUndefined();
 
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "status", [
-      "node",
-      "openclaw",
-      "status",
+    expect(registerSubCliByNameMock.mock.calls).toEqual([
+      [program, "status", ["node", "openclaw", "status"]],
     ]);
     expect(process.exitCode).toBe(1);
     process.exitCode = exitCode;
   });
 
   it("loads the real primary command before rendering command help", async () => {
-    buildProgramMock.mockReturnValueOnce({
+    const program = {
       commands: [{ name: () => "doctor" }],
       parseAsync: vi.fn().mockResolvedValueOnce(undefined),
-    });
+    };
+    buildProgramMock.mockReturnValueOnce(program);
     const ctx = { programVersion: "0.0.0-test" };
     getProgramContextMock.mockReturnValueOnce(ctx as never);
 
     await runCli(["node", "openclaw", "doctor", "--help"]);
 
-    expect(registerCoreCliByNameMock).toHaveBeenCalledWith(expect.anything(), ctx, "doctor", [
-      "node",
-      "openclaw",
-      "doctor",
-      "--help",
+    expect(registerCoreCliByNameMock.mock.calls).toEqual([
+      [program, ctx, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);
-    expect(registerSubCliByNameMock).toHaveBeenCalledWith(expect.anything(), "doctor", [
-      "node",
-      "openclaw",
-      "doctor",
-      "--help",
+    expect(registerSubCliByNameMock.mock.calls).toEqual([
+      [program, "doctor", ["node", "openclaw", "doctor", "--help"]],
     ]);
   });
 
@@ -907,10 +902,9 @@ describe("runCli exit behavior", () => {
         code: "EHOSTUNREACH",
       });
       expect(handler(hostUnreachable)).toBeUndefined();
-      expect(consoleWarnSpy).toHaveBeenCalledWith(
-        "[openclaw] Non-fatal uncaught exception (continuing):",
-        expect.stringContaining("EHOSTUNREACH"),
-      );
+      expect(consoleWarnSpy.mock.calls).toEqual([
+        ["[openclaw] Non-fatal uncaught exception (continuing):", hostUnreachable.stack],
+      ]);
       expect(restoreTerminalStateMock).not.toHaveBeenCalled();
       expect(exitSpy).not.toHaveBeenCalled();
     } finally {
