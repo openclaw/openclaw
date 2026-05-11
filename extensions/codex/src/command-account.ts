@@ -11,7 +11,7 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import { CODEX_CONTROL_METHODS, type CodexControlMethod } from "./app-server/capabilities.js";
-import type { JsonValue } from "./app-server/protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import { rememberCodexRateLimits } from "./app-server/rate-limit-cache.js";
 import {
   summarizeCodexAccountUsage,
@@ -72,6 +72,7 @@ export async function readCodexAccountAuthOverview(params: {
     store,
     order,
     config,
+    account: params.account,
     limits: params.limits,
   });
   const subscriptionProfileId = order.find((profileId) =>
@@ -163,8 +164,17 @@ function resolveActiveProfileId(params: {
   store: AuthProfileStore;
   order: string[];
   config: AuthProfileOrderConfig;
+  account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
 }): string | undefined {
+  const liveProfileId = resolveLiveAccountProfileId({
+    account: params.account,
+    store: params.store,
+    order: params.order,
+  });
+  if (liveProfileId) {
+    return liveProfileId;
+  }
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
@@ -195,6 +205,44 @@ function resolveActiveProfileId(params: {
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   })[0];
+}
+
+function resolveLiveAccountProfileId(params: {
+  account: SafeValue<JsonValue | undefined>;
+  store: AuthProfileStore;
+  order: string[];
+}): string | undefined {
+  if (!params.account.ok || !isJsonObject(params.account.value)) {
+    return undefined;
+  }
+  const account = isJsonObject(params.account.value.account)
+    ? params.account.value.account
+    : params.account.value;
+  const type = readString(account, "type")?.toLowerCase();
+  if (type === "chatgpt") {
+    const email = readString(account, "email")?.toLowerCase();
+    const firstSubscription = params.order.find((profileId) =>
+      isChatGptSubscriptionProfile(params.store.profiles[profileId]),
+    );
+    if (!email) {
+      return firstSubscription;
+    }
+    return (
+      params.order.find((profileId) => {
+        const credential = params.store.profiles[profileId];
+        if (!isChatGptSubscriptionProfile(credential)) {
+          return false;
+        }
+        const profileEmail =
+          credential.email?.trim().toLowerCase() ?? extractEmailFromProfileId(profileId);
+        return profileEmail?.toLowerCase() === email;
+      }) ?? firstSubscription
+    );
+  }
+  if (type === "apikey" || type === "api_key") {
+    return params.order.find((profileId) => params.store.profiles[profileId]?.type === "api_key");
+  }
+  return undefined;
 }
 
 function shouldInferApiKeyActiveFromRateLimitProbe(
@@ -326,6 +374,11 @@ function formatSubscriptionUsageLine(
 
 function formatUsageLineForDisplay(value: string): string {
   return value.replace(/^weekly\b/u, "Weekly").replace(/\bshort-term\b/u, "Short-term");
+}
+
+function readString(record: JsonObject, key: string): string | undefined {
+  const value = record[key];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isChatGptSubscriptionProfile(credential: AuthProfileCredential | undefined): boolean {

@@ -754,6 +754,68 @@ describe("codex command", () => {
     expect(result.text).not.toContain("secondary");
   });
 
+  it("prefers the live ChatGPT account over stale API-key lastGood state", async () => {
+    const config = {};
+    const now = Date.now();
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+        },
+        order: {
+          openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"],
+        },
+        lastGood: {
+          openai: "openai:api-key-backup",
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "personal-email@gmail.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 12,
+          secondaryUsedPercent: 63,
+          primaryResetSeconds: Math.ceil(now / 1000) + 120,
+          secondaryResetSeconds: Math.ceil(now / 1000) + 3600,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+    expect(result.text).toContain("\n  2. api-key-backup   API key   — available if needed");
+    expect(result.text).not.toContain("Now using: api-key-backup");
+    expect(result.text).not.toContain("subscription unavailable");
+  });
+
   it("shows Codex auth order before OpenAI fallback order", async () => {
     const config = {};
     const now = Date.now();
