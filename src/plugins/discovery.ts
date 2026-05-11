@@ -15,7 +15,6 @@ import {
   resolvePackagedBundledLoadPathAlias,
 } from "./bundled-load-path-aliases.js";
 import { listBundledSourceOverlayDirs } from "./bundled-source-overlays.js";
-import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import type { PluginBundleFormat, PluginDiagnostic, PluginFormat } from "./manifest-types.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
@@ -30,6 +29,7 @@ import {
   resolvePackageRuntimeExtensionSources,
   resolvePackageSetupSource,
 } from "./package-entry-resolution.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { formatPosixMode, isPathInside, safeRealpathSync, safeStatSync } from "./path-safety.js";
 import { tracePluginLifecyclePhase } from "./plugin-lifecycle-trace.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";

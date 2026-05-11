@@ -52,7 +52,10 @@ describe("parseOcPath", () => {
   });
 
   it("rejects control chars in ignored query values", () => {
-    expectOcPathError(() => parseOcPath("oc://SOUL.md?ignored=\x00"), "OC_PATH_CONTROL_CHAR");
+    expectOcPathError(
+      () => parseOcPath("oc://SOUL.md?ignored=\x00"),
+      "OC_PATH_CONTROL_CHAR",
+    );
   });
 
   it("rejects missing scheme", () => {

@@ -129,13 +129,9 @@ function repackSlotSubs(pattern: OcPath, slotSubs: readonly SlotSub[]): OcPath {
   const itemSubs: string[] = [];
   const fieldSubs: string[] = [];
   for (const s of slotSubs) {
-    if (s.slot === "section") {
-      sectionSubs.push(s.value);
-    } else if (s.slot === "item") {
-      itemSubs.push(s.value);
-    } else {
-      fieldSubs.push(s.value);
-    }
+    if (s.slot === "section") {sectionSubs.push(s.value);}
+    else if (s.slot === "item") {itemSubs.push(s.value);}
+    else {fieldSubs.push(s.value);}
   }
   return {
     file: pattern.file,
@@ -155,13 +151,7 @@ interface WalkOps<T> {
   lookup(node: T, key: string): { keySub: string; child: T } | null;
   positional(node: T, seg: string): { keySub: string; child: T } | null;
   predicate(node: T, pred: PredicateSpec): Iterable<{ keySub: string; child: T }>;
-  walk(
-    node: T,
-    subs: readonly PatternSub[],
-    i: number,
-    walked: readonly SlotSub[],
-    onMatch: OnMatch,
-  ): void;
+  walk(node: T, subs: readonly PatternSub[], i: number, walked: readonly SlotSub[], onMatch: OnMatch): void;
 }
 
 function checkDepth(walked: readonly SlotSub[]): void {
@@ -186,9 +176,7 @@ function dispatchSeg<T>(
 
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
+    if (alts === null) {return;}
     for (const alt of alts) {
       const altSubs = subs.slice();
       altSubs[i] = { slot: cur.slot, value: alt };
@@ -199,9 +187,7 @@ function dispatchSeg<T>(
 
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred === null) {
-      return;
-    }
+    if (pred === null) {return;}
     for (const m of ops.predicate(node, pred)) {
       ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
     }
@@ -211,9 +197,7 @@ function dispatchSeg<T>(
   if (cur.value === WILDCARD_RECURSIVE) {
     // `**` — descend with `**` consumed (i+1) AND retained (i) so
     // deeper structures still match. Emit if no subs remain.
-    if (i + 1 >= subs.length) {
-      onMatch(walked);
-    }
+    if (i + 1 >= subs.length) {onMatch(walked);}
     for (const m of ops.enumerate(node)) {
       const nextWalked: readonly SlotSub[] = [...walked, { slot: cur.slot, value: m.keySub }];
       ops.walk(m.child, subs, i + 1, nextWalked, onMatch);
@@ -231,17 +215,13 @@ function dispatchSeg<T>(
 
   if (isPositionalSeg(cur.value)) {
     const m = ops.positional(node, cur.value);
-    if (m === null) {
-      return;
-    }
+    if (m === null) {return;}
     ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
     return;
   }
 
   const m = ops.lookup(node, cur.value);
-  if (m === null) {
-    return;
-  }
+  if (m === null) {return;}
   ops.walk(m.child, subs, i + 1, [...walked, { slot: cur.slot, value: m.keySub }], onMatch);
 }
 
@@ -265,9 +245,7 @@ function walkJsonc(
 const jsoncOps: WalkOps<JsoncValue> = {
   *enumerate(node) {
     if (node.kind === "object") {
-      for (const e of node.entries) {
-        yield { keySub: quoteSeg(e.key), child: e.value };
-      }
+      for (const e of node.entries) {yield { keySub: quoteSeg(e.key), child: e.value };}
     } else if (node.kind === "array") {
       for (let idx = 0; idx < node.items.length; idx++) {
         yield { keySub: String(idx), child: node.items[idx] };
@@ -284,18 +262,14 @@ const jsoncOps: WalkOps<JsoncValue> = {
     }
     if (node.kind === "array") {
       const idx = Number(key);
-      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {
-        return null;
-      }
+      if (!Number.isInteger(idx) || idx < 0 || idx >= node.items.length) {return null;}
       return { keySub: key, child: node.items[idx] };
     }
     return null;
   },
   positional(node, seg) {
     const concrete = positionalForJsoncNode(node, seg);
-    if (concrete === null) {
-      return null;
-    }
+    if (concrete === null) {return null;}
     return jsoncOps.lookup(node, concrete);
   },
   *predicate(node, pred) {
@@ -351,16 +325,12 @@ function walkJsonl(
 const jsonlOps: WalkOps<JsonlAst> = {
   *enumerate(ast) {
     for (const l of ast.lines) {
-      if (l.kind === "value") {
-        yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
-      }
+      if (l.kind === "value") {yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };}
     }
   },
   lookup(ast, key) {
     const line = pickLine(ast, key);
-    if (line === null) {
-      return null;
-    }
+    if (line === null) {return null;}
     const concreteAddr = line.kind === "value" ? `L${line.line}` : key;
     return { keySub: concreteAddr, child: lineHolder(ast, line) };
   },
@@ -369,9 +339,7 @@ const jsonlOps: WalkOps<JsonlAst> = {
   },
   *predicate(ast, pred) {
     for (const l of ast.lines) {
-      if (l.kind !== "value") {
-        continue;
-      }
+      if (l.kind !== "value") {continue;}
       const actual = topLevelLeafText(l.value, pred.key);
       if (evaluatePredicate(actual, pred)) {
         yield { keySub: `L${l.line}`, child: lineHolder(ast, l) };
@@ -391,9 +359,7 @@ const jsonlOps: WalkOps<JsonlAst> = {
       onMatch(walked);
       return;
     }
-    if (line.kind !== "value") {
-      return;
-    }
+    if (line.kind !== "value") {return;}
     walkJsonc(line.value, subs, i, walked, onMatch);
   },
 };
@@ -416,20 +382,12 @@ function unwrapHolder(holder: JsonlAst): JsonlLine | null {
 }
 
 function topLevelLeafText(value: JsoncValue, key: string): string | null {
-  if (value.kind !== "object") {
-    return null;
-  }
+  if (value.kind !== "object") {return null;}
   const entry = value.entries.find((e) => e.key === key);
-  if (entry === undefined) {
-    return null;
-  }
+  if (entry === undefined) {return null;}
   const v = entry.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
+  if (v.kind === "string") {return v.value;}
+  if (v.kind === "number" || v.kind === "boolean") {return String(v.value);}
   return null;
 }
 
@@ -437,21 +395,15 @@ function pickLine(ast: JsonlAst, addr: string): JsonlLine | null {
   if (addr === "$last") {
     for (let i = ast.lines.length - 1; i >= 0; i--) {
       const l = ast.lines[i];
-      if (l !== undefined && l.kind === "value") {
-        return l;
-      }
+      if (l !== undefined && l.kind === "value") {return l;}
     }
     return null;
   }
   const m = /^L(\d+)$/.exec(addr);
-  if (m === null || m[1] === undefined) {
-    return null;
-  }
+  if (m === null || m[1] === undefined) {return null;}
   const target = Number(m[1]);
   for (const l of ast.lines) {
-    if (l.line === target) {
-      return l;
-    }
+    if (l.line === target) {return l;}
   }
   return null;
 }
@@ -497,9 +449,7 @@ function walkMd(
     }
     const fmKey = isQuotedSeg(next.value) ? unquoteSeg(next.value) : next.value;
     const entry = level.ast.frontmatter.find((e) => e.key === fmKey);
-    if (entry === undefined) {
-      return;
-    }
+    if (entry === undefined) {return;}
     onMatch([
       { slot: cur.slot, value: cur.value },
       { slot: next.slot, value: next.value },
@@ -522,46 +472,34 @@ function walkMdItemField(
   walked: readonly SlotSub[],
   onMatch: OnMatch,
 ): void {
-  if (item.kv === undefined) {
-    return;
-  }
+  if (item.kv === undefined) {return;}
   const key = item.kv.key;
   const emit = (value: string): void => {
     onMatch([...walked, { slot: cur.slot, value }]);
   };
   if (isUnionSeg(cur.value)) {
     const alts = parseUnionSeg(cur.value);
-    if (alts === null) {
-      return;
-    }
+    if (alts === null) {return;}
     for (const alt of alts) {
-      if (alt.toLowerCase() === key.toLowerCase()) {
-        emit(key);
-      }
+      if (alt.toLowerCase() === key.toLowerCase()) {emit(key);}
     }
     return;
   }
   if (isPredicateSeg(cur.value)) {
     const pred = parsePredicateSeg(cur.value);
-    if (pred !== null && mdItemMatchesPredicate(item, pred)) {
-      emit(key);
-    }
+    if (pred !== null && mdItemMatchesPredicate(item, pred)) {emit(key);}
     return;
   }
   if (cur.value === WILDCARD_SINGLE || cur.value === WILDCARD_RECURSIVE) {
     emit(key);
     return;
   }
-  if (key.toLowerCase() === cur.value.toLowerCase()) {
-    emit(cur.value);
-  }
+  if (key.toLowerCase() === cur.value.toLowerCase()) {emit(cur.value);}
 }
 
 function blockSlugCounts(items: readonly MdItem[]): Map<string, number> {
   const counts = new Map<string, number>();
-  for (const item of items) {
-    counts.set(item.slug, (counts.get(item.slug) ?? 0) + 1);
-  }
+  for (const item of items) {counts.set(item.slug, (counts.get(item.slug) ?? 0) + 1);}
   return counts;
 }
 
@@ -590,38 +528,28 @@ const mdOps: WalkOps<MdLevel> = {
     if (level.kind === "root") {
       const target = key.toLowerCase();
       const block = level.ast.blocks.find((b) => b.slug === target);
-      return block === undefined
-        ? null
-        : { keySub: key, child: { kind: "block", block, ast: level.ast } };
+      return block === undefined ? null : { keySub: key, child: { kind: "block", block, ast: level.ast } };
     }
     if (level.kind === "block") {
       // Ordinal `#N` short-circuits slug lookup.
       if (isOrdinalSeg(key)) {
         const n = parseOrdinalSeg(key);
-        if (n === null || n < 0 || n >= level.block.items.length) {
-          return null;
-        }
+        if (n === null || n < 0 || n >= level.block.items.length) {return null;}
         return { keySub: key, child: { kind: "item", item: level.block.items[n], ast: level.ast } };
       }
       const target = key.toLowerCase();
       const item = level.block.items.find((it) => it.slug === target);
-      return item === undefined
-        ? null
-        : { keySub: key, child: { kind: "item", item, ast: level.ast } };
+      return item === undefined ? null : { keySub: key, child: { kind: "item", item, ast: level.ast } };
     }
     return null;
   },
   positional(level, seg) {
-    if (level.kind !== "block") {
-      return null;
-    }
+    if (level.kind !== "block") {return null;}
     const concrete = resolvePositionalSeg(seg, {
       indexable: true,
       size: level.block.items.length,
     });
-    if (concrete === null) {
-      return null;
-    }
+    if (concrete === null) {return null;}
     // Preserve the positional token in keySub so the resolver
     // re-evaluates positionally on round-trip.
     const item = level.block.items[Number(concrete)];
@@ -651,20 +579,14 @@ const mdOps: WalkOps<MdLevel> = {
 };
 
 function mdItemMatchesPredicate(item: MdItem, pred: PredicateSpec): boolean {
-  if (item.kv === undefined) {
-    return false;
-  }
-  if (item.kv.key.toLowerCase() !== pred.key.toLowerCase()) {
-    return false;
-  }
+  if (item.kv === undefined) {return false;}
+  if (item.kv.key.toLowerCase() !== pred.key.toLowerCase()) {return false;}
   return evaluatePredicate(item.kv.value, pred);
 }
 
 function mdBlockHasMatchingItem(block: MdBlock, pred: PredicateSpec): boolean {
   for (const item of block.items) {
-    if (mdItemMatchesPredicate(item, pred)) {
-      return true;
-    }
+    if (mdItemMatchesPredicate(item, pred)) {return true;}
   }
   return false;
 }
@@ -674,22 +596,12 @@ function jsoncChildMatchesPredicate(node: JsoncValue, pred: PredicateSpec): bool
 }
 
 function jsoncChildFieldText(node: JsoncValue, key: string): string | null {
-  if (node.kind !== "object") {
-    return null;
-  }
+  if (node.kind !== "object") {return null;}
   const e = node.entries.find((entry) => entry.key === key);
-  if (e === undefined) {
-    return null;
-  }
+  if (e === undefined) {return null;}
   const v = e.value;
-  if (v.kind === "string") {
-    return v.value;
-  }
-  if (v.kind === "number" || v.kind === "boolean") {
-    return String(v.value);
-  }
-  if (v.kind === "null") {
-    return "null";
-  }
+  if (v.kind === "string") {return v.value;}
+  if (v.kind === "number" || v.kind === "boolean") {return String(v.value);}
+  if (v.kind === "null") {return "null";}
   return null;
 }
