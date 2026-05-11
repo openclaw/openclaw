@@ -530,6 +530,74 @@ describe("buildInboundUserContextPrefix", () => {
     expect(parseConversationInfoPayload(text)["has_reply_context"]).toBe(true);
   });
 
+  it("renders Telegram replies as an inline current-message quote", () => {
+    const text = buildInboundUserContextPrefix(
+      {
+        Provider: "telegram",
+        Surface: "telegram",
+        OriginatingChannel: "telegram",
+        ChatType: "group",
+        MessageSid: "34974",
+        ReplyToId: "34971",
+        ReplyToBody: "The full message should not be preferred.",
+        ReplyToQuoteText: " selected quote\n",
+        SenderName: "obviyus",
+        Timestamp: Date.UTC(2026, 4, 10, 17, 8),
+        ReplyChain: [
+          {
+            messageId: "34971",
+            sender: "bh.ai",
+            body: "The full message should not be preferred.",
+          },
+        ],
+      } as TemplateContext,
+      { timezone: "utc" },
+    );
+
+    expect(text).toContain("Current message:\n#34974 Sun 2026-05-10T17:08Z obviyus ->#34971");
+    expect(text).toContain('[Replying to: "selected quote"]');
+    expect(text.trimEnd().endsWith('[Replying to: "selected quote"]')).toBe(true);
+    expect(text).not.toContain("Reply chain of current user message");
+    expect(text).not.toContain("Reply target of current user message");
+  });
+
+  it("keeps Telegram current-message quote even when context already includes the target", () => {
+    const text = buildInboundUserContextPrefix({
+      Provider: "telegram",
+      Surface: "telegram",
+      OriginatingChannel: "telegram",
+      ChatType: "group",
+      MessageSid: "34974",
+      ReplyToId: "34971",
+      ReplyToBody: "quoted status body",
+      SenderName: "obviyus",
+      UntrustedStructuredContext: [
+        {
+          label: "Conversation context",
+          source: "telegram",
+          type: "chat_window",
+          payload: {
+            order: "chronological",
+            relation: "selected_for_current_message",
+            messages: [
+              {
+                message_id: "34971",
+                sender: "bh.ai",
+                body: "quoted status body",
+                is_reply_target: true,
+              },
+            ],
+          },
+        },
+      ],
+    } as TemplateContext);
+
+    expect(text).toContain("#34971 [reply target] bh.ai: quoted status body");
+    expect(text).toContain("Current message:\n#34974 obviyus ->#34971");
+    expect(text).toContain('[Replying to: "quoted status body"]');
+    expect(text.trimEnd().endsWith('[Replying to: "quoted status body"]')).toBe(true);
+  });
+
   it("includes sender_id in conversation info", () => {
     const text = buildInboundUserContextPrefix({
       ChatType: "group",
