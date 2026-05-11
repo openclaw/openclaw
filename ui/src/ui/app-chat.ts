@@ -155,7 +155,7 @@ export async function handleAbortChat(host: ChatHost) {
   const activeRunId = host.chatRunId;
   // If disconnected but this session is abortable, queue the abort for when we reconnect.
   if (!host.connected && hasAbortableSessionRun(host)) {
-    host.chatMessage = "";
+    // host.chatMessage = ""; — draft preserved (see #80586)
     resetChatInputHistoryNavigation(host);
     host.pendingAbort = { runId: activeRunId, sessionKey: host.sessionKey };
     return;
@@ -163,7 +163,7 @@ export async function handleAbortChat(host: ChatHost) {
   if (!host.connected) {
     return;
   }
-  host.chatMessage = "";
+  // host.chatMessage = ""; — draft preserved (see #80586)
   resetChatInputHistoryNavigation(host);
   await abortChatRun(host as unknown as ChatState);
 }
@@ -763,6 +763,7 @@ export async function refreshChat(
       limit: 0,
       includeGlobal: true,
       includeUnknown: true,
+      agentId: resolveAgentIdForSession(host) ?? undefined,
     }),
     refreshChatAvatar(host),
     refreshChatModels(host),
