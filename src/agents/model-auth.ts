@@ -381,6 +381,7 @@ type SyntheticProviderAuthResolution = {
 function resolveProviderSyntheticRuntimeAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): SyntheticProviderAuthResolution {
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
@@ -395,6 +396,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
           provider: params.provider,
           providerConfig,
         },
+        modelApi: params.modelApi,
       }) ?? undefined
     );
   };
@@ -425,6 +427,7 @@ function resolveProviderSyntheticRuntimeAuth(params: {
 function resolveSyntheticLocalProviderAuth(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
+  modelApi?: string;
 }): ResolvedProviderAuth | null {
   const syntheticProviderAuth = resolveProviderSyntheticRuntimeAuth(params);
   if (syntheticProviderAuth.auth) {
@@ -542,6 +545,7 @@ export async function resolveApiKeyForProvider(params: {
    *  silently overridden by env/config credentials. */
   lockedProfile?: boolean;
   credentialPrecedence?: ProviderCredentialPrecedence;
+  modelApi?: string;
 }): Promise<ResolvedProviderAuth> {
   const { provider, cfg, profileId, preferredProfile } = params;
   let scopedStore: AuthProfileStore | undefined = params.store;
@@ -752,7 +756,7 @@ export async function resolveApiKeyForProvider(params: {
     return deferredAuthProfileResult;
   }
 
-  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider });
+  const syntheticLocalAuth = resolveSyntheticLocalProviderAuth({ cfg, provider, modelApi: params.modelApi });
   if (syntheticLocalAuth) {
     return syntheticLocalAuth;
   }
