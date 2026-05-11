@@ -8,6 +8,7 @@ import {
   formatSubagentRecoveryWedgedReason,
   isSubagentRecoveryWedgedEntry,
 } from "../agents/subagent-recovery-state.js";
+import { normalizeChatType } from "../channels/chat-type.js";
 import { getSessionEntry } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -190,8 +191,13 @@ function createBackingSessionLookupContext(): BackingSessionLookupContext {
 
 function resolveSessionChatType(
   sessionKey: string,
+  entry?: SessionEntry,
   context?: BackingSessionLookupContext,
 ): SessionKeyChatType {
+  const storedChatType = normalizeChatType(entry?.chatType);
+  if (storedChatType) {
+    return storedChatType;
+  }
   const derive =
     taskRegistryMaintenanceRuntime.deriveSessionChatTypeFromKey ?? deriveSessionChatTypeFromKey;
   if (!context) {
@@ -419,13 +425,13 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
     return Boolean(acpEntry.entry);
   }
   if (task.runtime === "subagent" || task.runtime === "cli") {
+    const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "cli") {
-      const chatType = resolveSessionChatType(childSessionKey, context);
+      const chatType = resolveSessionChatType(childSessionKey, entry, context);
       if (chatType === "channel" || chatType === "group" || chatType === "direct") {
         return false;
       }
     }
-    const entry = findTaskSessionEntry(task, context);
     if (task.runtime === "subagent" && isSubagentRecoveryWedgedEntry(entry)) {
       return false;
     }

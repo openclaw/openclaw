@@ -244,6 +244,35 @@ describe("task-registry maintenance issue #60299", () => {
     expect(deriveSessionChatTypeMock).toHaveBeenCalledTimes(1);
   });
 
+  it("uses typed CLI session metadata before deriving chat type from key shape", async () => {
+    const childSessionKey = "agent:main:opaque-cli-session";
+    const task = makeStaleTask({
+      runtime: "cli",
+      sourceId: "run-typed-cli-stale",
+      runId: "run-typed-cli-stale",
+      ownerKey: "agent:main:main",
+      requesterSessionKey: childSessionKey,
+      childSessionKey,
+    });
+    const deriveSessionChatTypeMock = vi.fn(() => "unknown" as const);
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      sessionStore: {
+        [childSessionKey]: {
+          sessionId: childSessionKey,
+          updatedAt: Date.now(),
+          chatType: "channel",
+        },
+      },
+      deriveSessionChatTypeFromKey: deriveSessionChatTypeMock,
+    });
+
+    expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 1 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+    expect(deriveSessionChatTypeMock).not.toHaveBeenCalled();
+  });
+
   it("marks stale cron tasks lost once the runtime no longer tracks the job as active", async () => {
     const childSessionKey = "agent:main:workspace:channel:test-channel";
     const task = makeStaleTask({
