@@ -423,16 +423,16 @@ const allowedExactPaths = new Set([
   "extensions/imessage/src/doctor-legacy-state.ts",
   "extensions/matrix/src/doctor-legacy-state.ts",
   "extensions/matrix/src/doctor-state-imports.ts",
-  "extensions/memory-wiki/src/digest-state-migration.ts",
-  "extensions/memory-wiki/src/source-sync-state-migration.ts",
-  "extensions/memory-wiki/src/source-sync-migration.ts",
+  "extensions/memory-wiki/src/doctor-legacy-digest-state.ts",
+  "extensions/memory-wiki/src/doctor-legacy-log.ts",
+  "extensions/memory-wiki/src/doctor-legacy-source-sync-state.ts",
+  "extensions/memory-wiki/src/doctor-legacy-state.ts",
   "extensions/msteams/src/doctor-legacy-state.ts",
   "extensions/nostr/src/doctor-legacy-state.ts",
   "extensions/skill-workshop/src/doctor-legacy-state.ts",
   "extensions/qqbot/src/doctor-legacy-state.ts",
   "extensions/telegram/src/doctor-legacy-state.ts",
   "extensions/whatsapp/src/doctor-legacy-state.ts",
-  "extensions/memory-wiki/src/log-migration.ts",
 ]);
 
 const allowedPrefixes = ["src/commands/doctor", "src/commands/export-trajectory"];

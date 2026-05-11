@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { importMemoryWikiLegacyLog, resolveMemoryWikiLegacyLogPath } from "./log-migration.js";
+import { importMemoryWikiLegacyLog, resolveMemoryWikiLegacyLogPath } from "./doctor-legacy-log.js";
 import { appendMemoryWikiLog, readMemoryWikiLogEntries } from "./log.js";
 
 describe("memory wiki activity log", () => {

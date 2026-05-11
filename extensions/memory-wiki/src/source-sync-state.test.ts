@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   importMemoryWikiLegacySourceSyncState,
   resolveMemoryWikiLegacySourceSyncStatePath,
-} from "./source-sync-state-migration.js";
+} from "./doctor-legacy-source-sync-state.js";
 import {
   readMemoryWikiSourceSyncState,
   writeMemoryWikiSourceSyncState,

@@ -4,15 +4,15 @@ import path from "node:path";
 import { resetPluginBlobStoreForTests } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  importMemoryWikiLegacyDigestFiles,
-  legacyMemoryWikiDigestFilesExist,
-  resolveMemoryWikiLegacyDigestPath,
-} from "./digest-state-migration.js";
-import {
   readMemoryWikiAgentDigestSync,
   readMemoryWikiCompiledDigestBundle,
   writeMemoryWikiCompiledDigests,
 } from "./digest-state.js";
+import {
+  importMemoryWikiLegacyDigestFiles,
+  legacyMemoryWikiDigestFilesExist,
+  resolveMemoryWikiLegacyDigestPath,
+} from "./doctor-legacy-digest-state.js";
 
 describe("memory wiki compiled digest state", () => {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
