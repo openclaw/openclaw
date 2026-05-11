@@ -517,6 +517,9 @@ Completed consolidation/deletion highlights:
 - Channel model override matching now uses explicit group and parent
   conversation metadata. It no longer decodes parent conversation ids from
   `parentSessionKey`.
+- Stored model override inheritance now requires an explicit parent session key
+  from typed session context. It no longer derives parent overrides from
+  `:thread:` or `:topic:` suffixes in `sessionKey`.
 - The old session thread-info wrapper and loaded-plugin thread parser are gone;
   no runtime code imports `config/sessions/thread-info`.
 - Completion delivery, send policy, and task maintenance no longer derive chat
