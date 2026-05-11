@@ -158,6 +158,11 @@ const entrySpecs: readonly CommandGroupDescriptorSpec<SubCliRegistrar>[] = [
       exportName: "registerCronCli",
     },
     {
+      commandNames: ["context"],
+      loadModule: () => import("../context-cli.js"),
+      exportName: "registerContextCli",
+    },
+    {
       commandNames: ["dns"],
       loadModule: () => import("../dns-cli.js"),
       exportName: "registerDnsCli",
