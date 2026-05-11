@@ -173,8 +173,8 @@ async function streamOpenRouterMusic(params: {
       throw new Error("OpenRouter music generation response missing audio data");
     }
 
-    const audioChunks = audioDataStrings.map((s) => Buffer.from(s, "base64"));
-    const audioBuffer = Buffer.concat(audioChunks);
+    const combinedBase64 = audioDataStrings.join("");
+    const audioBuffer = Buffer.from(combinedBase64, "base64");
     return { audioBuffer, transcriptPieces };
   } finally {
     void release();
