@@ -118,12 +118,22 @@ function prepareElevenLabsTtsRequest(params: ElevenLabsTtsRequestParams & { stre
   };
 }
 
-export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<Buffer> {
+export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise<{
+  audioBuffer: Buffer;
+  wordTimestamps?: {
+    characters: string[];
+    characterStartTimesSeconds: number[];
+    characterEndTimesSeconds: number[];
+  };
+}> {
   const { apiKey, timeoutMs } = params;
   const { url, normalizedBaseUrl, acceptHeader, body } = prepareElevenLabsTtsRequest({
     ...params,
     stream: false,
   });
+
+  // Request alignment
+  url.searchParams.set("with_timestamps", "true");
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -143,7 +153,21 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    return Buffer.from(await response.arrayBuffer());
+    const contentType = response.headers.get("content-type");
+    if (contentType?.includes("application/json")) {
+      const json = await response.json() as any;
+      const audioBuffer = Buffer.from(json.audio_base64, "base64");
+      return {
+        audioBuffer,
+        wordTimestamps: {
+          characters: json.alignment.characters,
+          characterStartTimesSeconds: json.alignment.character_start_times_seconds,
+          characterEndTimesSeconds: json.alignment.character_end_times_seconds,
+        },
+      };
+    }
+
+    return { audioBuffer: Buffer.from(await response.arrayBuffer()) };
   } finally {
     await release();
   }
