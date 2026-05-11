@@ -337,13 +337,13 @@ describe("executePreparedCliRun supervisor output capture", () => {
     expect(result.sessionId).toBe("session-rl-warn");
   });
 
-  it("classifies rate_limit_event denied as rate_limit (not billing)", async () => {
+  it("classifies rate_limit_event rejected as rate_limit (not billing)", async () => {
     const rateLimitDeniedEvent = `${JSON.stringify({
       type: "rate_limit_event",
       rate_limit_info: {
         rateLimitType: "seven_day",
         utilization: 1.0,
-        status: "denied",
+        status: "rejected",
         surpassedThreshold: 1.0,
         isUsingOverage: false,
         resetsAt: 1778835600,

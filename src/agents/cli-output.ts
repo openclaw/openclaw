@@ -563,9 +563,9 @@ export function parseCliOutput(params: {
 
 // Reads a `rate_limit_event` JSONL record emitted by the Claude CLI.
 // Returns the `rate_limit_info.status` string when present, otherwise null.
-// Claude Pro Max plan sessions emit this with status "allowed_warning" at ~75%
-// utilization — the request was served normally. Only "denied" means the cap
-// was enforced and the request was rejected.
+// SDK-documented statuses: "allowed" | "allowed_warning" | "rejected".
+// "allowed" / "allowed_warning" — request was served (Pro Max soft warning at ~75%).
+// "rejected" — cap enforced, request was not served.
 export function extractClaudeCliRateLimitStatus(parsed: Record<string, unknown>): string | null {
   if (parsed.type !== "rate_limit_event") {
     return null;
@@ -585,17 +585,17 @@ export function extractCliErrorMessage(raw: string): string | null {
 
   let errorText = "";
   for (const parsed of parsedRecords) {
-    // A rate_limit_event with status "denied" means the 7-day (or other
-    // periodic) cap was enforced. Surface it as a rate-limit string so the
-    // downstream classifier maps it to "rate_limit", not "billing".
-    // Statuses "allowed" and "allowed_warning" are soft notices — the request
+    // A rate_limit_event with status "rejected" means the periodic cap was
+    // enforced and the request was not served. Surface it as a rate-limit
+    // string so the downstream classifier maps it to "rate_limit", not "billing".
+    // Statuses "allowed" and "allowed_warning" are informational — the request
     // was served; don't record them as failures.
     const rlStatus = extractClaudeCliRateLimitStatus(parsed);
     if (rlStatus !== null) {
-      if (rlStatus === "denied") {
+      if (rlStatus === "rejected") {
         const info = isRecord(parsed.rate_limit_info) ? parsed.rate_limit_info : {};
         const limitType = typeof info.rateLimitType === "string" ? info.rateLimitType : "periodic";
-        errorText = `Rate limit exceeded (${limitType} cap denied)`;
+        errorText = `Rate limit exceeded (${limitType} cap rejected)`;
       }
       // "allowed" / "allowed_warning" — continue silently
       continue;

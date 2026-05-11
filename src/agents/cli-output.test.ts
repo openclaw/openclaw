@@ -513,8 +513,8 @@ describe("rate_limit_event — Claude CLI JSONL", () => {
       expect(extractCliErrorMessage(jsonl)).toBeNull();
     });
 
-    it("surfaces denied as a rate_limit error string (not billing)", () => {
-      const jsonl = buildRateLimitEventJsonl("denied", "seven_day");
+    it("surfaces rejected as a rate_limit error string (not billing)", () => {
+      const jsonl = buildRateLimitEventJsonl("rejected", "seven_day");
 
       const msg = extractCliErrorMessage(jsonl);
       expect(msg).toMatch(/rate limit exceeded/i);
