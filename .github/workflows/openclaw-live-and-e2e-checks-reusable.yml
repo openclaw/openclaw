@@ -455,7 +455,7 @@ jobs:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
     runs-on: blacksmith-8vcpu-ubuntu-2404
-    timeout-minutes: 40
+    timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -490,12 +490,12 @@ jobs:
       - name: Verify live prompt cache floors
         run: |
           set -euo pipefail
-          for attempt in 1 2 3; do
-            echo "live-cache attempt ${attempt}/3"
-            if timeout --foreground --kill-after=30s 12m pnpm test:live:cache; then
+          for attempt in 1 2; do
+            echo "live-cache attempt ${attempt}/2"
+            if timeout --foreground --kill-after=30s 8m pnpm test:live:cache; then
               exit 0
             fi
-            if [[ "$attempt" == "3" ]]; then
+            if [[ "$attempt" == "2" ]]; then
               exit 1
             fi
             sleep $((attempt * 15))

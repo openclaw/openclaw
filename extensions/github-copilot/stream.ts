@@ -8,7 +8,6 @@ import {
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { rewriteCopilotResponsePayloadConnectionBoundIds } from "./connection-bound-ids.js";
 
-type _StreamContext = Parameters<StreamFn>[1];
 type StreamOptions = Parameters<StreamFn>[2];
 
 function containsCopilotContentType(value: unknown, type: string): boolean {

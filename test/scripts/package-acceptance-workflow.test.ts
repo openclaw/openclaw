@@ -347,7 +347,7 @@ describe("package artifact reuse", () => {
     expect(workflow).toContain("live_suite_filter:");
     expect(workflow).toContain("validate_live_suite_filter:");
     expect(workflow).toContain("LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}");
-    expect(workflow).toContain("live-cache attempt ${attempt}/3");
+    expect(workflow).toContain("live-cache attempt ${attempt}/2");
     expect(workflow).toContain(
       "live_suite_filter '${LIVE_SUITE_FILTER}' does not match any runnable suite",
     );
@@ -909,9 +909,10 @@ describe("package artifact reuse", () => {
     expect(fullRelease.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(releaseChecks.jobs?.prepare_release_package?.["timeout-minutes"]).toBe(15);
     expect(crossOs.jobs?.cross_os_release_checks?.["timeout-minutes"]).toBe(60);
-    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(40);
+    expect(liveE2e.jobs?.validate_release_live_cache?.["timeout-minutes"]).toBe(20);
     expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain(
-      "timeout --foreground --kill-after=30s 12m pnpm test:live:cache",
+      "timeout --foreground --kill-after=30s 8m pnpm test:live:cache",
     );
+    expect(readFileSync(LIVE_E2E_WORKFLOW, "utf8")).toContain("live-cache attempt ${attempt}/2");
   });
 });

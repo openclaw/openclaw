@@ -95,10 +95,6 @@ const FONT: Record<string, string[]> = {
   Z: ["11111", "00001", "00010", "00100", "01000", "10000", "11111"],
 };
 
-function clampByte(value: number): number {
-  return Math.max(0, Math.min(255, Math.round(value)));
-}
-
 function rgba(r: number, g: number, b: number, a = 255): Rgba {
   return { r, g, b, a };
 }

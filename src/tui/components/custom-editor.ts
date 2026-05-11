@@ -13,7 +13,7 @@ export class CustomEditor extends Editor {
   onAltEnter?: () => void;
   onAltUp?: () => void;
 
-  handleInput(data: string): void {
+  override handleInput(data: string): void {
     if (matchesKey(data, Key.alt("enter")) && this.onAltEnter) {
       this.onAltEnter();
       return;
