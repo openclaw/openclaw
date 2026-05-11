@@ -134,6 +134,7 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
 
   // Request alignment
   url.searchParams.set("with_timestamps", "true");
+  url.pathname = url.pathname.replace("/text-to-speech/", "/text-to-speech-with-timestamps/");
 
   const { response, release } = await fetchWithSsrFGuard({
     url: url.toString(),
@@ -153,10 +154,9 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
   try {
     await assertOkOrThrowProviderError(response, "ElevenLabs API error");
 
-    const contentType = response.headers.get("content-type");
     if (contentType?.includes("application/json")) {
       const json = await response.json() as any;
-      const audioBuffer = Buffer.from(json.audio_base64, "base64");
+      const audioBuffer = Buffer.from(json.audio, "base64");
       return {
         audioBuffer,
         wordTimestamps: {
@@ -166,7 +166,6 @@ export async function elevenLabsTTS(params: ElevenLabsTtsRequestParams): Promise
         },
       };
     }
-
     return { audioBuffer: Buffer.from(await response.arrayBuffer()) };
   } finally {
     await release();
