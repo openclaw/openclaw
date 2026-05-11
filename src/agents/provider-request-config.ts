@@ -196,6 +196,7 @@ function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigP
   allowPrivateNetwork: boolean;
   explicitlyDenied: boolean;
 } {
+  // Preserve existing precedence: runtime/caller policy overrides model config.
   const configuredAllowPrivateNetwork =
     params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
   if (configuredAllowPrivateNetwork !== undefined) {

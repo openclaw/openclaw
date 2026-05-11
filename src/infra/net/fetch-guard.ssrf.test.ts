@@ -642,6 +642,47 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("allows a configured private DNS origin and blocks the same host on another port", async () => {
+    const lookupFn: LookupFn = vi.fn(async () => [
+      { address: "10.0.0.5", family: 4 },
+    ]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://model.lan:11434/v1/models",
+      fetchImpl,
+      lookupFn,
+      policy: { allowedOrigins: ["http://model.lan:11434"] },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+
+    const blockedFetchImpl = vi.fn(async () => okResponse());
+    await expect(
+      fetchWithSsrFGuard({
+        url: "http://model.lan:11435/v1/models",
+        fetchImpl: blockedFetchImpl,
+        lookupFn,
+        policy: { allowedOrigins: ["http://model.lan:11434"] },
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+    expect(blockedFetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("allows a configured IPv6 unique-local exact origin through the guard", async () => {
+    const fetchImpl = vi.fn(async () => okResponse());
+
+    const result = await fetchWithSsrFGuard({
+      url: "http://[fd00::1]:11434/v1/models",
+      fetchImpl,
+      policy: { allowedOrigins: ["http://[fd00::1]:11434"] },
+    });
+
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
+  });
+
   it("enforces hostname allowlist policies", async () => {
     const fetchImpl = vi.fn();
     await expect(
