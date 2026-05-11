@@ -58,7 +58,7 @@ vi.mock("./replies.js", () => ({
 function writeMatrixSessionMeta(
   stateDir: string,
   sessionKey: string,
-  origin: {
+  meta: {
     chatType: "direct" | "group";
     from: string;
     to: string;
@@ -73,21 +73,24 @@ function writeMatrixSessionMeta(
     sessionId: `sess-${Date.now()}`,
     updatedAt: Date.now(),
   };
-  const existingOrigin =
-    typeof existing.origin === "object" && existing.origin !== null
-      ? (existing.origin as Record<string, unknown>)
-      : {};
+  const nativeDirectUserId =
+    meta.nativeDirectUserId ??
+    (meta.chatType === "direct" && meta.from.startsWith("matrix:@")
+      ? meta.from.slice("matrix:".length)
+      : undefined);
   upsertSessionEntry({
     agentId: "ops",
     sessionKey,
     entry: {
       ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
+      channel: "matrix",
+      chatType: meta.chatType,
+      ...(meta.nativeChannelId ? { nativeChannelId: meta.nativeChannelId } : {}),
+      ...(nativeDirectUserId ? { nativeDirectUserId } : {}),
+      deliveryContext: {
+        channel: "matrix",
         accountId: "ops",
-        ...origin,
+        to: meta.to,
       },
     } as never,
   });

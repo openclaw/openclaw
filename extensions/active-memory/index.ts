@@ -605,14 +605,9 @@ function resolveRecallRunChannelContext(params: {
       rawStrongEntryChannel && isRunnableChannelName(rawStrongEntryChannel)
         ? rawStrongEntryChannel
         : undefined;
-    const weakEntryChannel = normalizeOptionalString(sessionEntry?.origin?.provider);
     return resolveReturnValue({
-      resolvedChannel: strongEntryChannel ?? weakEntryChannel,
-      resolvedChannelStrength: strongEntryChannel
-        ? "strong"
-        : weakEntryChannel
-          ? "weak"
-          : undefined,
+      resolvedChannel: strongEntryChannel,
+      resolvedChannelStrength: strongEntryChannel ? "strong" : undefined,
     });
   } catch {
     return resolveReturnValue({});

@@ -68,21 +68,22 @@ function createStoredDirectDmSession(
   const accountId = params.accountId === null ? undefined : (params.accountId ?? "ops");
   const to = params.to ?? "room:!dm:example.org";
   const accountMetadata = accountId ? { accountId } : {};
+  const from = params.from ?? "matrix:@alice:example.org";
+  const nativeChannelId =
+    params.nativeChannelId ?? (to.startsWith("room:!") ? to.slice("room:".length) : undefined);
+  const nativeDirectUserId =
+    params.nativeDirectUserId ??
+    (from.startsWith("matrix:@") ? from.slice("matrix:".length) : undefined);
   const nativeMetadata = {
-    ...(params.nativeChannelId ? { nativeChannelId: params.nativeChannelId } : {}),
-    ...(params.nativeDirectUserId ? { nativeDirectUserId: params.nativeDirectUserId } : {}),
+    ...(nativeChannelId ? { nativeChannelId } : {}),
+    ...(nativeDirectUserId ? { nativeDirectUserId } : {}),
   };
   return {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "direct",
-    origin: {
-      chatType: "direct",
-      from: params.from ?? "matrix:@alice:example.org",
-      to,
-      ...nativeMetadata,
-      ...accountMetadata,
-    },
+    channel: "matrix",
+    ...nativeMetadata,
     deliveryContext: {
       channel: "matrix",
       to,
@@ -98,14 +99,9 @@ function createStoredChannelSession(): Record<string, unknown> {
     sessionId: "sess-1",
     updatedAt: Date.now(),
     chatType: "channel",
-    origin: {
-      chatType: "channel",
-      from: "matrix:channel:!ops:example.org",
-      to: "room:!ops:example.org",
-      nativeChannelId: "!ops:example.org",
-      nativeDirectUserId: "@alice:example.org",
-      accountId: "ops",
-    },
+    channel: "matrix",
+    nativeChannelId: "!ops:example.org",
+    nativeDirectUserId: "@alice:example.org",
     deliveryContext: {
       channel: "matrix",
       to: "room:!ops:example.org",
@@ -276,13 +272,13 @@ describe("resolveMatrixOutboundSessionRoute", () => {
     expectCurrentDmRoomRoute(route);
   });
 
-  it("reuses the current DM room when stored account metadata is missing", () => {
+  it("does not reuse the current DM room when stored account metadata is missing", () => {
     const route = resolveUserRouteForCurrentSession({
       storedSession: createStoredDirectDmSession({ accountId: null }),
       matrix: defaultAccountPerRoomDmMatrixConfig,
     });
 
-    expectCurrentDmRoomRoute(route);
+    expectFallbackUserRoute(route);
   });
 
   it("recovers channel thread routes from currentSessionKey and preserves Matrix event-id case", () => {

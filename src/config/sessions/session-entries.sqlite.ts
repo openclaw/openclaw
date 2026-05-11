@@ -84,6 +84,8 @@ type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "ses
     typed_conversation_kind?: string | null;
     typed_conversation_peer_id?: string | null;
     typed_conversation_thread_id?: string | null;
+    typed_conversation_native_channel_id?: string | null;
+    typed_conversation_native_direct_user_id?: string | null;
   };
 type BoundSessionEntryRow = {
   entry: Insertable<SessionEntriesTable>;
@@ -171,6 +173,8 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   const conversationTo = optionalString(row.typed_conversation_peer_id);
   const conversationAccountId = optionalString(row.typed_conversation_account_id) ?? accountId;
   const conversationThreadId = optionalThreadId(row.typed_conversation_thread_id);
+  const nativeChannelId = optionalString(row.typed_conversation_native_channel_id);
+  const nativeDirectUserId = optionalString(row.typed_conversation_native_direct_user_id);
   if (conversationChannel) {
     next.channel = channel ?? conversationChannel;
     next.lastChannel = conversationChannel;
@@ -190,6 +194,12 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   }
   if (conversationThreadId) {
     next.lastThreadId = conversationThreadId;
+  }
+  if (nativeChannelId) {
+    next.nativeChannelId = nativeChannelId;
+  }
+  if (nativeDirectUserId) {
+    next.nativeDirectUserId = nativeDirectUserId;
   }
   const modelProvider = optionalString(row.typed_model_provider);
   if (modelProvider) {
@@ -249,6 +259,8 @@ function selectSessionEntryRows(
       "c.kind as typed_conversation_kind",
       "c.peer_id as typed_conversation_peer_id",
       "c.thread_id as typed_conversation_thread_id",
+      "c.native_channel_id as typed_conversation_native_channel_id",
+      "c.native_direct_user_id as typed_conversation_native_direct_user_id",
     ]);
 }
 

@@ -99,6 +99,8 @@ const SESSION_ENTRY_RESERVED_SLOT_KEY_LIST = [
   "label",
   "displayName",
   "channel",
+  "nativeChannelId",
+  "nativeDirectUserId",
   "groupId",
   "subject",
   "groupChannel",

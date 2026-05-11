@@ -135,14 +135,20 @@ export function conversationIdentityFromSessionEntry(
     deliveryContext?.channel ?? normalizeText(entry.channel) ?? normalizeText(entry.lastChannel);
   const peerId =
     kind === "direct"
-      ? (deliveryContextPeerId(deliveryContext) ?? normalizeText(entry.lastTo))
-      : (normalizeText(entry.groupId) ?? deliveryContextPeerId(deliveryContext));
+      ? (normalizeText(entry.nativeDirectUserId) ??
+        deliveryContextPeerId(deliveryContext) ??
+        normalizeText(entry.lastTo))
+      : (normalizeText(entry.groupId) ??
+        normalizeText(entry.nativeChannelId) ??
+        deliveryContextPeerId(deliveryContext));
   return finalizeConversationIdentity({
     channel,
     accountId: deliveryContext?.accountId ?? entry.lastAccountId,
     kind,
     peerId,
     threadId: normalizeThreadId(deliveryContext?.threadId ?? entry.lastThreadId),
+    nativeChannelId: entry.nativeChannelId,
+    nativeDirectUserId: entry.nativeDirectUserId,
     label: entry.displayName ?? entry.label,
   });
 }

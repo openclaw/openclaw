@@ -344,6 +344,10 @@ export type SessionEntry = {
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: string | number;
+  /** Provider-native conversation id, such as a Matrix room id. */
+  nativeChannelId?: string;
+  /** Provider-native direct peer id, such as a Matrix user id. */
+  nativeDirectUserId?: string;
   skillsSnapshot?: SessionSkillSnapshot;
   systemPromptReport?: SessionSystemPromptReport;
   /**
