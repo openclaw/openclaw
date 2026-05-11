@@ -2143,6 +2143,49 @@ describe("deliverOutboundPayloads", () => {
     expect(chunker).toHaveBeenNthCalledWith(1, text, 4000);
   });
 
+  it("passes formatting overrides for pre-rendered chunker output", async () => {
+    const chunker = vi.fn(() => ["<b>bold</b>"]);
+    const sendText = vi.fn().mockImplementation(async ({ text }: { text: string }) => ({
+      channel: "matrix" as const,
+      messageId: text,
+      roomId: "r1",
+    }));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "matrix",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "matrix",
+            outbound: {
+              deliveryMode: "direct",
+              chunker,
+              chunkerMode: "markdown",
+              chunkedTextFormatting: { parseMode: "HTML" },
+              textChunkLimit: 4000,
+              sendText,
+            },
+          }),
+        },
+      ]),
+    );
+
+    await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room",
+      payloads: [{ text: "**bold**" }],
+    });
+
+    expect(chunker).toHaveBeenCalledWith("**bold**", 4000);
+    expect(sendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "<b>bold</b>",
+        formatting: { parseMode: "HTML" },
+      }),
+    );
+  });
+
   it("passes config through for plugin media sends", async () => {
     const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m-media", roomId: "!room" });
     setActivePluginRegistry(

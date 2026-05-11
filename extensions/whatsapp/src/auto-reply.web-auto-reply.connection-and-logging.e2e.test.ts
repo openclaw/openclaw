@@ -40,6 +40,7 @@ function requireOnMessage(
 
 async function startWatchdogScenario(params: {
   monitorWebChannel: typeof import("./auto-reply/monitor.js").monitorWebChannel;
+  statusSink?: Parameters<typeof startWebAutoReplyMonitor>[0]["statusSink"];
 }) {
   const sleep = vi.fn(async () => {});
   const scripted = createScriptedWebListenerFactory();
@@ -50,6 +51,7 @@ async function startWatchdogScenario(params: {
     heartbeatSeconds: 60,
     messageTimeoutMs: 30,
     watchdogCheckMs: 5,
+    statusSink: params.statusSink,
   });
 
   await vi.waitFor(
@@ -351,8 +353,10 @@ describe("web auto-reply connection", () => {
   it("forces reconnect when watchdog closes without onClose", async () => {
     vi.useFakeTimers();
     try {
-      const { scripted, controller, run } = await startWatchdogScenario({
+      const statuses: Array<Record<string, unknown>> = [];
+      const { scripted, controller, run, runtime } = await startWatchdogScenario({
         monitorWebChannel,
+        statusSink: (status) => statuses.push({ ...status }),
       });
 
       await vi.advanceTimersByTimeAsync(200);
@@ -368,6 +372,38 @@ describe("web auto-reply connection", () => {
       scripted.resolveClose(1, { status: 499, isLoggedOut: false });
       await Promise.resolve();
       await run;
+
+      expect(runtime.log).toHaveBeenCalledWith(
+        expect.stringContaining("WhatsApp Web watchdog is recovering a stale connection"),
+      );
+      expect(runtime.error).not.toHaveBeenCalledWith(expect.stringContaining("status 499"));
+      expect(
+        statuses.some(
+          (status) =>
+            status.healthState === "reconnecting" &&
+            status.reconnectAttempts === 1 &&
+            (status.lastDisconnect as { status?: number } | null)?.status === 499,
+        ),
+      ).toBe(true);
+      expect(
+        statuses.every(
+          (status) =>
+            !(
+              status.lastDisconnect &&
+              typeof status.lastDisconnect === "object" &&
+              "expected" in status.lastDisconnect
+            ),
+        ),
+      ).toBe(true);
+      expect(
+        statuses.some(
+          (status) =>
+            status.connected === true &&
+            status.healthState === "healthy" &&
+            status.reconnectAttempts === 0 &&
+            status.lastDisconnect === null,
+        ),
+      ).toBe(true);
     } finally {
       vi.useRealTimers();
     }

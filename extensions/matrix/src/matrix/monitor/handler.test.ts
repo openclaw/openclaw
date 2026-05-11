@@ -367,6 +367,15 @@ describe("matrix monitor handler pairing account scope", () => {
       }),
     );
 
+    expect(recordInboundSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        updateLastRoute: expect.objectContaining({
+          channel: "matrix",
+          to: "room:!dm:example.org",
+          mainDmOwnerPin: undefined,
+        }),
+      }),
+    );
     const inbound = requireRecord(
       callArg(recordInboundSession, 0, 0, "record inbound session"),
       "record inbound session",

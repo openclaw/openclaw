@@ -779,7 +779,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
   const scopes = Array.isArray(opts.scopes)
     ? opts.scopes
     : isGatewayMethodClassified(opts.method)
-      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method)
+      ? resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params)
       : CLI_DEFAULT_OPERATOR_SCOPES;
   return await callGatewayWithScopes(opts, scopes);
 }
@@ -787,7 +787,7 @@ export async function callGatewayCli<T = Record<string, unknown>>(
 export async function callGatewayLeastPrivilege<T = Record<string, unknown>>(
   opts: CallGatewayBaseOptions,
 ): Promise<T> {
-  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method);
+  const scopes = resolveLeastPrivilegeOperatorScopesForMethod(opts.method, opts.params);
   return await callGatewayWithScopes(opts, scopes);
 }
 

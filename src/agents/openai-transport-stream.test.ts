@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import type { Model } from "@mariozechner/pi-ai";
+import type { Model } from "@earendil-works/pi-ai";
 import { describe, expect, it, vi } from "vitest";
 import {
   buildOpenAIResponsesParams,

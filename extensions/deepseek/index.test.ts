@@ -1,5 +1,5 @@
-import type { Context, Model } from "@mariozechner/pi-ai";
-import { createAssistantMessageEventStream } from "@mariozechner/pi-ai";
+import type { Context, Model } from "@earendil-works/pi-ai";
+import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
