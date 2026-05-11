@@ -206,12 +206,16 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireFirstCallArg<T>(mock: unknown, label: string, _type?: (value: T) => T): T {
+function optionalString(value: unknown): string {
+  return typeof value === "string" ? value : "";
+}
+
+function requireFirstCallArg(mock: unknown, label: string): unknown {
   const call = (mock as MockCallReader).mock.calls.at(0);
   if (!call) {
     throw new Error(`expected ${label} to be called`);
   }
-  return call[0] as T;
+  return call[0];
 }
 
 function requireRequestParams(
@@ -233,14 +237,18 @@ function expectRequestInputTextContains(
   harness: ReturnType<typeof createStartedThreadHarness>,
   expected: string,
 ): void {
+  expect(getRequestInputText(harness)).toContain(expected);
+}
+
+function getRequestInputText(harness: ReturnType<typeof createStartedThreadHarness>): string {
   const params = requireRequestParams(harness, "turn/start");
   const input = requireArray(params.input, "turn/start input");
-  expect(
-    input.some((entry) => {
+  return input
+    .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
-      return item.type === "text" && typeof item.text === "string" && item.text.includes(expected);
-    }),
-  ).toBe(true);
+      return item.type === "text" ? optionalString(item.text) : "";
+    })
+    .join("\n");
 }
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
@@ -275,18 +283,17 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       throw new Error("expected bootstrap hook");
     }
     expect(contextEngine.bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = requireFirstCallArg<
-      Parameters<NonNullable<ContextEngine["bootstrap"]>>[0]
-    >(contextEngine.bootstrap, "bootstrap");
+    const bootstrapParams = requireFirstCallArg(contextEngine.bootstrap, "bootstrap") as Parameters<
+      NonNullable<ContextEngine["bootstrap"]>
+    >[0];
     expect(bootstrapParams.sessionId).toBe("session-1");
     expect(bootstrapParams.sessionKey).toBe("agent:main:session-1");
     expect(bootstrapParams.sessionFile).toBe(sessionFile);
 
     expect(contextEngine.assemble).toHaveBeenCalledTimes(1);
-    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
-      contextEngine.assemble,
-      "assemble",
-    );
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
     expect(assembleParams.sessionId).toBe("session-1");
     expect(assembleParams.sessionKey).toBe("agent:main:session-1");
     expect(assembleParams.tokenBudget).toBe(321);
@@ -297,8 +304,7 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     expect(assembleParams.availableTools).toEqual(new Set());
 
     const threadStartParams = requireRequestParams(harness, "thread/start");
-    const developerInstructions = threadStartParams.developerInstructions;
-    expect(typeof developerInstructions === "string" ? developerInstructions : "").toContain(
+    expect(optionalString(threadStartParams.developerInstructions)).toContain(
       "context-engine system",
     );
     expectRequestInputTextContains(harness, "OpenClaw assembled context for this turn:");
@@ -306,6 +312,37 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
     expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps current-turn context at the front of the Codex context-engine prompt", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    SessionManager.open(sessionFile).appendMessage(
+      assistantMessage("older context", Date.now()) as never,
+    );
+    const contextEngine = createContextEngine();
+    const harness = createStartedThreadHarness();
+    const params = createParams(sessionFile, workspaceDir);
+    params.contextEngine = contextEngine;
+    params.currentTurnContext = {
+      text: [
+        "Conversation context (untrusted, chronological, selected for current message):",
+        "#6474 Sun 2026-05-10 22:22 GMT+5:30 [reply target] OpenClaw: anchor REPLYCTX this is the old message",
+        "#6498 Sun 2026-05-10 22:22 GMT+5:30 OpenClaw: filler REPLYCTX 23",
+      ].join("\n"),
+    };
+
+    const run = runCodexAppServerAttempt(params);
+    await harness.waitForMethod("turn/start");
+
+    const inputText = getRequestInputText(harness);
+    expect(inputText).toContain("OpenClaw assembled context for this turn:");
+    expect(inputText).toContain("Current user request:\nhello");
+    expect(inputText).toContain("[reply target] OpenClaw: anchor REPLYCTX");
+    expect(inputText.trim().startsWith("Conversation context (untrusted")).toBe(true);
+
+    await harness.completeTurn();
+    await run;
   });
 
   it("calls afterTurn with the mirrored transcript and runs turn maintenance", async () => {
@@ -327,9 +364,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await run;
 
     expect(afterTurn).toHaveBeenCalledTimes(1);
-    const afterTurnCall = requireFirstCallArg<
-      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
-    >(afterTurn, "afterTurn");
+    const afterTurnCall = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+      NonNullable<ContextEngine["afterTurn"]>
+    >[0];
     expect(afterTurnCall.sessionId).toBe("session-1");
     expect(afterTurnCall.sessionKey).toBe("agent:main:session-1");
     expect(afterTurnCall.prePromptMessageCount).toBe(0);
@@ -370,17 +407,16 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
     await harness.completeTurn();
     await run;
 
-    const assembleParams = requireFirstCallArg<Parameters<ContextEngine["assemble"]>[0]>(
-      contextEngine.assemble,
-      "assemble",
-    );
+    const assembleParams = requireFirstCallArg(contextEngine.assemble, "assemble") as Parameters<
+      ContextEngine["assemble"]
+    >[0];
     expect(assembleParams.messages.map((message) => message.role)).toEqual([
       "assistant",
       "assistant",
     ]);
-    const afterTurnParams = requireFirstCallArg<
-      Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]
-    >(afterTurn, "afterTurn");
+    const afterTurnParams = requireFirstCallArg(afterTurn, "afterTurn") as Parameters<
+      NonNullable<ContextEngine["afterTurn"]>
+    >[0];
     expect(afterTurnParams.prePromptMessageCount).toBe(2);
     expectRequestInputTextContains(harness, "bootstrap context");
   });

@@ -105,9 +105,10 @@ function createConfigWithDiscordAccount(overrides: Record<string, unknown> = {})
 type MockCallReader = { mock: { calls: unknown[][] } };
 
 function mockMessages(mock: unknown): string[] {
-  return (mock as MockCallReader).mock.calls.map((call) =>
-    typeof call[0] === "string" ? call[0] : "",
-  );
+  return (mock as MockCallReader).mock.calls.map((call) => {
+    const message = call[0];
+    return typeof message === "string" ? message : "";
+  });
 }
 
 function expectMockLogContains(mock: unknown, expected: string): void {

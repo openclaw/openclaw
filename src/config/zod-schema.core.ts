@@ -360,6 +360,19 @@ const ModelDefinitionSchema = z
   })
   .strict();
 
+const ModelProviderLocalServiceSchema = z
+  .object({
+    command: z.string().min(1),
+    args: z.array(z.string()).optional(),
+    cwd: z.string().min(1).optional(),
+    env: z.record(z.string(), z.string().register(sensitive)).optional(),
+    healthUrl: z.string().min(1).optional(),
+    readyTimeoutMs: z.number().int().positive().optional(),
+    idleStopMs: z.number().int().nonnegative().optional(),
+  })
+  .strict()
+  .optional();
+
 const ModelProviderSchema = z
   .object({
     baseUrl: z.string().min(1),
@@ -375,6 +388,7 @@ const ModelProviderSchema = z
     injectNumCtxForOpenAICompat: z.boolean().optional(),
     params: z.record(z.string(), z.unknown()).optional(),
     agentRuntime: ModelAgentRuntimePolicySchema,
+    localService: ModelProviderLocalServiceSchema,
     headers: z.record(z.string(), SecretInputSchema.register(sensitive)).optional(),
     authHeader: z.boolean().optional(),
     request: ConfiguredModelProviderRequestSchema,

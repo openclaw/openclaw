@@ -3,6 +3,7 @@
 import Foundation
 
 public let GATEWAY_PROTOCOL_VERSION = 4
+public let GATEWAY_MIN_PROTOCOL_VERSION = 3
 
 public enum ErrorCode: String, Codable, Sendable {
     case notLinked = "NOT_LINKED"
