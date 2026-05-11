@@ -89,16 +89,16 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("gives the Windows packaged updater wrapper enough headroom for OpenClaw timeout output", () => {
-    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(15 * 60);
+    expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS).toBeLessThanOrEqual(10 * 60);
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeGreaterThan(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
     );
     expect(
       CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS -
         CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS * 1000,
-    ).toBeGreaterThanOrEqual(3 * 60 * 1000);
+    ).toBeGreaterThanOrEqual(2 * 60 * 1000);
     expect(CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS).toBeLessThanOrEqual(
-      18 * 60 * 1000,
+      12 * 60 * 1000,
     );
   });
 

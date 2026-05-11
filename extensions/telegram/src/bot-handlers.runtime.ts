@@ -934,7 +934,7 @@ export const registerTelegramHandlers = ({
   };
 
   class TelegramRetryableCallbackError extends Error {
-    constructor(public readonly cause: unknown) {
+    constructor(public override readonly cause: unknown) {
       super(String(cause));
       this.name = "TelegramRetryableCallbackError";
     }

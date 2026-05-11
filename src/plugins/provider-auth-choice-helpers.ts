@@ -1,3 +1,4 @@
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   normalizeAgentModelMapForConfig,
@@ -121,29 +122,12 @@ function normalizeAgentModelMapForWrite(value: unknown): unknown {
   return normalizeAgentModelMapForConfig(value);
 }
 
-const GOOGLE_CONFIG_MODEL_PROVIDERS = new Set(["google", "google-gemini-cli", "google-vertex"]);
-
 function normalizeProviderCatalogModelIdForWrite(provider: string, modelId: string): string {
   const trimmed = modelId.trim();
   if (!trimmed) {
     return trimmed;
   }
-
-  const slash = trimmed.indexOf("/");
-  if (slash > 0 && slash < trimmed.length - 1) {
-    return normalizeAgentModelRefForConfig(trimmed);
-  }
-
-  const providerId = normalizeProviderId(provider);
-  if (!GOOGLE_CONFIG_MODEL_PROVIDERS.has(providerId)) {
-    return trimmed;
-  }
-
-  const normalizedQualified = normalizeAgentModelRefForConfig(`${providerId}/${trimmed}`);
-  const prefix = `${providerId}/`;
-  return normalizedQualified.startsWith(prefix)
-    ? normalizedQualified.slice(prefix.length)
-    : normalizedQualified;
+  return normalizeConfiguredProviderCatalogModelId(normalizeProviderId(provider), trimmed);
 }
 
 function normalizeProviderCatalogModelIdsForWrite(

@@ -85,6 +85,7 @@ describe("tsdown config", () => {
 
     expect(entryKeys(distGraph)).toEqual(
       expect.arrayContaining([
+        "acp/control-plane/manager",
         "agents/auth-profiles.runtime",
         "agents/model-catalog.runtime",
         "agents/models-config.runtime",
@@ -101,6 +102,7 @@ describe("tsdown config", () => {
         "plugins/provider-discovery.runtime",
         "plugins/provider-runtime.runtime",
         "plugins/runtime/index",
+        "web-fetch/runtime",
         "plugin-sdk/compat",
         "plugin-sdk/index",
         bundledEntry("active-memory"),

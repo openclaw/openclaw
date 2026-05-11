@@ -174,18 +174,18 @@ export function createDiscordNativeCommand(params: {
       : undefined;
 
   return new (class extends Command {
-    name = command.name;
-    description = truncateDiscordCommandDescription({
+    override name = command.name;
+    override description = truncateDiscordCommandDescription({
       value: command.description,
       label: `command:${command.name}`,
     });
-    descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
+    override descriptionLocalizations = truncateDiscordCommandDescriptionLocalizations({
       value: command.descriptionLocalizations,
       label: `command:${command.name}`,
     });
-    defer = false;
-    ephemeral = ephemeralDefault;
-    options = options;
+    override defer = false;
+    override ephemeral = ephemeralDefault;
+    override options = options;
 
     async run(interaction: CommandInteraction) {
       const deferred = await safeDiscordInteractionCall("interaction defer", () =>

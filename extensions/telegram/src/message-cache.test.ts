@@ -72,16 +72,48 @@ describe("telegram message cache", () => {
       });
 
       expect(chain).toEqual([
-        expect.objectContaining({
+        {
           messageId: "9001",
+          sender: "Ada",
+          senderId: "2",
+          timestamp: 1736380750000,
           body: "The cache warmer is the piece I meant",
           replyToId: "9000",
-        }),
-        expect.objectContaining({
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Ada" },
+            message_id: 9001,
+            date: 1736380750,
+            text: "The cache warmer is the piece I meant",
+            from: { id: 2, is_bot: false, first_name: "Ada" },
+            reply_to_message: {
+              chat: { id: 7, type: "private", first_name: "Kesava" },
+              message_id: 9000,
+              date: 1736380700,
+              from: { id: 1, is_bot: false, first_name: "Kesava" },
+              photo: [
+                { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+              ],
+            },
+          },
+        },
+        {
           messageId: "9000",
+          sender: "Kesava",
+          senderId: "1",
+          timestamp: 1736380700000,
           mediaRef: "telegram:file/photo-1",
           mediaType: "image",
-        }),
+          body: "<media:image>",
+          sourceMessage: {
+            chat: { id: 7, type: "private", first_name: "Kesava" },
+            message_id: 9000,
+            date: 1736380700,
+            from: { id: 1, is_bot: false, first_name: "Kesava" },
+            photo: [
+              { file_id: "photo-1", file_unique_id: "photo-unique-1", width: 640, height: 480 },
+            ],
+          },
+        },
       ]);
     } finally {
       await rm(persistedPath, { force: true });

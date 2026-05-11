@@ -246,12 +246,14 @@ describe("resolveAuthProfileOrder", () => {
       };
       saveAuthProfileStore(store, agentDir);
 
+      const beforeSuccess = Date.now();
       await markAuthProfileSuccess({
         store,
         provider: "fixture-provider-plan",
         profileId: "fixture-provider:default",
         agentDir,
       });
+      const afterSuccess = Date.now();
 
       expect(store.lastGood).toEqual({
         "fixture-provider": "fixture-provider:default",
@@ -261,7 +263,11 @@ describe("resolveAuthProfileOrder", () => {
         cooldownUntil: undefined,
         cooldownReason: undefined,
       });
-      expect(store.usageStats?.["fixture-provider:default"]?.lastUsed).toEqual(expect.any(Number));
+      const lastUsed = store.usageStats?.["fixture-provider:default"]?.lastUsed;
+      expect(typeof lastUsed).toBe("number");
+      expect(Number.isFinite(lastUsed)).toBe(true);
+      expect(lastUsed).toBeGreaterThanOrEqual(beforeSuccess);
+      expect(lastUsed).toBeLessThanOrEqual(afterSuccess);
     } finally {
       await rm(agentDir, { force: true, recursive: true });
     }

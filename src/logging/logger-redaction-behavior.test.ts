@@ -115,10 +115,6 @@ describe("file log redaction", () => {
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
     expect(record.traceId).toBe(TRACE_ID);
     expect(record.spanId).toBe(SPAN_ID);
-    expect(record).toMatchObject({
-      traceId: TRACE_ID,
-      spanId: SPAN_ID,
-    });
   });
 
   it("writes active request trace context as top-level JSONL fields", () => {
@@ -135,10 +131,8 @@ describe("file log redaction", () => {
 
     const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-    expect(record).toMatchObject({
-      traceId: TRACE_ID,
-      spanId: SPAN_ID,
-    });
+    expect(record.traceId).toBe(TRACE_ID);
+    expect(record.spanId).toBe(SPAN_ID);
   });
 
   it("writes hostname and flattened message as top-level JSONL fields", () => {
@@ -166,11 +160,9 @@ describe("file log redaction", () => {
 
     const [line] = fs.readFileSync(logPath, "utf8").trim().split("\n");
     const record = JSON.parse(line ?? "{}") as Record<string, unknown>;
-    expect(record).toMatchObject({
-      agent_id: "agent-main",
-      session_id: "agent:main:discord:channel:c1",
-      channel: "discord",
-      message: "session routed",
-    });
+    expect(record.agent_id).toBe("agent-main");
+    expect(record.session_id).toBe("agent:main:discord:channel:c1");
+    expect(record.channel).toBe("discord");
+    expect(record.message).toBe("session routed");
   });
 });

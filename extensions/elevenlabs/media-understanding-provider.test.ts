@@ -1,10 +1,22 @@
-import { describe, expect, it, vi } from "vitest";
+import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   elevenLabsMediaUnderstandingProvider,
   transcribeElevenLabsAudio,
 } from "./media-understanding-provider.js";
 
 describe("elevenLabsMediaUnderstandingProvider", () => {
+  let ssrfMock: { mockRestore: () => void } | undefined;
+
+  beforeEach(() => {
+    ssrfMock = mockPinnedHostnameResolution();
+  });
+
+  afterEach(() => {
+    ssrfMock?.mockRestore();
+    ssrfMock = undefined;
+  });
+
   it("has expected provider metadata", () => {
     expect(elevenLabsMediaUnderstandingProvider.id).toBe("elevenlabs");
     expect(elevenLabsMediaUnderstandingProvider.capabilities).toEqual(["audio"]);

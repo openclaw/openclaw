@@ -81,6 +81,7 @@ describe("codex plugin", () => {
   });
 
   it("registers with capture APIs that do not expose conversation binding hooks yet", () => {
+    const registerProvider = vi.fn();
     const api = createTestPluginApi({
       id: "codex",
       name: "Codex",
@@ -91,7 +92,7 @@ describe("codex plugin", () => {
       registerAgentHarness: vi.fn(),
       registerCommand: vi.fn(),
       registerMediaUnderstandingProvider: vi.fn(),
-      registerProvider: vi.fn(),
+      registerProvider,
       on: vi.fn(),
     }) as ReturnType<typeof createTestPluginApi> & {
       onConversationBindingResolved?: ReturnType<typeof vi.fn>;
@@ -99,8 +100,8 @@ describe("codex plugin", () => {
     delete (api as { onConversationBindingResolved?: unknown }).onConversationBindingResolved;
 
     plugin.register(api);
-    expect(api.registerProvider).toHaveBeenCalledTimes(1);
-    expect(api.registerProvider.mock.calls[0]?.[0].id).toBe("codex");
+    expect(registerProvider).toHaveBeenCalledTimes(1);
+    expect(registerProvider.mock.calls[0]?.[0].id).toBe("codex");
   });
 
   it("only claims the codex provider by default", () => {

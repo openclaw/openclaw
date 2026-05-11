@@ -38,7 +38,7 @@ const providerRuntimeMocks = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("@mariozechner/pi-ai/oauth", () => ({
+vi.mock("@earendil-works/pi-ai/oauth", () => ({
   getOAuthApiKey: vi.fn(),
   getOAuthProviders: () => [],
   loginOpenAICodex: vi.fn(),

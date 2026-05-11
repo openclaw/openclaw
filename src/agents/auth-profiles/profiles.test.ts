@@ -51,7 +51,6 @@ describe("markAuthProfileSuccess", () => {
       profileId: "anthropic:default",
       agentDir: "/tmp/openclaw-auth-profiles-success",
     });
-
     expect(storeMocks.saveAuthProfileStore).toHaveBeenCalledWith(
       store,
       "/tmp/openclaw-auth-profiles-success",
@@ -79,12 +78,14 @@ describe("markAuthProfileSuccess", () => {
       return lockedStore;
     });
 
+    const beforeUsed = Date.now();
     await markAuthProfileSuccess({
       store,
       provider: "anthropic",
       profileId: "anthropic:default",
       agentDir: "/tmp/openclaw-auth-profiles-success",
     });
+    const afterUsed = Date.now();
 
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
     expect(store.lastGood).toEqual({ anthropic: "anthropic:default" });
@@ -93,6 +94,10 @@ describe("markAuthProfileSuccess", () => {
       errorCount: 0,
       cooldownUntil: undefined,
     });
-    expect(store.usageStats?.["anthropic:default"]?.lastUsed).toEqual(expect.any(Number));
+    const lastUsed = store.usageStats?.["anthropic:default"]?.lastUsed;
+    expect(typeof lastUsed).toBe("number");
+    expect(Number.isFinite(lastUsed)).toBe(true);
+    expect(lastUsed).toBeGreaterThanOrEqual(beforeUsed);
+    expect(lastUsed).toBeLessThanOrEqual(afterUsed);
   });
 });

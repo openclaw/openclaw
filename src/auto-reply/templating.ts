@@ -103,6 +103,7 @@ export type MsgContext = {
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
+  ReplyToQuoteText?: string;
   ReplyToSender?: string;
   ReplyChain?: Array<{
     messageId?: string;
