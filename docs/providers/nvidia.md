@@ -62,7 +62,19 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
 }
 ```
 
-## Built-in catalog
+## Featured catalog
+
+When OpenClaw can load the NVIDIA provider runtime, it fetches NVIDIA's public
+featured-model catalog from
+`https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json` and
+caches the ranked result for 24 hours. New featured models from build.nvidia.com
+therefore appear in setup and model-selection surfaces without waiting for an
+OpenClaw release.
+
+If that public catalog is unavailable or malformed, OpenClaw falls back to the
+bundled catalog below.
+
+## Bundled fallback catalog
 
 | Model ref                                  | Name                         | Context | Max output |
 | ------------------------------------------ | ---------------------------- | ------- | ---------- |
@@ -80,8 +92,9 @@ openclaw onboard --auth-choice nvidia-api-key --nvidia-api-key "nvapi-..."
   </Accordion>
 
   <Accordion title="Catalog and pricing">
-    The bundled catalog is static. Costs default to `0` in source since NVIDIA
-    currently offers free API access for the listed models.
+    OpenClaw prefers NVIDIA's public featured-model catalog and caches it for 24
+    hours. The bundled fallback catalog is static. Costs default to `0` in source
+    since NVIDIA currently offers free API access for the listed models.
   </Accordion>
 
   <Accordion title="OpenAI-compatible endpoint">

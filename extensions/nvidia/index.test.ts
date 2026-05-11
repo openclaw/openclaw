@@ -4,8 +4,18 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { clearNvidiaFeaturedModelCacheForTests } from "./provider-catalog.js";
+
+const ssrfRuntimeMocks = vi.hoisted(() => ({
+  fetchWithSsrFGuard: vi.fn(),
+  ssrfPolicyFromHttpBaseUrlAllowedHostname: vi.fn((baseUrl: string) => ({
+    allowedHostnames: [new URL(baseUrl).hostname],
+  })),
+}));
+
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ssrfRuntimeMocks);
 
 type NvidiaManifest = {
   providerAuthChoices?: Array<Record<string, unknown>>;
@@ -22,6 +32,19 @@ function readManifest(): NvidiaManifest {
 
 async function registerNvidiaProvider() {
   return registerSingleProviderPlugin(plugin);
+}
+
+afterEach(() => {
+  clearNvidiaFeaturedModelCacheForTests();
+  ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
+  ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
+});
+
+function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
+  ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+    response: Response.json(payload, { status }),
+    release: vi.fn(),
+  });
 }
 
 describe("nvidia provider hooks", () => {
@@ -129,7 +152,8 @@ describe("nvidia provider hooks", () => {
     expect(provider.wrapStreamFn).toBeUndefined();
   });
 
-  it("surfaces the bundled NVIDIA models via augmentModelCatalog", async () => {
+  it("surfaces the bundled NVIDIA models when featured catalog fetch fails", async () => {
+    mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
     const provider = await registerNvidiaProvider();
 
     const entries = await provider.augmentModelCatalog?.({
@@ -144,6 +168,33 @@ describe("nvidia provider hooks", () => {
       "z-ai/glm5",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
+  });
+
+  it("surfaces live featured NVIDIA models via augmentModelCatalog", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "minimaxai/minimax-m2.7",
+          "model-name": "Minimax M2.7",
+          context: 196608,
+          "max-output": 8192,
+        },
+      ],
+    });
+    const provider = await registerNvidiaProvider();
+
+    const entries = await provider.augmentModelCatalog?.({
+      env: process.env,
+      entries: [],
+    });
+
+    expect(entries?.map((entry) => entry.id)).toEqual([
+      "minimaxai/minimax-m2.7",
+      "nvidia/nemotron-3-super-120b-a12b",
+      "moonshotai/kimi-k2.5",
+      "minimaxai/minimax-m2.5",
+      "z-ai/glm5",
+    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
