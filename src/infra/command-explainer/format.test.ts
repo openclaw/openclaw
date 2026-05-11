@@ -82,6 +82,14 @@ describe("formatCommandSpans", () => {
     expect(commandTexts).toContain("node");
   });
 
+  it("omits command spans for unsupported shell wrapper languages", async () => {
+    const powershell = await explainShellCommand('pwsh -Command "Get-ChildItem"');
+    const cmd = await explainShellCommand('cmd.exe /d /s /c "dir"');
+
+    expect(formatCommandSpans(powershell)).toEqual([]);
+    expect(formatCommandSpans(cmd)).toEqual([]);
+  });
+
   it("ignores invalid executable spans", () => {
     const explanation: CommandExplanation = {
       ok: true,

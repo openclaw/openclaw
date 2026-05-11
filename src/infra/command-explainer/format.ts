@@ -1,5 +1,9 @@
 import type { ExecApprovalCommandSpan } from "../exec-approvals.js";
+import { normalizeExecutableToken } from "../exec-wrapper-tokens.js";
+import { isShellWrapperExecutable, POSIX_SHELL_WRAPPERS } from "../shell-wrapper-resolution.js";
 import type { CommandExplanation } from "./types.js";
+
+const POSIX_COMMAND_HIGHLIGHT_SHELLS: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 function spanToCommandSpan(span: {
   startIndex: number;
@@ -14,7 +18,24 @@ function spanToCommandSpan(span: {
   return { startIndex: span.startIndex, endIndex: span.endIndex };
 }
 
+function isUnsupportedShellWrapper(executable: string): boolean {
+  const normalizedExecutable = normalizeExecutableToken(executable);
+  return (
+    isShellWrapperExecutable(normalizedExecutable) &&
+    !POSIX_COMMAND_HIGHLIGHT_SHELLS.has(normalizedExecutable)
+  );
+}
+
+function hasUnsupportedShellWrapper(explanation: CommandExplanation): boolean {
+  return explanation.topLevelCommands.some((command) =>
+    isUnsupportedShellWrapper(command.executable),
+  );
+}
+
 export function formatCommandSpans(explanation: CommandExplanation): ExecApprovalCommandSpan[] {
+  if (hasUnsupportedShellWrapper(explanation)) {
+    return [];
+  }
   const commandSpans: ExecApprovalCommandSpan[] = [];
 
   for (const command of [...explanation.topLevelCommands, ...explanation.nestedCommands]) {

@@ -255,6 +255,42 @@ describe("requestExecApprovalDecision", () => {
     expect(payload?.commandSpans).toContainEqual({ startIndex: 0, endIndex: 4 });
   });
 
+  it("omits generated command spans for unsupported shell wrapper languages", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-powershell",
+      command: 'pwsh -Command "Get-ChildItem"',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id-cmd",
+      command: 'cmd.exe /d /s /c "dir"',
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "always",
+    });
+
+    expect(callGatewayTool).toHaveBeenNthCalledWith(
+      1,
+      "exec.approval.request",
+      expect.anything(),
+      expect.not.objectContaining({ commandSpans: expect.anything() }),
+      expect.anything(),
+    );
+    expect(callGatewayTool).toHaveBeenNthCalledWith(
+      2,
+      "exec.approval.request",
+      expect.anything(),
+      expect.not.objectContaining({ commandSpans: expect.anything() }),
+      expect.anything(),
+    );
+  });
+
   it("keeps explicit command spans", async () => {
     vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
 
