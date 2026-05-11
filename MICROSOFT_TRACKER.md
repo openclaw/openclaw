@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-05-10 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-05-11 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -17,12 +17,12 @@
 
 | Category                  | Issues | PRs    | Total   | Closed | Remaining |
 | ------------------------- | ------ | ------ | ------- | ------ | --------- |
-| MS Teams (channel plugin) | 6      | 39     | 45      | 0      | 45        |
-| Windows platform          | 66     | 39     | 105     | 0      | 105       |
-| WSL                       | 9      | 5      | 14      | 0      | 14        |
+| MS Teams (channel plugin) | 5      | 40     | 45      | 0      | 45        |
+| Windows platform          | 65     | 34     | 99      | 0      | 99        |
+| WSL                       | 11     | 4      | 15      | 0      | 15        |
 | Azure                     | 5      | 6      | 11      | 0      | 11        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **86** | **89** | **175** | **0**  | **175**   |
+| **Total**                 | **86** | **84** | **170** | **0**  | **170**   |
 
 ---
 
@@ -35,7 +35,6 @@
 | [ ]       | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint |        |          |
 | [ ]       | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                            |        |          |
 | [ ]       | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                              |        |          |
-| [ ]       | P2       | #66771 | [Bug]: MSTeams malformed mixed thread session key from old-session reselection                                                  |        |          |
 | [ ]       | P2       | #42099 | fix(plugins): false-positive duplicate plugin ID warning on gateway start (msteams)                                             |        |          |
 
 ### Feature Requests
@@ -53,14 +52,15 @@
 | [ ]       | P0       | #79972 | feat: add SQLite transcript frontier and delta API                                                   | XL   |             |
 | [ ]       | P0       | #79971 | fix: tighten SQLite runtime truth in session refactor                                                | XL   |             |
 | [ ]       | P0       | #79970 | feat: expose durable session id match selection helpers                                              | XL   |             |
+| [ ]       | P0       | #79934 | feat(sessions): add transcript projections                                                           | XL   |             |
 | [ ]       | P0       | #78595 | Refactor runtime state into SQLite                                                                   | XL   |             |
 | [ ]       | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                         | XL   |             |
-| [ ]       | P1       | #79444 | [codex] refresh plugin regression fixtures                                                           | S    |             |
 | [ ]       | P1       | #77784 | Add Teams delegated auth for plugin tools                                                            | XL   |             |
-| [ ]       | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                      | L    |             |
 | [ ]       | P2       | #79609 | Show session cleanup dry-run counts by label                                                         | L    |             |
-| [ ]       | P2       | #78850 | fix(msteams): make resolveMSTeamsRouteSessionKey idempotent against pre-suffixed bases (#66771)      | S    |             |
+| [ ]       | P2       | #79510 | fix(gateway): cancel deferred channel reloads during restart                                         | L    |             |
+| [ ]       | P2       | #79185 | fix(tts/xiaomi): support Token Plan TTS endpoint                                                     | S    |             |
 | [ ]       | P2       | #78839 | [codex] Add Teams member-info action gate                                                            | S    |             |
+| [ ]       | P2       | #78687 | feat(wake): expose typed sessionKey on wake protocol + system event CLI (refs #52305)                | L    |             |
 | [ ]       | P2       | #77921 | feat(inworld): default to inworld-tts-2 (Realtime TTS-2)                                             | XS   |             |
 | [ ]       | P2       | #76560 | feat(plugins): allow community plugins to use openKeyedStore with man…                               | L    | @vincentkoc |
 | [ ]       | P2       | #76262 | fix(msteams): rebase TeamsSDK patterns to simplify Teams Integration                                 | XL   | @BradGroux  |
@@ -99,6 +99,7 @@
 | Resolved? | Priority | #      | Title                                                                                                                                                     | Labels               | Assignee    |
 | --------- | -------- | ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | ----------- |
 | [ ]       | P0       | #74350 | [Security] Windows ACL audit bypass: Anonymous and Guest SIDs are misclassified as "group" instead of "world"                                             |                      |             |
+| [ ]       | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                    | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                         |                      |             |
 | [ ]       | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                      | `bug` `bug:crash`    |             |
 | [ ]       | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                            | `bug` `regression`   |             |
@@ -116,10 +117,8 @@
 | [ ]       | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                        |                      |             |
 | [ ]       | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                              | `bug` `regression`   |             |
 | [ ]       | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                        |                      |             |
-| [ ]       | P1       | #53947 | writeTextFileAtomic (sync) crashes with EPERM on Docker volumes mounted from Windows                                                                      |                      |             |
-| [ ]       | P1       | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows                                               | `bug` `regression`   |             |
 | [ ]       | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                          | `bug` `regression`   |             |
-| [ ]       | P1       | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows                                                                     | `bug` `bug:crash`    |             |
+| [ ]       | P2       | #80416 | [Bug] core-plugin-tools ~3.5s overhead on every embedded run persists after #75520 fix — Windows + Node 24 + isolated cron jobs                           |                      |             |
 | [ ]       | P2       | #79899 | DefaultResourceLoader.reload() blocks event loop for 12-15s on Windows due to synchronous filesystem scanning                                             |                      |             |
 | [ ]       | P2       | #79099 | Windows gateway probe still reports unreachable while gateway health is OK on 2026.5.6                                                                    |                      |             |
 | [ ]       | P2       | #78640 | fix(memory): EPERM on Windows persists after 64187 retry — needs copyFile/unlink fallback (was in closed PR 71611)                                        |                      |             |
@@ -195,13 +194,9 @@
 | [ ]       | P2       | #67655 | fix(exec): fail closed on Windows shell wrappers in allowlist mode                   | XS   |             |
 | [ ]       | P2       | #64110 | feat: Deleting scheduled tasks also clears tasks in the queue.                       | L    |             |
 | [ ]       | P2       | #63651 | fix: remove duplicate restart message on Windows (schtasks)                          | S    |             |
-| [ ]       | P2       | #60678 | fix(acpx): add windowsHide to MCP proxy spawn on Windows                             | XS   |             |
 | [ ]       | P2       | #59705 | [codex] improve parallels windows smoke logging                                      | M    |             |
 | [ ]       | P2       | #59013 | fix: tolerate EPERM in session write-lock on Windows                                 | S    |             |
 | [ ]       | P2       | #53965 | fix: atomic file writes on Windows-mounted Docker volumes                            | XS   |             |
-| [ ]       | P2       | #52989 | fix: use pathToFileURL for Windows path comparison in generate-base-config-schema    | XS   |             |
-| [ ]       | P2       | #52487 | fix(windows): prevent restart race from duplicate schtasks /Run                      | XS   |             |
-| [ ]       | P2       | #52200 | fix(skills): normalize backslashes in compacted skill paths on Windows               | XS   |             |
 | [ ]       | P2       | #51486 | fix(daemon): query Windows task runtime directly                                     | S    |             |
 | [ ]       | P2       | #50136 | fix(windows): stabilize gateway restart and avoid false stale cleanup [AI-assisted]  | M    |             |
 | [ ]       | P2       | #50116 | fix: handle Windows-style session paths when running on POSIX                        | XS   |             |
@@ -212,7 +207,6 @@
 | [ ]       | P2       | #45380 | Make env-prefixed npm scripts work on Windows                                        | S    |             |
 | [ ]       | P2       | #44228 | fix(reply): normalize Windows media paths for dedupe                                 | XS   |             |
 | [ ]       | P2       | #44215 | fix(path): add Windows PATH bootstrap dirs                                           | S    |             |
-| [ ]       | P2       | #42131 | fix(doctor): case-insensitive safe-bin trusted dir matching on macOS/Windows         | S    |             |
 | [ ]       | P2       | #39644 | fix(windows): PowerShell completion install and time-format detection                | S    |             |
 | [ ]       | P2       | #38932 | docs(gateway): add Windows no-Docker hardening fallback guide                        | XS   |             |
 
@@ -222,16 +216,18 @@
 
 ### Bugs / Crashes
 
-| Resolved? | Priority | #      | Title                                                                                                                                        | Labels             | Assignee |
-| --------- | -------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | -------- |
-| [ ]       | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                | `bug`              |          |
-| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                  | `bug` `bug:crash`  |          |
-| [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                | `bug` `regression` |          |
-| [ ]       | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment)                             | `bug` `regression` |          |
-| [ ]       | P2       | #78222 | OpenClaw 2026.5.4 Gateway status/health inconsistency on WSL2: diagnostics report ok/listener, external checks show no listener and HTTP 000 |                    |          |
-| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                       |                    |          |
-| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                       |                    |          |
-| [ ]       | P2       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                            | `bug`              |          |
+| Resolved? | Priority | #      | Title                                                                                                                                        | Labels               | Assignee |
+| --------- | -------- | ------ | -------------------------------------------------------------------------------------------------------------------------------------------- | -------------------- | -------- |
+| [ ]       | P1       | #80580 | [Bug]: ./docker_setup.sh fails on WSL due to Dockerfile syntax comment being misinterpreted as command                                       | `bug` `regression`   |          |
+| [ ]       | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                | `bug`                |          |
+| [ ]       | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                  | `bug` `bug:crash`    |          |
+| [ ]       | P1       | #59209 | Misleading CDP "Empty reply from server" in WSL2 caused by portproxy self-loop (svchost/iphlpsvc), not Chrome                                | `bug` `regression`   |          |
+| [ ]       | P1       | #44051 | [Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment)                             | `bug` `regression`   |          |
+| [ ]       | P2       | #80336 | [Bug]: placeholder.openclaw.cloud unreachable on WSL2 with custom gateway port                                                               | `bug` `bug:behavior` |          |
+| [ ]       | P2       | #78222 | OpenClaw 2026.5.4 Gateway status/health inconsistency on WSL2: diagnostics report ok/listener, external checks show no listener and HTTP 000 |                      |          |
+| [ ]       | P2       | #73602 | [Bug]: WhatsApp flaps and Telegram polling stalls on WSL2 in 2026.4.26                                                                       |                      |          |
+| [ ]       | P2       | #73152 | Docs/doctor request: clarify gateway reachability for OrbStack/WSL/VM/Tailscale setups                                                       |                      |          |
+| [ ]       | P2       | #61616 | [Bug]: [WSL2] Global 30-min gateway stall (:29/:59) affects Telegram + Control UI                                                            | `bug`                |          |
 
 ### Feature Requests
 
@@ -249,7 +245,6 @@
 | [ ]       | P2       | #68400 | daemon/systemd: distinguish WSL user D-Bus socket missing from missing systemctl                                    | S    |          |
 | [ ]       | P2       | #59219 | fix[Bug]: [skills] Skipping skill path error triggered on officially installed skills via clawhub (WSL Environment) | M    |          |
 | [ ]       | P2       | #58853 | feat(doctor): add WSL environment diagnostics check [AI-assisted]                                                   | L    |          |
-| [ ]       | P2       | #44129 | fix(skills): exempt managed skills from path escaping checks on WSL (#44051)                                        | S    |          |
 
 ---
 
@@ -310,6 +305,7 @@ _No currently open items found._
 | MS Teams (channel plugin) | pr    | P0       | #79972 | feat: add SQLite transcript frontier and delta API                                                            |
 | MS Teams (channel plugin) | pr    | P0       | #79971 | fix: tighten SQLite runtime truth in session refactor                                                         |
 | MS Teams (channel plugin) | pr    | P0       | #79970 | feat: expose durable session id match selection helpers                                                       |
+| MS Teams (channel plugin) | pr    | P0       | #79934 | feat(sessions): add transcript projections                                                                    |
 | MS Teams (channel plugin) | pr    | P0       | #78595 | Refactor runtime state into SQLite                                                                            |
 | MS Teams (channel plugin) | pr    | P0       | #63827 | fix(security): preserve dmPolicy settings during wizard runs                                                  |
 | Windows platform          | issue | P0       | #74350 | [Security] Windows ACL audit bypass: Anonymous and Guest SIDs are misclassified as "group" instead of "world" |
@@ -324,9 +320,8 @@ _No currently open items found._
 | MS Teams (channel plugin) | issue | P1       | #67177 | [msteams] Inbound file attachments silently fail in DMs — file.download.info downloadUrl not rewritten to Graph shares endpoint                         |
 | MS Teams (channel plugin) | issue | P1       | #65329 | bug(msteams): DM inline images and file attachments silently dropped                                                                                    |
 | MS Teams (channel plugin) | issue | P1       | #62765 | msteams dmPolicy=pairing silently drops unpaired senders with HTTP 200, no log line, no auto-reply                                                      |
-| MS Teams (channel plugin) | pr    | P1       | #79444 | [codex] refresh plugin regression fixtures                                                                                                              |
 | MS Teams (channel plugin) | pr    | P1       | #77784 | Add Teams delegated auth for plugin tools                                                                                                               |
-| MS Teams (channel plugin) | pr    | P1       | #48014 | feat(msteams): add DefaultAzureCredential auth type for passwordless Teams auth                                                                         |
+| Windows platform          | issue | P1       | #80344 | [Bug]: Discord voice /vc join fails on Windows with AggregateError + gateway heartbeat timeout / event loop starvation                                  |
 | Windows platform          | issue | P1       | #79437 | Prebuilt `node-llama-cpp` Windows binaries crash (0xC0000005) on Intel Alder Lake-N (N95) — qmd LLM half unusable                                       |
 | Windows platform          | issue | P1       | #77734 | Gateway crashes every 3 minutes on Windows - CIAO PROBING CANCELLED (bonjour plugin)                                                                    |
 | Windows platform          | issue | P1       | #77443 | [Bug]: WhatsApp event loop blocked (eventLoopDelayMaxMs=12088ms) on first inbound message — 2026.5.3-1 Windows                                          |
@@ -344,10 +339,8 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #62055 | Windows: CLI crashes with stack overflow / heap OOM on v2026.4.5 (large ESM module graph exceeds V8 default stack)                                      |
 | Windows platform          | issue | P1       | #59362 | [Bug]: Windows: exec tool causes console window flash when spawning commands                                                                            |
 | Windows platform          | issue | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                      |
-| Windows platform          | issue | P1       | #53947 | writeTextFileAtomic (sync) crashes with EPERM on Docker volumes mounted from Windows                                                                    |
-| Windows platform          | issue | P1       | #47643 | [Bug]: Persistent Telegram Channel Issues: Sync Failures, Loops, and Config Changes Not Applying on Windows                                             |
 | Windows platform          | issue | P1       | #46378 | [Bug]: 安装配置界面windows会卡死                                                                                                                        |
-| Windows platform          | issue | P1       | #42011 | [Bug]: Control UI chat can stay stuck on "Stop" after embedded run timeout on Windows                                                                   |
+| WSL                       | issue | P1       | #80580 | [Bug]: ./docker_setup.sh fails on WSL due to Dockerfile syntax comment being misinterpreted as command                                                  |
 | WSL                       | issue | P1       | #74251 | [Bug]: [Bug]: npm install -g openclaw@latest crashes with V8 Fatal error in WSL2 Ubuntu 24.04                                                           |
 | WSL                       | issue | P1       | #68966 | [Bug]: [WSL] openclaw browser command terminated by SIGKILL causing timeout                                                                             |
 | WSL                       | issue | P1       | #67060 | [Feature]: Provider requests ignore env proxy by default → causes silent timeout in WSL / proxy environments                                            |
