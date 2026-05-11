@@ -79,10 +79,9 @@ High level:
 
 Dev mode is simply:
 
-- `~/polytropos/releases/dev` points at a worktree’s `dist/` output.
-- `~/polytropos/releases/current` points at `dev`.
+- `~/polytropos/releases/current` points at `~/polytropos/releases/dev`.
 
-You still run only one gateway; you’re just pointing it at a different `dist/` tree.
+(`dev` is defined in the directory layout above.)
 
 ---
 
