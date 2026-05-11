@@ -1061,7 +1061,7 @@ describe("resolveTelegramFetch", () => {
     expect(headers?.get("User-Agent")).toBe("OpenClawBot/2026.5.10-test");
   });
 
-  it("does not overwrite a caller-provided User-Agent header", async () => {
+  it("does not overwrite a caller-provided User-Agent header via init", async () => {
     vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
     undiciFetch.mockResolvedValue({ ok: true } as Response);
 
@@ -1079,6 +1079,27 @@ describe("resolveTelegramFetch", () => {
     const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
     const headers = callInit?.headers as Headers | undefined;
     expect(headers?.get("User-Agent")).toBe("CustomBot/1.0");
+  });
+
+  it("does not overwrite a User-Agent carried on a Request input", async () => {
+    vi.stubEnv("OPENCLAW_VERSION", "2026.5.10-test");
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    const req = new Request("https://api.telegram.org/botTOKEN/getMe", {
+      headers: { "User-Agent": "RequestBot/2.0" },
+    });
+    await transport.sourceFetch(req);
+
+    const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    const headers = callInit?.headers as Headers | undefined;
+    expect(headers?.get("User-Agent")).toBe("RequestBot/2.0");
   });
 
   describe("transport lifecycle", () => {

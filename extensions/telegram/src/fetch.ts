@@ -387,7 +387,15 @@ function stampUserAgent(fetchImpl: typeof fetch): typeof fetch {
   const version = process.env["OPENCLAW_VERSION"]?.trim() || "unknown";
   const ua = `OpenClawBot/${version}`;
   return (input, init) => {
-    const headers = new Headers(init?.headers);
+    // Start from Request headers so a Request-carried User-Agent is not lost
+    // when init.headers is absent (undici replaces Request headers with init.headers).
+    const headers = input instanceof Request ? new Headers(input.headers) : new Headers();
+    // Apply init headers on top (init takes precedence over Request headers).
+    if (init?.headers) {
+      for (const [k, v] of new Headers(init.headers)) {
+        headers.set(k, v);
+      }
+    }
     if (!headers.has("User-Agent")) {
       headers.set("User-Agent", ua);
     }
