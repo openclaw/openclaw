@@ -787,13 +787,10 @@ describe("gateway send mirroring", () => {
       idempotencyKey: "idem-send-options",
     });
 
-    expect(mocks.deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        forceDocument: true,
-        silent: true,
-        formatting: { parseMode: "HTML" },
-      }),
-    );
+    const options = mocks.deliverOutboundPayloads.mock.calls[0]?.[0];
+    expect(options?.forceDocument).toBe(true);
+    expect(options?.silent).toBe(true);
+    expect(options?.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("updates mirror session keys and delivery thread ids when Slack routing derives a thread", async () => {
@@ -1098,7 +1095,7 @@ describe("gateway send mirroring", () => {
     });
 
     expect(firstRespondCall(respond)?.[0]).toBe(true);
-    expect(capturedMediaLocalRoots).toEqual(expect.arrayContaining([TEST_AGENT_WORKSPACE]));
+    expect(capturedMediaLocalRoots).toContain(TEST_AGENT_WORKSPACE);
   });
 
   it("forces senderIsOwner=false for narrowly-scoped callers but honors it for full operators", async () => {

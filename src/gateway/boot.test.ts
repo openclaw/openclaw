@@ -136,12 +136,8 @@ describe("runBootOnce", () => {
 
       expect(agentCommand).toHaveBeenCalledTimes(1);
       const call = agentCommand.mock.calls[0]?.[0];
-      expect(call).toEqual(
-        expect.objectContaining({
-          deliver: false,
-          sessionKey: resolveMainSessionKey({}),
-        }),
-      );
+      expect(call?.deliver).toBe(false);
+      expect(call?.sessionKey).toBe(resolveMainSessionKey({}));
       expect(call?.message).toContain("BOOT.md:");
       expect(call?.message).toContain(content);
       expect(call?.message).toContain("NO_REPLY");

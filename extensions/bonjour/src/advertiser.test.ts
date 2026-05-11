@@ -250,6 +250,22 @@ describe("gateway bonjour advertiser", () => {
     await expect(started.stop()).resolves.toBeUndefined();
   });
 
+  it("auto-disables Bonjour on Fly Machines without Docker sentinel files", async () => {
+    enableAdvertiserUnitMode();
+    process.env.FLY_MACHINE_ID = "3d8d5459a03038";
+    process.env.FLY_APP_NAME = "openclaw-clawcks-test";
+    vi.spyOn(fs, "existsSync").mockReturnValue(false);
+    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+
+    const started = await startAdvertiser({
+      gatewayPort: 18789,
+      sshPort: 2222,
+    });
+
+    expect(createService).not.toHaveBeenCalled();
+    await expect(started.stop()).resolves.toBeUndefined();
+  });
+
   it("honors explicit Bonjour opt-in inside detected containers", async () => {
     enableAdvertiserUnitMode();
     process.env.OPENCLAW_DISABLE_BONJOUR = "0";

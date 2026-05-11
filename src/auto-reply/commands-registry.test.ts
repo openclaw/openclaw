@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   buildCommandText,
@@ -82,12 +86,27 @@ function installOllamaThinkingProvider() {
   setActivePluginRegistry(registry);
 }
 
+function createNativeCommandsRegistry(id: "discord" | "slack") {
+  return createTestRegistry([
+    {
+      pluginId: id,
+      plugin: createChannelTestPluginBase({
+        id,
+        capabilities: { nativeCommands: true, chatTypes: ["direct"] },
+      }),
+      source: "test",
+    },
+  ]);
+}
+
 beforeEach(() => {
   vi.doUnmock("../channels/plugins/index.js");
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
 afterEach(() => {
+  resetPluginRuntimeStateForTest();
   setActivePluginRegistry(createTestRegistry([]));
 });
 
@@ -453,6 +472,65 @@ describe("commands registry", () => {
         commandSource: "native",
       }),
     ).toBe(true);
+  });
+
+  it("refreshes dock commands when pinned-empty fallback active registry changes", () => {
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    expect([...commandKeySet(listChatCommands())]).toEqual(
+      expect.arrayContaining(["dock:discord"]),
+    );
+    expect([...commandKeySet(listChatCommands())]).not.toEqual(
+      expect.arrayContaining(["dock:slack"]),
+    );
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    expect([...commandKeySet(listChatCommands())]).not.toEqual(
+      expect.arrayContaining(["dock:discord"]),
+    );
+    expect([...commandKeySet(listChatCommands())]).toEqual(expect.arrayContaining(["dock:slack"]));
+  });
+
+  it("refreshes text-command gating when pinned-empty fallback active registry changes", () => {
+    const cfg = { commands: { text: false } };
+    const pinnedEmptyRegistry = createTestRegistry([]);
+    setActivePluginRegistry(pinnedEmptyRegistry);
+    pinActivePluginChannelRegistry(pinnedEmptyRegistry);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("discord"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(false);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+
+    setActivePluginRegistry(createNativeCommandsRegistry("slack"));
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "discord",
+        commandSource: "text",
+      }),
+    ).toBe(true);
+    expect(
+      shouldHandleTextCommands({
+        cfg,
+        surface: "slack",
+        commandSource: "text",
+      }),
+    ).toBe(false);
   });
 
   it("normalizes telegram-style command mentions for the current bot", () => {

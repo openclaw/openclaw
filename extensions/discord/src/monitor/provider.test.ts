@@ -131,6 +131,7 @@ vi.mock("../voice/manager.runtime.js", () => {
     DiscordVoiceManager: function DiscordVoiceManager() {},
     DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
     DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+    DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
   };
 });
 describe("monitorDiscordProvider", () => {
@@ -263,6 +264,7 @@ describe("monitorDiscordProvider", () => {
         DiscordVoiceManager: function DiscordVoiceManager() {},
         DiscordVoiceReadyListener: function DiscordVoiceReadyListener() {},
         DiscordVoiceResumedListener: function DiscordVoiceResumedListener() {},
+        DiscordVoiceStateUpdateListener: function DiscordVoiceStateUpdateListener() {},
       } as never;
     });
     providerTesting.setLoadDiscordProviderSessionRuntime(

@@ -121,7 +121,7 @@ describe("openrouter image generation provider", () => {
     });
 
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(resolveApiKeyForProviderMock.mock.calls[0]?.[0]).toEqual({
+    expect(resolveApiKeyForProviderMock).toHaveBeenCalledWith({
       provider: "openrouter",
       cfg: {
         models: {

@@ -513,10 +513,10 @@ describe("GatewayClient request errors", () => {
       expect(onConnectError).not.toHaveBeenCalled();
       expect(onClose).not.toHaveBeenCalled();
       expect(ws.lastClose).toEqual({ code: 1013, reason: "gateway starting" });
-      expect(logDebugMock).toHaveBeenCalledWith(expect.stringContaining("gateway connect failed:"));
-      expect(logErrorMock).not.toHaveBeenCalledWith(
-        expect.stringContaining("gateway connect failed:"),
-      );
+      expect(logDebugMock.mock.calls).toEqual([
+        ["gateway connect failed: GatewayClientRequestError: gateway starting; retry shortly"],
+      ]);
+      expect(logErrorMock.mock.calls).toEqual([]);
       expect(wsInstances).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(249);
@@ -568,7 +568,7 @@ describe("GatewayClient close handling", () => {
     expect(getLatestWs().emitClose(1008, "unauthorized: device token mismatch")).toBeUndefined();
 
     expect(logDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("failed clearing stale device-auth token"),
+      "failed clearing stale device-auth token for device dev-2: Error: disk unavailable",
     );
     expect(onClose).toHaveBeenCalledWith(1008, "unauthorized: device token mismatch");
     client.stop();

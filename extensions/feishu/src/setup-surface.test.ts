@@ -8,7 +8,19 @@ import {
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { FeishuProbeResult } from "./types.js";
 
-const { probeFeishuMock } = vi.hoisted(() => ({
+const {
+  beginAppRegistrationMock,
+  getAppOwnerOpenIdMock,
+  initAppRegistrationMock,
+  pollAppRegistrationMock,
+  printQrCodeMock,
+  probeFeishuMock,
+} = vi.hoisted(() => ({
+  beginAppRegistrationMock: vi.fn(),
+  getAppOwnerOpenIdMock: vi.fn(),
+  initAppRegistrationMock: vi.fn(),
+  pollAppRegistrationMock: vi.fn(),
+  printQrCodeMock: vi.fn(),
   probeFeishuMock: vi.fn<() => Promise<FeishuProbeResult>>(async () => ({
     ok: false,
     error: "mocked",
@@ -20,13 +32,11 @@ vi.mock("./probe.js", () => ({
 }));
 
 vi.mock("./app-registration.js", () => ({
-  initAppRegistration: vi.fn(async () => {
-    throw new Error("mocked: scan-to-create not available");
-  }),
-  beginAppRegistration: vi.fn(),
-  pollAppRegistration: vi.fn(),
-  printQrCode: vi.fn(async () => {}),
-  getAppOwnerOpenId: vi.fn(async () => undefined),
+  initAppRegistration: initAppRegistrationMock,
+  beginAppRegistration: beginAppRegistrationMock,
+  pollAppRegistration: pollAppRegistrationMock,
+  printQrCode: printQrCodeMock,
+  getAppOwnerOpenId: getAppOwnerOpenIdMock,
 }));
 
 import { feishuPlugin } from "./channel.js";
@@ -86,6 +96,116 @@ describe("feishu setup wizard", () => {
   beforeEach(() => {
     probeFeishuMock.mockReset();
     probeFeishuMock.mockResolvedValue({ ok: false, error: "mocked" });
+    initAppRegistrationMock.mockReset();
+    initAppRegistrationMock.mockRejectedValue(new Error("mocked: scan-to-create not available"));
+    beginAppRegistrationMock.mockReset();
+    pollAppRegistrationMock.mockReset();
+    printQrCodeMock.mockReset();
+    printQrCodeMock.mockResolvedValue(undefined);
+    getAppOwnerOpenIdMock.mockReset();
+    getAppOwnerOpenIdMock.mockResolvedValue(undefined);
+  });
+
+  it("uses manual credentials by default instead of starting scan-to-create", async () => {
+    const text = vi.fn().mockResolvedValueOnce("cli_manual").mockResolvedValueOnce("secret_manual");
+    const prompter = createTestWizardPrompter({ text });
+
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {} as never,
+      prompter,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(initAppRegistrationMock).not.toHaveBeenCalled();
+    expect(beginAppRegistrationMock).not.toHaveBeenCalled();
+    expect(result.cfg.channels?.feishu).toMatchObject({
+      appId: "cli_manual",
+      appSecret: "secret_manual",
+      connectionMode: "websocket",
+      domain: "feishu",
+    });
+  });
+
+  it("passes selected domain through scan-to-create and poll", async () => {
+    initAppRegistrationMock.mockResolvedValueOnce(undefined);
+    beginAppRegistrationMock.mockResolvedValueOnce({
+      deviceCode: "device-code",
+      qrUrl: "https://accounts.larksuite.com/qr",
+      userCode: "user-code",
+      interval: 1,
+      expireIn: 10,
+    });
+    pollAppRegistrationMock.mockResolvedValueOnce({
+      status: "success",
+      result: {
+        appId: "cli_lark",
+        appSecret: "secret_lark",
+        domain: "lark",
+        openId: "ou_owner",
+      },
+    });
+    const prompter = createTestWizardPrompter({
+      select: vi
+        .fn()
+        .mockResolvedValueOnce("scan")
+        .mockResolvedValueOnce("lark")
+        .mockResolvedValueOnce("open") as never,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {} as never,
+      prompter,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(initAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(beginAppRegistrationMock).toHaveBeenCalledWith("lark");
+    expect(pollAppRegistrationMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deviceCode: "device-code",
+        initialDomain: "lark",
+        tp: "ob_cli_app",
+      }),
+    );
+    expect(result.cfg.channels?.feishu).toMatchObject({
+      appId: "cli_lark",
+      appSecret: "secret_lark",
+      domain: "lark",
+      groupPolicy: "open",
+      requireMention: true,
+    });
+  });
+
+  it("falls back to manual credentials when selected scan-to-create is unavailable", async () => {
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("cli_from_fallback")
+      .mockResolvedValueOnce("secret_from_fallback");
+    const prompter = createTestWizardPrompter({
+      text,
+      select: vi
+        .fn()
+        .mockResolvedValueOnce("scan")
+        .mockResolvedValueOnce("feishu")
+        .mockResolvedValueOnce("allowlist") as never,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: feishuConfigure,
+      cfg: {} as never,
+      prompter,
+      runtime: createNonExitingRuntimeEnv(),
+    });
+
+    expect(initAppRegistrationMock).toHaveBeenCalledWith("feishu");
+    expect(beginAppRegistrationMock).not.toHaveBeenCalled();
+    expect(result.cfg.channels?.feishu).toMatchObject({
+      appId: "cli_from_fallback",
+      appSecret: "secret_from_fallback",
+      domain: "feishu",
+    });
   });
 
   it("prompts over SecretRef appId/appSecret config objects", async () => {

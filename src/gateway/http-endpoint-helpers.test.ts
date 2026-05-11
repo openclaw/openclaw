@@ -159,13 +159,11 @@ describe("handleGatewayPostJsonEndpoint", () => {
       },
     );
 
-    expect(resolveOperatorScopes).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        authMethod: "token",
-        trustDeclaredOperatorScopes: false,
-      }),
-    );
+    const [, requestAuth] = (resolveOperatorScopes.mock.calls[0] as unknown as
+      | [IncomingMessage, { authMethod?: string; trustDeclaredOperatorScopes: boolean }]
+      | undefined) ?? [undefined, undefined];
+    expect(requestAuth?.authMethod).toBe("token");
+    expect(requestAuth?.trustDeclaredOperatorScopes).toBe(false);
     expect(result).toEqual({
       body: { ok: true },
       requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },

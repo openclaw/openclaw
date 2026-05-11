@@ -185,15 +185,21 @@ describe("server-runtime-services", () => {
     expect(services.heartbeatRunner).toBe(hoisted.heartbeatRunner);
     await vi.advanceTimersByTimeAsync(1_250);
     await vi.dynamicImportSettled();
+    expect(log.child).toHaveBeenNthCalledWith(1, "delivery-recovery");
+    expect(log.child).toHaveBeenNthCalledWith(2, "session-delivery-recovery");
+    const deliveryLog = log.child.mock.results[0]?.value;
+    const sessionDeliveryLog = log.child.mock.results[1]?.value;
+    expect(deliveryLog).toBeDefined();
+    expect(sessionDeliveryLog).toBeDefined();
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledWith({
       deliver: hoisted.deliverOutboundPayloads,
       cfg: {},
-      log: expect.any(Object),
+      log: deliveryLog,
     });
     expect(hoisted.recoverPendingRestartContinuationDeliveries).toHaveBeenCalledWith({
       deps: {},
       maxEnqueuedAt: 123,
-      log: expect.any(Object),
+      log: sessionDeliveryLog,
     });
   });
 

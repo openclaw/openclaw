@@ -141,6 +141,22 @@ function livePluginToolLane() {
   );
 }
 
+function liveOpenAiChatToolsLane() {
+  return liveLane(
+    "openai-chat-tools",
+    "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:openai-chat-tools",
+    {
+      e2eImageKind: "functional",
+      needsLiveImage: false,
+      provider: "openai",
+      resources: ["service"],
+      stateScenario: "empty",
+      timeoutMs: 10 * 60 * 1000,
+      weight: 2,
+    },
+  );
+}
+
 export const mainLanes = [
   liveLane("live-models", liveDockerScriptCommand("test-live-models-docker.sh"), {
     providers: ["claude-cli", "codex-cli", "google-gemini-cli"],
@@ -539,6 +555,7 @@ const releasePathPackageInstallOpenAiLanes = [
       weight: 3,
     },
   ),
+  liveOpenAiChatToolsLane(),
   npmLane("codex-on-demand", "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:codex-on-demand", {
     resources: ["service"],
     stateScenario: "empty",

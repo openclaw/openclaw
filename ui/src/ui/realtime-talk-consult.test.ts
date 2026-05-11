@@ -41,14 +41,13 @@ describe("RealtimeTalkSession consult handoff", () => {
       submit,
     });
 
-    expect(request).toHaveBeenCalledWith(
-      "talk.client.toolCall",
-      expect.objectContaining({
-        sessionKey: "agent:main:main",
-        name: "openclaw_agent_consult",
-        args: { question: "Are the basement lights off?" },
-      }),
-    );
+    const toolCall = request.mock.calls[0] as
+      | [string, { sessionKey?: string; name?: string; args?: { question?: string } }]
+      | undefined;
+    expect(toolCall?.[0]).toBe("talk.client.toolCall");
+    expect(toolCall?.[1]?.sessionKey).toBe("agent:main:main");
+    expect(toolCall?.[1]?.name).toBe("openclaw_agent_consult");
+    expect(toolCall?.[1]?.args).toEqual({ question: "Are the basement lights off?" });
     expect(submit).toHaveBeenCalledWith("call-1", { result: "Basement lights are off." });
   });
 });

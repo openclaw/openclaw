@@ -49,6 +49,21 @@ function expectMainHookContext(context: HookEventRecord, sessionId: string) {
   expect(context.sessionId).toBe(sessionId);
 }
 
+function expectStringValue(value: unknown, label: string): string {
+  expect(typeof value, label).toBe("string");
+  if (typeof value !== "string") {
+    throw new Error(`${label} must be a string`);
+  }
+  return value;
+}
+
+function expectStringWithPrefix(value: unknown, prefix: string, label: string): string {
+  const text = expectStringValue(value, label);
+  expect(text.startsWith(prefix), label).toBe(true);
+  expect(text.length, label).toBeGreaterThan(prefix.length);
+  return text;
+}
+
 test("sessions.reset emits internal command hook with reason", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
@@ -175,7 +190,12 @@ test("sessions.reset emits enriched session_end and session_start hooks", async 
   expect(endEvent.sessionKey).toBe("agent:main:main");
   expect(endEvent.reason).toBe("new");
   expect(endEvent.transcriptArchived).toBe(true);
-  expect(endEvent.sessionFile).toEqual(expect.stringContaining(".jsonl.reset."));
+  const archivedSessionFile = expectStringWithPrefix(
+    endEvent.sessionFile,
+    path.join(dir, "sess-main.jsonl.reset."),
+    "archived session file",
+  );
+  expect(path.dirname(archivedSessionFile)).toBe(dir);
   expect(endEvent.nextSessionId).toBe(startEvent.sessionId);
   expectMainHookContext(endContext, "sess-main");
   expect(startEvent.sessionKey).toBe("agent:main:main");
@@ -213,9 +233,9 @@ test("sessions.reset returns unavailable when active run does not stop", async (
   >;
   expect(store["agent:main:main"]?.sessionId).toBe("sess-main");
   const filesAfterResetAttempt = await fs.readdir(dir);
-  expect(filesAfterResetAttempt).not.toContainEqual(
-    expect.stringMatching(/^sess-main\.jsonl\.reset\./),
-  );
+  expect(
+    filesAfterResetAttempt.filter((file) => file.startsWith("sess-main.jsonl.reset.")),
+  ).toEqual([]);
 });
 
 test("sessions.reset emits before_reset for the entry actually reset in the writer slot", async () => {
@@ -371,7 +391,7 @@ test("sessions.create with emitCommandHooks=true emits reset lifecycle hooks aga
   expect(startEvent.resumedFrom).toBe("sess-parent-hooks");
   expect(startEvent.sessionId).toBeTypeOf("string");
   expect(startEvent.sessionId).not.toBe("");
-  expect(startEvent.sessionKey).toEqual(expect.stringMatching(/^agent:main:dashboard:/));
+  expectStringWithPrefix(startEvent.sessionKey, "agent:main:dashboard:", "created session key");
 });
 
 test("sessions.create with emitCommandHooks=true resets parent in place when session.dmScope is 'main' (#77434)", async () => {
