@@ -1165,17 +1165,6 @@
                 ]
               },
               {
-                "group": "Agent coordination",
-                "pages": [
-                  "tools/agent-send",
-                  "tools/steer",
-                  "tools/subagents",
-                  "tools/acp-agents",
-                  "tools/acp-agents-setup",
-                  "tools/multi-agent-sandbox-tools"
-                ]
-              },
-              {
                 "group": "Messages and delivery",
                 "pages": [
                   "concepts/messages",
@@ -1190,10 +1179,10 @@
             ]
           },
           {
-            "tab": "Tools, Skills & Plugins",
+            "tab": "Capabilities",
             "groups": [
               {
-                "group": "Overview",
+                "group": "Tools, skills, and plugins",
                 "pages": ["tools/index"]
               },
               {
@@ -1261,6 +1250,17 @@
                 ]
               },
               {
+                "group": "Automation",
+                "pages": [
+                  "automation/index",
+                  "automation/cron-jobs",
+                  "automation/tasks",
+                  "automation/taskflow",
+                  "automation/standing-orders",
+                  "automation/hooks"
+                ]
+              },
+              {
                 "group": "Tools",
                 "pages": [
                   "tools/apply-patch",
@@ -1315,32 +1315,16 @@
                     ]
                   }
                 ]
-              }
-            ]
-          },
-          {
-            "tab": "Automation",
-            "groups": [
-              {
-                "group": "Overview",
-                "pages": ["automation/index"]
               },
               {
-                "group": "Scheduled and background work",
+                "group": "Agent coordination",
                 "pages": [
-                  "automation/cron-jobs",
-                  "automation/tasks",
-                  "automation/taskflow",
-                  "gateway/heartbeat",
-                  "concepts/commitments"
-                ]
-              },
-              {
-                "group": "Authority and events",
-                "pages": [
-                  "automation/standing-orders",
-                  "automation/hooks",
-                  "plugins/hooks"
+                  "tools/agent-send",
+                  "tools/steer",
+                  "tools/subagents",
+                  "tools/acp-agents",
+                  "tools/acp-agents-setup",
+                  "tools/multi-agent-sandbox-tools"
                 ]
               }
             ]

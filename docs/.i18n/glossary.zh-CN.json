@@ -872,16 +872,20 @@
     "target": "自动化"
   },
   {
-    "source": "Tools, Skills & Plugins",
-    "target": "工具、技能和插件"
-  },
-  {
     "source": "Tools, skills, and plugins",
     "target": "工具、技能和插件"
   },
   {
-    "source": "Docs tools, skills, and plugins navigation refactor",
-    "target": "文档工具、技能和插件导航重构"
+    "source": "Capabilities",
+    "target": "能力"
+  },
+  {
+    "source": "Docs capabilities navigation refactor",
+    "target": "文档能力导航重构"
+  },
+  {
+    "source": "Tools, skills, and plugins overview",
+    "target": "工具、技能和插件概览"
   },
   {
     "source": "Tools overview",
