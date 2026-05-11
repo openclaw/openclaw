@@ -5,6 +5,7 @@ packages:
   - extensions/*
 
 minimumReleaseAge: 2880
+blockExoticSubdeps: false
 
 minimumReleaseAgeExclude:
   - "acpx"
