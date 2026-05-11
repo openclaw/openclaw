@@ -585,7 +585,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
       accountId: account.accountId,
       allowedSourceIps: effectiveInteractionSourceIps,
       trustedProxies: cfg.gateway?.trustedProxies,
-      allowRealIpFallback: cfg.gateway?.allowRealIpFallback === true,
+      allowRealIpFallback: cfg.gateway?.allowRealIpFallback,
       handleInteraction: handleModelPickerInteraction,
       authorizeButtonClick: async ({ payload, post }) => {
         const channelInfo = await resolveChannelInfo(payload.channel_id);
@@ -946,7 +946,7 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
         fallbackLimit: account.textChunkLimit ?? 4000,
       },
     );
-    const shouldDeliverReplies = params.deliverReplies === true;
+    const shouldDeliverReplies = Boolean(params.deliverReplies);
     const { onModelSelected, typingCallbacks, ...replyPipeline } =
       createChannelMessageReplyPipeline({
         cfg,
