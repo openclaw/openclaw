@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "Overview of automation mechanisms: tasks, cron, hooks, standing orders, and Task Flow"
 read_when:
   - Deciding how to automate work with OpenClaw

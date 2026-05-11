@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 summary: "OpenClaw tools, skills, and plugins overview: what agents can call and how to extend them"
 read_when:
   - You want to understand what tools OpenClaw provides

@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 title: "Tools page best-practices refactor"
 summary: "Specification for rewriting the tools overview so it follows OpenClaw docs best practices without duplicating reference pages"
 read_when:

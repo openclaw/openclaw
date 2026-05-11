@@ -1,4 +1,5 @@
 ---
+doc-schema-version: 1
 title: "Docs capabilities navigation refactor"
 summary: "Specification for renaming the broad tools docs tab to Capabilities while keeping automation and agent coordination as sections"
 read_when:
