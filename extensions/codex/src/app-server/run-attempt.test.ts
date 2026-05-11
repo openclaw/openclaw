@@ -403,7 +403,7 @@ function createPluginAppConfigPatch() {
         enabled: true,
         destructive_enabled: true,
         open_world_enabled: true,
-        default_tools_approval_mode: "prompt",
+        default_tools_approval_mode: "auto",
       },
     },
   };
@@ -435,7 +435,7 @@ function createTwoPluginAppConfigPatch() {
         enabled: true,
         destructive_enabled: true,
         open_world_enabled: true,
-        default_tools_approval_mode: "prompt",
+        default_tools_approval_mode: "auto",
       },
     },
   };
@@ -469,7 +469,7 @@ function createTwoCalendarAppConfigPatch() {
         enabled: true,
         destructive_enabled: true,
         open_world_enabled: true,
-        default_tools_approval_mode: "prompt",
+        default_tools_approval_mode: "auto",
       },
     },
   };
