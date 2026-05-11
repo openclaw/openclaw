@@ -261,10 +261,8 @@ async function touchSessionRow(params: {
       reasoningLevel: params.entry?.reasoningLevel,
       systemSent: params.entry?.systemSent,
       sendPolicy: params.entry?.sendPolicy,
-      lastChannel: params.entry?.lastChannel,
-      lastTo: params.entry?.lastTo,
-      lastAccountId: params.entry?.lastAccountId,
-      lastThreadId: params.entry?.lastThreadId,
+      channel: params.entry?.channel,
+      deliveryContext: params.entry?.deliveryContext,
     }),
   });
 }
@@ -545,10 +543,12 @@ export const handleNodeEvent = async (
 
       if (deliverRequested && (!channel || !to)) {
         const entryChannel =
-          typeof entry?.lastChannel === "string"
-            ? normalizeChannelId(entry.lastChannel)
-            : undefined;
-        const entryTo = normalizeOptionalString(entry?.lastTo) ?? "";
+          typeof entry?.deliveryContext?.channel === "string"
+            ? normalizeChannelId(entry.deliveryContext.channel)
+            : typeof entry?.channel === "string"
+              ? normalizeChannelId(entry.channel)
+              : undefined;
+        const entryTo = normalizeOptionalString(entry?.deliveryContext?.to) ?? "";
         if (!channel && entryChannel) {
           channel = entryChannel;
         }

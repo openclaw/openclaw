@@ -169,9 +169,13 @@ export const handleDockCommand: CommandHandler = async (params, allowTextCommand
     };
   }
 
-  sessionEntry.lastChannel = targetChannel;
-  sessionEntry.lastTo = target.peerId;
-  sessionEntry.lastAccountId = resolveTargetChannelAccountId(params, targetChannel);
+  const accountId = resolveTargetChannelAccountId(params, targetChannel);
+  sessionEntry.channel = targetChannel;
+  sessionEntry.deliveryContext = {
+    channel: targetChannel,
+    to: target.peerId,
+    accountId,
+  };
   params.sessionEntry = sessionEntry;
   const persisted = await persistSessionEntry(params);
   if (!persisted) {
