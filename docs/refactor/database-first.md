@@ -491,6 +491,9 @@ Completed consolidation/deletion highlights:
 - Subagent announce origin resolution now threads the typed requester-session
   delivery context through `loadRequesterSessionEntry` and prefers that row over
   compatibility `last*`/`deliveryContext` shadows.
+- Inbound session metadata updates now merge against the typed per-agent
+  delivery row first; old `SessionEntry` delivery fields are only the fallback
+  when no typed conversation row exists.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

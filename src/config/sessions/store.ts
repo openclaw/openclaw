@@ -16,6 +16,7 @@ import {
   applySqliteSessionEntriesPatch,
   deleteSqliteSessionEntry,
   listSqliteSessionEntries,
+  readSqliteSessionDeliveryContext,
   readSqliteSessionEntry,
   replaceSqliteSessionEntry,
 } from "./session-entries.sqlite.js";
@@ -122,6 +123,14 @@ function removeThreadFromDeliveryContext(context?: DeliveryContext): DeliveryCon
   const next: DeliveryContext = { ...context };
   delete next.threadId;
   return next;
+}
+
+function readExistingDeliveryContext(options: SessionEntryRowOptions & { sessionKey: string }) {
+  try {
+    return readSqliteSessionDeliveryContext(options);
+  } catch {
+    return undefined;
+  }
 }
 
 export function readSessionUpdatedAt(params: {
@@ -257,9 +266,12 @@ export async function updateLastRoute(params: {
     explicitContext?.channel || explicitContext?.to || inlineContext?.channel || inlineContext?.to,
   );
   const clearThreadFromFallback = explicitRouteProvided && explicitThreadValue == null;
+  const existingDeliveryContext =
+    readExistingDeliveryContext({ ...rowOptions, sessionKey }) ??
+    deliveryContextFromSession(existing);
   const fallbackContext = clearThreadFromFallback
-    ? removeThreadFromDeliveryContext(deliveryContextFromSession(existing))
-    : deliveryContextFromSession(existing);
+    ? removeThreadFromDeliveryContext(existingDeliveryContext)
+    : existingDeliveryContext;
   const merged = mergeDeliveryContext(mergedInput, fallbackContext);
   const normalized = normalizeSessionDeliveryFields({
     deliveryContext: {
