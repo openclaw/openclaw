@@ -806,6 +806,7 @@ You can wait on more than just time/text:
   - `openclaw browser wait --url "**/dash"`
 - Wait for load state:
   - `openclaw browser wait --load networkidle`
+  - **Note:** `--load networkidle` is supported on the managed `openclaw` browser and remote-CDP profiles. It is not yet supported on `existing-session` / `user` profiles.
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
