@@ -176,7 +176,7 @@ export async function handleAssistantFailover(params: {
         lastRetryFailoverReason: mergeRetryFailoverReason({
           previous: params.previousRetryFailoverReason,
           failoverReason: params.failoverReason,
-          timedOut: params.timedOut,
+          timedOut: params.timedOut || params.idleTimedOut,
         }),
       };
     }
