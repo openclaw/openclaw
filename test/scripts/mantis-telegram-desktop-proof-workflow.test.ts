@@ -5,6 +5,7 @@ import { parse } from "yaml";
 const PROOF_SCRIPT = "scripts/e2e/telegram-user-crabbox-proof.ts";
 const USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const WORKFLOW = ".github/workflows/mantis-telegram-desktop-proof.yml";
+const LIVE_WORKFLOW = ".github/workflows/mantis-telegram-live.yml";
 
 type WorkflowStep = {
   env?: Record<string, string>;
@@ -18,6 +19,7 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
 };
 
@@ -32,6 +34,14 @@ function workflowStep(name: string): WorkflowStep {
 }
 
 describe("Mantis Telegram Desktop proof workflow", () => {
+  it("runs with the repository pnpm major", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
+
+    expect(workflow.env?.PNPM_VERSION).toBe("11.0.8");
+    expect(liveWorkflow.env?.PNPM_VERSION).toBe("11.0.8");
+  });
+
   it("uses the repo-owned Telegram user driver by default", () => {
     expect(existsSync(USER_DRIVER)).toBe(true);
     expect(readFileSync(PROOF_SCRIPT, "utf8")).toContain(
