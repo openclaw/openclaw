@@ -1,7 +1,11 @@
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
-import { buildInboundDedupeKey, resetInboundDedupe } from "./inbound-dedupe.js";
+import {
+  buildInboundDedupeKey,
+  resetInboundDedupe,
+  type InboundDedupeClaimResult,
+} from "./inbound-dedupe.js";
 
 const sharedInboundContext: MsgContext = {
   Provider: "discord",
@@ -13,6 +17,14 @@ const sharedInboundContext: MsgContext = {
   SessionKey: "agent:main:discord:channel:c1",
   MessageSid: "msg-1",
 };
+
+function expectClaimed(result: InboundDedupeClaimResult, expectedKey: string): string {
+  expect(result).toEqual({ status: "claimed", key: expectedKey });
+  if (result.status !== "claimed") {
+    throw new Error(`expected claimed inbound dedupe result, got ${result.status}`);
+  }
+  return result.key;
+}
 
 describe("inbound dedupe", () => {
   afterEach(() => {
@@ -74,15 +86,12 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
-      if (firstClaim.status !== "claimed") {
-        throw new Error("expected first inbound dedupe claim to be claimed");
-      }
+      const firstClaimKey = expectClaimed(firstClaim, expectedKey);
       expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "inflight",
         key: expectedKey,
       });
-      inboundB.releaseInboundDedupe(firstClaim.key);
+      inboundB.releaseInboundDedupe(firstClaimKey);
       expect(inboundA.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "claimed",
         key: expectedKey,
@@ -112,11 +121,8 @@ describe("inbound dedupe", () => {
 
     try {
       const firstClaim = inboundA.claimInboundDedupe(sharedInboundContext);
-      expect(firstClaim).toEqual({ status: "claimed", key: expectedKey });
-      if (firstClaim.status !== "claimed") {
-        throw new Error("expected first inbound dedupe claim to be claimed");
-      }
-      inboundA.commitInboundDedupe(firstClaim.key);
+      const firstClaimKey = expectClaimed(firstClaim, expectedKey);
+      inboundA.commitInboundDedupe(firstClaimKey);
       expect(inboundB.claimInboundDedupe(sharedInboundContext)).toEqual({
         status: "duplicate",
         key: expectedKey,
