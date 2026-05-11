@@ -166,7 +166,7 @@ async function streamOpenRouterMusic(params: {
     const audioBuffer = Buffer.concat(audioChunks);
     return { audioBuffer, transcriptPieces };
   } finally {
-    release();
+    void release();
   }
 }
 
