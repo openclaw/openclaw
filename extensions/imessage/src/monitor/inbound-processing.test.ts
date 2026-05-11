@@ -464,6 +464,49 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     expect(decision.text).toBe("iMessage reaction added: ❤️ by +15555550123 on msg tool-sent-guid");
   });
 
+  it("routes a thumbs-down tapback on a tool-sent reply as a model-visible reaction event", async () => {
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👎",
+        reaction_type: "dislike",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/lobster-reply-guid",
+        associated_message_type: 2000,
+        text: "Disliked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Disliked “tapback target”",
+      bodyText: "Disliked “tapback target”",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: ({ messageId, accountId, chatId, chatGuid, chatIdentifier }) => {
+        expect({ messageId, accountId, chatId, chatGuid, chatIdentifier }).toEqual({
+          messageId: "lobster-reply-guid",
+          accountId: "default",
+          chatId: 3,
+          chatGuid: "any;-;+15555550123",
+          chatIdentifier: "+15555550123",
+        });
+        return true;
+      },
+    });
+
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe(
+      "iMessage reaction added: 👎 by +15555550123 on msg lobster-reply-guid",
+    );
+    expect(decision.route.sessionKey).toBe("agent:main:main");
+    expect(decision.contextKey).toBe(
+      "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
+    );
+  });
+
   it("drops tapbacks on non-bot messages in own notification mode", async () => {
     const decision = await resolveDecision({
       message: {
