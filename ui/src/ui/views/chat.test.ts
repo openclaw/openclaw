@@ -2,6 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n, t } from "../../i18n/index.ts";
 import type { AppViewState } from "../app-view-state.ts";
 import {
   createModelCatalog,
@@ -503,6 +504,10 @@ describe("chat loading skeleton", () => {
 });
 
 describe("chat voice controls", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
@@ -568,6 +573,18 @@ describe("chat voice controls", () => {
     model!.dispatchEvent(new Event("input", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
+  });
+
+  it("renders composer and Talk labels from the active locale", async () => {
+    await i18n.setLocale("zh-CN");
+    const container = renderChatView();
+
+    expect(container.querySelector(`[aria-label="${t("chat.composer.startTalk")}"]`)).toBeTruthy();
+    expect(container.querySelector(`[aria-label="${t("chat.composer.attachFile")}"]`)).toBeTruthy();
+    expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+      t("chat.composer.placeholder", { name: "Val" }),
+    );
+    expect(container.textContent).not.toContain("Start Talk");
   });
 
   it("lets users dismiss Talk start errors", () => {
@@ -823,6 +840,10 @@ describe("chat sidebar raw content", () => {
 });
 
 describe("chat welcome", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   function renderWelcome(params: {
     assistantAvatar: string | null;
     assistantAvatarUrl?: string | null;
@@ -866,9 +887,22 @@ describe("chat welcome", () => {
     expect(fallbackAvatar?.getAttribute("src")).toBe("apple-touch-icon.png");
     expect(fallbackAvatar?.getAttribute("alt")).toBe("Val");
   });
+
+  it("renders welcome text from the active locale", async () => {
+    await i18n.setLocale("zh-CN");
+    const container = renderWelcome({ assistantAvatar: "VC", assistantAvatarUrl: null });
+
+    expect(container.textContent).toContain(t("chat.welcome.ready"));
+    expect(container.textContent).toContain(t("chat.welcome.suggestions.whatCanYouDo"));
+    expect(container.textContent).not.toContain("Ready to chat");
+  });
 });
 
 describe("chat session controls", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it("filters chat sessions by agent and switches to that agent's recent session", () => {
     const { state } = createChatHeaderState();
     const onSwitchSession = vi.fn();
@@ -915,6 +949,20 @@ describe("chat session controls", () => {
     agentSelect!.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onSwitchSession).toHaveBeenCalledWith(state, "agent:beta:dashboard:beta-recent");
+  });
+
+  it("renders selector labels from the active locale", async () => {
+    await i18n.setLocale("zh-CN");
+    const { state } = createChatHeaderState();
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    expect(container.querySelector(`[aria-label="${t("chat.selectors.session")}"]`)).toBeTruthy();
+    expect(container.querySelector(`[aria-label="${t("chat.selectors.model")}"]`)).toBeTruthy();
+    expect(
+      container.querySelector(`[aria-label="${t("chat.selectors.thinkingLevel")}"]`),
+    ).toBeTruthy();
+    expect(container.innerHTML).not.toContain("Chat session");
   });
 
   it("falls back to the selected agent's main session when no sessions exist yet", () => {

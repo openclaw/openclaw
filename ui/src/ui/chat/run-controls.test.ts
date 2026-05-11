@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { i18n, t } from "../../i18n/index.ts";
 import type { GatewaySessionRow } from "../types.ts";
 import {
   getContextNoticeViewModel,
@@ -47,6 +48,10 @@ function getButton(container: Element, selector: string): HTMLButtonElement {
 }
 
 describe("chat run controls", () => {
+  afterEach(async () => {
+    await i18n.setLocale("en");
+  });
+
   it("switches between idle and abort actions", () => {
     const container = document.createElement("div");
     const onAbort = vi.fn();
@@ -144,6 +149,19 @@ describe("chat run controls", () => {
     expect(stopButton.disabled).toBe(false);
     stopButton.click();
     expect(onAbort).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders run-control labels from the active locale", async () => {
+    await i18n.setLocale("zh-CN");
+    const container = document.createElement("div");
+    render(renderChatRunControls(createProps({ hasMessages: true })), container);
+
+    expect(
+      getButton(container, `button[title="${t("chat.runControls.newSession")}"]`),
+    ).toBeTruthy();
+    expect(getButton(container, `button[title="${t("chat.runControls.export")}"]`)).toBeTruthy();
+    expect(getButton(container, `button[title="${t("chat.runControls.send")}"]`)).toBeTruthy();
+    expect(container.textContent).not.toContain("New session");
   });
 });
 
