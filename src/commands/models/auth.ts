@@ -193,6 +193,10 @@ async function pickProviderAuthMethod(params: {
   if (requestedMethod) {
     return requestedMethod;
   }
+  const oauthMethod = params.provider.auth.find((method) => method.kind === "oauth");
+  if (oauthMethod) {
+    return oauthMethod;
+  }
   if (params.provider.auth.length === 1) {
     return params.provider.auth[0] ?? null;
   }

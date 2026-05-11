@@ -280,12 +280,13 @@ function withInteractiveStdin() {
 function createProvider(params: {
   id: string;
   label?: string;
+  auth?: ProviderPlugin["auth"];
   run: NonNullable<ProviderPlugin["auth"]>[number]["run"];
 }): ProviderPlugin {
   return {
     id: params.id,
     label: params.label ?? params.id,
-    auth: [
+    auth: params.auth ?? [
       {
         id: "oauth",
         label: "OAuth",
@@ -443,6 +444,128 @@ describe("modelsAuthLoginCommand", () => {
     expect(runtime.log).toHaveBeenCalledWith(
       "Tip: Codex-capable models can use native Codex web search. Enable it with openclaw configure --section web (recommended mode: cached). Docs: https://docs.openclaw.ai/tools/web",
     );
+  });
+
+  it("defaults OpenAI login to ChatGPT OAuth when API key is also available", async () => {
+    const runtime = createRuntime();
+    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const select = vi.fn();
+    mocks.createClackPrompter.mockReturnValue({
+      note: vi.fn(async () => {}),
+      select,
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai",
+        label: "OpenAI",
+        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT Login",
+            kind: "oauth",
+            run: runOauthAuth,
+          },
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "openai" }, runtime);
+
+    expect(runOauthAuth).toHaveBeenCalledOnce();
+    expect(runApiKeyAuth).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+  });
+
+  it("honors --method api-key for OpenAI login", async () => {
+    const runtime = createRuntime();
+    const runOauthAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "openai",
+        label: "OpenAI",
+        run: runOauthAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "oauth",
+            label: "ChatGPT Login",
+            kind: "oauth",
+            run: runOauthAuth,
+          },
+          {
+            id: "api-key",
+            label: "OpenAI API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+        ],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "openai", method: "api-key" }, runtime);
+
+    expect(runOauthAuth).not.toHaveBeenCalled();
+    expect(runApiKeyAuth).toHaveBeenCalledOnce();
+  });
+
+  it("prompts when a provider exposes multiple non-OAuth login methods", async () => {
+    const runtime = createRuntime();
+    const runApiKeyAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const runCliAuth = vi.fn().mockResolvedValue({ profiles: [] });
+    const select = vi.fn().mockResolvedValue("cli");
+    mocks.createClackPrompter.mockReturnValue({
+      note: vi.fn(async () => {}),
+      select,
+    });
+    mocks.resolvePluginProviders.mockReturnValue([
+      createProvider({
+        id: "anthropic",
+        label: "Anthropic",
+        run: runApiKeyAuth as ProviderPlugin["auth"][number]["run"],
+        auth: [
+          {
+            id: "api-key",
+            label: "Anthropic API Key",
+            kind: "api_key",
+            run: runApiKeyAuth,
+          },
+          {
+            id: "cli",
+            label: "Claude CLI",
+            kind: "custom",
+            run: runCliAuth,
+          },
+        ],
+      }),
+    ]);
+
+    await modelsAuthLoginCommand({ provider: "anthropic" }, runtime);
+
+    expect(select).toHaveBeenCalledWith({
+      message: "Auth method for Anthropic",
+      options: [
+        {
+          value: "api-key",
+          label: "Anthropic API Key",
+          hint: undefined,
+        },
+        {
+          value: "cli",
+          label: "Claude CLI",
+          hint: undefined,
+        },
+      ],
+    });
+    expect(runApiKeyAuth).not.toHaveBeenCalled();
+    expect(runCliAuth).toHaveBeenCalledOnce();
   });
 
   it("uses the requested agent store for provider auth login", async () => {

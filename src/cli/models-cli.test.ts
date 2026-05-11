@@ -192,6 +192,23 @@ describe("models cli", () => {
     expectCommandOptions(command, expected);
   });
 
+  it("passes --method through models auth login", async () => {
+    await runModelsCommand([
+      "models",
+      "auth",
+      "login",
+      "--provider",
+      "openai",
+      "--method",
+      "api-key",
+    ]);
+
+    expectCommandOptions(modelsAuthLoginCommand, {
+      provider: "openai",
+      method: "api-key",
+    });
+  });
+
   it("passes list-specific --agent and --json to models auth list", async () => {
     await runModelsCommand(["models", "auth", "list", "--agent", "poe", "--json"]);
 
