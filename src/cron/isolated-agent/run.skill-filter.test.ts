@@ -157,7 +157,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   describe("model fallbacks", () => {
     const defaultFallbacks = [
       "anthropic/claude-opus-4-6",
-      "google-gemini-cli/gemini-3-pro-preview",
+      "google-gemini-cli/gemini-3.1-pro-preview",
       "nvidia/deepseek-ai/deepseek-v3.2",
     ];
 

@@ -64,7 +64,6 @@ describe("music generate background helpers", () => {
       providerId: "google",
     });
 
-    expect(handle).not.toBeNull();
     if (!handle) {
       throw new Error("Expected music generation task handle");
     }

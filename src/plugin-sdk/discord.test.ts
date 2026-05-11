@@ -165,7 +165,6 @@ describe("discord plugin-sdk facade", () => {
     expect(callParams.agentId).toBe("agent");
     expect(callParams.cfg).toBe(mocks.runtimeConfig);
     expect(callParams.childSessionKey).toBe("child");
-    expect(binding).not.toBeNull();
     if (!binding) {
       throw new Error("expected Discord subagent binding");
     }

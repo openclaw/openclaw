@@ -84,12 +84,17 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624)", () => {
       expect(vi.mocked(runEmbeddedPiAgent)).toHaveBeenCalledTimes(1);
 
       // 5. Check that authProfileId was passed
-      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as {
-        authProfileId?: string;
-        authProfileIdSource?: string;
-      };
+      const callArgs = vi.mocked(runEmbeddedPiAgent).mock.calls[0]?.[0] as
+        | {
+            authProfileId?: string;
+            authProfileIdSource?: string;
+          }
+        | undefined;
+      if (!callArgs) {
+        throw new Error("Expected embedded PI agent call for auth profile propagation");
+      }
 
-      expect(callArgs?.authProfileId).toBe("openrouter:default");
+      expect(callArgs.authProfileId).toBe("openrouter:default");
     });
   });
 });

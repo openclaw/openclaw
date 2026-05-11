@@ -1797,7 +1797,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const replies = deliverReplies.mock.calls[0]?.[0]?.replies as
       | Array<{ text?: string }>
       | undefined;
-    expect(replies?.[0]?.text?.trim()).toBeTruthy();
+    const replyText = replies?.[0]?.text?.trim();
+    if (!replyText) {
+      throw new Error("expected non-empty Telegram reply text");
+    }
     expect(replies?.[0]?.text).not.toBe("NO_REPLY");
   });
 

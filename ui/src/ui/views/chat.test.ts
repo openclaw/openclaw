@@ -345,6 +345,14 @@ function getChatModelSelect(container: Element): HTMLSelectElement {
   return select;
 }
 
+function requireElement(container: Element, selector: string, label: string): Element {
+  const element = container.querySelector(selector);
+  if (element === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return element;
+}
+
 function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]> = {}) {
   const container = document.createElement("div");
   render(
@@ -511,8 +519,8 @@ describe("chat voice controls", () => {
   it("keeps Talk visible without the stale browser dictation button", () => {
     const container = renderChatView();
 
-    expect(container.querySelector('[aria-label="Start Talk"]')).not.toBeNull();
-    expect(container.querySelector('[aria-label="Talk options"]')).not.toBeNull();
+    requireElement(container, '[aria-label="Start Talk"]', "Start Talk button");
+    requireElement(container, '[aria-label="Talk options"]', "Talk options button");
     expect(container.querySelector('[aria-label="Voice input"]')).toBeNull();
   });
 
@@ -550,7 +558,9 @@ describe("chat voice controls", () => {
       ),
     ).map((option) => option.value);
 
-    expect(voice).not.toBeNull();
+    if (voice === null) {
+      throw new Error("expected Talk voice select");
+    }
     expect(voiceOptions).toEqual([
       "",
       "alloy",
@@ -568,9 +578,11 @@ describe("chat voice controls", () => {
     expect(voiceOptions).not.toContain("onyx");
     expect(voiceOptions).not.toContain("fable");
     expect(reasoningOptions).toEqual(["", "minimal", "low", "medium", "high"]);
-    expect(model).not.toBeNull();
-    model!.value = "gpt-realtime-mini";
-    model!.dispatchEvent(new Event("input", { bubbles: true }));
+    if (model === null) {
+      throw new Error("expected Talk model input");
+    }
+    model.value = "gpt-realtime-mini";
+    model.dispatchEvent(new Event("input", { bubbles: true }));
 
     expect(onRealtimeTalkOptionsChange).toHaveBeenCalledWith({ model: "gpt-realtime-mini" });
   });
@@ -579,12 +591,16 @@ describe("chat voice controls", () => {
     await i18n.setLocale("zh-CN");
     const container = renderChatView();
 
-    expect(
-      container.querySelector(`[aria-label="${t("chat.composer.startTalk")}"]`),
-    ).not.toBeNull();
-    expect(
-      container.querySelector(`[aria-label="${t("chat.composer.attachFile")}"]`),
-    ).not.toBeNull();
+    requireElement(
+      container,
+      `[aria-label="${t("chat.composer.startTalk")}"]`,
+      "localized Start Talk button",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.composer.attachFile")}"]`,
+      "localized attach file button",
+    );
     expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
@@ -961,11 +977,21 @@ describe("chat session controls", () => {
     const container = document.createElement("div");
     render(renderChatSessionSelect(state), container);
 
-    expect(container.querySelector(`[aria-label="${t("chat.selectors.session")}"]`)).not.toBeNull();
-    expect(container.querySelector(`[aria-label="${t("chat.selectors.model")}"]`)).not.toBeNull();
-    expect(
-      container.querySelector(`[aria-label="${t("chat.selectors.thinkingLevel")}"]`),
-    ).not.toBeNull();
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.session")}"]`,
+      "localized session selector",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.model")}"]`,
+      "localized model selector",
+    );
+    requireElement(
+      container,
+      `[aria-label="${t("chat.selectors.thinkingLevel")}"]`,
+      "localized thinking level selector",
+    );
     expect(container.innerHTML).not.toContain("Chat session");
   });
 

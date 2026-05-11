@@ -132,7 +132,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }
@@ -214,7 +213,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }
@@ -266,7 +264,6 @@ describe("Crestodian assistant", () => {
         removeTempDir: async () => {},
       },
     });
-    expect(result).not.toBeNull();
     if (result === null) {
       throw new Error("Expected planner result");
     }

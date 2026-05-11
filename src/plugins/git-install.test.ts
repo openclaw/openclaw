@@ -35,7 +35,6 @@ function expectedGitRepoDir(params: { gitDir: string; normalizedSpec: string }):
 
 function expectParsedGitSpec(spec: string) {
   const parsed = parseGitPluginSpec(spec);
-  expect(parsed).not.toBeNull();
   if (!parsed) {
     throw new Error(`Expected ${spec} to parse as a git plugin spec`);
   }

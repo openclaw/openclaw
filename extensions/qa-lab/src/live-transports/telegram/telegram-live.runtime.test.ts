@@ -413,11 +413,6 @@ describe("telegram live qa runtime", () => {
         .find((scenario) => scenario.id === "telegram-mentioned-message-reply")
         ?.buildRun("sut_bot").steps[0].replyToLatestSutMessage,
     ).toBe(true);
-    expect(
-      scenarios
-        .find((scenario) => scenario.id === "telegram-reply-chain-exact-marker")
-        ?.buildRun("sut_bot").steps[0],
-    ).toBeDefined();
     const replyChainStep = requireScenario(scenarios, "telegram-reply-chain-exact-marker").buildRun(
       "sut_bot",
     ).steps[0];

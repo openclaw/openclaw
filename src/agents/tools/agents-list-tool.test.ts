@@ -61,13 +61,15 @@ describe("agents_list tool", () => {
     const details = result.details as AgentListDetails;
 
     expect(details.requester).toBe("main");
-    expect(details.agents).toHaveLength(1);
-    expect(details.agents?.[0]?.id).toBe("codex");
-    expect(details.agents?.[0]?.name).toBe("Codex");
-    expect(details.agents?.[0]?.configured).toBe(true);
-    expect(details.agents?.[0]?.model).toBe("openai/gpt-5.5");
-    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
-    expect(details.agents?.[0]?.agentRuntime?.source).toBe("model");
+    expect(details.agents).toStrictEqual([
+      expect.objectContaining({
+        id: "codex",
+        name: "Codex",
+        configured: true,
+        model: "openai/gpt-5.5",
+        agentRuntime: { id: "codex", source: "model" },
+      }),
+    ]);
   });
 
   it("returns requester as the only target when no subagent allowlist is configured", async () => {
@@ -85,9 +87,12 @@ describe("agents_list tool", () => {
 
     expect(details.requester).toBe("main");
     expect(details.allowAny).toBe(false);
-    expect(details.agents).toHaveLength(1);
-    expect(details.agents?.[0]?.id).toBe("main");
-    expect(details.agents?.[0]?.configured).toBe(true);
+    expect(details.agents).toStrictEqual([
+      expect.objectContaining({
+        id: "main",
+        configured: true,
+      }),
+    ]);
   });
 
   it("ignores legacy env-forced plugin runtime selections", async () => {
@@ -107,10 +112,12 @@ describe("agents_list tool", () => {
     );
     const details = result.details as AgentListDetails;
 
-    expect(details.agents).toHaveLength(1);
-    expect(details.agents?.[0]?.id).toBe("main");
-    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
-    expect(details.agents?.[0]?.agentRuntime?.source).toBe("implicit");
+    expect(details.agents).toStrictEqual([
+      expect.objectContaining({
+        id: "main",
+        agentRuntime: { id: "codex", source: "implicit" },
+      }),
+    ]);
   });
 
   it("ignores legacy per-agent runtime overrides", async () => {
@@ -133,9 +140,11 @@ describe("agents_list tool", () => {
     );
     const details = result.details as AgentListDetails;
 
-    expect(details.agents).toHaveLength(1);
-    expect(details.agents?.[0]?.id).toBe("strict");
-    expect(details.agents?.[0]?.agentRuntime?.id).toBe("codex");
-    expect(details.agents?.[0]?.agentRuntime?.source).toBe("implicit");
+    expect(details.agents).toStrictEqual([
+      expect.objectContaining({
+        id: "strict",
+        agentRuntime: { id: "codex", source: "implicit" },
+      }),
+    ]);
   });
 });

@@ -656,7 +656,6 @@ describe("legacy migrate heartbeat config", () => {
     });
 
     expect(res.changes).toStrictEqual(["Removed empty top-level heartbeat."]);
-    expect(res.config).not.toBeNull();
     if (res.config === null) {
       throw new Error("Expected migrated config");
     }

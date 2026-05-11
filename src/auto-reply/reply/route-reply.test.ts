@@ -112,8 +112,9 @@ function lastDelivery() {
     throw new Error("Expected outbound delivery call");
   }
   const delivery = call[0];
-  expect(typeof delivery).toBe("object");
-  expect(delivery).not.toBeNull();
+  if (!delivery || typeof delivery !== "object") {
+    throw new Error("expected outbound delivery");
+  }
   return delivery as Record<string, unknown>;
 }
 
@@ -128,8 +129,9 @@ function lastDeliveryPayload(index = 0): Record<string, unknown> {
   const payloads = lastDelivery().payloads;
   expect(Array.isArray(payloads)).toBe(true);
   const payload = (payloads as unknown[])[index];
-  expect(typeof payload).toBe("object");
-  expect(payload).not.toBeNull();
+  if (!payload || typeof payload !== "object") {
+    throw new Error(`expected delivery payload ${index}`);
+  }
   return payload as Record<string, unknown>;
 }
 

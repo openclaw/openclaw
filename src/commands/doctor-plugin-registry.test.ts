@@ -31,7 +31,6 @@ async function readRequiredPersistedInstalledPluginIndex(
   stateDir: string,
 ): Promise<InstalledPluginIndex> {
   const persisted = await readPersistedInstalledPluginIndex({ stateDir });
-  expect(persisted).not.toBeNull();
   if (!persisted) {
     throw new Error("Expected persisted installed plugin index");
   }

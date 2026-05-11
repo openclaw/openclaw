@@ -80,7 +80,6 @@ function createCandidate(rootDir: string, options: { id?: string } = {}): Plugin
 }
 
 function requirePersisted(index: InstalledPluginIndex | null): InstalledPluginIndex {
-  expect(index).not.toBeNull();
   if (!index) {
     throw new Error("Expected persisted installed plugin index");
   }

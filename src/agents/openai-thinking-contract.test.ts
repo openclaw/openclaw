@@ -53,8 +53,11 @@ describe("OpenAI thinking contract", () => {
 
       await agent.prompt("hello");
 
-      expect(capturedOptions).toHaveLength(1);
-      expect(capturedOptions[0]?.reasoning).toBe(expectedReasoning);
+      expect(capturedOptions).toStrictEqual([
+        expect.objectContaining({
+          reasoning: expectedReasoning,
+        }),
+      ]);
     },
   );
 
@@ -72,8 +75,11 @@ describe("OpenAI thinking contract", () => {
 
       await agent.prompt("hello");
 
-      expect(capturedOptions).toHaveLength(1);
-      expect(capturedOptions[0]?.reasoning).toBeUndefined();
+      expect(capturedOptions).toStrictEqual([
+        expect.not.objectContaining({
+          reasoning: expect.anything(),
+        }),
+      ]);
     },
   );
 

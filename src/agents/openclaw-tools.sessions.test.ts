@@ -503,11 +503,13 @@ describe("sessions tools", () => {
           lastMessagePreview?: string;
         }>;
       };
-      expect(details.sessions).toHaveLength(1);
-      const visible = details.sessions?.[0];
-      expect(visible?.key).toBe("agent:main:main");
-      expect(visible?.derivedTitle).toBe("Visible project kickoff");
-      expect(visible?.lastMessagePreview).toBe("Visible latest reply");
+      expect(details.sessions).toStrictEqual([
+        expect.objectContaining({
+          derivedTitle: "Visible project kickoff",
+          key: "agent:main:main",
+          lastMessagePreview: "Visible latest reply",
+        }),
+      ]);
       expect(JSON.stringify(details.sessions)).not.toContain("Hidden");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -810,7 +812,12 @@ describe("sessions tools", () => {
 
     const result = await tool.execute("call5", { sessionKey: sessionId });
     const details = result.details as { messages?: unknown[] };
-    expect(details.messages).toHaveLength(1);
+    expect(details.messages).toStrictEqual([
+      {
+        content: [{ text: "ok", type: "text" }],
+        role: "assistant",
+      },
+    ]);
     const historyCall = callGatewayMock.mock.calls.find(
       (call) => (call[0] as { method?: string }).method === "chat.history",
     );

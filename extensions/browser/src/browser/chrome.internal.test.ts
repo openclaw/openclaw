@@ -459,8 +459,8 @@ describe("chrome.ts internal", () => {
           expect(spawnOptions.env?.HTTPS_PROXY).toBeUndefined();
           expect(spawnOptions.env?.NO_PROXY).toBeUndefined();
           if (process.platform === "linux") {
-            expect(spawnOptions.env?.XDG_CONFIG_HOME).toBeTruthy();
-            expect(spawnOptions.env?.XDG_CACHE_HOME).toBeTruthy();
+            expect(spawnOptions.env?.XDG_CONFIG_HOME).toEqual(expect.any(String));
+            expect(spawnOptions.env?.XDG_CACHE_HOME).toEqual(expect.any(String));
           }
           // Cleanup.
           running.proc.kill?.("SIGTERM");

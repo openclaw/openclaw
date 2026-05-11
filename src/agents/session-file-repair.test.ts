@@ -55,7 +55,11 @@ describe("repairSessionFileIfNeeded", () => {
     const backupPath = requireBackupPath(result);
 
     const repaired = await fs.readFile(file, "utf-8");
-    expect(repaired.trim().split("\n")).toHaveLength(2);
+    const repairedLines = repaired
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(repairedLines).toEqual([header, message]);
 
     const backup = await fs.readFile(backupPath, "utf-8");
     expect(backup).toBe(content);
@@ -668,7 +672,7 @@ describe("repairSessionFileIfNeeded", () => {
 
     const after = await fs.readFile(file, "utf-8");
     const lines = after.trimEnd().split("\n");
-    expect(lines).toHaveLength(2);
+    expect(lines.map((line) => JSON.parse(line))).toEqual([header, message]);
   });
 
   it("preserves non-`message` envelope types (e.g. compactionSummary, custom) without role inspection", async () => {

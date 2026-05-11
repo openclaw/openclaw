@@ -37,8 +37,13 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].baseUrl).toBe("http://localhost:8000");
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "custom-model",
+        provider: "custom",
+        baseUrl: "http://localhost:8000",
+      }),
+    ]);
   });
 
   it("inherits api from provider when model does not specify it", () => {
@@ -52,8 +57,13 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "custom-model",
+        provider: "custom",
+        api: "anthropic-messages",
+      }),
+    ]);
   });
 
   it("model-level api takes precedence over provider-level api", () => {
@@ -67,8 +77,13 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].api).toBe("anthropic-messages");
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "custom-model",
+        provider: "custom",
+        api: "anthropic-messages",
+      }),
+    ]);
   });
 
   it("inherits both baseUrl and api from provider config", () => {
@@ -118,8 +133,13 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "User-Agent": "custom-agent/1.0" });
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "claude-sonnet-4-6",
+        provider: "proxy",
+        headers: { "User-Agent": "custom-agent/1.0" },
+      }),
+    ]);
   });
 
   it("merges provider request headers into inline models", () => {
@@ -138,8 +158,13 @@ describe("buildInlineProviderModels", () => {
 
     const result = buildInlineProviderModels(providers);
 
-    expect(result).toHaveLength(1);
-    expect(result[0].headers).toEqual({ "X-Tenant": "acme" });
+    expect(result).toEqual([
+      expect.objectContaining({
+        id: "proxy-model",
+        provider: "proxy",
+        headers: { "X-Tenant": "acme" },
+      }),
+    ]);
   });
 
   it("keeps inline provider transport overrides once the llm transport adapter is available", () => {

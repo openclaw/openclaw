@@ -92,9 +92,10 @@ function expectCredentialFields(
 function expectReaderPolicyCall(mock: { mock: { calls: unknown[][] } }) {
   expect(mock.mock.calls).toStrictEqual([
     [
-      expect.objectContaining({
+      {
         allowKeychainPrompt: false,
-      }),
+        ttlMs: 15 * 60 * 1000,
+      },
     ],
   ]);
 }

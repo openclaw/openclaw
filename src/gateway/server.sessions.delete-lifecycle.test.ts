@@ -20,8 +20,9 @@ import {
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
 function expectObject(value: unknown) {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected object");
+  }
 }
 
 test("sessions.delete rejects main and aborts active runs", async () => {

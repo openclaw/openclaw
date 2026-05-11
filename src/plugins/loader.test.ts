@@ -5433,11 +5433,11 @@ module.exports = {
       },
     });
 
-    expect(
-      registry.channels.find((entry) => entry.plugin.id === "healthy-chat")?.plugin.meta,
-    ).toBeDefined();
     const healthyMeta = registry.channels.find((entry) => entry.plugin.id === "healthy-chat")
       ?.plugin.meta;
+    if (!healthyMeta) {
+      throw new Error("expected healthy chat plugin metadata");
+    }
     expect(healthyMeta?.label).toBe("Healthy Chat");
     expect(healthyMeta?.docsPath).toBe("/channels/healthy-chat");
     expect(registry.plugins.find((entry) => entry.id === "healthy-channel")?.status).toBe("loaded");
