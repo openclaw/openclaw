@@ -30,6 +30,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("./models-config.providers.js", () => ({
   applyNativeStreamingUsageCompat: (providers: unknown) => providers,
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
+  normalizeProviderCatalogModelsForConfig: (providers: unknown) => providers,
   normalizeProviders: ({ providers }: { providers: unknown }) => providers,
   resolveImplicitProviders: async ({
     explicitProviders,
