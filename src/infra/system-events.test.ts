@@ -307,6 +307,18 @@ describe("system events (session routing)", () => {
     ]);
   });
 
+  it("allows non-consecutive unkeyed duplicate events", () => {
+    const key = "agent:main:test-unkeyed-noncons-dupe";
+    const first = enqueueSystemEvent("Node connected", { sessionKey: key });
+    const interleaved = enqueueSystemEvent("Heartbeat tick", { sessionKey: key });
+    const retry = enqueueSystemEvent("Node connected", { sessionKey: key });
+
+    expect(first).toBe(true);
+    expect(interleaved).toBe(true);
+    expect(retry).toBe(true);
+    expect(peekSystemEvents(key)).toEqual(["Node connected", "Heartbeat tick", "Node connected"]);
+  });
+
   it("allows the same text under a different context key", () => {
     const key = "agent:main:test-context-disambiguates";
     const reactionA = enqueueSystemEvent("Discord reaction added: ✅", {
@@ -320,6 +332,42 @@ describe("system events (session routing)", () => {
 
     expect(reactionA).toBe(true);
     expect(reactionB).toBe(true);
+    expect(peekSystemEventEntries(key)).toHaveLength(2);
+  });
+
+  it("allows the same text and context under a different delivery route", () => {
+    const key = "agent:main:test-context-route-disambiguates";
+    const first = enqueueSystemEvent("Build completed", {
+      sessionKey: key,
+      contextKey: "build:123",
+      deliveryContext: { channel: "telegram", to: "100" },
+    });
+    const second = enqueueSystemEvent("Build completed", {
+      sessionKey: key,
+      contextKey: "build:123",
+      deliveryContext: { channel: "telegram", to: "200" },
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(true);
+    expect(peekSystemEventEntries(key)).toHaveLength(2);
+  });
+
+  it("allows the same text and context under different trust metadata", () => {
+    const key = "agent:main:test-context-trust-disambiguates";
+    const trusted = enqueueSystemEvent("Hook finished", {
+      sessionKey: key,
+      contextKey: "hook:done",
+      trusted: true,
+    });
+    const untrusted = enqueueSystemEvent("Hook finished", {
+      sessionKey: key,
+      contextKey: "hook:done",
+      trusted: false,
+    });
+
+    expect(trusted).toBe(true);
+    expect(untrusted).toBe(true);
     expect(peekSystemEventEntries(key)).toHaveLength(2);
   });
 
@@ -342,6 +390,60 @@ describe("system events (session routing)", () => {
     enqueueSystemEvent("Heartbeat tick", { sessionKey: key });
 
     expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+  });
+
+  it("preserves lastContextKey from the newest contextful event after partial consume", () => {
+    const key = "agent:main:test-context-preserved-after-consume";
+    enqueueSystemEvent("startup", { sessionKey: key });
+    enqueueSystemEvent("contextful", { sessionKey: key, contextKey: "build:123" });
+    enqueueSystemEvent("unkeyed followup", { sessionKey: key });
+    const inspected = peekSystemEventEntries(key).slice(0, 1);
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual([
+      "startup",
+    ]);
+    expect(isSystemEventContextChanged(key, "build:123")).toBe(false);
+  });
+
+  it("allows a keyed duplicate after the original is evicted", () => {
+    const key = "agent:main:test-keyed-duplicate-after-eviction";
+    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
+    for (let index = 0; index < 20; index += 1) {
+      enqueueSystemEvent(`event ${index}`, { sessionKey: key, contextKey: `event:${index}` });
+    }
+
+    expect(
+      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
+    ).toBe(true);
+  });
+
+  it("allows a keyed duplicate after the original is consumed from the prefix", () => {
+    const key = "agent:main:test-keyed-duplicate-after-prefix-consume";
+    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
+    const inspected = peekSystemEventEntries(key);
+
+    expect(consumeSystemEventEntries(key, inspected).map((entry) => entry.text)).toEqual([
+      "Build completed",
+    ]);
+    expect(
+      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
+    ).toBe(true);
+  });
+
+  it("allows a keyed duplicate after the original is selectively consumed", () => {
+    const key = "agent:main:test-keyed-duplicate-after-selected-consume";
+    enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" });
+    enqueueSystemEvent("Other event", { sessionKey: key, contextKey: "build:other" });
+    const selected = peekSystemEventEntries(key).filter(
+      (entry) => entry.text === "Build completed",
+    );
+
+    expect(consumeSelectedSystemEventEntries(key, selected).map((entry) => entry.text)).toEqual([
+      "Build completed",
+    ]);
+    expect(
+      enqueueSystemEvent("Build completed", { sessionKey: key, contextKey: "build:123" }),
+    ).toBe(true);
   });
 });
 
