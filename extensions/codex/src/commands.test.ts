@@ -794,18 +794,6 @@ describe("codex command", () => {
             "openai:work-api-key-backup",
           ],
         },
-        lastGood: {
-          openai: "openai:api-key-backup",
-        },
-        usageStats: {
-          "openai:personal-email@gmail.com": {
-            blockedUntil: secondaryResetSeconds * 1000,
-            blockedReason: "subscription_limit",
-          },
-          "openai:api-key-backup": {
-            lastUsed: now - 1_000,
-          },
-        },
       },
       config,
     );

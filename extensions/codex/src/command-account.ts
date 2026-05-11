@@ -67,7 +67,12 @@ export async function readCodexAccountAuthOverview(params: {
   }
 
   const now = Date.now();
-  const activeProfileId = resolveActiveProfileId({ store, order, config });
+  const activeProfileId = resolveActiveProfileId({
+    store,
+    order,
+    config,
+    limits: params.limits,
+  });
   const subscriptionProfileId = order.find((profileId) =>
     isChatGptSubscriptionProfile(store.profiles[profileId]),
   );
@@ -160,6 +165,7 @@ function resolveActiveProfileId(params: {
   store: AuthProfileStore;
   order: string[];
   config: AuthProfileOrderConfig;
+  limits: SafeValue<JsonValue | undefined>;
 }): string | undefined {
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
@@ -178,11 +184,25 @@ function resolveActiveProfileId(params: {
   if (mostRecent) {
     return mostRecent;
   }
+  if (shouldInferApiKeyActiveFromRateLimitProbe(params.limits)) {
+    const apiKeyProfile = params.order.find(
+      (profileId) => params.store.profiles[profileId]?.type === "api_key",
+    );
+    if (apiKeyProfile) {
+      return apiKeyProfile;
+    }
+  }
   return resolveAuthProfileOrder({
     cfg: params.config,
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   })[0];
+}
+
+function shouldInferApiKeyActiveFromRateLimitProbe(
+  limits: SafeValue<JsonValue | undefined>,
+): boolean {
+  return !limits.ok && limits.error.toLowerCase().includes("chatgpt authentication required");
 }
 
 async function readSubscriptionUsage(params: {
@@ -224,14 +244,16 @@ function buildProfileRow(params: {
   const active = params.profileId === params.activeProfileId;
   const status = active
     ? "active"
-    : describeInactiveProfileStatus({
-        store: params.store,
-        config: params.config,
-        profileId: params.profileId,
-        credential,
-        now: params.now,
-        afterActive: params.activeIndex >= 0 && params.index > params.activeIndex,
-      });
+    : params.usage?.blocked
+      ? formatUsageBlockedStatus(params.usage)
+      : describeInactiveProfileStatus({
+          store: params.store,
+          config: params.config,
+          profileId: params.profileId,
+          credential,
+          now: params.now,
+          afterActive: params.activeIndex >= 0 && params.index > params.activeIndex,
+        });
   return {
     profileId: params.profileId,
     label,
@@ -240,6 +262,12 @@ function buildProfileRow(params: {
     active,
     ...(params.usage?.usageLine ? { usage: params.usage.usageLine } : {}),
   };
+}
+
+function formatUsageBlockedStatus(usage: CodexAccountUsageSummary): string {
+  return usage.blockedResetRelative
+    ? `rate-limited - resets ${usage.blockedResetRelative}`
+    : "rate-limited";
 }
 
 function describeInactiveProfileStatus(params: {
