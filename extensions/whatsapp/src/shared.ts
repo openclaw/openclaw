@@ -199,7 +199,6 @@ export function createWhatsAppPluginBase(params: {
       showConfigured: false,
       quickstartAllowFrom: true,
       forceAccountBinding: true,
-      preferSessionLookupForAnnounceTarget: true,
     },
     setupWizard: params.setupWizard,
     capabilities: {

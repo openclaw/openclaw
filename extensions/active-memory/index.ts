@@ -270,6 +270,16 @@ type CachedActiveRecallResult = {
 };
 
 type ActiveMemoryChatType = "direct" | "group" | "channel" | "explicit";
+type ActiveMemorySessionEntry = {
+  chatType?: unknown;
+  groupId?: unknown;
+  nativeChannelId?: unknown;
+  nativeDirectUserId?: unknown;
+  deliveryContext?: {
+    to?: unknown;
+  };
+  lastTo?: unknown;
+};
 
 type ActiveMemorySessionToggleEntry = {
   version: 1;
@@ -503,6 +513,27 @@ function resolveCanonicalSessionKeyFromSessionId(params: {
 
 function normalizeOptionalString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeActiveMemoryChatType(value: unknown): ActiveMemoryChatType | undefined {
+  if (value === "direct" || value === "group" || value === "channel" || value === "explicit") {
+    return value;
+  }
+  return undefined;
+}
+
+function normalizeConversationIdValue(value: unknown): string | undefined {
+  const trimmed = normalizeOptionalString(value)?.toLowerCase();
+  if (!trimmed) {
+    return undefined;
+  }
+  for (const prefix of ["room:", "group:", "channel:", "direct:", "dm:", "user:"]) {
+    if (trimmed.startsWith(prefix)) {
+      const withoutPrefix = trimmed.slice(prefix.length).trim();
+      return withoutPrefix || undefined;
+    }
+  }
+  return trimmed;
 }
 
 function formatRuntimeToolsAllowSource(toolsAllow: readonly string[]): string {
@@ -1029,10 +1060,13 @@ function resolveChatType(ctx: {
   messageProvider?: string;
   channelId?: string;
   mainKey?: string;
+  sessionEntry?: ActiveMemorySessionEntry;
 }): ActiveMemoryChatType | undefined {
-  const rawSessionKey = ctx.sessionKey?.trim();
-  const { baseSessionKey } = parseThreadSessionSuffix(rawSessionKey);
-  const sessionKey = (baseSessionKey ?? rawSessionKey)?.trim().toLowerCase();
+  const storedChatType = normalizeActiveMemoryChatType(ctx.sessionEntry?.chatType);
+  if (storedChatType) {
+    return storedChatType;
+  }
+  const sessionKey = ctx.sessionKey?.trim().toLowerCase();
   if (sessionKey) {
     if (sessionKey.startsWith("agent:") && sessionKey.split(":")[2] === "explicit") {
       return "explicit";
@@ -1074,6 +1108,7 @@ function isAllowedChatType(
     messageProvider?: string;
     channelId?: string;
     mainKey?: string;
+    sessionEntry?: ActiveMemorySessionEntry;
   },
 ): boolean {
   const chatType = resolveChatType(ctx);
@@ -1105,7 +1140,28 @@ function isAllowedChatType(
 function resolveConversationId(ctx: {
   sessionKey?: string;
   messageProvider?: string;
+  sessionEntry?: ActiveMemorySessionEntry;
 }): string | undefined {
+  const storedChatType = normalizeActiveMemoryChatType(ctx.sessionEntry?.chatType);
+  if (storedChatType === "direct") {
+    const id =
+      normalizeConversationIdValue(ctx.sessionEntry?.nativeDirectUserId) ??
+      normalizeConversationIdValue(ctx.sessionEntry?.deliveryContext?.to) ??
+      normalizeConversationIdValue(ctx.sessionEntry?.lastTo);
+    if (id) {
+      return id;
+    }
+  }
+  if (storedChatType === "group" || storedChatType === "channel") {
+    const id =
+      normalizeConversationIdValue(ctx.sessionEntry?.groupId) ??
+      normalizeConversationIdValue(ctx.sessionEntry?.nativeChannelId) ??
+      normalizeConversationIdValue(ctx.sessionEntry?.deliveryContext?.to) ??
+      normalizeConversationIdValue(ctx.sessionEntry?.lastTo);
+    if (id) {
+      return id;
+    }
+  }
   const rawSessionKey = ctx.sessionKey?.trim();
   if (!rawSessionKey) {
     return undefined;
@@ -1139,7 +1195,7 @@ function resolveConversationId(ctx: {
         .slice(index + 1)
         .join(":")
         .trim();
-      return tail || undefined;
+      return normalizeConversationIdValue(tail);
     }
   }
   return undefined;
@@ -1160,6 +1216,7 @@ function isAllowedChatId(
   ctx: {
     sessionKey?: string;
     messageProvider?: string;
+    sessionEntry?: ActiveMemorySessionEntry;
   },
 ): boolean {
   const hasAllowlist = config.allowedChatIds.length > 0;
@@ -2877,10 +2934,18 @@ export default definePluginEntry({
             });
             return undefined;
           }
+          const sessionEntry =
+            resolvedSessionKey && effectiveAgentId
+              ? (api.runtime.agent.session.getSessionEntry({
+                  agentId: effectiveAgentId,
+                  sessionKey: resolvedSessionKey,
+                }) as ActiveMemorySessionEntry | undefined)
+              : undefined;
           if (
             !isAllowedChatType(config, {
               ...ctx,
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
+              sessionEntry,
               mainKey: api.config.session?.mainKey,
             })
           ) {
@@ -2895,6 +2960,7 @@ export default definePluginEntry({
             !isAllowedChatId(config, {
               sessionKey: resolvedSessionKey ?? ctx.sessionKey,
               messageProvider: ctx.messageProvider,
+              sessionEntry,
             })
           ) {
             await persistPluginStatusLines({

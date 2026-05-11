@@ -116,7 +116,6 @@ const installRegistry = async () => {
             selectionLabel: "WhatsApp",
             docsPath: "/channels/whatsapp",
             blurb: "WhatsApp test stub.",
-            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
           messaging: {
@@ -140,7 +139,6 @@ const installRegistry = async () => {
             selectionLabel: "Slack",
             docsPath: "/channels/slack",
             blurb: "Slack test stub.",
-            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "channel", "thread"] },
           messaging: {
@@ -279,13 +277,27 @@ describe("resolveAnnounceTarget", () => {
     await installRegistry();
   });
 
-  it("derives non-WhatsApp announce targets from the session key", async () => {
+  it("prefers typed sessions.list delivery context for announce targets", async () => {
+    callGatewayMock.mockResolvedValueOnce({
+      sessions: [
+        {
+          key: "agent:main:discord:group:dev",
+          deliveryContext: {
+            channel: "discord",
+            to: "group:dev",
+            accountId: "default",
+          },
+        },
+      ],
+    });
+
     const target = await resolveAnnounceTarget({
       sessionKey: "agent:main:discord:group:dev",
       displayKey: "agent:main:discord:group:dev",
     });
-    expect(target).toEqual({ channel: "discord", to: "group:dev" });
-    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(target).toEqual({ channel: "discord", to: "group:dev", accountId: "default" });
+    expect(callGatewayMock).toHaveBeenCalledTimes(1);
+    expect(requireGatewayRequest().method).toBe("sessions.list");
   });
 
   it("hydrates WhatsApp accountId from sessions.list when available", async () => {

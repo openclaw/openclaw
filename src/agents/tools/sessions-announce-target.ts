@@ -1,4 +1,3 @@
-import { getChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { parseThreadSessionSuffix } from "../../sessions/session-key-utils.js";
 import { normalizeOptionalStringifiedId } from "../../shared/string-coerce.js";
@@ -16,22 +15,6 @@ export async function resolveAnnounceTarget(params: {
   sessionKey: string;
   displayKey: string;
 }): Promise<AnnounceTarget | null> {
-  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
-  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
-  const fallback = parsed ?? parsedDisplay ?? null;
-  const fallbackThreadId =
-    fallback?.threadId ??
-    parseThreadSessionSuffix(params.sessionKey).threadId ??
-    parseThreadSessionSuffix(params.displayKey).threadId;
-
-  if (fallback) {
-    const normalized = normalizeChannelId(fallback.channel);
-    const plugin = normalized ? getChannelPlugin(normalized) : null;
-    if (!plugin?.meta?.preferSessionLookupForAnnounceTarget) {
-      return fallback;
-    }
-  }
-
   try {
     const list = await callGatewayLazy<{ sessions: Array<SessionListRow> }>({
       method: "sessions.list",
@@ -47,13 +30,19 @@ export async function resolveAnnounceTarget(params: {
       sessions.find((entry) => entry?.key === params.displayKey);
 
     const context = normalizeDeliveryContext(match?.deliveryContext);
-    const threadId = normalizeOptionalStringifiedId(context?.threadId ?? fallbackThreadId);
     if (context?.channel && context.to) {
+      const fallbackThreadId =
+        parseThreadSessionSuffix(params.sessionKey).threadId ??
+        parseThreadSessionSuffix(params.displayKey).threadId;
+      const threadId = normalizeOptionalStringifiedId(context.threadId ?? fallbackThreadId);
       return { channel: context.channel, to: context.to, accountId: context.accountId, threadId };
     }
   } catch {
     // ignore
   }
 
+  const parsed = resolveAnnounceTargetFromKey(params.sessionKey);
+  const parsedDisplay = resolveAnnounceTargetFromKey(params.displayKey);
+  const fallback = parsed ?? parsedDisplay ?? null;
   return fallback;
 }

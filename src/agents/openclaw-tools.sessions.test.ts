@@ -111,7 +111,6 @@ function installMessagingTestRegistry() {
             selectionLabel: "WhatsApp",
             docsPath: "/channels/whatsapp",
             blurb: "WhatsApp test stub.",
-            preferSessionLookupForAnnounceTarget: true,
           },
           capabilities: { chatTypes: ["direct", "group"] },
           messaging: {

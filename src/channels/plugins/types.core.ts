@@ -210,7 +210,6 @@ export type ChannelMeta = {
   showInSetup?: boolean;
   quickstartAllowFrom?: boolean;
   forceAccountBinding?: boolean;
-  preferSessionLookupForAnnounceTarget?: boolean;
   preferOver?: readonly string[];
 };
 

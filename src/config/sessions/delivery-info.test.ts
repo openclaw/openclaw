@@ -366,9 +366,6 @@ describe("extractDeliveryInfo", () => {
       entry: {
         sessionId: "session-1",
         updatedAt: Date.now(),
-        origin: {
-          provider: "matrix",
-        },
         lastChannel: "matrix",
         lastTo: "room:!MixedCase:example.org",
       },
@@ -524,10 +521,6 @@ describe("extractDeliveryInfo", () => {
       entry: {
         sessionId: "thread-session",
         updatedAt: Date.now(),
-        origin: {
-          provider: "matrix",
-          threadId: "$thread-event",
-        },
       },
     });
     upsertSessionEntry({

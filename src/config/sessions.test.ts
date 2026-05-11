@@ -225,6 +225,7 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "12345",
+      accountId: "default",
     });
     expect(store[mainSessionKey]?.responseUsage).toBe("on");
     expect(store[mainSessionKey]?.queueDebounceMs).toBe(1234);
@@ -296,11 +297,12 @@ describe("sessions", () => {
     expect(store[mainSessionKey]?.deliveryContext).toEqual({
       channel: "telegram",
       to: "222",
+      accountId: "default",
     });
     expect(store[mainSessionKey]?.lastThreadId).toBeUndefined();
   });
 
-  it("updateLastRoute records origin + group metadata when ctx is provided", async () => {
+  it("updateLastRoute records typed group metadata when ctx is provided", async () => {
     const sessionKey = "agent:main:demo-chat:group:room-123";
     await createSessionStoreFixture({
       prefix: "updateLastRoute",
@@ -326,9 +328,7 @@ describe("sessions", () => {
     expect(store[sessionKey]?.subject).toBe("Family");
     expect(store[sessionKey]?.channel).toBe("demo-chat");
     expect(store[sessionKey]?.groupId).toBe("room-123");
-    expect(store[sessionKey]?.origin?.label).toBe("Family");
-    expect(store[sessionKey]?.origin?.provider).toBe("demo-chat");
-    expect(store[sessionKey]?.origin?.chatType).toBe("group");
+    expect(store[sessionKey]?.origin).toBeUndefined();
   });
 
   it("updateLastRoute skips missing sessions when creation is disabled", async () => {

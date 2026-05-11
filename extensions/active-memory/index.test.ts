@@ -1018,6 +1018,36 @@ describe("active-memory plugin", () => {
     });
   });
 
+  it("uses typed stored session metadata before parsing session-key shape", async () => {
+    hoisted.sessionStore["agent:main:typed-main"] = {
+      sessionId: "typed-main-session",
+      updatedAt: 1,
+      chatType: "group",
+      groupId: "oc_allowed_group",
+      channel: "feishu",
+    };
+    api.pluginConfig = {
+      agents: ["main"],
+      allowedChatTypes: ["group"],
+      allowedChatIds: ["oc_allowed_group"],
+    };
+    plugin.register(api as unknown as OpenClawPluginApi);
+
+    const result = await hooks.before_prompt_build(
+      { prompt: "hi", messages: [] },
+      {
+        agentId: "main",
+        trigger: "user",
+        sessionKey: "agent:main:typed-main",
+        messageProvider: "feishu",
+        channelId: "feishu",
+      },
+    );
+
+    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
+    expectPrependContextResult(result);
+  });
+
   it("treats allowedChatIds matching as case-insensitive", async () => {
     api.pluginConfig = {
       agents: ["main"],
