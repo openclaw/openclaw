@@ -131,6 +131,71 @@ describe("redactTranscriptMessage", () => {
     expect(serializedArguments).toContain("visible");
   });
 
+  it("redacts structured tool-use input payloads", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "toolUse",
+          id: "call_1",
+          name: "send_request",
+          input: {
+            apiKey: "plainsecretvalue123",
+            nested: { accessToken: ["nestedplainsecret123"] },
+            command: "OPENAI_API_KEY=sk-abcdef1234567890xyz openclaw health",
+            safe: "visible",
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<{ input: unknown }>)[0];
+    const inputValue = block.input as {
+      apiKey: string;
+      nested: { accessToken: string[] };
+      command: string;
+      safe: string;
+    };
+    const serializedInput = JSON.stringify(block.input);
+    expect(serializedInput).not.toContain("plainsecretvalue123");
+    expect(serializedInput).not.toContain("nestedplainsecret123");
+    expect(serializedInput).not.toContain("sk-abcdef1234567890xyz");
+    expect(inputValue.apiKey).toBe("plains…e123");
+    expect(inputValue.nested.accessToken[0]).toBe("nested…t123");
+    expect(inputValue.command).toBe("OPENAI_API_KEY=sk-abc…0xyz openclaw health");
+    expect(serializedInput).toContain("visible");
+  });
+
+  it("redacts defensive function-call input payloads", () => {
+    const msg = {
+      role: "assistant",
+      content: [
+        {
+          type: "functionCall",
+          id: "call_1",
+          name: "send_request",
+          input: {
+            password: "hunter2",
+            nested: { accessToken: ["nestedplainsecret123"] },
+          },
+        },
+      ],
+    } as unknown as AgentMessage;
+
+    const result = redactTranscriptMessage(msg, cfg("tools"));
+    const block = (msgContent(result) as Array<{ input: unknown }>)[0];
+    const inputValue = block.input as {
+      password: string;
+      nested: { accessToken: string[] };
+    };
+    const serializedInput = JSON.stringify(block.input);
+    expect(serializedInput).not.toContain("hunter2");
+    expect(serializedInput).not.toContain("nestedplainsecret123");
+    expect(inputValue.password).toBe("***");
+    expect(inputValue.nested.accessToken[0]).toBe("nested…t123");
+  });
+
   it("redacts structured secret fields in tool-result details", () => {
     const msg = {
       role: "toolResult",

@@ -88,12 +88,19 @@ function redactTranscriptContentBlock(block: unknown, cfg?: OpenClawConfig): unk
   if (typeof source.partialJson === "string") {
     assign("partialJson", source.partialJson);
   }
-  if (source.type === "toolCall" && "arguments" in source) {
-    const redactedArguments = redactTranscriptStructuredValue(source.arguments, cfg);
-    if (redactedArguments !== source.arguments) {
-      next ??= { ...source };
-      next.arguments = redactedArguments;
+  const redactStructuredBlockField = (key: "arguments" | "input") => {
+    if (!(key in source)) {
+      return;
     }
+    const redactedValue = redactTranscriptStructuredValue(source[key], cfg);
+    if (redactedValue !== source[key]) {
+      next ??= { ...source };
+      next[key] = redactedValue;
+    }
+  };
+  if (source.type === "toolCall" || source.type === "toolUse" || source.type === "functionCall") {
+    redactStructuredBlockField("arguments");
+    redactStructuredBlockField("input");
   }
   return next ?? block;
 }
