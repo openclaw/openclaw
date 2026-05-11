@@ -197,8 +197,16 @@ describe("memory_search corpus labels", () => {
     expect(getMemorySearchManagerMockConfigs()).toEqual([patchedConfig]);
   });
 
-  it("preserves sessions corpus labels for session transcript hits", async () => {
+  it("preserves source corpus labels for memory and session transcript hits", async () => {
     setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 3,
+        endLine: 4,
+        score: 0.95,
+        snippet: "Durable memory note",
+        source: "memory" as const,
+      },
       {
         path: "sessions/thread-1.jsonl",
         startLine: 1,
@@ -217,10 +225,19 @@ describe("memory_search corpus labels", () => {
       },
       agentSessionKey: "agent:main:main",
     });
-    const result = await tool.execute("sessions", { query: "thread note", corpus: "sessions" });
+    const result = await tool.execute("mixed", { query: "thread note" });
     const details = result.details as { results: Array<{ corpus: string; path: string }> };
 
     expect(details.results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 3,
+        endLine: 4,
+        score: 0.95,
+        snippet: "Durable memory note",
+        source: "memory",
+      },
       {
         corpus: "sessions",
         path: "sessions/thread-1.jsonl",
