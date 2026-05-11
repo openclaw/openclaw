@@ -818,10 +818,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
       ),
     );
     expect(plan.lanes).toHaveLength(BUNDLED_PLUGIN_INSTALL_UNINSTALL_SHARDS);
-    expect(plan.lanes.at(0)).toBeDefined();
-    expect(plan.lanes.at(23)).toBeDefined();
-    expect(summarizeLane(plan.lanes[0])).toEqual(bundledPluginSweepLane(0));
-    expect(summarizeLane(plan.lanes[23])).toEqual(bundledPluginSweepLane(23));
+    const firstLane = plan.lanes[0];
+    const lastLane = plan.lanes[23];
+    if (!firstLane || !lastLane) {
+      throw new Error("Expected bundled plugin sweep boundary lanes");
+    }
+    expect(summarizeLane(firstLane)).toEqual(bundledPluginSweepLane(0));
+    expect(summarizeLane(lastLane)).toEqual(bundledPluginSweepLane(23));
     expect(plan.needs).toEqual({
       bareImage: false,
       e2eImage: true,

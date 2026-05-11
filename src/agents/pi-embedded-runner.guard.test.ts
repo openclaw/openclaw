@@ -68,14 +68,24 @@ describe("guardSessionManager integration", () => {
       .getEntries()
       .filter((e) => e.type === "message")
       .map((e) => (e as { message: AgentMessage }).message);
-    const serialized = JSON.stringify(messages);
 
-    expect(serialized).not.toContain("the email is peter@dc.io");
-    expect(serialized).not.toContain("contact peter@dc.io");
-    expect(serialized).not.toContain("peter@dc.io\\n");
-    expect(serialized).toContain('"thinking":"the email is peter@d***.io"');
-    expect(serialized).toContain('"text":"contact peter@d***.io"');
-    expect(serialized).toContain('"text":"peter@d***.io\\n"');
-    expect(serialized).toContain('"/tmp/peter@dc.io"');
+    expect(messages).toEqual([
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "the email is peter@d***.io", thinkingSignature: "sig" },
+          { type: "text", text: "contact peter@d***.io" },
+          { type: "toolCall", id: "call_1", name: "read", arguments: { path: "/tmp/peter@dc.io" } },
+        ],
+        stopReason: "toolUse",
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "read",
+        content: [{ type: "text", text: "peter@d***.io\n" }],
+        isError: false,
+      },
+    ]);
   });
 });

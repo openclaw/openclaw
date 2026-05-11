@@ -156,8 +156,6 @@ describe("agent event handler", () => {
   }
 
   function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    expect(typeof value).toBe("object");
-    expect(value).not.toBeNull();
     if (typeof value !== "object" || value === null) {
       throw new Error(`${label} was not an object`);
     }
@@ -186,7 +184,6 @@ describe("agent event handler", () => {
     label: string,
   ) {
     const call = mock.mock.calls[index];
-    expect(call).toBeDefined();
     if (!call) {
       throw new Error(`missing ${label} call ${index + 1}`);
     }

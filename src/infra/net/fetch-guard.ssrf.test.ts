@@ -592,7 +592,9 @@ describe("fetchWithSsrFGuard hardening", () => {
       | [string, { dispatcher?: unknown }]
       | undefined;
     expect(fetchCall?.[0]).toBe("https://public.example/resource");
-    expect(fetchCall?.[1].dispatcher).toBeTruthy();
+    if (!fetchCall?.[1].dispatcher) {
+      throw new Error("Expected proxy dispatcher");
+    }
     await result.release();
   });
 

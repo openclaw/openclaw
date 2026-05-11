@@ -105,15 +105,12 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      allowedHostnames: ["127.0.0.1"],
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 
@@ -134,16 +131,13 @@ describe("cdp helpers", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: "http://127.0.0.1:9222/json/version",
-        policy: {
-          dangerouslyAllowPrivateNetwork: false,
-          hostnameAllowlist: ["*.corp.example"],
-          allowedHostnames: ["127.0.0.1"],
-        },
-      }),
-    );
+    const [request] = fetchWithSsrFGuardMock.mock.calls[0] ?? [];
+    expect(request?.url).toBe("http://127.0.0.1:9222/json/version");
+    expect(request?.policy).toEqual({
+      dangerouslyAllowPrivateNetwork: false,
+      hostnameAllowlist: ["*.corp.example"],
+      allowedHostnames: ["127.0.0.1"],
+    });
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

@@ -13,7 +13,6 @@ import {
 type CliRespawnPlan = NonNullable<ReturnType<typeof buildCliRespawnPlan>>;
 
 function expectCliRespawnPlan(plan: ReturnType<typeof buildCliRespawnPlan>): CliRespawnPlan {
-  expect(plan).not.toBeNull();
   if (plan === null) {
     throw new Error("Expected CLI respawn plan");
   }

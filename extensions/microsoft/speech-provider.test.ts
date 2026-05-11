@@ -101,17 +101,20 @@ describe("listMicrosoftVoices", () => {
     });
 
     await listMicrosoftVoices();
-    await new Promise((resolve) => setTimeout(resolve, 0));
 
-    const events = store.getSessionEvents("ms-voices-session", 10);
-    expect(
-      events.some((event) => event.kind === "request" && event.host === "speech.platform.bing.com"),
-    ).toBe(true);
-    expect(
-      events.some(
-        (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
-      ),
-    ).toBe(true);
+    await vi.waitFor(() => {
+      const events = store.getSessionEvents("ms-voices-session", 10);
+      expect(
+        events.some(
+          (event) => event.kind === "request" && event.host === "speech.platform.bing.com",
+        ),
+      ).toBe(true);
+      expect(
+        events.some(
+          (event) => event.kind === "response" && event.host === "speech.platform.bing.com",
+        ),
+      ).toBe(true);
+    });
   });
 
   it("does not double-capture voice discovery when the global fetch patch is installed", async () => {
@@ -143,12 +146,14 @@ describe("listMicrosoftVoices", () => {
 
     try {
       await listMicrosoftVoices();
-      await new Promise((resolve) => setTimeout(resolve, 0));
 
-      const events = store
-        .getSessionEvents("ms-voices-global-session", 10)
-        .filter((event) => event.host === "speech.platform.bing.com");
-      expect(events).toHaveLength(2);
+      let events: Array<Record<string, unknown>> = [];
+      await vi.waitFor(() => {
+        events = store
+          .getSessionEvents("ms-voices-global-session", 10)
+          .filter((event) => event.host === "speech.platform.bing.com");
+        expect(events).toHaveLength(2);
+      });
       const kinds = events.map((event) => String(event.kind)).toSorted();
       expect(kinds).toEqual(["request", "response"]);
     } finally {

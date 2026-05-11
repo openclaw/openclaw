@@ -126,6 +126,8 @@ USER.md
 !.agents/skills/openclaw-parallels-smoke/**
 !.agents/skills/openclaw-pr-maintainer/
 !.agents/skills/openclaw-pr-maintainer/**
+!.agents/skills/openclaw-refactor-docs/
+!.agents/skills/openclaw-refactor-docs/**
 !.agents/skills/openclaw-qa-testing/
 !.agents/skills/openclaw-qa-testing/**
 !.agents/skills/openclaw-release-maintainer/

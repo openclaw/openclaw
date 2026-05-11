@@ -221,11 +221,14 @@ describe("bootstrap prompt warnings", () => {
     };
     expect(signature.bootstrapMaxChars).toBe(120);
     expect(signature.bootstrapTotalMaxChars).toBe(200);
-    expect(signature.files).toHaveLength(1);
-    expect(signature.files?.[0]?.path).toBe("/tmp/AGENTS.md");
-    expect(signature.files?.[0]?.rawChars).toBe(150);
-    expect(signature.files?.[0]?.injectedChars).toBe(100);
-    expect(signature.files?.[0]?.causes).toStrictEqual(["per-file-limit"]);
+    expect(signature.files).toStrictEqual([
+      {
+        causes: ["per-file-limit"],
+        injectedChars: 100,
+        path: "/tmp/AGENTS.md",
+        rawChars: 150,
+      },
+    ]);
     expect(first.lines.join("\n")).toContain("AGENTS.md");
 
     const second = buildBootstrapPromptWarning({

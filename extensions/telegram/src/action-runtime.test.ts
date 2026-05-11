@@ -50,8 +50,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -375,7 +376,7 @@ describe("handleTelegramAction", () => {
     expect(options.mediaUrl).toBeUndefined();
     expect(result.content).toContainEqual({
       type: "text",
-      text: expect.stringContaining('"ok": true'),
+      text: '{\n  "ok": true,\n  "messageId": "789",\n  "chatId": "123"\n}',
     });
   });
 

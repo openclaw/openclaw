@@ -141,6 +141,7 @@ const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
 const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
 const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
+const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
 const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
@@ -429,6 +430,19 @@ function resolveCodexPluginAppCacheCodexHome(
   return appServer.start.transport === "stdio" ? resolveCodexAppServerHomeDir(agentDir) : undefined;
 }
 
+function restrictCodexAppServerSandboxForOpenClawSandbox(
+  appServer: CodexAppServerRuntimeOptions,
+  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
+): CodexAppServerRuntimeOptions {
+  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
+    return appServer;
+  }
+  return {
+    ...appServer,
+    sandbox: "workspace-write",
+  };
+}
+
 export async function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: {
@@ -448,12 +462,7 @@ export async function runCodexAppServerAttempt(
   const attemptStartedAt = Date.now();
   const attemptClientFactory = resolveCodexAppServerClientFactory();
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const appServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
+  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sandboxSessionKey =
@@ -469,6 +478,12 @@ export async function runCodexAppServerAttempt(
       : sandbox.workspaceDir
     : resolvedWorkspace;
   await fs.mkdir(effectiveWorkspace, { recursive: true });
+  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
 
   const runAbortController = new AbortController();
   const abortFromUpstream = () => {
@@ -1448,7 +1463,10 @@ export async function runCodexAppServerAttempt(
     prompt: promptBuild.prompt,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId);
+  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
+    nativePostToolUseRelayEnabled:
+      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+  });
   emitLifecycleStart();
   const activeProjector = projector;
   for (const notification of pendingNotifications.splice(0)) {
@@ -1496,10 +1514,19 @@ export async function runCodexAppServerAttempt(
   );
 
   const abortListener = () => {
+    const shouldRetireClient = timedOut;
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,
+      timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
+    if (shouldRetireClient) {
+      retireCodexAppServerClientAfterTimedOutTurn(client, {
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        reason: String(runAbortController.signal.reason ?? "timeout"),
+      });
+    }
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -1974,13 +2001,47 @@ function interruptCodexTurnBestEffort(
   params: {
     threadId: string;
     turnId: string;
+    timeoutMs?: number;
   },
 ): void {
-  void Promise.resolve()
-    .then(() => client.request("turn/interrupt", params))
-    .catch((error: unknown) => {
+  const requestOptions =
+    params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
+      ? { timeoutMs: params.timeoutMs }
+      : undefined;
+  const requestParams = { threadId: params.threadId, turnId: params.turnId };
+  try {
+    const interrupt = requestOptions
+      ? client.request("turn/interrupt", requestParams, requestOptions)
+      : client.request("turn/interrupt", requestParams);
+    void Promise.resolve(interrupt).catch((error: unknown) => {
       embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
     });
+  } catch (error) {
+    embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
+  }
+}
+
+function retireCodexAppServerClientAfterTimedOutTurn(
+  client: CodexAppServerClient,
+  params: {
+    threadId: string;
+    turnId: string;
+    reason: string;
+  },
+): void {
+  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
+  if (!clearedSharedClient) {
+    const close = (client as { close?: () => void }).close;
+    if (typeof close === "function") {
+      close.call(client);
+    }
+  }
+  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
+    threadId: params.threadId,
+    turnId: params.turnId,
+    reason: params.reason,
+    clearedSharedClient,
+  });
 }
 
 type DynamicToolBuildParams = {
@@ -2908,6 +2969,7 @@ export const __testing = {
   handleDynamicToolCallWithTimeout,
   resolveDynamicToolCallTimeoutMs,
   resolveCodexPluginAppCacheEndpoint,
+  restrictCodexAppServerSandboxForOpenClawSandbox,
   resolveOpenClawCodingToolsSessionKeys,
   shouldForceMessageTool,
   setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {

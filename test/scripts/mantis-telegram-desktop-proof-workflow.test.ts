@@ -21,8 +21,10 @@ type WorkflowJob = {
 };
 
 type Workflow = {
+  concurrency?: unknown;
   env?: Record<string, string>;
   jobs?: Record<string, WorkflowJob>;
+  permissions?: Record<string, string>;
 };
 
 type PackageJson = {
@@ -48,6 +50,16 @@ function workflowStep(name: string): WorkflowStep {
   return step;
 }
 
+function jobStep(workflowFile: string, jobName: string, stepName: string): WorkflowStep {
+  const workflow = parse(readFileSync(workflowFile, "utf8")) as Workflow;
+  const steps = workflow.jobs?.[jobName]?.steps ?? [];
+  const step = steps.find((candidate) => candidate.name === stepName);
+  if (!step) {
+    throw new Error(`Missing workflow step: ${workflowFile} ${jobName} ${stepName}`);
+  }
+  return step;
+}
+
 describe("Mantis Telegram Desktop proof workflow", () => {
   it("runs with the repository pnpm major", () => {
     const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
@@ -56,6 +68,27 @@ describe("Mantis Telegram Desktop proof workflow", () => {
 
     expect(workflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
     expect(liveWorkflow.env?.PNPM_VERSION?.split(".", 1)[0]).toBe(pnpmMajor);
+  });
+
+  it("serializes all Mantis Telegram account runs without workflow concurrency cancellation", () => {
+    const workflow = parse(readFileSync(WORKFLOW, "utf8")) as Workflow;
+    const liveWorkflow = parse(readFileSync(LIVE_WORKFLOW, "utf8")) as Workflow;
+
+    expect(workflow.concurrency).toBeUndefined();
+    expect(liveWorkflow.concurrency).toBeUndefined();
+    expect(workflow.permissions?.actions).toBe("read");
+    expect(liveWorkflow.permissions?.actions).toBe("read");
+
+    for (const step of [
+      jobStep(WORKFLOW, "run_telegram_desktop_proof", "Wait for older Mantis Telegram account run"),
+      jobStep(LIVE_WORKFLOW, "run_telegram_live", "Wait for older Mantis Telegram account run"),
+    ]) {
+      expect(step.run).toContain("mantis-telegram-desktop-proof.yml");
+      expect(step.run).toContain("mantis-telegram-live.yml");
+      expect(step.run).toContain("GITHUB_RUN_ID");
+      expect(step.run).toContain(".createdAt < $current_created");
+      expect(step.run).toContain("sleep 60");
+    }
   });
 
   it("uses the OpenClaw Mantis mention as the comment trigger", () => {

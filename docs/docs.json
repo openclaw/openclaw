@@ -1050,7 +1050,7 @@
             "groups": [
               {
                 "group": "Overview",
-                "pages": ["channels/index"]
+                "pages": ["channels/index", "announcements/bluebubbles-imessage"]
               },
               {
                 "group": "Mainstream messaging",

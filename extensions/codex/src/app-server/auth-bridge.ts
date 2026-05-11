@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ensureAuthProfileStore,
+  ensureAuthProfileStoreWithoutExternalProfiles,
   loadAuthProfileStoreForSecretsRuntime,
+  refreshOAuthCredentialForRuntime,
   resolveAuthProfileOrder,
   resolveProviderIdForAuth,
   resolveApiKeyForProfile,
@@ -50,7 +52,11 @@ export async function bridgeCodexAppServerStartOptions(params: {
     params.startOptions,
     params.agentDir,
   );
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const store = ensureCodexAppServerAuthProfileStore({
+    agentDir: params.agentDir,
+    authProfileId: params.authProfileId,
+    config: params.config,
+  });
   const authProfileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
     store,
@@ -88,12 +94,60 @@ export function resolveCodexAppServerAuthProfileIdForAgent(params: {
   config?: AuthProfileOrderConfig;
 }): string | undefined {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = ensureCodexAppServerAuthProfileStore({
+    agentDir,
+    authProfileId: params.authProfileId,
+    config: params.config,
+  });
   return resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
     store,
     config: params.config,
   });
+}
+
+function ensureCodexAppServerAuthProfileStore(params: {
+  agentDir?: string;
+  authProfileId?: string;
+  config?: AuthProfileOrderConfig;
+}): ReturnType<typeof ensureAuthProfileStore> {
+  return ensureAuthProfileStore(params.agentDir, {
+    allowKeychainPrompt: false,
+    config: params.config,
+    externalCliProviderIds: [CODEX_APP_SERVER_AUTH_PROVIDER],
+    ...(params.authProfileId ? { externalCliProfileIds: [params.authProfileId] } : {}),
+  });
+}
+
+function resolveCodexAppServerAuthProfileStore(params: {
+  agentDir?: string;
+  authProfileId?: string;
+  authProfileStore?: AuthProfileStore;
+  config?: AuthProfileOrderConfig;
+}): AuthProfileStore {
+  const overlaidStore = ensureCodexAppServerAuthProfileStore({
+    agentDir: params.agentDir,
+    authProfileId: params.authProfileId,
+    config: params.config,
+  });
+  if (!params.authProfileStore) {
+    return overlaidStore;
+  }
+  const order =
+    params.authProfileStore.order || overlaidStore.order
+      ? {
+          ...overlaidStore.order,
+          ...params.authProfileStore.order,
+        }
+      : undefined;
+  return {
+    ...params.authProfileStore,
+    ...(order ? { order } : {}),
+    profiles: {
+      ...overlaidStore.profiles,
+      ...params.authProfileStore.profiles,
+    },
+  };
 }
 
 export async function resolveCodexAppServerAuthAccountCacheKey(params: {
@@ -103,8 +157,12 @@ export async function resolveCodexAppServerAuthAccountCacheKey(params: {
   config?: AuthProfileOrderConfig;
 }): Promise<string | undefined> {
   const agentDir = params.agentDir?.trim() || resolveDefaultAgentDir(params.config ?? {});
-  const store =
-    params.authProfileStore ?? ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
+  const store = resolveCodexAppServerAuthProfileStore({
+    agentDir,
+    authProfileId: params.authProfileId,
+    authProfileStore: params.authProfileStore,
+    config: params.config,
+  });
   const profileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
     store,
@@ -292,7 +350,11 @@ async function resolveCodexAppServerAuthProfileLoginParamsInternal(params: {
   forceOAuthRefresh?: boolean;
   config?: AuthProfileOrderConfig;
 }): Promise<CodexLoginAccountParams | undefined> {
-  const store = ensureAuthProfileStore(params.agentDir, { allowKeychainPrompt: false });
+  const store = ensureCodexAppServerAuthProfileStore({
+    agentDir: params.agentDir,
+    authProfileId: params.authProfileId,
+    config: params.config,
+  });
   const profileId = resolveCodexAppServerAuthProfileId({
     authProfileId: params.authProfileId,
     store,
@@ -388,14 +450,38 @@ async function resolveOAuthCredentialForCodexAppServer(
     agentDir: params.agentDir,
     profileId,
   });
-  const store = ensureAuthProfileStore(ownerAgentDir, { allowKeychainPrompt: false });
+  const store = ensureCodexAppServerAuthProfileStore({
+    agentDir: ownerAgentDir,
+    authProfileId: profileId,
+    config: params.config,
+  });
+  const persistedStore = ensureAuthProfileStoreWithoutExternalProfiles(ownerAgentDir, {
+    allowKeychainPrompt: false,
+  });
+  const persistedCredential = persistedStore.profiles[profileId];
+  const persistedOAuthCredential =
+    persistedCredential?.type === "oauth" &&
+    isCodexAppServerAuthProvider(persistedCredential.provider, params.config)
+      ? persistedCredential
+      : undefined;
   const ownerCredential = store.profiles[profileId];
-  const credentialForOwner =
+  const overlaidOAuthCredential =
     ownerCredential?.type === "oauth" &&
     isCodexAppServerAuthProvider(ownerCredential.provider, params.config)
       ? ownerCredential
-      : credential;
-  if (params.forceRefresh) {
+      : undefined;
+  const credentialForOwner = persistedOAuthCredential ?? overlaidOAuthCredential ?? credential;
+  if (params.forceRefresh && !persistedOAuthCredential && overlaidOAuthCredential) {
+    const refreshedRuntimeCredential = await refreshOAuthCredentialForRuntime({
+      credential: overlaidOAuthCredential,
+    });
+    if (!refreshedRuntimeCredential?.access?.trim()) {
+      throw new Error(`Codex app-server auth profile "${profileId}" could not refresh.`);
+    }
+    store.profiles[profileId] = refreshedRuntimeCredential;
+    return refreshedRuntimeCredential;
+  }
+  if (params.forceRefresh && persistedOAuthCredential) {
     store.profiles[profileId] = { ...credentialForOwner, expires: 0 };
     saveAuthProfileStore(store, ownerAgentDir);
   }

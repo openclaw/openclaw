@@ -91,6 +91,7 @@ export function isNonRecoverableAuthError(error: GatewayErrorInfo | undefined): 
     code === ConnectErrorDetailCodes.AUTH_PASSWORD_MISMATCH ||
     code === ConnectErrorDetailCodes.AUTH_RATE_LIMITED ||
     code === ConnectErrorDetailCodes.AUTH_DEVICE_TOKEN_MISMATCH ||
+    code === ConnectErrorDetailCodes.AUTH_SCOPE_MISMATCH ||
     code === ConnectErrorDetailCodes.PAIRING_REQUIRED ||
     code === ConnectErrorDetailCodes.CONTROL_UI_DEVICE_IDENTITY_REQUIRED ||
     code === ConnectErrorDetailCodes.DEVICE_IDENTITY_REQUIRED
@@ -146,6 +147,7 @@ type SelectedConnectAuth = {
   authPassword?: string;
   resolvedDeviceToken?: string;
   storedToken?: string;
+  storedScopes?: string[];
   canFallbackToShared: boolean;
 };
 
@@ -318,6 +320,21 @@ function formatBrowserWebSocketConstructorError(err: unknown, url: string): Gate
       browserMessage,
     },
   };
+}
+
+function resolveControlUiConnectScopes(selectedAuth: SelectedConnectAuth): string[] {
+  const isUsingStoredDeviceToken =
+    Boolean(selectedAuth.storedToken) &&
+    (selectedAuth.resolvedDeviceToken === selectedAuth.storedToken ||
+      selectedAuth.authDeviceToken === selectedAuth.storedToken);
+  if (
+    isUsingStoredDeviceToken &&
+    selectedAuth.storedScopes &&
+    selectedAuth.storedScopes.length > 0
+  ) {
+    return [...selectedAuth.storedScopes];
+  }
+  return [...CONTROL_UI_OPERATOR_SCOPES];
 }
 
 async function buildGatewayConnectDevice(params: {
@@ -545,7 +562,6 @@ export class GatewayBrowserClient {
 
   private async buildConnectPlan(connectNonce: string | null): Promise<ConnectPlan> {
     const role = CONTROL_UI_OPERATOR_ROLE;
-    const scopes = [...CONTROL_UI_OPERATOR_SCOPES];
     const client = this.buildConnectClient();
     const explicitGatewayToken = this.opts.token?.trim() || undefined;
     const explicitPassword = this.opts.password?.trim() || undefined;
@@ -568,6 +584,7 @@ export class GatewayBrowserClient {
         deviceId: deviceIdentity.deviceId,
       });
     }
+    const scopes = resolveControlUiConnectScopes(selectedAuth);
 
     return {
       role,
@@ -793,6 +810,7 @@ export class GatewayBrowserClient {
       authPassword,
       resolvedDeviceToken,
       storedToken: storedToken ?? undefined,
+      storedScopes: storedEntry?.scopes ?? undefined,
       canFallbackToShared: Boolean(storedToken && explicitGatewayToken),
     };
   }

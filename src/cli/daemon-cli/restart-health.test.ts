@@ -56,8 +56,10 @@ function makeGatewayService(
 
 function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
   const call = mock.mock.calls[0];
-  expect(call).toBeDefined();
-  return call?.[0];
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0];
 }
 
 async function inspectGatewayRestartWithSnapshot(params: {

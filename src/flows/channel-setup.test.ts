@@ -80,8 +80,10 @@ function makePluginRegistry(overrides: Partial<PluginRegistry> = {}): PluginRegi
 
 function callArg<T>(mock: { mock: { calls: unknown[][] } }, index = 0, _type?: (value: T) => T): T {
   const call = mock.mock.calls[index];
-  expect(call).toBeDefined();
-  return call?.[0] as T;
+  if (!call) {
+    throw new Error(`Expected mock call ${index}`);
+  }
+  return call[0] as T;
 }
 
 function expectExternalCatalogInstallCall(index = 0) {

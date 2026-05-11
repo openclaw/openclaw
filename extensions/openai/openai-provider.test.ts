@@ -93,8 +93,9 @@ function runWrappedPayloadCase(params: {
 }
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
-  expect(value).toBeTypeOf("object");
-  expect(value).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
   const record = value as Record<string, unknown>;
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
@@ -888,10 +889,12 @@ describe("buildOpenAIProvider", () => {
     });
 
     expect(mocks.openAIResponsesTransportStreamFn).not.toHaveBeenCalled();
+    const headers = result.options?.headers as Record<string, unknown> | undefined;
     expectFields(result.options?.headers, {
       originator: "openclaw",
-      "User-Agent": expect.stringMatching(/^openclaw\//u),
     });
+    expect(typeof headers?.["User-Agent"]).toBe("string");
+    expect(String(headers?.["User-Agent"]).startsWith("openclaw/")).toBe(true);
     expect(result.payload.store).toBe(false);
     expect(result.payload.service_tier).toBe("priority");
     expect(result.payload.text).toEqual({ verbosity: "high" });

@@ -427,7 +427,9 @@ describe("update-cli", () => {
       "--no-audit",
       "--loglevel=error",
     ]);
-    expect(call?.[1]).toBeDefined();
+    if (call?.[1] === undefined) {
+      throw new Error("Expected package install command options");
+    }
   };
 
   const statfsFixture = (params: {

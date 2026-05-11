@@ -74,7 +74,6 @@ function expectInputProvenance(
   sourceSessionKey: string,
 ) {
   const inputProvenance = params?.inputProvenance;
-  expect(inputProvenance).toBeTruthy();
   if (!inputProvenance || typeof inputProvenance !== "object") {
     throw new Error("Expected input provenance");
   }
@@ -86,7 +85,6 @@ function expectInputProvenance(
 
 function getAgentCall(index = 0): AgentCallRequest {
   const call = agentSpy.mock.calls[index]?.[0];
-  expect(call).toBeDefined();
   if (!call) {
     throw new Error(`Expected agent call at index ${index}`);
   }

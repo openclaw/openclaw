@@ -55,7 +55,9 @@ function createInvokeParams(params: Record<string, unknown>) {
 
 function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
   const arg = mock.mock.calls[0]?.[0];
-  expect(arg, label).toBeDefined();
+  if (arg === undefined) {
+    throw new Error(`Expected ${label}`);
+  }
   return arg;
 }
 

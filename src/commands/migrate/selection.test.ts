@@ -131,7 +131,6 @@ function expectSummaryFields(
 
 function requireItem(items: MigrationItem[], id: string): MigrationItem {
   const item = items.find((candidate) => candidate.id === id);
-  expect(item).toBeDefined();
   if (!item) {
     throw new Error(`missing migration item ${id}`);
   }
@@ -152,8 +151,6 @@ function expectItemStatus(
 }
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(typeof value).toBe("object");
-  expect(value).not.toBeNull();
   if (typeof value !== "object" || value === null) {
     throw new Error(`${label} was not an object`);
   }

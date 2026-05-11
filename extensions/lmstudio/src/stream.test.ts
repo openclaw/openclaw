@@ -83,7 +83,9 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
     "base stream",
   );
   expectRecordFields(requireRecord(call[0], "base stream model"), fields);
-  expect(call[1]).toBeDefined();
+  if (call[1] === undefined) {
+    throw new Error("Expected base stream context");
+  }
   expect(call[2]).toBeUndefined();
 }
 

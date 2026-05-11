@@ -81,9 +81,10 @@ describe("inbound_claim hook runner", () => {
     );
 
     expect(result).toEqual({ handled: true });
-    expect(logger.error).toHaveBeenCalledWith(
-      expect.stringContaining("inbound_claim handler from test-plugin failed: boom"),
-    );
+    expect(logger.error).toHaveBeenCalledTimes(1);
+    expect(logger.error.mock.calls[0]).toEqual([
+      "[hooks] inbound_claim handler from test-plugin failed: boom",
+    ]);
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -193,11 +194,10 @@ describe("inbound_claim hook runner", () => {
       await vi.advanceTimersByTimeAsync(5);
 
       await expect(run).resolves.toEqual({ status: "error", error: "timed out after 5ms" });
-      expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "inbound_claim handler from test-plugin failed: timed out after 5ms",
-        ),
-      );
+      expect(logger.error).toHaveBeenCalledTimes(1);
+      expect(logger.error.mock.calls[0]).toEqual([
+        "[hooks] inbound_claim handler from test-plugin failed: timed out after 5ms",
+      ]);
     } finally {
       vi.useRealTimers();
     }

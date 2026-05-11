@@ -243,7 +243,6 @@ function expectStringSchema(
     description?: string;
   },
 ) {
-  expect(schema).toBeTruthy();
   if (!schema || typeof schema !== "object") {
     throw new Error("Expected string schema");
   }
@@ -1005,11 +1004,13 @@ describe("message tool schema scoping", () => {
     });
 
     const context = seenContexts.find((item) => item.phase === "describeMessageTool");
-    expect(context).toBeDefined();
-    expect(context?.currentChannelProvider).toBe("discord");
-    expect(context?.currentChannelId).toBe("channel:123");
-    expect(context?.currentThreadTs).toBe("thread-456");
-    expect(context?.currentMessageId).toBe("msg-789");
+    if (!context) {
+      throw new Error("Expected describeMessageTool discovery context");
+    }
+    expect(context.currentChannelProvider).toBe("discord");
+    expect(context.currentChannelId).toBe("channel:123");
+    expect(context.currentThreadTs).toBe("thread-456");
+    expect(context.currentMessageId).toBe("msg-789");
     expect(context?.accountId).toBe("ops");
     expect(context?.sessionKey).toBe("agent:alpha:main");
     expect(context?.sessionId).toBe("session-123");

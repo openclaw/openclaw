@@ -204,7 +204,12 @@ describe("commitment extraction runtime", () => {
     await expect(drainCommitmentExtractionQueue()).resolves.toBe(1);
     expect(resolveDefaultModelMock).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(1);
-    const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0];
+    const request = runEmbeddedPiAgentMock.mock.calls[0]?.[0] as
+      | { provider?: string; model?: string; disableTools?: boolean }
+      | undefined;
+    if (!request) {
+      throw new Error("Expected embedded PI agent extraction request");
+    }
     expect(request.provider).toBe("openai-codex");
     expect(request.model).toBe("gpt-5.5");
     expect(request.disableTools).toBe(true);

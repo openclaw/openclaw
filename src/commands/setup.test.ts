@@ -43,10 +43,18 @@ describe("setupCommand", () => {
       await setupCommand({ workspace }, runtime, deps);
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const raw = await fs.readFile(configPath, "utf-8");
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
 
-      expect(raw).toContain('"mode": "local"');
-      expect(raw).toContain('"workspace"');
+      expect(raw).toStrictEqual({
+        agents: {
+          defaults: {
+            workspace,
+          },
+        },
+        gateway: {
+          mode: "local",
+        },
+      });
     });
   });
 
@@ -61,13 +69,13 @@ describe("setupCommand", () => {
 
       await setupCommand(undefined, runtime, deps);
 
-      const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(logs).toContain(
+      expect(runtime.log.mock.calls.map((call) => String(call[0])).slice(-5)).toStrictEqual([
+        "",
         "Setup complete: config, workspace, and session directories are ready.",
-      );
-      expect(logs).toContain("openclaw onboard");
-      expect(logs).toContain("openclaw configure");
-      expect(logs).toContain("openclaw channels add");
+        "Next guided path: openclaw onboard.",
+        "Next targeted changes: openclaw configure for models, channels, Gateway, plugins, skills, and health checks.",
+        "Add a chat channel later: openclaw channels add.",
+      ]);
     });
   });
 

@@ -203,10 +203,12 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       message: { role: "user", content: "x".repeat(5 * 1024 * 1024) },
     });
 
-    await expect(readLatestAssistantTextFromSessionTranscript(sessionFile)).resolves.toMatchObject({
-      id: exactResult.messageId,
-      text: "Hello before the large user entry",
-    });
+    const latestAssistantText = await readLatestAssistantTextFromSessionTranscript(sessionFile);
+    if (!latestAssistantText) {
+      throw new Error("expected latest assistant text");
+    }
+    expect(latestAssistantText.id).toBe(exactResult.messageId);
+    expect(latestAssistantText.text).toBe("Hello before the large user entry");
 
     const mirrorResult = await appendAssistantMessageToSessionTranscript({
       sessionKey,

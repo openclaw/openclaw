@@ -1,11 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withBrowserFetchPreconnect } from "../../test-fetch.js";
 import "../test-support/browser-security.mock.js";
-
-vi.hoisted(() => {
-  vi.resetModules();
-});
-
 import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdpHelpersModule from "./cdp.helpers.js";
@@ -170,6 +165,65 @@ describe("browser server-context tab selection state", () => {
 
     const selected = await openclaw.ensureTabAvailable();
     expect(selected.targetId).toBe("CREATED");
+    expect(createTargetViaCdp).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18800",
+      url: "about:blank",
+      ssrfPolicy: undefined,
+    });
+  });
+
+  it("opens a real tab when only browser-internal CDP targets are listed", async () => {
+    const createTargetViaCdp = vi
+      .spyOn(cdpModule, "createTargetViaCdp")
+      .mockResolvedValue({ targetId: "REAL" });
+
+    let listCount = 0;
+    const fetchMock = vi.fn(async (url: unknown) => {
+      const u = String(url);
+      if (!u.includes("/json/list")) {
+        throw new Error(`unexpected fetch: ${u}`);
+      }
+      listCount += 1;
+      return {
+        ok: true,
+        json: async () =>
+          listCount <= 2
+            ? [
+                {
+                  id: "OMNI",
+                  title: "Omnibox Popup",
+                  url: "chrome://omnibox-popup.top-chrome/",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OMNI",
+                  type: "page",
+                },
+              ]
+            : [
+                {
+                  id: "OMNI",
+                  title: "Omnibox Popup",
+                  url: "chrome://omnibox-popup.top-chrome/",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/OMNI",
+                  type: "page",
+                },
+                {
+                  id: "REAL",
+                  title: "New Tab",
+                  url: "about:blank",
+                  webSocketDebuggerUrl: "ws://127.0.0.1/devtools/page/REAL",
+                  type: "page",
+                },
+              ],
+      } as unknown as Response;
+    });
+
+    global.fetch = withBrowserFetchPreconnect(fetchMock);
+    const state = makeState("openclaw");
+    const ctx = createTestBrowserRouteContext({ getState: () => state });
+    const openclaw = ctx.forProfile("openclaw");
+
+    const selected = await openclaw.ensureTabAvailable();
+    expect(selected.targetId).toBe("REAL");
+    expect(state.profiles.get("openclaw")?.lastTargetId).toBe("REAL");
     expect(createTargetViaCdp).toHaveBeenCalledWith({
       cdpUrl: "http://127.0.0.1:18800",
       url: "about:blank",

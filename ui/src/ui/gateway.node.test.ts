@@ -183,9 +183,10 @@ async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
   } else {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await vi.waitFor(() => {
+      expect(ws.sent.length).toBeGreaterThan(0);
+    });
   }
-  expect(ws.sent.length).toBeGreaterThan(0);
   return { ws, connectFrame: parseLatestConnectFrame(ws) };
 }
 
@@ -273,7 +274,7 @@ describe("GatewayBrowserClient", () => {
     vi.unstubAllGlobals();
   });
 
-  it("requests the full control ui operator scope bundle on connect", async () => {
+  it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
@@ -283,6 +284,29 @@ describe("GatewayBrowserClient", () => {
 
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+    expect(connectFrame.params?.scopes).toContain("operator.admin");
+    expect(connectFrame.params?.scopes).toContain("operator.pairing");
+  });
+
+  it("reuses cached device token scopes when connecting from bootstrap handoff", async () => {
+    localStorage.clear();
+    const storedEntry = storeDeviceAuthToken({
+      deviceId: "device-1",
+      role: "operator",
+      token: "bootstrap-device-token",
+      scopes: ["operator.read", "operator.write", "operator.approvals"],
+    });
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.method).toBe("connect");
+    expect(connectFrame.params?.auth?.token).toBe("bootstrap-device-token");
+    expect(connectFrame.params?.scopes).toEqual(storedEntry.scopes);
+    expect(connectFrame.params?.scopes).not.toContain("operator.admin");
+    expect(connectFrame.params?.scopes).not.toContain("operator.pairing");
   });
 
   it("reports browser security errors from WebSocket construction without retrying", async () => {
@@ -810,6 +834,38 @@ describe("GatewayBrowserClient", () => {
     ws.emitClose(4008, "connect failed");
 
     expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toBeNull();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(wsInstances).toHaveLength(1);
+
+    vi.useRealTimers();
+  });
+
+  it("does not clear stored device tokens or reconnect on AUTH_SCOPE_MISMATCH", async () => {
+    useNodeFakeTimers();
+
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    expect(connectFrame.params?.auth?.token).toBe("stored-device-token");
+
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "unauthorized",
+        details: { code: "AUTH_SCOPE_MISMATCH" },
+      },
+    });
+    await expectSocketClosed(ws);
+    ws.emitClose(4008, "connect failed");
+
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.token).toBe(
+      "stored-device-token",
+    );
     await vi.advanceTimersByTimeAsync(30_000);
     expect(wsInstances).toHaveLength(1);
 

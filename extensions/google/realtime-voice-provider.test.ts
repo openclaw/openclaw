@@ -59,7 +59,9 @@ function lastConnectParams(): MockGoogleLiveConnectParams {
 
 function sentAudio(index = 0): { data?: unknown; mimeType?: unknown } {
   const audio = session.sendRealtimeInput.mock.calls[index]?.[0]?.audio;
-  expect(audio).toBeDefined();
+  if (!audio) {
+    throw new Error(`Expected sent audio at index ${index}`);
+  }
   return audio as { data?: unknown; mimeType?: unknown };
 }
 

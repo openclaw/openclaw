@@ -112,7 +112,7 @@ describe("telegramPlugin gateway startup", () => {
     await expect(task).rejects.toThrow("channels.telegram.accounts.ops.botToken/tokenFile");
     expect(monitorTelegramProvider).not.toHaveBeenCalled();
     expect(ctx.log?.error).toHaveBeenCalledWith(
-      expect.stringContaining('Telegram bot token unauthorized for account "ops"'),
+      '[ops] Telegram bot token unauthorized for account "ops" (getMe returned 401 from Telegram; source: config token). Update channels.telegram.accounts.ops.botToken/tokenFile with the current BotFather token.',
     );
   });
 
@@ -225,16 +225,18 @@ describe("telegramPlugin outbound attachments", () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-1", chatId: "12345" });
     const sendText = telegramPlugin.outbound?.sendText;
-    expect(sendText).toBeDefined();
+    if (!sendText) {
+      throw new Error("Expected Telegram outbound sendText");
+    }
 
-    await sendText!({
+    await sendText({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "hi **boss**",
     });
     expect(sendMessageTelegram.mock.calls[0]?.[2]).not.toHaveProperty("textMode");
 
-    await sendText!({
+    await sendText({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "<b>hi boss</b>",
@@ -247,9 +249,11 @@ describe("telegramPlugin outbound attachments", () => {
     installTelegramRuntime();
     sendMessageTelegram.mockResolvedValue({ messageId: "tg-payload", chatId: "12345" });
     const sendPayload = telegramPlugin.outbound?.sendPayload;
-    expect(sendPayload).toBeDefined();
+    if (!sendPayload) {
+      throw new Error("Expected Telegram outbound sendPayload");
+    }
 
-    await sendPayload!({
+    await sendPayload({
       cfg: createTelegramConfig(),
       to: "12345",
       text: "",

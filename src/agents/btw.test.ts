@@ -254,7 +254,9 @@ function expectRecordFields(
   record: unknown,
   expected: Record<string, unknown>,
 ): Record<string, unknown> {
-  expect(record).toBeDefined();
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
   const actual = record as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(actual[key]).toEqual(value);
@@ -267,8 +269,10 @@ function streamContext(callIndex = 0): {
   systemPrompt?: unknown;
 } {
   const call = streamSimpleMock.mock.calls[callIndex];
-  expect(call).toBeDefined();
-  return (call?.[1] ?? {}) as {
+  if (!call) {
+    throw new Error(`Expected streamSimple call at index ${callIndex}`);
+  }
+  return (call[1] ?? {}) as {
     messages?: Array<Record<string, unknown>>;
     systemPrompt?: unknown;
   };
@@ -276,8 +280,10 @@ function streamContext(callIndex = 0): {
 
 function contextMessages(context: unknown): Array<Record<string, unknown>> {
   const messages = (context as { messages?: Array<Record<string, unknown>> }).messages;
-  expect(messages).toBeDefined();
-  return messages ?? [];
+  if (!messages) {
+    throw new Error("Expected BTW context messages");
+  }
+  return messages;
 }
 
 function expectTextBlockContains(block: unknown, text: string): void {
@@ -497,15 +503,26 @@ describe("runBtwSideQuestion", () => {
 
     expect(result).toEqual({ text: "Codex side answer." });
     expect(codexSideQuestionMock).toHaveBeenCalledTimes(1);
-    expect(codexSideQuestionMock.mock.calls[0]?.[0]).toMatchObject({
-      provider: "openai",
-      model: "gpt-5.5",
-      question: DEFAULT_QUESTION,
-      sessionId: "session-1",
-      agentId: "main",
-      workspaceDir: "/tmp/workspace",
-      authProfileId: "openai-codex:work",
-    });
+    const [[sideQuestionParams]] = codexSideQuestionMock.mock.calls as unknown as Array<
+      [
+        {
+          provider?: string;
+          model?: string;
+          question?: string;
+          sessionId?: string;
+          agentId?: string;
+          workspaceDir?: string;
+          authProfileId?: string;
+        },
+      ]
+    >;
+    expect(sideQuestionParams.provider).toBe("openai");
+    expect(sideQuestionParams.model).toBe("gpt-5.5");
+    expect(sideQuestionParams.question).toBe(DEFAULT_QUESTION);
+    expect(sideQuestionParams.sessionId).toBe("session-1");
+    expect(sideQuestionParams.agentId).toBe("main");
+    expect(sideQuestionParams.workspaceDir).toBe("/tmp/workspace");
+    expect(sideQuestionParams.authProfileId).toBe("openai-codex:work");
     expect(codexSideQuestionMock.mock.calls[0]?.[0].sessionFile).toContain("session-1.jsonl");
     expect(streamSimpleMock).not.toHaveBeenCalled();
     expect(registerProviderStreamForModelMock).not.toHaveBeenCalled();
@@ -737,7 +754,9 @@ describe("runBtwSideQuestion", () => {
           `<btw_side_question>\n${MATH_QUESTION}\n</btw_side_question>`,
         ),
     );
-    expect(sideQuestionMessage).toBeDefined();
+    if (!sideQuestionMessage) {
+      throw new Error("Expected BTW side question message");
+    }
   });
 
   it("uses the in-flight prompt as background only when there is no prior transcript context", async () => {
@@ -777,7 +796,9 @@ describe("runBtwSideQuestion", () => {
           "Ignore any unfinished task in the conversation while answering it.",
         ),
     );
-    expect(sideQuestionMessage).toBeDefined();
+    if (!sideQuestionMessage) {
+      throw new Error("Expected isolated side question message");
+    }
   });
 
   it("branches away from an unresolved trailing user turn before building BTW context", async () => {

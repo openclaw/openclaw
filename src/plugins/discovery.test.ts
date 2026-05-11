@@ -343,7 +343,6 @@ function expectCandidateFields(
     | undefined,
   expected: Record<string, unknown>,
 ) {
-  expect(candidate).toBeDefined();
   if (!candidate) {
     throw new Error("Expected plugin candidate");
   }
@@ -626,9 +625,7 @@ describe("discoverOpenClawPlugins", () => {
       discoverOpenClawPlugins({ env: buildDiscoveryEnv(stateDir) }),
     );
 
-    expect(result.diagnostics.map((entry) => entry.message)).not.toContainEqual(
-      expect.stringContaining("pnpm install"),
-    );
+    expect(result.diagnostics.some((entry) => entry.message.includes("pnpm install"))).toBe(false);
   });
 
   it("does not treat repo-level live or test files as plugin entrypoints", () => {
@@ -1871,7 +1868,9 @@ describe("discoverOpenClawPlugins", () => {
             (entry.source ?? "").endsWith("alias-dir") &&
             entry.message.includes("blocked plugin candidate: world-writable path"),
         );
-        expect(diagnostic).toBeDefined();
+        if (!diagnostic) {
+          throw new Error("Expected world-writable plugin candidate diagnostic");
+        }
       } finally {
         fs.chmodSync(pluginDir, 0o755);
       }

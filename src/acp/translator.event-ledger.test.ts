@@ -82,6 +82,12 @@ function createChatEvent(params: {
   } as unknown as EventFrame;
 }
 
+async function waitForChatSend(requestMock: { mock: { calls: Array<readonly unknown[]> } }) {
+  await vi.waitFor(() =>
+    expect(requestMock.mock.calls.some((call) => call[0] === "chat.send")).toBe(true),
+  );
+}
+
 describe("ACP translator event ledger replay", () => {
   it("loads complete ledger-backed sessions without the lossy Gateway transcript fallback", async () => {
     const eventLedger = createInMemoryAcpEventLedger();
@@ -107,14 +113,7 @@ describe("ACP translator event ledger replay", () => {
     firstConnection.__sessionUpdateMock.mockClear();
 
     const promptPromise = firstAgent.prompt(createPromptRequest(created.sessionId, "Question"));
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (firstRequestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(firstRequestMock);
     const runId = firstSessionStore.getSession(created.sessionId)?.activeRunId;
     if (!runId) {
       throw new Error("Expected active ACP run");
@@ -243,14 +242,7 @@ describe("ACP translator event ledger replay", () => {
     const listedPrompt = listedAgent.prompt(
       createPromptRequest(firstSession.sessionKey, "Follow-up"),
     );
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (listedRequestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(listedRequestMock);
     const listedRunId = listedSessionStore.getSession(firstSession.sessionKey)?.activeRunId;
     if (!listedRunId) {
       throw new Error("Expected listed ACP session to have an active run");
@@ -375,14 +367,7 @@ describe("ACP translator event ledger replay", () => {
     }
 
     const prompt = agent.prompt(createPromptRequest(created.sessionId, "Question"));
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      if (requestMock.mock.calls.some((call) => call[0] === "chat.send")) {
-        break;
-      }
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-    }
+    await waitForChatSend(requestMock);
     await markIncompletePromise;
     const runId = sessionStore.getSession(created.sessionId)?.activeRunId;
     if (!runId) {

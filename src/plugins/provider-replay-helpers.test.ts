@@ -12,8 +12,9 @@ import {
 } from "./provider-replay-helpers.js";
 
 function expectFields(actual: unknown, expected: Record<string, unknown>): void {
-  expect(actual).toBeDefined();
-  expect(typeof actual).toBe("object");
+  if (!actual || typeof actual !== "object") {
+    throw new Error("Expected record");
+  }
   const record = actual as Record<string, unknown>;
   for (const [key, value] of Object.entries(expected)) {
     expect(record[key]).toEqual(value);

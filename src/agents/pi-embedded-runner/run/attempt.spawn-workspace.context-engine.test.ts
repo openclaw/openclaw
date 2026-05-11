@@ -52,8 +52,9 @@ type MockCallSource = {
 };
 
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  expect(value, label).toBeTypeOf("object");
-  expect(value, label).not.toBeNull();
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
   return value as Record<string, unknown>;
 }
 
@@ -78,6 +79,9 @@ function mockArg(source: MockCallSource, callIndex: number, argIndex: number, la
   const call = source.mock.calls[callIndex];
   if (!call) {
     throw new Error(`expected mock call: ${label}`);
+  }
+  if (argIndex >= call.length) {
+    throw new Error(`expected mock call argument ${argIndex}: ${label}`);
   }
   return call[argIndex];
 }

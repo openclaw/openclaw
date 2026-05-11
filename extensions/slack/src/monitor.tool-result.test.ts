@@ -267,7 +267,6 @@ describe("monitorSlackProvider tool results", () => {
         channel_type: "channel",
       }),
     });
-    await new Promise((resolve) => setTimeout(resolve, 0));
     await flush();
   }
 

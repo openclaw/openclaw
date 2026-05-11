@@ -116,6 +116,7 @@ Skills own workflows; root owns hard policy and routing.
 - Codex harness upgrade (`extensions/codex/package.json` `@openai/codex`): refresh `docs/plugins/codex-harness.md` model snapshot from the new harness `model/list`.
 - Docs final answers: include relevant full `https://docs.openclaw.ai/...` URL(s). If issue/PR work too, GitHub URL last.
 - Changelog entries: active version `### Changes`/`### Fixes`; single-line bullets only.
+- Contributor PR authors should not edit `CHANGELOG.md`; maintainer/AI adds entries during landing/merge.
 - Contributor-facing changelog entries thank credited human `@author`. Never thank bots, `@openclaw`, `@clawsweeper`, or `@steipete`; if unknown, omit thanks.
 
 ## Git

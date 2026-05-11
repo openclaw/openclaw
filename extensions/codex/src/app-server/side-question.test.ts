@@ -252,35 +252,52 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "Side answer." });
-    expect(client.request).toHaveBeenNthCalledWith(
-      1,
-      "thread/fork",
-      expect.objectContaining({
-        threadId: "parent-thread",
-        model: "gpt-5.5",
-        approvalPolicy: "on-request",
-        sandbox: "workspace-write",
-        ephemeral: true,
-        threadSource: "user",
-      }),
-      expect.any(Object),
+    const forkCall = client.request.mock.calls[0];
+    expect(forkCall?.[0]).toBe("thread/fork");
+    const forkParams = forkCall?.[1] as Record<string, unknown> | undefined;
+    expect(Object.keys(forkParams ?? {}).toSorted()).toEqual([
+      "approvalPolicy",
+      "approvalsReviewer",
+      "config",
+      "cwd",
+      "developerInstructions",
+      "ephemeral",
+      "model",
+      "sandbox",
+      "threadId",
+      "threadSource",
+    ]);
+    expect(forkParams?.threadId).toBe("parent-thread");
+    expect(forkParams?.model).toBe("gpt-5.5");
+    expect(forkParams?.approvalPolicy).toBe("on-request");
+    expect(forkParams?.sandbox).toBe("workspace-write");
+    expect(forkParams?.ephemeral).toBe(true);
+    expect(forkParams?.threadSource).toBe("user");
+    expect(forkParams?.approvalsReviewer).toBe("user");
+    expect(forkParams?.cwd).toBe("/tmp/workspace");
+    expect(forkParams?.config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
+    expect(forkParams?.developerInstructions).toContain("You are in a side conversation");
+    expect(forkParams?.developerInstructions).toContain(
+      "Only instructions submitted after the side-conversation boundary are active.",
     );
-    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("dynamicTools");
-    expect(client.request.mock.calls[0]?.[1]).not.toHaveProperty("modelProvider");
-    expect(client.request).toHaveBeenNthCalledWith(
-      2,
-      "thread/inject_items",
-      expect.objectContaining({
-        threadId: "side-thread",
-        items: [expect.objectContaining({ type: "message", role: "user" })],
-      }),
-      expect.any(Object),
-    );
-    const injectedItem = (
-      client.request.mock.calls.find(([method]) => method === "thread/inject_items")?.[1] as {
-        items?: Array<{ content?: Array<{ text?: string }> }>;
-      }
-    )?.items?.[0];
+    expect(forkCall?.[2]).toEqual({ timeoutMs: 60_000, signal: undefined });
+
+    const injectCall = client.request.mock.calls[1];
+    expect(injectCall?.[0]).toBe("thread/inject_items");
+    const injectParams = injectCall?.[1] as
+      | { threadId?: string; items?: Array<{ type?: string; role?: string; content?: unknown }> }
+      | undefined;
+    expect(injectParams?.threadId).toBe("side-thread");
+    expect(injectParams?.items).toHaveLength(1);
+    expect(injectParams?.items?.[0]?.type).toBe("message");
+    expect(injectParams?.items?.[0]?.role).toBe("user");
+    expect(injectCall?.[2]).toEqual({ timeoutMs: 60_000, signal: undefined });
+    const injectedItem = injectParams?.items?.[0] as
+      | { content?: Array<{ text?: string }> }
+      | undefined;
     const injectedText = injectedItem?.content?.[0]?.text;
     expect(injectedText).toContain(
       "External tools may be available according to this thread's current permissions",
@@ -288,40 +305,43 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(injectedText).toContain(
       "unless the user explicitly asks for that mutation after this boundary",
     );
-    expect(client.request).toHaveBeenCalledWith(
+    const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
+    expect(turnStartCall).toEqual([
       "turn/start",
-      expect.objectContaining({
+      {
         threadId: "side-thread",
         input: [{ type: "text", text: "What changed?", text_elements: [] }],
+        cwd: "/tmp/workspace",
         model: "gpt-5.5",
-      }),
-      expect.any(Object),
-    );
-    const turnStartParams = client.request.mock.calls.find(
-      ([method]) => method === "turn/start",
-    )?.[1] as Record<string, unknown> | undefined;
+        effort: null,
+        collaborationMode: {
+          mode: "default",
+          settings: {
+            model: "gpt-5.5",
+            reasoning_effort: null,
+            developer_instructions: null,
+          },
+        },
+      },
+      { timeoutMs: 60_000, signal: undefined },
+    ]);
+    const turnStartParams = turnStartCall?.[1] as Record<string, unknown> | undefined;
     expect(turnStartParams).not.toHaveProperty("approvalPolicy");
     expect(turnStartParams).not.toHaveProperty("sandboxPolicy");
-    expect(client.request).toHaveBeenLastCalledWith(
+    expect(client.request.mock.calls.at(-1)).toEqual([
       "thread/unsubscribe",
       { threadId: "side-thread" },
-      expect.any(Object),
-    );
-    expect(client.request).not.toHaveBeenCalledWith(
-      "turn/interrupt",
-      expect.anything(),
-      expect.anything(),
-    );
-    expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        sessionId: "session-1",
-        modelProvider: "openai",
-        modelId: "gpt-5.5",
-        requireExplicitMessageTarget: true,
-      }),
-    );
+      { timeoutMs: 60_000 },
+    ]);
+    expect(client.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+
+    const [toolOptions] = createOpenClawCodingToolsMock.mock.calls[0] ?? [];
+    expect(toolOptions).toHaveProperty("agentDir", "/tmp/agent");
+    expect(toolOptions).toHaveProperty("workspaceDir", "/tmp/workspace");
+    expect(toolOptions).toHaveProperty("sessionId", "session-1");
+    expect(toolOptions).toHaveProperty("modelProvider", "openai");
+    expect(toolOptions).toHaveProperty("modelId", "gpt-5.5");
+    expect(toolOptions).toHaveProperty("requireExplicitMessageTarget", true);
   });
 
   it("bridges side-thread dynamic tool requests to OpenClaw tools", async () => {
@@ -362,12 +382,13 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "Tool answer." });
-    expect(toolExecuteMock).toHaveBeenCalledWith(
-      "tool-1",
-      { topic: "AGENTS.md" },
-      expect.any(AbortSignal),
-      undefined,
-    );
+    const [toolCallId, toolArguments, toolSignal, toolOptions] =
+      toolExecuteMock.mock.calls[0] ?? [];
+    expect(toolExecuteMock).toHaveBeenCalledTimes(1);
+    expect(toolCallId).toBe("tool-1");
+    expect(toolArguments).toEqual({ topic: "AGENTS.md" });
+    expect(toolSignal).toBeInstanceOf(AbortSignal);
+    expect(toolOptions).toBeUndefined();
     expect(toolResponse).toEqual({
       success: true,
       contentItems: [{ type: "inputText", text: "tool output" }],
@@ -549,15 +570,11 @@ describe("runCodexAppServerSideQuestion", () => {
         }),
       ),
     ).rejects.toThrow("Codex /btw was aborted.");
-    expect(client.request).toHaveBeenCalledWith(
-      "turn/interrupt",
-      { threadId: "side-thread", turnId: "turn-1" },
-      expect.any(Object),
-    );
-    expect(client.request).toHaveBeenCalledWith(
-      "thread/unsubscribe",
-      { threadId: "side-thread" },
-      expect.any(Object),
+    expect(client.request.mock.calls.filter(([method]) => method === "turn/interrupt")).toEqual([
+      ["turn/interrupt", { threadId: "side-thread", turnId: "turn-1" }, { timeoutMs: 60_000 }],
+    ]);
+    expect(client.request.mock.calls.filter(([method]) => method === "thread/unsubscribe")).toEqual(
+      [["thread/unsubscribe", { threadId: "side-thread" }, { timeoutMs: 60_000 }]],
     );
   });
 });
