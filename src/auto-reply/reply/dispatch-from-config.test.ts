@@ -520,6 +520,7 @@ const automaticGroupReplyConfig = {
   },
 } as const satisfies OpenClawConfig;
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
+let shouldEmitSuppressedSourceReplyDiagnostic: typeof import("./dispatch-from-config.js").shouldEmitSuppressedSourceReplyDiagnostic;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let tryDispatchAcpReplyHook: typeof import("../../plugin-sdk/acp-runtime.js").tryDispatchAcpReplyHook;
 type DispatchReplyArgs = Parameters<
@@ -527,7 +528,8 @@ type DispatchReplyArgs = Parameters<
 >[0];
 
 beforeAll(async () => {
-  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
+  ({ dispatchReplyFromConfig, shouldEmitSuppressedSourceReplyDiagnostic } =
+    await import("./dispatch-from-config.js"));
   await import("./dispatch-acp.js");
   await import("./dispatch-acp-command-bypass.js");
   await import("./dispatch-acp-tts.runtime.js");
@@ -4657,6 +4659,37 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyDispatchEvent?.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(replyDispatchEvent?.sendPolicy).toBe("allow");
     expect(replyDispatchCall?.[1]).toBeDefined();
+  });
+
+  it("diagnoses only non-empty final text suppressed by message-tool-only delivery", () => {
+    expect(
+      shouldEmitSuppressedSourceReplyDiagnostic({
+        suppressDelivery: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        reply: { text: "final reply" },
+      }),
+    ).toBe(true);
+    expect(
+      shouldEmitSuppressedSourceReplyDiagnostic({
+        suppressDelivery: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        reply: { text: "reasoning", isReasoning: true },
+      }),
+    ).toBe(false);
+    expect(
+      shouldEmitSuppressedSourceReplyDiagnostic({
+        suppressDelivery: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+        reply: { text: " " },
+      }),
+    ).toBe(false);
+    expect(
+      shouldEmitSuppressedSourceReplyDiagnostic({
+        suppressDelivery: false,
+        sourceReplyDeliveryMode: "automatic",
+        reply: { text: "visible reply" },
+      }),
+    ).toBe(false);
   });
 
   it("preserves hook-blocked metadata when source delivery is message-tool-only", async () => {

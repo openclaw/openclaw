@@ -4,9 +4,22 @@ const FINAL_REPLY_TEXT = "final answer";
 const THREAD_TS = "thread-1";
 const SAME_TEXT = "same reply";
 
+function slackDeliveryResult(overrides?: { messageId?: string; channelId?: string }) {
+  return {
+    target: "channel:C123",
+    messageId: overrides?.messageId ?? "171234.999",
+    channelId: overrides?.channelId ?? "C123",
+    threadTs: THREAD_TS,
+  };
+}
+
 const createSlackDraftStreamMock = vi.fn();
-const deliverRepliesMock = vi.fn(async () => {});
+const deliverRepliesMock = vi.fn(async () => [slackDeliveryResult()]);
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
+const messageHookRunnerMock = {
+  hasHooks: vi.fn<(name?: string) => boolean>(() => false),
+  runMessageSent: vi.fn<(event: unknown, hookCtx: unknown) => Promise<void>>(async () => {}),
+};
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
@@ -205,6 +218,7 @@ function createPreparedSlackMessage(params?: {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+  runtime?: Record<string, unknown>;
   typingReaction?: string;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
@@ -217,7 +231,7 @@ function createPreparedSlackMessage(params?: {
   return {
     ctx: {
       cfg: params?.cfg ?? {},
-      runtime: {},
+      runtime: params?.runtime ?? {},
       botToken: "xoxb-test",
       app: { client: { chat: { postMessage: postMessageMock } } },
       teamId: "T1",
@@ -500,6 +514,10 @@ vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
   resolveAgentOutboundIdentity: () => undefined,
 }));
 
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getGlobalHookRunner: () => messageHookRunnerMock,
+}));
+
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
 }));
@@ -712,7 +730,12 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
   beforeEach(() => {
     createSlackDraftStreamMock.mockReset();
     deliverRepliesMock.mockReset();
+    deliverRepliesMock.mockResolvedValue([slackDeliveryResult()]);
     finalizeSlackPreviewEditMock.mockReset();
+    messageHookRunnerMock.hasHooks.mockReset();
+    messageHookRunnerMock.hasHooks.mockReturnValue(false);
+    messageHookRunnerMock.runMessageSent.mockReset();
+    messageHookRunnerMock.runMessageSent.mockResolvedValue(undefined);
     postMessageMock.mockClear();
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
@@ -755,6 +778,110 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("emits message_sent with Slack delivery correlation after normal reply delivery", async () => {
+    messageHookRunnerMock.hasHooks.mockImplementation((name) => name === "message_sent");
+    deliverRepliesMock.mockResolvedValueOnce([
+      slackDeliveryResult({ messageId: "171234.555", channelId: "C999" }),
+    ]);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        route: { sessionKey: "agent:agent-1:slack:channel:c999:thread:171234.111" },
+      }),
+    );
+
+    expect(messageHookRunnerMock.runMessageSent).toHaveBeenCalledTimes(1);
+    const [event, hookCtx] = messageHookRunnerMock.runMessageSent.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+      Record<string, unknown>,
+    ];
+    expect(event).toMatchObject({
+      to: "channel:C123",
+      content: FINAL_REPLY_TEXT,
+      success: true,
+      messageId: "171234.555",
+      sessionKey: "agent:agent-1:slack:channel:c999:thread:171234.111",
+    });
+    expect(hookCtx).toMatchObject({
+      channelId: "slack",
+      accountId: "default",
+      conversationId: "C999",
+      messageId: "171234.555",
+      sessionKey: "agent:agent-1:slack:channel:c999:thread:171234.111",
+    });
+  });
+
+  it("keeps rapid same-session final replies observable with distinct Slack message ids", async () => {
+    messageHookRunnerMock.hasHooks.mockImplementation((name) => name === "message_sent");
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "first final" } },
+      { kind: "final", payload: { text: "second final" } },
+    ];
+    deliverRepliesMock
+      .mockResolvedValueOnce([slackDeliveryResult({ messageId: "171234.001", channelId: "C123" })])
+      .mockResolvedValueOnce([slackDeliveryResult({ messageId: "171234.002", channelId: "C123" })]);
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expect(messageHookRunnerMock.runMessageSent).toHaveBeenCalledTimes(2);
+    const events = messageHookRunnerMock.runMessageSent.mock.calls.map(
+      ([event]) =>
+        event as {
+          content?: unknown;
+          messageId?: unknown;
+          success?: unknown;
+        },
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        content: "first final",
+        messageId: "171234.001",
+        success: true,
+      }),
+      expect.objectContaining({
+        content: "second final",
+        messageId: "171234.002",
+        success: true,
+      }),
+    ]);
+  });
+
+  it("does not mark normal delivery complete when deliverReplies returns no Slack identity", async () => {
+    const runtimeError = vi.fn();
+    messageHookRunnerMock.hasHooks.mockImplementation((name) => name === "message_sent");
+    deliverRepliesMock.mockResolvedValueOnce([]);
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        runtime: { error: runtimeError },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(runtimeError).toHaveBeenCalledWith(
+      expect.stringContaining("delivery returned no Slack message identity"),
+    );
+    expect(messageHookRunnerMock.runMessageSent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to: "channel:C123",
+        content: FINAL_REPLY_TEXT,
+        success: false,
+        error: "Slack delivery returned no message identity",
+      }),
+      expect.objectContaining({
+        channelId: "slack",
+        accountId: "default",
+        conversationId: "C123",
+      }),
+    );
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
   });
 
   it("updates non-main DM last-route metadata on the prepared thread session", async () => {

@@ -30,11 +30,18 @@ import {
 } from "openclaw/plugin-sdk/channel-streaming";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
+  buildCanonicalSentMessageHookContext,
+  fireAndForgetHook,
+  toPluginMessageContext,
+  toPluginMessageSentEvent,
+} from "openclaw/plugin-sdk/hook-runtime";
+import {
   type ChannelTurnRecordOptions,
   hasVisibleInboundReplyDispatch,
   runInboundReplyTurn,
 } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import { resolveAgentOutboundIdentity } from "openclaw/plugin-sdk/outbound-runtime";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import { clearHistoryEntriesIfEnabled } from "openclaw/plugin-sdk/reply-history";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
@@ -73,6 +80,7 @@ import {
   readSlackReplyBlocks,
   resolveDeliveredSlackReplyThreadTs,
   resolveSlackThreadTs,
+  type SlackReplyDeliveryResult,
 } from "../replies.js";
 import {
   createReplyDispatcherWithTyping,
@@ -194,6 +202,58 @@ function buildSlackTurnDeliveryKey(params: SlackTurnDeliveryAttempt): string | n
     mediaUrls: reply.mediaUrls,
     blocks: slackBlocks ?? null,
   });
+}
+
+function hasSlackReplyDeliveryIdentity(results: readonly SlackReplyDeliveryResult[]): boolean {
+  return results.some(
+    (result) => Boolean(result.messageId.trim()) || Boolean(result.channelId.trim()),
+  );
+}
+
+function hasSendableSlackReplyPayload(payload: ReplyPayload): boolean {
+  const reply = resolveSendableOutboundReplyParts(payload);
+  const slackBlocks = readSlackReplyBlocks(payload);
+  return reply.hasContent || Boolean(slackBlocks?.length);
+}
+
+function resolveSlackMessageSentHookContent(payload: ReplyPayload): string {
+  const reply = resolveSendableOutboundReplyParts(payload);
+  return reply.trimmedText;
+}
+
+function emitSlackMessageSentHook(params: {
+  to: string;
+  content: string;
+  success: boolean;
+  accountId?: string;
+  conversationId?: string;
+  sessionKey?: string;
+  messageId?: string;
+  error?: string;
+}): void {
+  const hookRunner = getGlobalHookRunner();
+  if (!hookRunner?.hasHooks("message_sent")) {
+    return;
+  }
+  const canonical = buildCanonicalSentMessageHookContext({
+    to: params.to,
+    content: params.content,
+    success: params.success,
+    error: params.error,
+    channelId: "slack",
+    accountId: params.accountId,
+    conversationId: params.conversationId ?? params.to,
+    sessionKey: params.sessionKey,
+    messageId: params.messageId,
+  });
+  fireAndForgetHook(
+    hookRunner.runMessageSent(
+      toPluginMessageSentEvent(canonical),
+      toPluginMessageContext(canonical),
+    ),
+    "slack: message_sent plugin hook failed",
+    logVerbose,
+  );
 }
 
 function readSlackStreamRecipientTeamCache(params: {
@@ -531,6 +591,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   let usedReplyThreadTs: string | undefined;
   let usedBlockReplyThreadTs: string | undefined;
   let observedReplyDelivery = false;
+  let deliveryAttemptWithoutIdentity = false;
   const deliveryTracker = createSlackTurnDeliveryTracker();
   const resolveDeliveryThreadTs = (params: {
     kind: ReplyDispatchKind;
@@ -555,6 +616,38 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       usedBlockReplyThreadTs = deliveredThreadTs;
     }
   };
+  const sessionKeyForMessageHooks = prepared.ctxPayload.SessionKey ?? route.sessionKey;
+  const emitMessageSentSuccessHooks = (
+    payload: ReplyPayload,
+    deliveryResults: readonly SlackReplyDeliveryResult[],
+  ) => {
+    const content = resolveSlackMessageSentHookContent(payload);
+    for (const result of deliveryResults) {
+      if (!result.messageId.trim() && !result.channelId.trim()) {
+        continue;
+      }
+      emitSlackMessageSentHook({
+        to: result.target,
+        content,
+        success: true,
+        accountId: account.accountId,
+        conversationId: result.channelId || prepared.replyTarget,
+        sessionKey: sessionKeyForMessageHooks,
+        messageId: result.messageId || undefined,
+      });
+    }
+  };
+  const emitMessageSentFailureHook = (payload: ReplyPayload, error: string) => {
+    emitSlackMessageSentHook({
+      to: prepared.replyTarget,
+      content: resolveSlackMessageSentHookContent(payload),
+      success: false,
+      accountId: account.accountId,
+      conversationId: message.channel,
+      sessionKey: sessionKeyForMessageHooks,
+      error,
+    });
+  };
   const deliverPendingStreamFallback = async (
     session: SlackStreamSession,
     err: SlackStreamNotDeliveredError,
@@ -569,10 +662,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     if (!fallbackText) {
       return false;
     }
+    const fallbackPayload = { text: fallbackText } as ReplyPayload;
     try {
-      await deliverReplies({
+      const deliveryResults = await deliverReplies({
         cfg: ctx.cfg,
-        replies: [{ text: fallbackText } as ReplyPayload],
+        replies: [fallbackPayload],
         target: prepared.replyTarget,
         token: ctx.botToken,
         accountId: account.accountId,
@@ -582,6 +676,17 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         replyToMode: prepared.replyToMode,
         ...(slackIdentity ? { identity: slackIdentity } : {}),
       });
+      if (!hasSlackReplyDeliveryIdentity(deliveryResults)) {
+        deliveryAttemptWithoutIdentity = true;
+        emitMessageSentFailureHook(fallbackPayload, "Slack delivery returned no message identity");
+        runtime.error?.(
+          danger(
+            "slack-stream: fallback deliverReplies returned no Slack message identity; delivery status is ambiguous",
+          ),
+        );
+        return false;
+      }
+      emitMessageSentSuccessHooks(fallbackPayload, deliveryResults);
       markSlackStreamFallbackDelivered(session);
       observedReplyDelivery = true;
       usedReplyThreadTs ??= session.threadTs;
@@ -590,6 +695,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       );
       return true;
     } catch (postErr) {
+      emitMessageSentFailureHook(fallbackPayload, formatSlackError(postErr));
       runtime.error?.(
         danger(
           `slack-stream: fallback deliverReplies failed after ${err.slackCode}: ${formatErrorMessage(postErr)}`,
@@ -615,18 +721,39 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
       logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return;
     }
-    await deliverReplies({
-      cfg: ctx.cfg,
-      replies: [params.payload],
-      target: prepared.replyTarget,
-      token: ctx.botToken,
-      accountId: account.accountId,
-      runtime,
-      textLimit: ctx.textLimit,
-      replyThreadTs,
-      replyToMode: prepared.replyToMode,
-      ...(slackIdentity ? { identity: slackIdentity } : {}),
-    });
+    let deliveryResults: SlackReplyDeliveryResult[];
+    try {
+      deliveryResults = await deliverReplies({
+        cfg: ctx.cfg,
+        replies: [params.payload],
+        target: prepared.replyTarget,
+        token: ctx.botToken,
+        accountId: account.accountId,
+        runtime,
+        textLimit: ctx.textLimit,
+        replyThreadTs,
+        replyToMode: prepared.replyToMode,
+        ...(slackIdentity ? { identity: slackIdentity } : {}),
+      });
+    } catch (err) {
+      if (hasSendableSlackReplyPayload(params.payload)) {
+        emitMessageSentFailureHook(params.payload, formatSlackError(err));
+      }
+      throw err;
+    }
+    if (!hasSlackReplyDeliveryIdentity(deliveryResults)) {
+      if (hasSendableSlackReplyPayload(params.payload)) {
+        deliveryAttemptWithoutIdentity = true;
+        emitMessageSentFailureHook(params.payload, "Slack delivery returned no message identity");
+        runtime.error?.(
+          danger(
+            `slack: ${params.kind} reply delivery returned no Slack message identity; delivery status is ambiguous`,
+          ),
+        );
+      }
+      return;
+    }
+    emitMessageSentSuccessHooks(params.payload, deliveryResults);
     observedReplyDelivery = true;
     const deliveredThreadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: prepared.replyToMode,
@@ -1300,7 +1427,10 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   }
 
   const anyReplyDelivered = hasVisibleInboundReplyDispatch(
-    { queuedFinal, counts },
+    {
+      queuedFinal,
+      counts: deliveryAttemptWithoutIdentity ? {} : counts,
+    },
     {
       observedReplyDelivery,
       fallbackDelivered: streamFallbackDelivered,

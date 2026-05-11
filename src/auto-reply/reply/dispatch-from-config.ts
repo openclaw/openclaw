@@ -48,6 +48,7 @@ import {
   logSessionStateChange,
   markDiagnosticSessionProgress,
 } from "../../logging/diagnostic.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   buildPluginBindingDeclinedText,
   buildPluginBindingErrorText,
@@ -101,6 +102,8 @@ import {
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
+
+const dispatchLog = createSubsystemLogger("auto-reply/dispatch");
 
 const routeReplyRuntimeLoader = createLazyImportLoader(() => import("./route-reply.runtime.js"));
 const getReplyFromConfigRuntimeLoader = createLazyImportLoader(
@@ -354,6 +357,20 @@ async function clearPendingFinalDeliveryAfterSuccess(params: {
       };
     },
   });
+}
+
+export function shouldEmitSuppressedSourceReplyDiagnostic(params: {
+  suppressDelivery: boolean;
+  sourceReplyDeliveryMode: "automatic" | "message_tool_only";
+  reply: ReplyPayload;
+}): boolean {
+  if (!params.suppressDelivery || params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return false;
+  }
+  if (params.reply.isReasoning === true) {
+    return false;
+  }
+  return resolveSendableOutboundReplyParts(params.reply).hasText;
 }
 
 export type {
@@ -1565,6 +1582,21 @@ export async function dispatchReplyFromConfig(
         continue;
       }
       if (suppressDelivery && !shouldDeliverDespiteSourceReplySuppression(reply)) {
+        if (
+          shouldEmitSuppressedSourceReplyDiagnostic({
+            suppressDelivery,
+            sourceReplyDeliveryMode,
+            reply,
+          })
+        ) {
+          dispatchLog.warn("source final reply suppressed by message_tool_only", {
+            channel,
+            chatType: ctx.ChatType,
+            sessionKey,
+            reason: deliverySuppressionReason,
+            textLength: resolveSendableOutboundReplyParts(reply).trimmedText.length,
+          });
+        }
         continue;
       }
       attemptedFinalDelivery = true;

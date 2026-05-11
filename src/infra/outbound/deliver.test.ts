@@ -2746,16 +2746,22 @@ describe("deliverOutboundPayloads", () => {
       channel: "matrix",
       to: "!room:example",
       payloads: [{ text: "hello" }],
+      session: { key: "agent:main:matrix:room:example" },
       deps: { matrix: sendMatrix },
     });
 
     const sentCall = hookMocks.runner.runMessageSent.mock.calls[0] as
-      | [{ content?: unknown; success?: unknown; to?: unknown }, { channelId?: unknown }]
+      | [
+          { content?: unknown; sessionKey?: unknown; success?: unknown; to?: unknown },
+          { channelId?: unknown; sessionKey?: unknown },
+        ]
       | undefined;
     expect(sentCall?.[0]?.to).toBe("!room:example");
     expect(sentCall?.[0]?.content).toBe("hello");
     expect(sentCall?.[0]?.success).toBe(true);
+    expect(sentCall?.[0]?.sessionKey).toBe("agent:main:matrix:room:example");
     expect(sentCall?.[1]?.channelId).toBe("matrix");
+    expect(sentCall?.[1]?.sessionKey).toBe("agent:main:matrix:room:example");
   });
 
   it("short-circuits lower-priority message_sending hooks after cancel=true", async () => {

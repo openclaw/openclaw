@@ -67,6 +67,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - CLI: strip generic OSC terminal escape payloads from sanitized output fields, preventing clipboard/title escape bodies from leaking into commitment tables and other terminal-safe text. Thanks @shakkernerd.
+- Slack: require concrete `chat.postMessage` timestamps before marking replies delivered, emit `message_sent` correlation for normal inbound replies, and warn when message-tool-only final text is intentionally suppressed. Fixes #80715. Thanks @cblustein-cpu.
 - Build: replace selected build utility `tsx` preloads with Node native type stripping so Node 26 build paths no longer emit `DEP0205` module loader deprecation warnings. (#78584) Thanks @keshavbotagent.
 - Media generation: honor configured music and video generation timeouts when tool calls omit `timeoutMs`, matching image generation behavior. (#80687)
 - CLI/update/status: label beta-channel plugin fallback and model-pricing refresh failures as warnings, keeping mixed beta/latest plugin cohorts visible without making core update or Gateway reachability look failed. Fixes #80689. Thanks @BKF-Gitty.

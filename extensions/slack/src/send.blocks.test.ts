@@ -312,6 +312,37 @@ describe("sendMessageSlack blocks", () => {
     expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects text sends when Slack omits the posted message timestamp", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({ ok: true });
+
+    await expect(
+      sendMessageSlack("channel:C123", "hello", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+      }),
+    ).rejects.toThrow(/message timestamp.*ambiguous/i);
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects block sends when Slack omits the posted message timestamp", async () => {
+    const client = createSlackSendTestClient();
+    client.chat.postMessage.mockResolvedValueOnce({ ok: true });
+
+    await expect(
+      sendMessageSlack("channel:C123", "", {
+        token: "xoxb-test",
+        cfg: SLACK_TEST_CFG,
+        client,
+        blocks: [{ type: "divider" }],
+      }),
+    ).rejects.toThrow(/message timestamp.*ambiguous/i);
+
+    expect(client.chat.postMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("derives fallback text from image blocks", async () => {
     const client = createSlackSendTestClient();
     await sendMessageSlack("channel:C123", "", {

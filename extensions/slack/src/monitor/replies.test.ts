@@ -13,6 +13,17 @@ import { deliverSlackSlashReplies } from "./replies.js";
 
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
+function slackSendResult(overrides?: { messageId?: string; channelId?: string }) {
+  const messageId = overrides?.messageId ?? "171234.567";
+  return {
+    messageId,
+    channelId: overrides?.channelId ?? "C123",
+    receipt: {
+      platformMessageIds: [messageId],
+    },
+  };
+}
+
 function baseParams(overrides?: Record<string, unknown>) {
   return {
     cfg: SLACK_TEST_CFG,
@@ -46,9 +57,9 @@ describe("deliverReplies identity passthrough", () => {
 
   beforeEach(() => {
     sendMock.mockReset();
+    sendMock.mockResolvedValue(slackSendResult());
   });
   it("passes identity to sendMessageSlack for text replies", async () => {
-    sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconEmoji: ":robot:" };
     await deliverReplies(baseParams({ identity }));
 
@@ -58,7 +69,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("passes identity to sendMessageSlack for media replies", async () => {
-    sendMock.mockResolvedValue(undefined);
     const identity = { username: "Bot", iconUrl: "https://example.com/icon.png" };
     await deliverReplies(
       baseParams({
@@ -73,7 +83,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("omits identity key when not provided", async () => {
-    sendMock.mockResolvedValue(undefined);
     await deliverReplies(baseParams());
 
     expect(sendMock).toHaveBeenCalledOnce();
@@ -81,7 +90,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("delivers block-only replies through to sendMessageSlack", async () => {
-    sendMock.mockResolvedValue(undefined);
     const blocks = [
       {
         type: "actions",
@@ -119,8 +127,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("renders interactive replies into Slack blocks during delivery", async () => {
-    sendMock.mockResolvedValue(undefined);
-
     await deliverReplies(
       baseParams({
         replies: [
@@ -156,8 +162,6 @@ describe("deliverReplies identity passthrough", () => {
   });
 
   it("rejects replies when merged Slack blocks exceed the platform limit", async () => {
-    sendMock.mockResolvedValue(undefined);
-
     await expect(
       deliverReplies(
         baseParams({
@@ -177,6 +181,64 @@ describe("deliverReplies identity passthrough", () => {
         }),
       ),
     ).rejects.toThrow(/Slack blocks cannot exceed 50 items/i);
+  });
+
+  it("returns delivered Slack identities for text replies", async () => {
+    sendMock.mockResolvedValueOnce(slackSendResult({ messageId: "171234.999", channelId: "C123" }));
+
+    const results = await deliverReplies(
+      baseParams({
+        replyThreadTs: "171234.100",
+        replyToMode: "all",
+      }),
+    );
+
+    expect(results).toStrictEqual([
+      {
+        target: "C123",
+        messageId: "171234.999",
+        channelId: "C123",
+        threadTs: "171234.100",
+      },
+    ]);
+  });
+
+  it("returns delivered Slack identities for block-only replies", async () => {
+    sendMock.mockResolvedValueOnce(slackSendResult({ messageId: "171234.888", channelId: "C123" }));
+    const blocks = [{ type: "divider" }];
+
+    const results = await deliverReplies(
+      baseParams({
+        replies: [
+          {
+            channelData: {
+              slack: {
+                blocks,
+              },
+            },
+          },
+        ],
+      }),
+    );
+
+    expect(results).toStrictEqual([
+      {
+        target: "C123",
+        messageId: "171234.888",
+        channelId: "C123",
+      },
+    ]);
+  });
+
+  it("returns no delivery identities for empty replies", async () => {
+    const results = await deliverReplies(
+      baseParams({
+        replies: [{ text: " " }],
+      }),
+    );
+
+    expect(results).toStrictEqual([]);
+    expect(sendMock).not.toHaveBeenCalled();
   });
 });
 

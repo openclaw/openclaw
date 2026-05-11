@@ -15,7 +15,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { markdownToSlackMrkdwnChunks } from "../format.js";
 import { SLACK_TEXT_LIMIT } from "../limits.js";
 import { resolveSlackReplyBlocks } from "../reply-blocks.js";
-import { sendMessageSlack, type SlackSendIdentity } from "./send.runtime.js";
+import { sendMessageSlack, type SlackSendIdentity, type SlackSendResult } from "./send.runtime.js";
 
 export function readSlackReplyBlocks(payload: ReplyPayload) {
   return resolveSlackReplyBlocks(payload);
@@ -32,6 +32,26 @@ export function resolveDeliveredSlackReplyThreadTs(params: {
   return inlineReplyToId ?? params.replyThreadTs;
 }
 
+export type SlackReplyDeliveryResult = {
+  target: string;
+  messageId: string;
+  channelId: string;
+  threadTs?: string;
+};
+
+function createSlackReplyDeliveryResult(params: {
+  target: string;
+  threadTs?: string;
+  sent: SlackSendResult;
+}): SlackReplyDeliveryResult {
+  return {
+    target: params.target,
+    messageId: params.sent.messageId,
+    channelId: params.sent.channelId,
+    ...(params.threadTs ? { threadTs: params.threadTs } : {}),
+  };
+}
+
 export async function deliverReplies(params: {
   cfg: OpenClawConfig;
   replies: ReplyPayload[];
@@ -43,7 +63,8 @@ export async function deliverReplies(params: {
   replyThreadTs?: string;
   replyToMode: "off" | "first" | "all" | "batched";
   identity?: SlackSendIdentity;
-}) {
+}): Promise<SlackReplyDeliveryResult[]> {
+  const results: SlackReplyDeliveryResult[] = [];
   for (const payload of params.replies) {
     const threadTs = resolveDeliveredSlackReplyThreadTs({
       replyToMode: params.replyToMode,
@@ -64,7 +85,7 @@ export async function deliverReplies(params: {
       if (trimmed && isSilentReplyText(trimmed, SILENT_REPLY_TOKEN)) {
         continue;
       }
-      await sendMessageSlack(params.target, trimmed, {
+      const sent = await sendMessageSlack(params.target, trimmed, {
         cfg: params.cfg,
         token: params.token,
         threadTs,
@@ -72,6 +93,7 @@ export async function deliverReplies(params: {
         ...(slackBlocks?.length ? { blocks: slackBlocks } : {}),
         ...(params.identity ? { identity: params.identity } : {}),
       });
+      results.push(createSlackReplyDeliveryResult({ target: params.target, threadTs, sent }));
       params.runtime.log?.(`delivered reply to ${params.target}`);
       continue;
     }
@@ -89,16 +111,17 @@ export async function deliverReplies(params: {
           }
         : undefined,
       sendText: async (trimmed) => {
-        await sendMessageSlack(params.target, trimmed, {
+        const sent = await sendMessageSlack(params.target, trimmed, {
           cfg: params.cfg,
           token: params.token,
           threadTs,
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        results.push(createSlackReplyDeliveryResult({ target: params.target, threadTs, sent }));
       },
       sendMedia: async ({ mediaUrl, caption }) => {
-        await sendMessageSlack(params.target, caption ?? "", {
+        const sent = await sendMessageSlack(params.target, caption ?? "", {
           cfg: params.cfg,
           token: params.token,
           mediaUrl,
@@ -106,12 +129,14 @@ export async function deliverReplies(params: {
           accountId: params.accountId,
           ...(params.identity ? { identity: params.identity } : {}),
         });
+        results.push(createSlackReplyDeliveryResult({ target: params.target, threadTs, sent }));
       },
     });
     if (delivered !== "empty") {
       params.runtime.log?.(`delivered reply to ${params.target}`);
     }
   }
+  return results;
 }
 
 export type SlackRespondFn = (payload: {

@@ -351,6 +351,16 @@ async function postSlackMessageBestEffort(params: {
   }
 }
 
+function requireSlackPostMessageTs(response: { ts?: string }, context: string): string {
+  const ts = typeof response.ts === "string" ? response.ts.trim() : "";
+  if (!ts) {
+    throw new Error(
+      `Slack ${context} response did not include a message timestamp; delivery status is ambiguous.`,
+    );
+  }
+  return ts;
+}
+
 export type SlackSendResult = {
   messageId: string;
   channelId: string;
@@ -718,7 +728,7 @@ async function sendMessageSlackQueuedInner(params: {
       blocks,
       unfurl,
     });
-    const messageId = response.ts ?? "unknown";
+    const messageId = requireSlackPostMessageTs(response, "chat.postMessage blocks");
     return {
       messageId,
       channelId,
@@ -781,10 +791,8 @@ async function sendMessageSlackQueuedInner(params: {
         identity: opts.identity,
         unfurl,
       });
-      lastMessageId = response.ts ?? lastMessageId;
-      if (response.ts) {
-        sentMessageIds.push(response.ts);
-      }
+      lastMessageId = requireSlackPostMessageTs(response, "chat.postMessage text");
+      sentMessageIds.push(lastMessageId);
     }
   } else {
     for (const chunk of resolvedChunks.length ? resolvedChunks : [""]) {
@@ -797,14 +805,12 @@ async function sendMessageSlackQueuedInner(params: {
         identity: opts.identity,
         unfurl,
       });
-      lastMessageId = response.ts ?? lastMessageId;
-      if (response.ts) {
-        sentMessageIds.push(response.ts);
-      }
+      lastMessageId = requireSlackPostMessageTs(response, "chat.postMessage text");
+      sentMessageIds.push(lastMessageId);
     }
   }
 
-  const messageId = lastMessageId || "unknown";
+  const messageId = lastMessageId;
   return {
     messageId,
     channelId,
