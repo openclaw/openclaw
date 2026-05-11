@@ -1442,7 +1442,7 @@ function validateConfigObjectWithPluginsBase(
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; suppressInstallHint?: boolean },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -1462,7 +1462,7 @@ function validateConfigObjectWithPluginsBase(
       }
       return;
     }
-    if (opts?.warnOnly) {
+    if (opts?.warnOnly && !opts?.suppressInstallHint) {
       const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
       if (externalInstallWarning) {
         warnings.push({
@@ -1526,7 +1526,16 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      // Mirror plugins.allow / plugins.entries: a stale deny entry naming a
+      // plugin that no longer exists is benign — keep startup and doctor
+      // resilient instead of triggering last-known-good recovery (#77802).
+      // suppressInstallHint avoids the misleading "install with ..." wording
+      // that the official-external catalog hint would emit otherwise — a
+      // denylist entry should never recommend installing the plugin.
+      pushMissingPluginIssue("plugins.deny", pluginId, {
+        warnOnly: true,
+        suppressInstallHint: true,
+      });
     }
   }
 

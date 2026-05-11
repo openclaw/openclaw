@@ -257,7 +257,7 @@ describe("config plugin validation", () => {
     });
     expect(res.ok).toBe(false);
     if (!res.ok) {
-      expectPathMessage(res.issues, "plugins.deny", "plugin not found: missing-deny");
+      // plugins.slots.memory is a functional binding; missing slot still blocks startup.
       expectPathMessage(res.issues, "plugins.slots.memory", "plugin not found: missing-slot");
       expect(res.warnings).toContainEqual({
         path: "plugins.allow",
@@ -265,10 +265,79 @@ describe("config plugin validation", () => {
           "plugin not found: missing-allow (stale config entry ignored; remove it from plugins config)",
       });
       expect(res.warnings).toContainEqual({
+        path: "plugins.deny",
+        message:
+          "plugin not found: missing-deny (stale config entry ignored; remove it from plugins config)",
+      });
+      expect(res.warnings).toContainEqual({
         path: "plugins.entries.missing-plugin",
         message:
           "plugin not found: missing-plugin (stale config entry ignored; remove it from plugins config)",
       });
+      // plugins.deny should not appear as a hard issue any more (#77802).
+      expect(res.issues.some((issue) => issue.path === "plugins.deny")).toBe(false);
+    }
+  });
+
+  // Stale `plugins.deny` entries must match plugins.allow / plugins.entries semantics:
+  // tolerated by the runtime, surfaced as a "stale config entry ignored" warning.
+  // Hardening this asymmetry stops openclaw doctor from auto-restoring the config
+  // from last-known-good when the only problem is a stale deny entry (#77802).
+  it("treats stale plugins.deny entries as warnings, matching plugins.allow semantics", () => {
+    const res = validateInSuite({
+      agents: { list: [{ id: "pi" }] },
+      plugins: {
+        enabled: true,
+        deny: ["stale-deny-entry"],
+      },
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expectPathMessage(
+        res.warnings,
+        "plugins.deny",
+        "plugin not found: stale-deny-entry (stale config entry ignored; remove it from plugins config)",
+      );
+    }
+  });
+
+  // A stale `plugins.deny` entry naming an uninstalled official external plugin
+  // (e.g. `brave`) must not suggest installing it — that contradicts deny intent.
+  // Surface the canonical "stale config entry ignored" warning instead. Regression
+  // guard for the warnOnly path triggering the official-external install hint.
+  it("does not suggest installing an uninstalled official external plugin when it is in plugins.deny", () => {
+    const res = validateConfigObjectWithPlugins(
+      {
+        agents: { list: [{ id: "pi" }] },
+        plugins: {
+          deny: ["brave"],
+        },
+      },
+      {
+        env: suiteEnv(),
+        pluginMetadataSnapshot: {
+          manifestRegistry: {
+            plugins: [],
+            diagnostics: [],
+          },
+        },
+      },
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expectPathMessage(
+        res.warnings,
+        "plugins.deny",
+        "plugin not found: brave (stale config entry ignored; remove it from plugins config)",
+      );
+      expect(
+        (res.warnings ?? []).some(
+          (warning) =>
+            warning.path === "plugins.deny" &&
+            warning.message.includes("plugin not installed") &&
+            warning.message.includes("install the official external plugin"),
+        ),
+      ).toBe(false);
     }
   });
 
