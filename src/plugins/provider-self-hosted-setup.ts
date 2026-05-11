@@ -89,6 +89,7 @@ function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
   const normalizedModelId = normalizeOptionalString(modelId);
   if (normalizedModelId) {
     parsed.searchParams.set("model", normalizedModelId);
+    parsed.searchParams.set("autoload", "false");
   }
   return parsed.toString();
 }

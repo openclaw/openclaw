@@ -195,7 +195,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(propsRelease).toHaveBeenCalledOnce();
   });
 
-  it("scopes llama.cpp /props runtime caps to each discovered model", async () => {
+  it("scopes llama.cpp /props runtime caps to each discovered model without autoloading", async () => {
     const modelsRelease = vi.fn(async () => undefined);
     const firstPropsRelease = vi.fn(async () => undefined);
     const secondPropsRelease = vi.fn(async () => undefined);
@@ -222,14 +222,14 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
         status: 200,
       }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a",
+      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
       release: firstPropsRelease,
     });
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
       response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 32_768 } }), {
         status: 200,
       }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b",
+      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
       release: secondPropsRelease,
     });
 
@@ -254,13 +254,13 @@ describe("discoverOpenAICompatibleLocalModels", () => {
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a",
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
       }),
     );
     expect(fetchWithSsrFGuardMock).toHaveBeenNthCalledWith(
       3,
       expect.objectContaining({
-        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b",
+        url: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
       }),
     );
     expect(modelsRelease).toHaveBeenCalledOnce();
