@@ -16,7 +16,7 @@ import {
 import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isCronJobActive } from "../cron/active-jobs.js";
+import { isCronJobActive, isCronJobLivenessAuthoritative } from "../cron/active-jobs.js";
 import { readCronRunLogEntriesSync } from "../cron/run-log.js";
 import type { CronRunLogEntry } from "../cron/run-log.js";
 import { loadCronJobsStoreSync, resolveCronJobsStorePath } from "../cron/store.js";
@@ -100,6 +100,7 @@ type TaskRegistryMaintenanceRuntime = {
   resolveStorePath: typeof resolveStorePath;
   deriveSessionChatTypeFromKey?: typeof deriveSessionChatTypeFromKey;
   isCronJobActive: typeof isCronJobActive;
+  isCronJobLivenessAuthoritative: typeof isCronJobLivenessAuthoritative;
   getAgentRunContext: typeof getAgentRunContext;
   hasActiveAcpTurn: (sessionKey: string) => boolean;
   parseAgentSessionKey: typeof parseAgentSessionKey;
@@ -140,6 +141,7 @@ const defaultTaskRegistryMaintenanceRuntime: TaskRegistryMaintenanceRuntime = {
   resolveStorePath,
   deriveSessionChatTypeFromKey,
   isCronJobActive,
+  isCronJobLivenessAuthoritative,
   getAgentRunContext,
   hasActiveAcpTurn: isAcpTurnActive,
   parseAgentSessionKey,
@@ -485,7 +487,22 @@ function hasBackingSession(task: TaskRecord, context?: BackingSessionLookupConte
       return true;
     }
     const jobId = task.sourceId?.trim();
-    return jobId ? taskRegistryMaintenanceRuntime.isCronJobActive(jobId) : false;
+    if (!jobId) {
+      return false;
+    }
+    if (taskRegistryMaintenanceRuntime.isCronJobActive(jobId)) {
+      return true;
+    }
+    // Until cron startup exits, `activeJobIds` is not authoritative for
+    // persisted cron tasks (it is empty after restart). Return true
+    // conservatively to avoid false-positive lost findings during that
+    // pre-start window. Once cron start exits, reconciliation has either
+    // completed or failed; a missing active-job entry should no longer be
+    // masked by startup state.
+    if (!taskRegistryMaintenanceRuntime.isCronJobLivenessAuthoritative()) {
+      return true;
+    }
+    return false;
   }
 
   if (task.runtime === "cli" && hasActiveCliRun(task)) {

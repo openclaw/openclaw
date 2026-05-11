@@ -7,7 +7,12 @@ import {
   createRunningTaskRun,
   failTaskRunByRunId,
 } from "../../tasks/detached-task-runtime.js";
-import { clearCronJobActive, markCronJobActive } from "../active-jobs.js";
+import {
+  clearCronJobActive,
+  markCronJobActive,
+  markCronJobLivenessAuthoritative,
+  markCronJobLivenessReconciling,
+} from "../active-jobs.js";
 import { resolveCronDeliveryPlan, resolveFailureDestination } from "../delivery-plan.js";
 import { createCronRunDiagnosticsFromError } from "../run-diagnostics.js";
 import { createCronExecutionId } from "../run-id.js";
@@ -165,78 +170,85 @@ async function ensureLoadedForRead(state: CronServiceState) {
 
 /** Starts the cron service, recovers interrupted runs, catches up missed jobs, and arms the timer. */
 export async function start(state: CronServiceState) {
-  if (!state.deps.cronEnabled) {
-    state.deps.log.info({ enabled: false }, "cron: disabled");
-    return;
-  }
+  markCronJobLivenessReconciling();
+  try {
+    if (!state.deps.cronEnabled) {
+      state.deps.log.info({ enabled: false }, "cron: disabled");
+      return;
+    }
 
-  const interruptedJobIds = new Set<string>();
-  const interruptedRuns: InterruptedStartupRun[] = [];
-  let markedAnyInterruptedRun = false;
-  await locked(state, async () => {
-    await ensureLoaded(state, { skipRecompute: true });
-    const jobs = state.store?.jobs ?? [];
-    for (const job of jobs) {
-      job.state ??= {};
-      if (typeof job.state.runningAtMs === "number") {
-        const nowMs = state.deps.nowMs();
-        const interrupted = markInterruptedStartupRun({
-          state,
-          job,
-          runningAtMs: job.state.runningAtMs,
-          nowMs,
-        });
-        interruptedJobIds.add(job.id);
-        interruptedRuns.push(interrupted);
-        markedAnyInterruptedRun = true;
+    const interruptedJobIds = new Set<string>();
+    const interruptedRuns: InterruptedStartupRun[] = [];
+    let markedAnyInterruptedRun = false;
+    await locked(state, async () => {
+      await ensureLoaded(state, { skipRecompute: true });
+      const jobs = state.store?.jobs ?? [];
+      for (const job of jobs) {
+        job.state ??= {};
+        if (typeof job.state.runningAtMs === "number") {
+          const nowMs = state.deps.nowMs();
+          const interrupted = markInterruptedStartupRun({
+            state,
+            job,
+            runningAtMs: job.state.runningAtMs,
+            nowMs,
+          });
+          interruptedJobIds.add(job.id);
+          interruptedRuns.push(interrupted);
+          markedAnyInterruptedRun = true;
+        }
       }
-    }
-    if (markedAnyInterruptedRun || jobs.length > 0) {
-      await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
-    }
-  });
+      if (markedAnyInterruptedRun || jobs.length > 0) {
+        await persist(state, markedAnyInterruptedRun ? undefined : { stateOnly: true });
+      }
+    });
 
-  await runMissedJobs(state, {
-    skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
-    deferAgentTurnJobs: true,
-  });
+    await runMissedJobs(state, {
+      skipJobIds: interruptedJobIds.size > 0 ? interruptedJobIds : undefined,
+      deferAgentTurnJobs: true,
+    });
 
-  await locked(state, async () => {
-    // Startup catch-up already persisted the latest in-memory store state, and
-    // this path runs before the scheduler begins servicing regular timer ticks.
-    // Avoid an extra reload/write cycle on startup.
-    await ensureLoaded(state, { skipRecompute: true });
-    const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
-    if (changed) {
-      await persist(state);
-    }
-    for (const interrupted of interruptedRuns) {
-      const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
-      emit(state, {
-        jobId: interrupted.jobId,
-        action: "finished",
-        job,
-        status: "error",
-        error: STARTUP_INTERRUPTED_ERROR,
-        delivered: false,
-        deliveryStatus: "unknown",
-        deliveryError: STARTUP_INTERRUPTED_ERROR,
-        failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
-        runAtMs: interrupted.runAtMs,
-        durationMs: interrupted.durationMs,
-        nextRunAtMs: job?.state.nextRunAtMs,
-      });
-    }
-    armTimer(state);
-    state.deps.log.info(
-      {
-        enabled: true,
-        jobs: state.store?.jobs.length ?? 0,
-        nextWakeAtMs: nextWakeAtMs(state) ?? null,
-      },
-      "cron: started",
-    );
-  });
+    await locked(state, async () => {
+      // Startup catch-up already persisted the latest in-memory store state, and
+      // this path runs before the scheduler begins servicing regular timer ticks.
+      // Avoid an extra reload/write cycle on startup.
+      await ensureLoaded(state, { skipRecompute: true });
+      const changed = recomputeNextRunsForMaintenance(state, { recomputeExpired: true });
+      if (changed) {
+        await persist(state);
+      }
+      for (const interrupted of interruptedRuns) {
+        const job = state.store?.jobs.find((entry) => entry.id === interrupted.jobId);
+        emit(state, {
+          jobId: interrupted.jobId,
+          action: "finished",
+          job,
+          status: "error",
+          error: STARTUP_INTERRUPTED_ERROR,
+          delivered: false,
+          deliveryStatus: "unknown",
+          deliveryError: STARTUP_INTERRUPTED_ERROR,
+          failureNotificationDelivery: job ? failureNotificationDeliveryFromJobState(job) : undefined,
+          runAtMs: interrupted.runAtMs,
+          durationMs: interrupted.durationMs,
+          nextRunAtMs: job?.state.nextRunAtMs,
+        });
+      }
+      armTimer(state);
+      state.deps.log.info(
+        {
+          enabled: true,
+          jobs: state.store?.jobs.length ?? 0,
+          nextWakeAtMs: nextWakeAtMs(state) ?? null,
+        },
+        "cron: started",
+      );
+    });
+  } finally {
+    // Always restore active-job liveness authority so task maintenance cannot
+    // preserve stale mapped cron tasks forever if startup exits early or fails.
+    markCronJobLivenessAuthoritative();
+  }
 }
 
 /** Stops the cron service timer without mutating persisted job state. */

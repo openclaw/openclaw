@@ -65,6 +65,7 @@ function createTaskRegistryMaintenanceHarness(params: {
   cronStore?: CronStoreFile;
   cronRunLogEntries?: Record<string, CronRunLogEntry[]>;
   runtimeAuthoritative?: boolean;
+  cronJobLivenessAuthoritative?: boolean;
 }) {
   const sessionStore = params.sessionStore ?? {};
   const acpEntry = params.acpEntry;
@@ -100,6 +101,7 @@ function createTaskRegistryMaintenanceHarness(params: {
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
       : {}),
     isCronJobActive: (jobId: string) => activeCronJobIds.has(jobId),
+    isCronJobLivenessAuthoritative: () => params.cronJobLivenessAuthoritative ?? true,
     getAgentRunContext: (runId: string) =>
       activeRunIds.has(runId) ? { sessionKey: "main" } : undefined,
     hasActiveAcpTurn: (sessionKey: string) => activeAcpSessionKeys.has(sessionKey),
@@ -458,6 +460,114 @@ describe("task-registry maintenance issue #60299", () => {
     );
     expectMaintenanceCounts(await runTaskRegistryMaintenance(), { reconciled: 0 });
     expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("does not mark cron tasks lost before cron startup reconciliation completes", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+      runtimeAuthoritative: true,
+      cronJobLivenessAuthoritative: false,
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 0, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("marks cron tasks lost after startup reconciliation when job is not active", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+      runtimeAuthoritative: true,
+      cronJobLivenessAuthoritative: true,
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("keeps cron tasks live when active in memory regardless of reconciliation flag", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: ["my-job"],
+      runtimeAuthoritative: true,
+      cronJobLivenessAuthoritative: false,
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 0, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "running");
+  });
+
+  it("marks unmappable cron tasks lost even before startup reconciliation completes", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: undefined,
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+      runtimeAuthoritative: true,
+      cronJobLivenessAuthoritative: false,
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
+  });
+
+  it("marks cron tasks lost by default when task maintenance has authoritative cron runtime", async () => {
+    const startedAt = Date.now() - GRACE_EXPIRED_MS;
+    const task = makeStaleTask({
+      runtime: "cron",
+      sourceId: "my-job",
+      runId: `cron:my-job:${startedAt}`,
+      startedAt,
+      lastEventAt: startedAt,
+    });
+
+    const { currentTasks } = createTaskRegistryMaintenanceHarness({
+      tasks: [task],
+      activeCronJobIds: [],
+    });
+
+    const result = await runTaskRegistryMaintenance();
+    expectMaintenanceCounts(result, { reconciled: 1, recovered: 0 });
+    expectTaskStatus(currentTasks, task.taskId, "lost");
   });
 
   it("recovers finished cron tasks from durable run logs before marking them lost", async () => {

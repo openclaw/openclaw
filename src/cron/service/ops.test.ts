@@ -1,10 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import * as detachedTaskRuntime from "../../tasks/detached-task-runtime.js";
 import { findTaskByRunId, resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { formatTaskStatusDetail } from "../../tasks/task-status.js";
+import {
+  isCronJobActive,
+  isCronJobLivenessAuthoritative,
+  resetCronActiveJobsForTests,
+} from "../active-jobs.js";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "../service.test-harness.js";
 import { loadCronJobsStoreWithConfigJobs, loadCronStore } from "../store.js";
 import type { CronJob } from "../types.js";
@@ -14,6 +19,10 @@ import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
+});
+
+afterEach(() => {
+  resetCronActiveJobsForTests();
 });
 
 function withStateDirForStorePath(storePath: string) {
@@ -327,6 +336,7 @@ describe("cron service ops seam coverage", () => {
 
     await start(state);
 
+    expect(isCronJobLivenessAuthoritative()).toBe(true);
     expectWarnedJob({
       field: "jobId",
       value: "startup-interrupted",
@@ -363,6 +373,79 @@ describe("cron service ops seam coverage", () => {
 
     timeoutSpy.mockRestore();
     stop(state);
+  });
+
+  it("start marks cron job liveness authoritative when cron is disabled", async () => {
+    const { storePath } = await makeStorePath();
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: false,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    expect(isCronJobLivenessAuthoritative()).toBe(false);
+    await start(state);
+
+    expect(isCronJobLivenessAuthoritative()).toBe(true);
+    expect(logger.info).toHaveBeenCalledWith({ enabled: false }, "cron: disabled");
+    expect(state.timer).toBeNull();
+  });
+
+  it("start marks cron job liveness authoritative before rethrowing startup failures", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    await writeCronStoreSnapshot({
+      storePath,
+      jobs: [createInterruptedMainJob(now)],
+    });
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => {
+        throw new Error("startup clock failed");
+      },
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    await expect(start(state)).rejects.toThrow("startup clock failed");
+    expect(isCronJobLivenessAuthoritative()).toBe(true);
+  });
+
+  it("start resets cron job liveness authority while a same-process enabled startup is reconciling", async () => {
+    const disabledStore = await makeStorePath();
+    const disabledState = createCronServiceState({
+      storePath: disabledStore.storePath,
+      cronEnabled: false,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    await start(disabledState);
+    expect(isCronJobLivenessAuthoritative()).toBe(true);
+
+    const enabledStore = await makeStorePath();
+    const enabledState = createCronServiceState({
+      storePath: enabledStore.storePath,
+      cronEnabled: true,
+      log: logger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+
+    const startPromise = start(enabledState);
+    expect(isCronJobLivenessAuthoritative()).toBe(false);
+    await startPromise;
+
+    expect(isCronJobLivenessAuthoritative()).toBe(true);
+    stop(enabledState);
   });
 
   it("start persists load-time updatedAtMs repairs to the state sidecar only", async () => {
@@ -584,6 +667,47 @@ describe("cron service ops seam coverage", () => {
     expect(updated.description).toBe("fixed");
     expect(updated.state.nextRunAtMs).toBeGreaterThan(0);
     expect(updated.state.nextRunAtMs).toBeGreaterThan(now);
+  });
+
+  it("defers missed isolated agent jobs until after startup reconciliation", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const restoreStateDir = withStateDirForStorePath(storePath);
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const, summary: "done" }));
+
+    try {
+      await writeCronStoreSnapshot({
+        storePath,
+        jobs: [createMissedIsolatedJob(now)],
+      });
+
+      const state = createCronServiceState({
+        storePath,
+        cronEnabled: true,
+        log: logger,
+        nowMs: () => now,
+        enqueueSystemEvent: vi.fn(),
+        requestHeartbeat: vi.fn(),
+        runIsolatedAgentJob,
+      });
+
+      await start(state);
+
+      expect(isCronJobLivenessAuthoritative()).toBe(true);
+      expect(isCronJobActive("startup-timeout")).toBe(false);
+      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(findTaskByRunId(`cron:startup-timeout:${now}`)).toBeUndefined();
+
+      const persisted = (await loadCronStore(storePath)) as { jobs: CronJob[] };
+      const job = persisted.jobs[0];
+      if (!job) {
+        throw new Error("expected persisted cron job");
+      }
+      expect(job.state.runningAtMs).toBeUndefined();
+      expect(job.state.nextRunAtMs).toBeGreaterThan(now);
+    } finally {
+      restoreStateDir();
+    }
   });
 
   it("records startup catch-up timeouts as timed_out in the shared task registry", async () => {
