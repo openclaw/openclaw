@@ -613,6 +613,7 @@ export async function runCodexAppServerAttempt(
     workspaceBootstrapInstructions,
   );
   let prePromptMessageCount = historyMessages.length;
+  const projectionReserveTokens = resolveCodexProjectionReserveTokens(params.config);
   if (activeContextEngine) {
     try {
       const assembled = await assembleHarnessContextEngine({
@@ -634,6 +635,9 @@ export async function runCodexAppServerAttempt(
         originalHistoryMessages: historyMessages,
         prompt: params.prompt,
         systemPromptAddition: assembled.systemPromptAddition,
+        ...(projectionReserveTokens !== undefined
+          ? { reserveTokens: projectionReserveTokens }
+          : {}),
       });
       promptText = projection.promptText;
       developerInstructions = joinPresentSections(
@@ -642,6 +646,14 @@ export async function runCodexAppServerAttempt(
         projection.developerInstructionAddition,
       );
       prePromptMessageCount = projection.prePromptMessageCount;
+      emitCodexAppServerEvent(params, {
+        stream: "codex_app_server.context_projection",
+        data: {
+          source: "context_engine",
+          frontierTokens: params.contextTokenBudget,
+          ...projection.stats,
+        },
+      });
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
         error: formatErrorMessage(assembleErr),
@@ -658,9 +670,18 @@ export async function runCodexAppServerAttempt(
       assembledMessages: historyMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+      ...(projectionReserveTokens !== undefined ? { reserveTokens: projectionReserveTokens } : {}),
     });
     promptText = projection.promptText;
     prePromptMessageCount = projection.prePromptMessageCount;
+    emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.context_projection",
+      data: {
+        source: "mirrored_history",
+        frontierTokens: params.contextTokenBudget,
+        ...projection.stats,
+      },
+    });
   }
   promptText = prependCurrentTurnContext(promptText, params.currentTurnContext);
   const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
@@ -2179,6 +2200,28 @@ function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
 
 function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
   return params.sourceReplyDeliveryMode === "message_tool_only";
+}
+
+/**
+ * Resolve the compaction reserve tokens the projection should surface in
+ * accounting telemetry. Pulls from `agents.defaults.compaction.reserveTokens`
+ * first, then `reserveTokensFloor`, and returns `undefined` when neither is
+ * configured so the projection only reports knobs the user has actually set.
+ * See issue #80765.
+ */
+function resolveCodexProjectionReserveTokens(
+  config: EmbeddedRunAttemptParams["config"],
+): number | undefined {
+  const compaction = config?.agents?.defaults?.compaction;
+  const reserve = compaction?.reserveTokens;
+  if (typeof reserve === "number" && Number.isFinite(reserve) && reserve >= 0) {
+    return Math.floor(reserve);
+  }
+  const floor = compaction?.reserveTokensFloor;
+  if (typeof floor === "number" && Number.isFinite(floor) && floor >= 0) {
+    return Math.floor(floor);
+  }
+  return undefined;
 }
 
 function shouldProjectMirroredHistoryForCodexStart(params: {
