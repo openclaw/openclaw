@@ -135,6 +135,10 @@ describe("registerPreActionHooks", () => {
       .option("--json")
       .action(() => {});
     program.command("doctor").action(() => {});
+    program
+      .command("lint")
+      .option("--json")
+      .action(() => {});
     program.command("completion").action(() => {});
     program.command("secrets").action(() => {});
     program
@@ -328,6 +332,16 @@ describe("registerPreActionHooks", () => {
     await runPreAction({
       parseArgv: ["config"],
       processArgv: ["node", "openclaw", "config", "--section", "models"],
+    });
+
+    expect(ensureConfigReadyMock).not.toHaveBeenCalled();
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
+  });
+
+  it("skips the config guard and plugin loading for lint", async () => {
+    await runPreAction({
+      parseArgv: ["lint"],
+      processArgv: ["node", "openclaw", "lint", "--json"],
     });
 
     expect(ensureConfigReadyMock).not.toHaveBeenCalled();

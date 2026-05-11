@@ -41,6 +41,48 @@ export function registerMaintenanceCommands(program: Command) {
     });
 
   program
+    .command("lint")
+    .description("Run read-only diagnostic checks for config and workspace health")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/lint", "docs.openclaw.ai/cli/lint")}\n`,
+    )
+    .option("--json", "Emit JSON findings instead of human output", false)
+    .option("--severity-min <level>", "Drop findings below this severity (info|warning|error)")
+    .option(
+      "--skip <id>",
+      "Skip a specific check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
+    .option(
+      "--only <id>",
+      "Run only the specified check id (repeatable)",
+      (v: string, prev: string[]) => [...prev, v],
+      [],
+    )
+    .action(async (opts) => {
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { runLintCli } = await import("../../commands/lint.js");
+          const exitCode = await runLintCli(defaultRuntime, {
+            json: Boolean(opts.json),
+            severityMin: typeof opts.severityMin === "string" ? opts.severityMin : undefined,
+            skipIds: Array.isArray(opts.skip) ? opts.skip : [],
+            onlyIds: Array.isArray(opts.only) ? opts.only : [],
+          });
+          defaultRuntime.exit(exitCode);
+        },
+        (err) => {
+          defaultRuntime.error(String(err));
+          defaultRuntime.exit(2);
+        },
+      );
+    });
+
+  program
     .command("dashboard")
     .description("Open the Control UI with your current token")
     .addHelpText(

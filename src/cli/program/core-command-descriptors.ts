@@ -46,6 +46,11 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     hasSubcommands: false,
   },
   {
+    name: "lint",
+    description: "Run read-only diagnostic checks for config and workspace health",
+    hasSubcommands: false,
+  },
+  {
     name: "dashboard",
     description: "Open the Control UI with your current token",
     hasSubcommands: false,

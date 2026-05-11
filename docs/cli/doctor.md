@@ -15,6 +15,24 @@ Related:
 - Troubleshooting: [Troubleshooting](/gateway/troubleshooting)
 - Security audit: [Security](/gateway/security)
 
+## Why Use It
+
+`openclaw doctor` is the OpenClaw health surface. Use it when the gateway,
+channels, plugins, skills, model routing, local state, or config migrations are
+not behaving as expected and you want one command that can explain what is
+wrong.
+
+Doctor has two postures:
+
+| Posture | Command                 | Behavior                                                                        |
+| ------- | ----------------------- | ------------------------------------------------------------------------------- |
+| Inspect | `openclaw doctor`       | Human-oriented checks and guided prompts.                                       |
+| Repair  | `openclaw doctor --fix` | Applies supported repairs, using prompts unless non-interactive repair is safe. |
+
+Use [`openclaw lint`](/cli/lint) when automation needs read-only diagnostic
+findings. Use `--fix` when a human operator intentionally wants doctor to edit
+config or state.
+
 ## Examples
 
 ```bash
@@ -45,11 +63,26 @@ The targeted Discord capabilities probe reports the bot's effective channel perm
 - `--generate-gateway-token`: generate and configure a gateway token
 - `--deep`: scan system services for extra gateway installs and report recent Gateway supervisor restart handoffs
 
+## Related Diagnostics
+
+Use `--only` and `--skip` when a workflow wants a focused gate:
+
+```bash
+openclaw lint --only core/lint/gateway-config --json
+openclaw lint --skip core/lint/skills-readiness
+```
+
+`--only` and `--skip` accept full check ids and may be repeated. If an `--only`
+id is not registered, no check runs for that id; use the command's `checksRun`
+and `checksSkipped` fields to verify a focused gate is selecting the checks you
+expect.
+
 Notes:
 
 - In Nix mode (`OPENCLAW_NIX_MODE=1`), read-only doctor checks still work, but `doctor --fix`, `doctor --repair`, `doctor --yes`, and `doctor --generate-gateway-token` are disabled because `openclaw.json` is immutable. Edit the Nix source for this install instead; for nix-openclaw, use the agent-first [Quick Start](https://github.com/openclaw/nix-openclaw#quick-start).
 - Interactive prompts (like keychain/OAuth fixes) only run when stdin is a TTY and `--non-interactive` is **not** set. Headless runs (cron, Telegram, no terminal) will skip prompts.
-- Performance: non-interactive `doctor` runs skip eager plugin loading so headless health checks stay fast. Interactive sessions still fully load plugins when a check needs their contribution.
+- Performance: non-interactive `doctor` runs skip eager plugin loading so headless health checks stay fast. Interactive doctor sessions still load the plugin surfaces needed by the legacy health and repair flow.
+- `openclaw lint` is stricter than `doctor --non-interactive`: it is always read-only, never prompts, and never applies safe migrations. Run `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - `--fix` (alias for `--repair`) writes a backup to `~/.openclaw/openclaw.json.bak` and drops unknown config keys, listing each removal.
 - `doctor --fix --non-interactive` reports missing or stale gateway service definitions but does not install or rewrite them outside update repair mode. Run `openclaw gateway install` for a missing service, or `openclaw gateway install --force` when you intentionally want to replace the launcher.
 - State integrity checks now detect orphan transcript files in the sessions directory. Archiving them as `.deleted.<timestamp>` requires an interactive confirmation; `--fix`, `--yes`, and headless runs leave them in place.

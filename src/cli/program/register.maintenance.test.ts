@@ -12,9 +12,11 @@ const mocks = vi.hoisted(() => ({
     error: vi.fn(),
     exit: vi.fn(),
   },
+  runLintCli: vi.fn(),
 }));
 
-const { doctorCommand, dashboardCommand, resetCommand, uninstallCommand, runtime } = mocks;
+const { doctorCommand, dashboardCommand, resetCommand, uninstallCommand, runtime, runLintCli } =
+  mocks;
 
 vi.mock("../../commands/doctor.js", () => ({
   doctorCommand: mocks.doctorCommand,
@@ -30,6 +32,10 @@ vi.mock("../../commands/reset.js", () => ({
 
 vi.mock("../../commands/uninstall.js", () => ({
   uninstallCommand: mocks.uninstallCommand,
+}));
+
+vi.mock("../../commands/lint.js", () => ({
+  runLintCli: mocks.runLintCli,
 }));
 
 vi.mock("../../runtime.js", () => ({
@@ -87,6 +93,39 @@ describe("registerMaintenanceCommands doctor action", () => {
     const [runtimeArg, options] = commandCall(doctorCommand);
     expect(runtimeArg).toBe(runtime);
     expect(options.repair).toBe(true);
+  });
+
+  it("runs lint diagnostics without invoking repair doctor", async () => {
+    runLintCli.mockResolvedValue(1);
+
+    await runMaintenanceCli([
+      "lint",
+      "--json",
+      "--severity-min",
+      "error",
+      "--skip",
+      "a",
+      "--only",
+      "b",
+    ]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runLintCli).toHaveBeenCalledWith(runtime, {
+      json: true,
+      severityMin: "error",
+      skipIds: ["a"],
+      onlyIds: ["b"],
+    });
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("exits with code 2 when lint fails before findings are emitted", async () => {
+    runLintCli.mockRejectedValue(new Error("lint failed"));
+
+    await runMaintenanceCli(["lint"]);
+
+    expect(runtime.error).toHaveBeenCalledWith("Error: lint failed");
+    expect(runtime.exit).toHaveBeenCalledWith(2);
   });
 
   it("passes noOpen to dashboard command", async () => {

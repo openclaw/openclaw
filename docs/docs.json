@@ -1609,6 +1609,7 @@
                       "cli/doctor",
                       "cli/gateway",
                       "cli/health",
+                      "cli/lint",
                       "cli/logs",
                       "cli/migrate",
                       "cli/onboard",

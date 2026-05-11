@@ -194,6 +194,10 @@ describe("command-path-policy", () => {
       loadPlugins: "never",
       networkProxy: "bypass",
     });
+    expectResolvedPolicy(["lint"], {
+      bypassConfigGuard: true,
+      loadPlugins: "never",
+    });
     expectResolvedPolicy(["config", "set"], {
       loadPlugins: "never",
       networkProxy: "bypass",
