@@ -47,6 +47,37 @@ function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
   });
 }
 
+function registerNvidiaPluginApi() {
+  const registeredProviders: string[] = [];
+  const registeredModelCatalogProviders: RegisteredModelCatalogProvider[] = [];
+
+  plugin.register(
+    createTestPluginApi({
+      registerProvider(provider: { id: string }) {
+        registeredProviders.push(provider.id);
+      },
+      registerModelCatalogProvider(provider) {
+        registeredModelCatalogProviders.push(provider);
+      },
+    }),
+  );
+
+  return { registeredProviders, registeredModelCatalogProviders };
+}
+
+function buildCatalogContext(apiKey?: string) {
+  return {
+    config: {},
+    env: process.env,
+    resolveProviderApiKey: () => ({ apiKey }),
+    resolveProviderAuth: () => ({
+      apiKey,
+      mode: apiKey ? ("api_key" as const) : ("none" as const),
+      source: apiKey ? ("env" as const) : ("none" as const),
+    }),
+  };
+}
+
 describe("nvidia provider hooks", () => {
   it("registers the nvidia provider with correct metadata", async () => {
     const provider = await registerNvidiaProvider();
@@ -209,23 +240,48 @@ describe("nvidia provider hooks", () => {
   });
 
   it("registers nvidia provider through the plugin api", () => {
-    const registeredProviders: string[] = [];
-    const registeredModelCatalogProviders: RegisteredModelCatalogProvider[] = [];
-
-    plugin.register(
-      createTestPluginApi({
-        registerProvider(provider: { id: string }) {
-          registeredProviders.push(provider.id);
-        },
-        registerModelCatalogProvider(provider) {
-          registeredModelCatalogProviders.push(provider);
-        },
-      }),
-    );
+    const { registeredProviders, registeredModelCatalogProviders } = registerNvidiaPluginApi();
 
     expect(registeredProviders).toStrictEqual(["nvidia"]);
     expect(registeredModelCatalogProviders.map((provider) => provider.provider)).toStrictEqual([
       "nvidia",
+    ]);
+  });
+
+  it("registers static and live nvidia model catalog rows", async () => {
+    mockFeaturedCatalogResponse({
+      "featured-models": [
+        {
+          model: "minimaxai/minimax-m2.7",
+          "model-name": "Minimax M2.7",
+          context: 196608,
+          "max-output": 8192,
+        },
+      ],
+    });
+    const { registeredModelCatalogProviders } = registerNvidiaPluginApi();
+    const catalogProvider = registeredModelCatalogProviders[0];
+
+    expect(catalogProvider?.provider).toBe("nvidia");
+    expect(catalogProvider?.kinds).toStrictEqual(["text"]);
+
+    const staticRows = await catalogProvider?.staticCatalog?.(buildCatalogContext());
+    expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
+      "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "static:nvidia/moonshotai/kimi-k2.5",
+      "static:nvidia/minimaxai/minimax-m2.5",
+      "static:nvidia/z-ai/glm5",
+    ]);
+
+    await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
+
+    const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));
+    expect(liveRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
+      "live:nvidia/minimaxai/minimax-m2.7",
+      "live:nvidia/nvidia/nemotron-3-super-120b-a12b",
+      "live:nvidia/moonshotai/kimi-k2.5",
+      "live:nvidia/minimaxai/minimax-m2.5",
+      "live:nvidia/z-ai/glm5",
     ]);
   });
 });
