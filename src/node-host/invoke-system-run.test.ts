@@ -392,7 +392,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(params.runCommand).toHaveBeenCalledWith(
       [params.expected, ...params.commandTail],
       params.cwd,
-      undefined,
+      expect.objectContaining({}),
       undefined,
     );
   }
@@ -511,6 +511,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
         cwd: params.cwd,
         approvalDecision: params.approvalDecision,
         approved: params.approved ?? false,
+        agentId: "main",
         sessionKey: "agent:main:main",
       },
       skillBins: {
@@ -1549,6 +1550,8 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(passedEnv).toEqual({
       LANG: "C",
       LC_TIME: "C",
+      OPENCLAW_AGENT_ID: "main",
+      OPENCLAW_SESSION_KEY: "agent:main:main",
     });
     expectInvokeOk(sendInvokeResult);
   });

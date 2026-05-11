@@ -1708,6 +1708,7 @@ export function createExecTool(
         notifyOnExit,
         notifyOnExitEmptySuccess,
         scopeKey: defaults?.scopeKey,
+        agentId,
         sessionKey: notifySessionKey,
         mainKey: defaults?.mainKey,
         sessionScope: defaults?.sessionScope,
