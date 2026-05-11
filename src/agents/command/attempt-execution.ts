@@ -16,7 +16,7 @@ import { getCliSessionBinding, setCliSessionBinding } from "../cli-session.js";
 import { FailoverError } from "../failover-error.js";
 import { resolveAgentHarnessPolicy } from "../harness/selection.js";
 import { isCliRuntimeAlias, resolveCliRuntimeExecutionProvider } from "../model-runtime-aliases.js";
-import { isCliProvider } from "../model-selection.js";
+import { isCliProvider, normalizeProviderId } from "../model-selection.js";
 import { prepareSessionManagerForRun } from "../pi-embedded-runner/session-manager-init.js";
 import { runEmbeddedPiAgent, type EmbeddedPiRunResult } from "../pi-embedded.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -282,6 +282,9 @@ export function runAgentAttempt(params: {
   );
   const bootstrapPromptWarningSignature =
     bootstrapPromptWarningSignaturesSeen[bootstrapPromptWarningSignaturesSeen.length - 1];
+  const agentRuntimeOverride = isRawModelRun
+    ? undefined
+    : params.sessionEntry?.agentRuntimeOverride?.trim();
   const sessionPinnedAgentHarnessId = isRawModelRun
     ? "pi"
     : resolveSessionPinnedAgentHarnessId({
@@ -291,10 +294,8 @@ export function runAgentAttempt(params: {
         sessionHasHistory: params.sessionHasHistory,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey ?? params.sessionId,
+        runtimeOverride: agentRuntimeOverride,
       });
-  const agentRuntimeOverride = isRawModelRun
-    ? undefined
-    : params.sessionEntry?.agentRuntimeOverride?.trim();
   const cliExecutionProvider = isRawModelRun
     ? params.providerOverride
     : (resolveCliRuntimeExecutionProvider({
@@ -507,9 +508,20 @@ function resolveSessionPinnedAgentHarnessId(params: {
   sessionHasHistory?: boolean;
   sessionId: string;
   sessionKey: string;
+  runtimeOverride?: string;
 }): string | undefined {
   if (params.sessionEntry?.sessionId !== params.sessionId) {
     return resolveConfiguredAgentHarnessId(params);
+  }
+  const runtimeOverride = params.runtimeOverride?.trim();
+  const normalizedRuntimeOverride = runtimeOverride ? normalizeProviderId(runtimeOverride) : "";
+  if (
+    runtimeOverride &&
+    normalizedRuntimeOverride !== "auto" &&
+    normalizedRuntimeOverride !== "default" &&
+    !isCliRuntimeAlias(runtimeOverride)
+  ) {
+    return runtimeOverride;
   }
   if (params.sessionEntry.agentHarnessId) {
     return params.sessionEntry.agentHarnessId;

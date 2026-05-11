@@ -755,10 +755,12 @@ describe("embedded attempt harness pinning", () => {
     );
   });
 
-  it("pins a fresh unpinned session to the default PI harness", async () => {
+  it("lets runtime overrides replace stale harness pins", async () => {
     const sessionEntry: SessionEntry = {
-      sessionId: "fresh-session",
+      sessionId: "runtime-override-session",
       updatedAt: Date.now(),
+      agentRuntimeOverride: "custom-harness",
+      agentHarnessId: "pi",
     };
     runEmbeddedPiAgentMock.mockResolvedValueOnce({
       meta: { durationMs: 1 },
@@ -775,11 +777,11 @@ describe("embedded attempt harness pinning", () => {
       sessionAgentId: "main",
       sessionFile: path.join(tmpDir, "session.jsonl"),
       workspaceDir: tmpDir,
-      body: "start",
+      body: "continue",
       isFallbackRetry: false,
       resolvedThinkLevel: "medium",
       timeoutMs: 1_000,
-      runId: "run-fresh-no-pin",
+      runId: "run-runtime-override-harness",
       opts: { senderIsOwner: false } as Parameters<typeof runAgentAttempt>[0]["opts"],
       runContext: {} as Parameters<typeof runAgentAttempt>[0]["runContext"],
       spawnedBy: undefined,
@@ -789,12 +791,12 @@ describe("embedded attempt harness pinning", () => {
       agentDir: tmpDir,
       onAgentEvent: vi.fn(),
       authProfileProvider: "openai",
-      sessionHasHistory: false,
+      sessionHasHistory: true,
     });
 
     expect(runEmbeddedPiAgent).toHaveBeenCalledWith(
       expect.objectContaining({
-        agentHarnessId: "pi",
+        agentHarnessId: "custom-harness",
       }),
     );
   });

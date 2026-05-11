@@ -5,6 +5,7 @@ import {
 } from "../../agents/agent-scope.js";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
+import { listAgentHarnessIds } from "../../agents/harness/registry.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { listLegacyRuntimeModelProviderAliases } from "../../agents/model-runtime-aliases.js";
 import { normalizeProviderId, type ModelAliasIndex } from "../../agents/model-selection.js";
@@ -63,6 +64,13 @@ function resolveModelRuntimeOverride(params: {
     if (runtime === aliasRuntime || (aliasRuntime === "codex" && runtime === "codex-app-server")) {
       return { kind: "set", runtime: alias.runtime };
     }
+  }
+
+  const registeredHarnessRuntime = listAgentHarnessIds().find(
+    (id) => normalizeProviderId(id) === runtime,
+  );
+  if (registeredHarnessRuntime) {
+    return { kind: "set", runtime: registeredHarnessRuntime };
   }
 
   return { kind: "invalid", runtime: rawRuntime };
@@ -255,9 +263,17 @@ export async function persistInlineDirectives(params: {
             delete sessionEntry.agentRuntimeOverride;
             updated = true;
           }
+          if (sessionEntry.agentHarnessId) {
+            delete sessionEntry.agentHarnessId;
+            updated = true;
+          }
         } else if (runtimeOverride?.kind === "set") {
           if (sessionEntry.agentRuntimeOverride !== runtimeOverride.runtime) {
             sessionEntry.agentRuntimeOverride = runtimeOverride.runtime;
+            updated = true;
+          }
+          if (sessionEntry.agentHarnessId) {
+            delete sessionEntry.agentHarnessId;
             updated = true;
           }
         } else if (runtimeOverride?.kind === "invalid") {
