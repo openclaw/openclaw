@@ -33,6 +33,7 @@ import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import { reactSlackMessage } from "../../actions.js";
+import { formatSlackError } from "../../errors.js";
 import { formatSlackFileReference } from "../../file-reference.js";
 import { hasSlackThreadParticipationWithPersistence } from "../../sent-thread-cache.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -782,7 +783,7 @@ export async function prepareSlackMessage(params: {
           () => true,
           (err) => {
             logVerbose(
-              `slack react failed for channel ${message.channel}: ${formatErrorMessage(err)}`,
+              `slack react failed for channel ${message.channel}: ${formatSlackError(err)}`,
             );
             return false;
           },

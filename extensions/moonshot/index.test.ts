@@ -20,7 +20,9 @@ describe("moonshot provider plugin", () => {
   it("mirrors Kimi web-search env credentials in manifest metadata", () => {
     const manifestEnvVars = readManifest().providerAuthEnvVars?.moonshot ?? [];
 
-    expect(manifestEnvVars).toEqual(expect.arrayContaining(createKimiWebSearchProvider().envVars));
+    expect([...manifestEnvVars].toSorted()).toStrictEqual(
+      [...createKimiWebSearchProvider().envVars].toSorted(),
+    );
   });
 
   it("owns replay policy for OpenAI-compatible Moonshot transports without mangling native Kimi tool_call IDs", async () => {

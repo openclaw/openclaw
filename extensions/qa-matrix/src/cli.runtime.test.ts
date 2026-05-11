@@ -62,14 +62,20 @@ describe("matrix qa cli runtime", () => {
       process.stdout.write = originalStdoutWrite;
     }
 
-    expect(runMatrixQaLive).toHaveBeenCalledWith(
-      expect.objectContaining({
-        repoRoot,
-        outputDir: path.join(repoRoot, ".artifacts/qa-e2e/matrix"),
-        providerMode: "mock-openai",
-        credentialSource: "env",
-      }),
-    );
+    expect(runMatrixQaLive).toHaveBeenCalledWith({
+      repoRoot,
+      outputDir: path.join(repoRoot, ".artifacts/qa-e2e/matrix"),
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      failFast: undefined,
+      profile: undefined,
+      scenarioIds: undefined,
+      sutAccountId: undefined,
+      credentialSource: "env",
+      credentialRole: undefined,
+    });
     expect(closeGlobalDispatcher).toHaveBeenCalledTimes(1);
   });
 

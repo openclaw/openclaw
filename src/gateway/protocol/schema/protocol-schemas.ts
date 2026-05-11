@@ -490,4 +490,8 @@ export const ProtocolSchemas = {
   ShutdownEvent: ShutdownEventSchema,
 } satisfies Record<string, TSchema>;
 
-export { MIN_PROBE_PROTOCOL_VERSION, PROTOCOL_VERSION } from "../version.js";
+export {
+  MIN_CLIENT_PROTOCOL_VERSION,
+  MIN_PROBE_PROTOCOL_VERSION,
+  PROTOCOL_VERSION,
+} from "../version.js";

@@ -229,6 +229,9 @@ describe("bun global install smoke", () => {
     expect(workflow).not.toContain('timeout 300s docker pull "$IMAGE_REF"');
     expect(workflow).toContain("--progress=plain");
     expect(workflow).toContain("--load");
+    expect(workflow).toContain("pnpm-workspace.yaml");
+    expect(workflow).toContain("workspace.patchedDependencies");
+    expect(workflow).not.toContain("pkg.pnpm?.patchedDependencies");
     expect(workflow).not.toContain("--cache-from");
     expect(workflow).not.toContain("--cache-to");
     expect(workflow).not.toContain("type=gha");

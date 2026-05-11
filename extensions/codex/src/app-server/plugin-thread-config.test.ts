@@ -313,12 +313,19 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({
+    expect(config.diagnostics).toStrictEqual([
+      {
         code: "app_not_ready",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: false,
+        },
         message: "google-calendar-app is not accessible or enabled for google-calendar.",
-      }),
-    );
+      },
+    ]);
   });
 
   it("re-reads app readiness after re-enabling an installed plugin", async () => {
@@ -452,11 +459,10 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({
-        code: "plugin_activation_failed",
-        message: expect.stringContaining("skills/list unavailable"),
-      }),
+    expect(config.diagnostics).toHaveLength(1);
+    expect(config.diagnostics[0]?.code).toBe("plugin_activation_failed");
+    expect(config.diagnostics[0]?.message).toBe(
+      "Codex plugin runtime refresh failed after install: skills/list unavailable",
     );
   });
 
@@ -500,9 +506,9 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps).toStrictEqual({});
-    expect(config.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "app_inventory_missing" }),
-    );
+    expect(config.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
+      "app_inventory_missing",
+    ]);
   });
 
   it("uses durable policy and app cache key in the cheap input fingerprint", async () => {

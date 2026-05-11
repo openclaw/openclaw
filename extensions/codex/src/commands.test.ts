@@ -141,6 +141,17 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
   });
 
+  it("keeps command loader failures on the Codex command surface", async () => {
+    const result = await handleCodexCommand(createContext("account"), {
+      loadSubcommandHandler: async () => {
+        throw new Error("<@U123> loader failed");
+      },
+    });
+
+    expect(result.text).toContain("Codex command failed: &lt;\uff20U123&gt; loader failed");
+    expect(result.text).not.toContain("<@U123>");
+  });
+
   it("attaches the current session to an existing Codex thread", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const requests: Array<{ method: string; params: unknown }> = [];
@@ -455,7 +466,7 @@ describe("codex command", () => {
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
     expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
-    expectResultTextContains(accountResult, "Rate limits: Codex: primary 42%");
+    expectResultTextContains(accountResult, "Codex is available.");
   });
 
   it("rejects extra operands for read-only Codex commands", async () => {
@@ -536,7 +547,7 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Account: codex@example.com");
-    expect(result.text).toContain("Rate limits: Codex: primary 50%, resets in");
+    expect(result.text).toContain("Codex is available.");
     const cachedLimits = requireRecord(
       readRecentCodexRateLimits(),
       "expected cached Codex rate limits",
@@ -566,6 +577,60 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
     expect(result.text).not.toContain("@here");
+  });
+
+  it("summarizes blocked account rate limits as a human takeaway", async () => {
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "codex@example.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          rateLimitsByLimitId: {
+            codex: {
+              limitId: "codex",
+              limitName: "Codex",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: "rate_limit_reached",
+            },
+            "gpt-5.3-codex-spark": {
+              limitId: "gpt-5.3-codex-spark",
+              limitName: "GPT 5.3 Codex Spark",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: null,
+            },
+          },
+        },
+      });
+
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Codex is paused until ");
+    expect(result.text).toContain("Your weekly Codex usage limit is reached.");
+    expect(result.text).not.toContain("GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("Primary:");
+    expect(result.text).not.toContain("Secondary:");
+    expect(result.text).not.toContain("Bucket:");
+    expect(result.text).not.toContain("Why:");
+    expect(result.text).not.toContain("5-hour");
+    expect(result.text).not.toContain("100%");
+    expect(result.text).not.toContain("; GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("\uff08rate limit reached\uff09");
   });
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
@@ -601,7 +666,7 @@ describe("codex command", () => {
         deps: createDeps({ safeCodexControlRequest }),
       }),
     ).resolves.toEqual({
-      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n"),
+      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n\n"),
     });
   });
 

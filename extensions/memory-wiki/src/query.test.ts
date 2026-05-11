@@ -352,15 +352,11 @@ describe("searchMemoryWiki", () => {
       query: "bgroux",
       mode: "find-person",
     });
-    expect(personResults[0]).toEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        canonicalId: "maintainer.brad-groux",
-        aliases: ["bgroux"],
-        privacyTier: "local-private",
-        searchMode: "find-person",
-      }),
-    );
+    expect(personResults[0]?.path).toBe("entities/brad.md");
+    expect(personResults[0]?.canonicalId).toBe("maintainer.brad-groux");
+    expect(personResults[0]?.aliases).toEqual(["bgroux"]);
+    expect(personResults[0]?.privacyTier).toBe("local-private");
+    expect(personResults[0]?.searchMode).toBe("find-person");
 
     const routeResults = await searchMemoryWiki({
       config,
@@ -374,15 +370,11 @@ describe("searchMemoryWiki", () => {
       query: "strong route Teams",
       mode: "raw-claim",
     });
-    expect(claimResults[0]).toEqual(
-      expect.objectContaining({
-        path: "entities/brad.md",
-        matchedClaimId: "claim.brad.teams",
-        matchedClaimConfidence: 0.88,
-        evidenceKinds: ["maintainer-whois"],
-        evidenceSourceIds: ["source.maintainers"],
-      }),
-    );
+    expect(claimResults[0]?.path).toBe("entities/brad.md");
+    expect(claimResults[0]?.matchedClaimId).toBe("claim.brad.teams");
+    expect(claimResults[0]?.matchedClaimConfidence).toBe(0.88);
+    expect(claimResults[0]?.evidenceKinds).toEqual(["maintainer-whois"]);
+    expect(claimResults[0]?.evidenceSourceIds).toEqual(["source.maintainers"]);
 
     const evidenceResults = await searchMemoryWiki({
       config,
@@ -648,9 +640,7 @@ describe("searchMemoryWiki", () => {
     });
 
     expect(results).toHaveLength(2);
-    expect(results.map((result) => result.corpus)).toEqual(
-      expect.arrayContaining(["wiki", "memory"]),
-    );
+    expect(results.map((result) => result.corpus).toSorted()).toEqual(["memory", "wiki"]);
     expect(manager.search).toHaveBeenCalledWith("alpha", { maxResults: 5 });
     expect(getActiveMemorySearchManagerMock).toHaveBeenCalledWith({
       cfg: createAppConfig(),
@@ -763,9 +753,6 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.map((result) => result.path)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("sibling-session")]),
-    );
   });
 
   it("filters session memory hits for session-bound non-sandboxed callers", async () => {
@@ -819,9 +806,6 @@ describe("searchMemoryWiki", () => {
       "sessions/child-session.jsonl",
       "MEMORY.md",
     ]);
-    expect(results.map((result) => result.path)).not.toEqual(
-      expect.arrayContaining([expect.stringContaining("sibling-session")]),
-    );
   });
 
   it("requires appConfig for session-bound shared memory searches", async () => {

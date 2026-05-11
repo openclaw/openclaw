@@ -79,6 +79,7 @@ Skills own workflows; root owns hard policy and routing.
 - PR create: real body required. Include Summary + Verification; mention refs, behavior, and proof.
 - PR artifacts/screenshots: attach to PR/comment/external artifact store. Do not commit `.github/pr-assets`.
 - CI polling: exact SHA, relevant checks only, minimal fields. Skip routine noise (`Auto response`, `Labeler`, docs agents, performance/stale). Logs only after failure/completion or concrete need.
+- Maintainers: ignore `Real behavior proof` failures that only say PR body lacks real after-fix evidence.
 - `/landpr`: use `~/.codex/prompts/landpr.md`; do not idle on `auto-response` or `check-docs`.
 
 ## Code

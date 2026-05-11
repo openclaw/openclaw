@@ -131,14 +131,13 @@ describe("mattermost monitor slash", () => {
         originalName: "oc_ping",
       },
     ]);
-    expect(activateSlashCommands).toHaveBeenCalledWith(
-      expect.objectContaining({
-        commandTokens: ["token-1", "token-2"],
-        triggerMap: new Map([
-          ["oc_skill", "skill"],
-          ["oc_ping", "oc_ping"],
-        ]),
-      }),
+    const [activation] = activateSlashCommands.mock.calls[0] ?? [];
+    expect(activation?.commandTokens).toStrictEqual(["token-1", "token-2"]);
+    expect(activation?.triggerMap).toStrictEqual(
+      new Map([
+        ["oc_skill", "skill"],
+        ["oc_ping", "oc_ping"],
+      ]),
     );
     expect(runtime.log).toHaveBeenCalledWith(
       "mattermost: slash commands registered (2 commands across 2 teams, callback=https://openclaw.test/slash)",
@@ -169,9 +168,7 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "slash commands callbackUrl resolved to http://127.0.0.1:18789/slash",
-      ),
+      "mattermost: slash commands callbackUrl resolved to http://127.0.0.1:18789/slash (loopback) while baseUrl is https://chat.example.com. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).",
     );
     expect(runtime.error).toHaveBeenCalledWith(
       "mattermost: failed to register slash commands for team team-2: Error: boom",
