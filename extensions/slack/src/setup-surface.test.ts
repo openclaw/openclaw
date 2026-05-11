@@ -95,7 +95,7 @@ describe("slackSetupWizard.prepare", () => {
       cfg: { channels: { slack: {} } } as OpenClawConfig,
       prompter: createTestWizardPrompter({
         plain,
-        note: note as WizardPrompter["note"],
+        note,
       }),
     });
 

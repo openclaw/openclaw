@@ -63,17 +63,15 @@ describe("memory host event journal integration", () => {
       "memory.promotion.applied",
     ]);
     const recallEvent = events[0];
-    const promotionEvent = events[1];
-    expect(recallEvent?.type).toBe("memory.recall.recorded");
-    expect(promotionEvent?.type).toBe("memory.promotion.applied");
     if (recallEvent?.type !== "memory.recall.recorded") {
-      throw new Error("expected memory recall event");
-    }
-    if (promotionEvent?.type !== "memory.promotion.applied") {
-      throw new Error("expected memory promotion event");
+      throw new Error("expected recall event");
     }
     expect(recallEvent.resultCount).toBe(1);
     expect(recallEvent.query).toBe("alpha memory");
+    const promotionEvent = events[1];
+    if (promotionEvent?.type !== "memory.promotion.applied") {
+      throw new Error("expected promotion event");
+    }
     expect(promotionEvent.applied).toBe(1);
   });
 
@@ -98,9 +96,8 @@ describe("memory host event journal integration", () => {
     await expect(fs.readFile(written.reportPath ?? "", "utf8")).resolves.toContain("- second note");
     expect(events).toHaveLength(1);
     const dreamEvent = events[0];
-    expect(dreamEvent?.type).toBe("memory.dream.completed");
     if (dreamEvent?.type !== "memory.dream.completed") {
-      throw new Error("expected memory dream completed event");
+      throw new Error("expected dream completion event");
     }
     expect(dreamEvent.phase).toBe("light");
     expect(dreamEvent.lineCount).toBe(2);

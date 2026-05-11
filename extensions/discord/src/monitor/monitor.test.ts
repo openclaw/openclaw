@@ -707,11 +707,11 @@ describe("discord component interactions", () => {
 
     expect(reply).toHaveBeenCalledWith({ content: "✓", ephemeral: true });
     expect(dispatchReplyMock).toHaveBeenCalledTimes(1);
-    expect(lastDispatchCtx).toMatchObject({
-      From: "discord:group:group-dm-1",
-      ChatType: "group",
-      ConversationLabel: "Group DM #incident-room channel id:group-dm-1",
-    });
+    expect(lastDispatchCtx?.From).toBe("discord:group:group-dm-1");
+    expect(lastDispatchCtx?.ChatType).toBe("group");
+    expect(lastDispatchCtx?.ConversationLabel).toBe(
+      "Group DM #incident-room channel id:group-dm-1",
+    );
   });
 
   it("blocks Group DM modal triggers before showing the modal", async () => {

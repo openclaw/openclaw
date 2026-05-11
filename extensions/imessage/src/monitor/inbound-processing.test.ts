@@ -120,22 +120,21 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     const selfChatCache = createSelfChatCache();
     const createdAt = "2026-03-02T20:58:10.649Z";
 
-    expect(
-      await resolveDecision({
-        message: {
-          id: 9641,
-          sender: "+15555550123",
-          chat_identifier: "+15555550123",
-          destination_caller_id: "+15555550123",
-          text: "Do you want to report this issue?",
-          created_at: createdAt,
-          is_from_me: true,
-        },
-        messageText: "Do you want to report this issue?",
-        bodyText: "Do you want to report this issue?",
-        selfChatCache,
-      }),
-    ).toMatchObject({ kind: "dispatch" });
+    const fromMeDecision = await resolveDecision({
+      message: {
+        id: 9641,
+        sender: "+15555550123",
+        chat_identifier: "+15555550123",
+        destination_caller_id: "+15555550123",
+        text: "Do you want to report this issue?",
+        created_at: createdAt,
+        is_from_me: true,
+      },
+      messageText: "Do you want to report this issue?",
+      bodyText: "Do you want to report this issue?",
+      selfChatCache,
+    });
+    expect(fromMeDecision.kind).toBe("dispatch");
 
     expect(
       await resolveDecision({

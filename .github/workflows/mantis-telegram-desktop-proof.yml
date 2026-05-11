@@ -48,7 +48,7 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.x"
-  PNPM_VERSION: "10.33.0"
+  PNPM_VERSION: "11.0.8"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
   CRABBOX_REF: main
@@ -64,9 +64,8 @@ jobs:
           github.event_name == 'issue_comment' &&
           github.event.issue.pull_request &&
           (
-            contains(github.event.comment.body, '@Mantis') ||
-            contains(github.event.comment.body, '@mantis') ||
-            contains(github.event.comment.body, '/mantis')
+            contains(github.event.comment.body, '@openclaw-mantis') ||
+            contains(github.event.comment.body, '/openclaw-mantis')
           )
         )
       }}
@@ -144,7 +143,7 @@ jobs:
 
             const normalized = body.toLowerCase();
             const requested =
-              (normalized.includes("@mantis") || normalized.includes("/mantis")) &&
+              (normalized.includes("@openclaw-mantis") || normalized.includes("/openclaw-mantis")) &&
               normalized.includes("telegram") &&
               (normalized.includes("desktop") || normalized.includes("native")) &&
               normalized.includes("proof");
@@ -336,6 +335,14 @@ jobs:
         run: |
           set -euo pipefail
           test -f scripts/e2e/telegram-user-driver.py
+          cat >"${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          exec node --import tsx "${GITHUB_WORKSPACE}/scripts/e2e/telegram-user-crabbox-proof.ts" "$@"
+          EOF
+          chmod 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof"
+          sudo install -m 0755 "${RUNNER_TEMP}/openclaw-telegram-user-crabbox-proof" /usr/local/bin/openclaw-telegram-user-crabbox-proof
+          /usr/local/bin/openclaw-telegram-user-crabbox-proof --help >/dev/null
           media_tools="${RUNNER_TEMP}/mantis-media-tools"
           install -d "$media_tools"
           curl --fail --location --retry 3 --retry-delay 2 \
@@ -370,7 +377,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
-            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT OPENCLAW_TELEGRAM_USER_PROOF_CMD"'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -408,7 +415,8 @@ jobs:
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
           OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
-          OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT: scripts/e2e/telegram-user-driver.py
+          OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT: ${{ github.workspace }}/scripts/e2e/telegram-user-driver.py
+          OPENCLAW_TELEGRAM_USER_PROOF_CMD: /usr/local/bin/openclaw-telegram-user-crabbox-proof
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md

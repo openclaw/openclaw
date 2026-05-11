@@ -553,8 +553,8 @@ Think of the suites as "increasing realism" (and increasing flakiness/cost):
 
 Native dependency policy:
 
-- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays in `ignoredBuiltDependencies` so local tests and Testbox lanes do not compile the native addon.
-- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not add `@discordjs/opus` back to the default `onlyBuiltDependencies`; that makes unrelated install/test loops compile native code.
+- Default test installs skip optional native Discord opus builds. Discord voice receive uses the pure-JS `opusscript` decoder, and `@discordjs/opus` stays disabled in `allowBuilds` so local tests and Testbox lanes do not compile the native addon.
+- Use a dedicated Discord voice performance or live lane if you intentionally need to compare a native opus build. Do not set `@discordjs/opus` to `true` in the default `allowBuilds`; that makes unrelated install/test loops compile native code.
 
 <AccordionGroup>
   <Accordion title="Projects, shards, and scoped lanes">

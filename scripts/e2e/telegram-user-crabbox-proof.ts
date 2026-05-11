@@ -1171,12 +1171,17 @@ async function writeExecutable(filePath: string, content: string) {
   fs.chmodSync(filePath, 0o700);
 }
 
+function requireUserDriverScript(opts: Options) {
+  const userDriverScript = expandHome(opts.userDriverScript);
+  if (!fs.existsSync(userDriverScript)) {
+    throw new Error(`Missing user driver script: ${opts.userDriverScript}`);
+  }
+  return userDriverScript;
+}
+
 async function prepareRemoteState(params: { localRoot: string; opts: Options; root: string }) {
   const stateArchive = path.join(params.localRoot, "remote-state.tgz");
-  const userDriverScript = expandHome(params.opts.userDriverScript);
-  if (!fs.existsSync(userDriverScript)) {
-    throw new Error(`Missing user driver script: ${params.opts.userDriverScript}`);
-  }
+  const userDriverScript = requireUserDriverScript(params.opts);
   await runCommand({
     command: "cp",
     args: [userDriverScript, path.join(params.localRoot, "user-driver.py")],
@@ -1475,6 +1480,7 @@ async function startSession(root: string, opts: Options, outputDir: string) {
     };
   }
 
+  requireUserDriverScript(opts);
   const credential = await leaseCredential({ localRoot, opts, root });
   const sut = opts.sutUsername
     ? { id: "", username: opts.sutUsername }
@@ -1960,6 +1966,7 @@ async function main() {
       return;
     }
 
+    requireUserDriverScript(opts);
     credential = await leaseCredential({ localRoot, opts, root });
     const sut = opts.sutUsername
       ? { id: "", username: opts.sutUsername }

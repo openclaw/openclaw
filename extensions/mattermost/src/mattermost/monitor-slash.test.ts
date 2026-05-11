@@ -94,13 +94,14 @@ describe("mattermost monitor slash", () => {
     registerSlashCommands
       .mockResolvedValueOnce([{ token: "token-1", trigger: "ping" }])
       .mockResolvedValueOnce([{ token: "token-2", trigger: "oc_skill" }]);
+    const client = {} as never;
     const runtime = {
       log: vi.fn(),
       error: vi.fn(),
     };
 
     await registerMattermostMonitorSlashCommands({
-      client: {} as never,
+      client,
       cfg: { gateway: { port: 18789 } } as never,
       runtime: runtime as never,
       account: { config: { commands: {} }, accountId: "default" } as never,
@@ -109,28 +110,35 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(registerSlashCommands).toHaveBeenCalledTimes(2);
-    expect(registerSlashCommands.mock.calls[0]?.[0]).toMatchObject({
+    const firstRegistration = registerSlashCommands.mock.calls[0]?.[0];
+    if (!firstRegistration) {
+      throw new Error("expected first Mattermost slash command registration");
+    }
+    expect(firstRegistration).toEqual({
+      client,
       teamId: "team-1",
       creatorUserId: "bot-user",
       callbackUrl: "https://openclaw.test/slash",
+      commands: [
+        { trigger: "ping", description: "ping" },
+        {
+          trigger: "oc_skill",
+          description: "Skill run",
+          autoComplete: true,
+          autoCompleteHint: "[args]",
+          originalName: "skill",
+        },
+        {
+          trigger: "oc_ping",
+          description: "Already prefixed",
+          autoComplete: true,
+          autoCompleteHint: "[args]",
+          originalName: "oc_ping",
+        },
+      ],
+      log: firstRegistration.log,
     });
-    expect(registerSlashCommands.mock.calls[0]?.[0].commands).toEqual([
-      { trigger: "ping", description: "ping" },
-      {
-        trigger: "oc_skill",
-        description: "Skill run",
-        autoComplete: true,
-        autoCompleteHint: "[args]",
-        originalName: "skill",
-      },
-      {
-        trigger: "oc_ping",
-        description: "Already prefixed",
-        autoComplete: true,
-        autoCompleteHint: "[args]",
-        originalName: "oc_ping",
-      },
-    ]);
+    expect(typeof firstRegistration.log).toBe("function");
     const [activation] = activateSlashCommands.mock.calls[0] ?? [];
     expect(activation?.commandTokens).toStrictEqual(["token-1", "token-2"]);
     expect(activation?.triggerMap).toStrictEqual(

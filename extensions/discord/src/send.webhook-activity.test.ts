@@ -67,35 +67,35 @@ describe("sendWebhookMessageDiscord activity", () => {
       threadId: "thread-1",
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       messageId: "msg-1",
       channelId: "thread-1",
-    });
-    expect(result.receipt).toEqual({
-      primaryPlatformMessageId: "msg-1",
-      platformMessageIds: ["msg-1"],
-      parts: [
-        {
-          platformMessageId: "msg-1",
-          kind: "text",
-          index: 0,
-          threadId: "thread-1",
-          raw: {
+      receipt: {
+        primaryPlatformMessageId: "msg-1",
+        platformMessageIds: ["msg-1"],
+        parts: [
+          {
+            platformMessageId: "msg-1",
+            kind: "text",
+            index: 0,
+            threadId: "thread-1",
+            raw: {
+              channel: "discord",
+              messageId: "msg-1",
+              channelId: "thread-1",
+            },
+          },
+        ],
+        threadId: "thread-1",
+        sentAt: 1_700_000_000_000,
+        raw: [
+          {
             channel: "discord",
             messageId: "msg-1",
             channelId: "thread-1",
           },
-        },
-      ],
-      threadId: "thread-1",
-      sentAt: 1_700_000_000_000,
-      raw: [
-        {
-          channel: "discord",
-          messageId: "msg-1",
-          channelId: "thread-1",
-        },
-      ],
+        ],
+      },
     });
     expect(recordChannelActivityMock).toHaveBeenCalledWith({
       channel: "discord",

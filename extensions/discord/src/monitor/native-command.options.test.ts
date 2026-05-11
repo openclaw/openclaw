@@ -1,4 +1,4 @@
-import { ChannelType } from "discord-api-types/v10";
+import { ApplicationCommandType, ChannelType, InteractionContextType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -359,12 +359,21 @@ describe("createDiscordNativeCommand option wiring", () => {
       ko: "현지화된 설명",
       "en-GB": "k".repeat(100),
     });
-    expect(command.serialize()).toMatchObject({
+    expect(command.serialize()).toEqual({
+      name: "localized",
       description: "Default description",
       description_localizations: {
         ko: "현지화된 설명",
         "en-GB": "k".repeat(100),
       },
+      type: ApplicationCommandType.ChatInput,
+      integration_types: [0, 1],
+      contexts: [
+        InteractionContextType.Guild,
+        InteractionContextType.BotDM,
+        InteractionContextType.PrivateChannel,
+      ],
+      default_member_permissions: null,
     });
   });
 });
