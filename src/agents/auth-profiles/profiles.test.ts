@@ -66,7 +66,8 @@ function readPersistedOAuthRefId(agentDir: string, profileId: string): string {
     profiles: Record<string, { oauthRef?: { id?: string } }>;
   };
   const refId = persisted.profiles[profileId]?.oauthRef?.id;
-  expect(refId).toEqual(expect.any(String));
+  expect(typeof refId).toBe("string");
+  expect(refId?.length).toBeGreaterThan(0);
   return String(refId);
 }
 
@@ -76,6 +77,58 @@ function resolvePersistedOAuthSecretPath(refId: string): string {
 
 function resolveAuthStoreLockPath(authPath: string): string {
   return `${path.join(fs.realpathSync(path.dirname(authPath)), path.basename(authPath))}.lock`;
+}
+
+type ExpectedOAuthCredentialFields = {
+  provider: string;
+  access?: string;
+  refresh?: string;
+  idToken?: string;
+  expires?: number;
+  email?: string;
+  accountId?: string;
+  chatgptPlanType?: string;
+};
+
+function expectOAuthCredentialFields(
+  value: unknown,
+  expected: ExpectedOAuthCredentialFields,
+): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error("Expected OAuth credential object");
+  }
+  const credential = value as Record<string, unknown>;
+  expect(credential.type).toBe("oauth");
+  expect(credential.provider).toBe(expected.provider);
+  for (const field of [
+    "access",
+    "refresh",
+    "idToken",
+    "expires",
+    "email",
+    "accountId",
+    "chatgptPlanType",
+  ] as const) {
+    if (field in expected) {
+      expect(credential[field]).toBe(expected[field]);
+    }
+  }
+  return credential;
+}
+
+function expectOpenClawCredentialsOAuthRef(
+  credential: Record<string, unknown>,
+  provider: string,
+): void {
+  const oauthRef = credential.oauthRef;
+  if (!oauthRef || typeof oauthRef !== "object") {
+    throw new Error("Expected OAuth credential ref");
+  }
+  const ref = oauthRef as Record<string, unknown>;
+  expect(ref.source).toBe("openclaw-credentials");
+  expect(ref.provider).toBe(provider);
+  expect(typeof ref.id).toBe("string");
+  expect(String(ref.id).length).toBeGreaterThan(0);
 }
 
 describe("promoteAuthProfileInOrder", () => {
@@ -810,7 +863,8 @@ describe("promoteAuthProfileInOrder", () => {
         profiles: Record<string, { oauthRef?: { id?: string } }>;
       };
       const refId = persisted.profiles[profileId]?.oauthRef?.id;
-      expect(refId).toEqual(expect.any(String));
+      expect(typeof refId).toBe("string");
+      expect(refId?.length).toBeGreaterThan(0);
       const secretPath = resolvePersistedOAuthSecretPath(String(refId));
       const secretFile = fs.readFileSync(secretPath, "utf8");
       expect(secretFile).not.toContain("delete-access-token");
