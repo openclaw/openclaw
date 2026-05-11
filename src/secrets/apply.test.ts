@@ -2,15 +2,12 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { authProfileStoreKey } from "../agents/auth-profiles/persisted.js";
 import {
-  AUTH_PROFILE_STORE_KV_SCOPE,
-  authProfileStoreKey,
-} from "../agents/auth-profiles/persisted.js";
-import {
-  readOpenClawStateKvJsonResult,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  readAuthProfileStorePayloadResult,
+  writeAuthProfileStorePayload,
+  type AuthProfilePayloadValue,
+} from "../agents/auth-profiles/sqlite-storage.js";
 import {
   buildTalkTestProviderConfig,
   TALK_TEST_PROVIDER_API_KEY_PATH,
@@ -106,20 +103,17 @@ async function createApplyFixture(): Promise<ApplyFixture> {
 }
 
 function writeAuthStoreFixture(fixture: ApplyFixture, value: unknown): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    AUTH_PROFILE_STORE_KV_SCOPE,
+  writeAuthProfileStorePayload(
     authProfileStoreKey(fixture.authStoreAgentDir),
-    value as OpenClawStateJsonValue,
+    value as AuthProfilePayloadValue,
     { env: fixture.env },
   );
 }
 
-function readAuthStoreFixture(fixture: ApplyFixture): OpenClawStateJsonValue {
-  const result = readOpenClawStateKvJsonResult(
-    AUTH_PROFILE_STORE_KV_SCOPE,
-    authProfileStoreKey(fixture.authStoreAgentDir),
-    { env: fixture.env },
-  );
+function readAuthStoreFixture(fixture: ApplyFixture): AuthProfilePayloadValue {
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(fixture.authStoreAgentDir), {
+    env: fixture.env,
+  });
   if (!result.exists || result.value === undefined) {
     throw new Error("Expected auth profile store fixture to exist.");
   }

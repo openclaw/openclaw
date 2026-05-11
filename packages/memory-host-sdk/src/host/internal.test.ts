@@ -9,7 +9,9 @@ import {
   isMemoryPath,
   listMemoryFiles,
   normalizeExtraMemoryPaths,
+  parseEmbedding,
   remapChunkLines,
+  serializeEmbedding,
 } from "./internal.js";
 import {
   DEFAULT_MEMORY_MULTIMODAL_MAX_FILE_BYTES,
@@ -111,6 +113,20 @@ describe("memory host SDK package internals", () => {
   it("allows top-level dreams path casing variants", () => {
     expect(isMemoryPath("dreams.md")).toBe(true);
     expect(isMemoryPath("DREAMS.md")).toBe(true);
+  });
+
+  it("round-trips embeddings as compact SQLite blob values", () => {
+    const parsed = parseEmbedding(serializeEmbedding([0.1, 0.2, Number.NaN]));
+
+    expect(parsed).toHaveLength(3);
+    expect(parsed[0]).toBeCloseTo(0.1);
+    expect(parsed[1]).toBeCloseTo(0.2);
+    expect(parsed[2]).toBe(0);
+  });
+
+  it("keeps JSON embedding parsing for explicit legacy fixtures", () => {
+    expect(parseEmbedding("[0.3,0.4]")).toEqual([0.3, 0.4]);
+    expect(parseEmbedding("not-json")).toEqual([]);
   });
 
   it("builds markdown and multimodal file entries", async () => {

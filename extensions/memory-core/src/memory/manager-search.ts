@@ -3,10 +3,10 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   cosineSimilarity,
   parseEmbedding,
+  serializeEmbedding,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
+const vectorToBlob = (embedding: number[]): Uint8Array => serializeEmbedding(embedding);
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
@@ -146,7 +146,7 @@ export async function searchVector(params: {
       params.db
         .prepare(
           `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
-            `       c.source,\n` +
+            `       c.source_kind AS source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
             `  JOIN ${params.chunksTable} c ON c.id = v.id\n` +
@@ -231,7 +231,7 @@ function searchChunksByEmbedding(params: {
   }
   const rows = params.db
     .prepare(
-      `SELECT id, path, start_line, end_line, text, embedding, source\n` +
+      `SELECT id, path, start_line, end_line, text, embedding, source_kind AS source\n` +
         `  FROM ${params.chunksTable}\n` +
         ` WHERE model = ?${params.sourceFilter.sql}`,
     )
@@ -241,7 +241,7 @@ function searchChunksByEmbedding(params: {
     start_line: number;
     end_line: number;
     text: string;
-    embedding: string;
+    embedding: unknown;
     source: SearchSource;
   }>;
 
@@ -280,6 +280,8 @@ function searchChunksByEmbedding(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
+  chunksTable: string;
+  requireChunkBacklink?: boolean;
   providerModel: string | undefined;
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
@@ -303,10 +305,15 @@ export async function searchKeyword(params: {
   }
 
   // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
+  const modelClause = params.providerModel ? ` AND ${params.ftsTable}.model = ?` : "";
   const modelParams = params.providerModel ? [params.providerModel] : [];
-  const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
+  const substringClause = plan.substringTerms
+    .map(() => ` AND ${params.ftsTable}.text LIKE ? ESCAPE '\\'`)
+    .join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
+  const chunkJoin = params.requireChunkBacklink
+    ? `  JOIN ${params.chunksTable} c ON c.id = ${params.ftsTable}.id\n`
+    : "";
 
   let rows: Array<{
     id: string;
@@ -323,9 +330,10 @@ export async function searchKeyword(params: {
     try {
       rows = params.db
         .prepare(
-          `SELECT id, path, source, start_line, end_line, text,\n` +
+          `SELECT ${params.ftsTable}.id AS id, ${params.ftsTable}.path AS path, ${params.ftsTable}.source AS source, ${params.ftsTable}.start_line AS start_line, ${params.ftsTable}.end_line AS end_line, ${params.ftsTable}.text AS text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
+            chunkJoin +
             ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
@@ -350,13 +358,16 @@ export async function searchKeyword(params: {
           ?.map((t) => t.trim())
           .filter(Boolean) ?? [];
       const allTerms = [...new Set([...queryTokens, ...plan.substringTerms])];
-      const fallbackLikeClause = allTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
+      const fallbackLikeClause = allTerms
+        .map(() => ` AND ${params.ftsTable}.text LIKE ? ESCAPE '\\'`)
+        .join("");
       const fallbackLikeParams = allTerms.map((term) => `%${escapeLikePattern(term)}%`);
       rows = params.db
         .prepare(
-          `SELECT id, path, source, start_line, end_line, text,\n` +
+          `SELECT ${params.ftsTable}.id AS id, ${params.ftsTable}.path AS path, ${params.ftsTable}.source AS source, ${params.ftsTable}.start_line AS start_line, ${params.ftsTable}.end_line AS end_line, ${params.ftsTable}.text AS text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
+            chunkJoin +
             ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
@@ -370,9 +381,10 @@ export async function searchKeyword(params: {
   } else {
     rows = params.db
       .prepare(
-        `SELECT id, path, source, start_line, end_line, text,\n` +
+        `SELECT ${params.ftsTable}.id AS id, ${params.ftsTable}.path AS path, ${params.ftsTable}.source AS source, ${params.ftsTable}.start_line AS start_line, ${params.ftsTable}.end_line AS end_line, ${params.ftsTable}.text AS text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
+          chunkJoin +
           ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )

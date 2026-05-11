@@ -354,7 +354,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     stored in:
 
     ```
-    ~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>
+    ~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
     ```
 
     Fix options:
@@ -423,7 +423,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     **Fix checklist:**
 
     - **Confirm where auth profiles live** (new vs legacy paths)
-      - Current: `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
+      - Current: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
       - Legacy: `~/.openclaw/agent/*` (migrated by `openclaw doctor`)
     - **Confirm your env var is loaded by the Gateway**
       - If you set `ANTHROPIC_API_KEY` in your shell but run the Gateway via systemd/launchd, it may not inherit it. Put it in `~/.openclaw/.env` or enable `env.shellEnv`.
@@ -476,7 +476,7 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
     An auth profile is a named credential record (OAuth or API key) tied to a provider. Profiles live in:
 
     ```
-    ~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>
+    ~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
     ```
 
     To inspect saved profiles without dumping secrets, run `openclaw models auth list` (optionally `--provider <id>` or `--json`). See [Models CLI](/cli/models#auth-profiles) for details.

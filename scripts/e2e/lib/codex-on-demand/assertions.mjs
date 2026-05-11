@@ -42,15 +42,17 @@ function stateDatabasePath() {
   return path.join(stateDir(), "state", "openclaw.sqlite");
 }
 
-function readOpenClawStateKvJson(scope, key) {
+function readAuthProfileStorePayload(storeKey) {
   const dbPath = stateDatabasePath();
   if (!fs.existsSync(dbPath)) {
     throw new Error(`missing OpenClaw state database: ${dbPath}`);
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = db.prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?").get(scope, key);
-    return typeof row?.value_json === "string" ? JSON.parse(row.value_json) : undefined;
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get(storeKey);
+    return typeof row?.store_json === "string" ? JSON.parse(row.store_json) : undefined;
   } finally {
     db.close();
   }
@@ -122,7 +124,7 @@ if (providerRuntime && providerRuntime !== "codex") {
 }
 
 const authAgentDir = path.join(stateDir(), "agents", "main", "agent");
-const authStore = readOpenClawStateKvJson("auth-profiles", authAgentDir);
+const authStore = readAuthProfileStorePayload(authAgentDir);
 const authRaw = JSON.stringify(authStore ?? {});
 if (!authStore || !authRaw.includes("OPENAI_API_KEY")) {
   throw new Error("auth profile did not persist OPENAI_API_KEY env ref");

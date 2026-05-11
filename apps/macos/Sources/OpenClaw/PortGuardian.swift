@@ -27,8 +27,6 @@ actor PortGuardian {
     #if DEBUG
     private var testingDescriptors: [Int: Descriptor] = [:]
     #endif
-    private nonisolated static let recordsScope = "macos.port-guardian"
-    private nonisolated static let recordsKey = "records"
 
     init() {
         self.records = Self.loadRecords()
@@ -396,17 +394,26 @@ actor PortGuardian {
     }
 
     private static func loadRecords() -> [Record] {
-        guard let raw = OpenClawSQLiteKVStore.readString(scope: self.recordsScope, key: self.recordsKey),
-              let data = raw.data(using: .utf8),
-              let decoded = try? JSONDecoder().decode([Record].self, from: data)
-        else { return [] }
-        return decoded
+        OpenClawSQLiteStateStore.readPortGuardianRecords().map { row in
+            Record(
+                port: row.port,
+                pid: row.pid,
+                command: row.command,
+                mode: row.mode,
+                timestamp: row.timestamp)
+        }
     }
 
     private func save() {
-        guard let data = try? JSONEncoder().encode(self.records) else { return }
-        guard let raw = String(data: data, encoding: .utf8) else { return }
-        try? OpenClawSQLiteKVStore.writeString(scope: Self.recordsScope, key: Self.recordsKey, value: raw)
+        try? OpenClawSQLiteStateStore.replacePortGuardianRecords(
+            self.records.map { record in
+                OpenClawSQLitePortGuardianRecord(
+                    port: record.port,
+                    pid: record.pid,
+                    command: record.command,
+                    mode: record.mode,
+                    timestamp: record.timestamp)
+            })
     }
 }
 

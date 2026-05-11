@@ -209,7 +209,13 @@ export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnap
 
 export function saveTaskFlowRegistryStateToSqlite(snapshot: TaskFlowRegistryStoreSnapshot) {
   withWriteTransaction(({ db }) => {
-    executeSqliteQuerySync(db, getFlowRegistryKysely(db).deleteFrom("flow_runs"));
+    const kysely = getFlowRegistryKysely(db);
+    const flowIds = [...snapshot.flows.keys()];
+    if (flowIds.length === 0) {
+      executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs"));
+      return;
+    }
+    executeSqliteQuerySync(db, kysely.deleteFrom("flow_runs").where("flow_id", "not in", flowIds));
     for (const flow of snapshot.flows.values()) {
       upsertFlowRow(db, bindFlowRecord(flow));
     }

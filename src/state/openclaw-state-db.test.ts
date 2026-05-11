@@ -2,7 +2,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
+import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -13,6 +19,8 @@ import {
   collectSqliteSchemaShape,
   createSqliteSchemaShapeFromSql,
 } from "./sqlite-schema-shape.test-support.js";
+
+type StateDbTestDatabase = Pick<OpenClawStateKyselyDatabase, "diagnostic_events" | "schema_meta">;
 
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-state-db-"));
@@ -60,6 +68,21 @@ describe("openclaw state database", () => {
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("wal");
   });
 
+  it("records durable schema metadata", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        database.db,
+        stateDb.selectFrom("schema_meta").select(["role", "schema_version"]),
+      ),
+    ).toEqual({ role: "global", schema_version: 1 });
+  });
+
   it("does not chmod shared parent directories for explicit database paths", () => {
     const databasePath = path.join(
       os.tmpdir(),
@@ -75,25 +98,44 @@ describe("openclaw state database", () => {
     const options = { env: { OPENCLAW_STATE_DIR: stateDir } };
 
     runOpenClawStateWriteTransaction((database) => {
-      database.db
-        .prepare("INSERT INTO kv(scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-        .run("test", "outer", "{}", 1);
+      const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        stateDb.insertInto("diagnostic_events").values({
+          scope: "transaction-test",
+          event_key: "outer",
+          payload_json: "{}",
+          created_at: 1,
+        }),
+      );
       expect(() =>
         runOpenClawStateWriteTransaction((inner) => {
-          inner.db
-            .prepare("INSERT INTO kv(scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-            .run("test", "inner", "{}", 2);
+          const innerDb = getNodeSqliteKysely<StateDbTestDatabase>(inner.db);
+          executeSqliteQuerySync(
+            inner.db,
+            innerDb.insertInto("diagnostic_events").values({
+              scope: "transaction-test",
+              event_key: "inner",
+              payload_json: "{}",
+              created_at: 2,
+            }),
+          );
           throw new Error("rollback nested");
         }, options),
       ).toThrow("rollback nested");
     }, options);
 
     const database = openOpenClawStateDatabase(options);
+    const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
     expect(
-      database.db
-        .prepare("SELECT key FROM kv WHERE scope = ? ORDER BY key")
-        .all("test")
-        .map((row) => (row as { key: string }).key),
+      executeSqliteQuerySync(
+        database.db,
+        stateDb
+          .selectFrom("diagnostic_events")
+          .select("event_key")
+          .where("scope", "=", "transaction-test")
+          .orderBy("event_key"),
+      ).rows.map((row) => row.event_key),
     ).toEqual(["outer"]);
   });
 
@@ -109,9 +151,16 @@ describe("openclaw state database", () => {
 
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
-        database.db
-          .prepare("INSERT INTO kv(scope, key, value_json, updated_at) VALUES (?, ?, ?, ?)")
-          .run("test", "after", "{}", 3);
+        const stateDb = getNodeSqliteKysely<StateDbTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          stateDb.insertInto("diagnostic_events").values({
+            scope: "transaction-test",
+            event_key: "after",
+            payload_json: "{}",
+            created_at: 3,
+          }),
+        );
       }, options),
     ).not.toThrow();
   });

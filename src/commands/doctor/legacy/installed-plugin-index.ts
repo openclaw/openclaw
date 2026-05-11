@@ -2,20 +2,14 @@ import fs from "node:fs";
 import { tryReadJsonSync } from "../../../infra/json-files.js";
 import { clearCurrentPluginMetadataSnapshotState } from "../../../plugins/current-plugin-metadata-state.js";
 import {
-  INSTALLED_PLUGIN_INDEX_KV_KEY,
-  INSTALLED_PLUGIN_INDEX_KV_SCOPE,
   parseInstalledPluginIndex,
-  resolveInstalledPluginIndexStateDbOptions,
+  writePersistedInstalledPluginIndexToSqliteSync,
 } from "../../../plugins/installed-plugin-index-persisted-read.js";
 import type { InstalledPluginIndexStoreOptions } from "../../../plugins/installed-plugin-index-store-options.js";
 import {
   INSTALLED_PLUGIN_INDEX_WARNING,
   type InstalledPluginIndex,
 } from "../../../plugins/installed-plugin-index-types.js";
-import {
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../../../state/openclaw-state-kv.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "./installed-plugin-index-path.js";
 
 function withInstalledPluginIndexWarning(index: InstalledPluginIndex): InstalledPluginIndex & {
@@ -49,12 +43,7 @@ export function importLegacyInstalledPluginIndexFileToSqlite(
   if (!parsed) {
     return { imported: false, plugins: 0, installRecords: 0, removedSource: false };
   }
-  writeOpenClawStateKvJson(
-    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-    INSTALLED_PLUGIN_INDEX_KV_KEY,
-    withInstalledPluginIndexWarning(parsed) as unknown as OpenClawStateJsonValue,
-    resolveInstalledPluginIndexStateDbOptions({ env: options.env, stateDir: options.stateDir }),
-  );
+  writePersistedInstalledPluginIndexToSqliteSync(withInstalledPluginIndexWarning(parsed), options);
   let removedSource = false;
   try {
     fs.unlinkSync(filePath);

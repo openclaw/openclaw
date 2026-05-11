@@ -4,47 +4,29 @@ import { CHANNEL_IDS } from "../../../channels/ids.js";
 import { getPairingAdapter } from "../../../channels/plugins/pairing.js";
 import {
   resolveAllowFromAccountId,
-  safeChannelKey,
   type AllowFromStore,
 } from "../../../pairing/pairing-store-keys.js";
+import {
+  readChannelPairingStateSnapshot,
+  writeChannelPairingStateSnapshot,
+  type PairingRequest,
+  type ChannelPairingState,
+} from "../../../pairing/pairing-store.js";
 import type { PairingChannel } from "../../../pairing/pairing-store.types.js";
 import { DEFAULT_ACCOUNT_ID } from "../../../routing/session-key.js";
 import { normalizeOptionalString } from "../../../shared/string-coerce.js";
-import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
-import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../../../state/openclaw-state-kv.js";
 import {
   readAllowFromFileWithExists,
   resolveLegacyPairingCredentialsDir,
 } from "./channel-pairing-files.js";
 
-const CHANNEL_PAIRING_SCOPE = "pairing.channel";
 const LEGACY_PAIRING_SUFFIX = "-pairing.json";
 const LEGACY_ALLOW_FROM_SUFFIX = "-allowFrom.json";
-
-type PairingRequest = {
-  id: string;
-  code: string;
-  createdAt: string;
-  lastSeenAt: string;
-  meta?: Record<string, string>;
-};
 
 type PairingStore = {
   version: 1;
   requests: PairingRequest[];
 };
-
-type ChannelPairingState = PairingStore & {
-  allowFrom?: Record<string, string[]>;
-};
-
-function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
-}
 
 function normalizePairingRequest(value: unknown): PairingRequest | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -125,14 +107,7 @@ function readChannelPairingState(
   channel: PairingChannel,
   env: NodeJS.ProcessEnv,
 ): ChannelPairingState {
-  return normalizeChannelPairingState(
-    channel,
-    readOpenClawStateKvJson(
-      CHANNEL_PAIRING_SCOPE,
-      safeChannelKey(channel),
-      sqliteOptionsForEnv(env),
-    ),
-  );
+  return readChannelPairingStateSnapshot(channel, env);
 }
 
 function writeChannelPairingState(
@@ -140,16 +115,7 @@ function writeChannelPairingState(
   state: ChannelPairingState,
   env: NodeJS.ProcessEnv,
 ): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    CHANNEL_PAIRING_SCOPE,
-    safeChannelKey(channel),
-    {
-      version: 1,
-      requests: state.requests,
-      allowFrom: state.allowFrom ?? {},
-    } as OpenClawStateJsonValue,
-    sqliteOptionsForEnv(env),
-  );
+  writeChannelPairingStateSnapshot(channel, state, env);
 }
 
 export async function legacyChannelPairingFilesExist(

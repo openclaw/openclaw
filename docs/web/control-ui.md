@@ -142,7 +142,7 @@ Imported themes are stored only in the current browser profile. They are not wri
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.
     - Form validation is inline with field-level errors; invalid values disable the save button until fixed.
     - Set `cron.webhookToken` to send a dedicated bearer token, if omitted the webhook is sent without an auth header.
-    - Deprecated fallback: stored legacy jobs with `notify: true` can still use `cron.webhook` until migrated.
+    - Deprecated fallback: runtime jobs do not use `cron.webhook`; doctor can use it while migrating legacy `notify: true` jobs to explicit webhook delivery.
 
   </Accordion>
 </AccordionGroup>

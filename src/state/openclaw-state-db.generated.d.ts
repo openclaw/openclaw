@@ -36,6 +36,45 @@ export interface AgentDatabases {
   size_bytes: number | null;
 }
 
+export interface AgentModelCatalogs {
+  agent_dir: string;
+  catalog_key: string;
+  raw_json: string;
+  updated_at: number;
+}
+
+export interface AndroidNotificationRecentPackages {
+  package_name: string;
+  sort_order: number;
+  updated_at_ms: number;
+}
+
+export interface ApnsRegistrations {
+  distribution: string | null;
+  environment: string;
+  installation_id: string | null;
+  node_id: string;
+  relay_handle: string | null;
+  send_grant: string | null;
+  token: string | null;
+  token_debug_suffix: string | null;
+  topic: string;
+  transport: string;
+  updated_at_ms: number;
+}
+
+export interface AuthProfileState {
+  state_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
+export interface AuthProfileStores {
+  store_json: string;
+  store_key: string;
+  updated_at: number;
+}
+
 export interface BackupRuns {
   archive_path: string;
   created_at: number;
@@ -88,6 +127,24 @@ export interface CaptureSessions {
   started_at: number;
 }
 
+export interface ChannelPairingAllowEntries {
+  account_id: string;
+  channel_key: string;
+  entry: string;
+  sort_order: number;
+  updated_at: number;
+}
+
+export interface ChannelPairingRequests {
+  account_id: string;
+  channel_key: string;
+  code: string;
+  created_at: string;
+  last_seen_at: string;
+  meta_json: string | null;
+  request_id: string;
+}
+
 export interface CommandLogEntries {
   action: string;
   entry_json: string;
@@ -99,34 +156,136 @@ export interface CommandLogEntries {
 }
 
 export interface Commitments {
+  account_id: string | null;
   agent_id: string;
+  attempts: number;
   channel: string;
+  confidence: number;
+  created_at_ms: number;
+  dedupe_key: string;
+  dismissed_at_ms: number | null;
   due_earliest_ms: number;
   due_latest_ms: number;
+  due_timezone: string;
+  expired_at_ms: number | null;
   id: string;
+  kind: string;
+  last_attempt_at_ms: number | null;
+  reason: string;
+  recipient_id: string | null;
   record_json: string;
+  sender_id: string | null;
+  sensitivity: string;
+  sent_at_ms: number | null;
   session_key: string;
+  snoozed_until_ms: number | null;
+  source: string;
+  source_message_id: string | null;
+  source_run_id: string | null;
   status: string;
+  suggested_text: string;
+  thread_id: string | null;
+  updated_at_ms: number;
+}
+
+export interface ConfigHealthEntries {
+  config_path: string;
+  last_known_good_json: string | null;
+  last_observed_suspicious_signature: string | null;
+  last_promoted_good_json: string | null;
   updated_at_ms: number;
 }
 
 export interface CronJobs {
+  agent_id: string | null;
+  anchor_ms: number | null;
+  at: string | null;
+  consecutive_errors: number | null;
+  consecutive_skipped: number | null;
+  created_at_ms: number;
+  delete_after_run: number | null;
+  delivery_account_id: string | null;
+  delivery_best_effort: number | null;
+  delivery_channel: string | null;
+  delivery_mode: string | null;
+  delivery_thread_id: string | null;
+  delivery_to: string | null;
+  description: string | null;
+  enabled: number;
+  every_ms: number | null;
+  failure_alert_account_id: string | null;
+  failure_alert_after: number | null;
+  failure_alert_channel: string | null;
+  failure_alert_cooldown_ms: number | null;
+  failure_alert_disabled: number | null;
+  failure_alert_include_skipped: number | null;
+  failure_alert_mode: string | null;
+  failure_alert_to: string | null;
+  failure_delivery_account_id: string | null;
+  failure_delivery_channel: string | null;
+  failure_delivery_mode: string | null;
+  failure_delivery_to: string | null;
   job_id: string;
   job_json: string;
+  last_delivered: number | null;
+  last_delivery_error: string | null;
+  last_delivery_status: string | null;
+  last_duration_ms: number | null;
+  last_error: string | null;
+  last_failure_alert_at_ms: number | null;
+  last_run_at_ms: number | null;
+  last_run_status: string | null;
+  name: string;
+  next_run_at_ms: number | null;
+  payload_allow_unsafe_external_content: number | null;
+  payload_external_content_source_json: string | null;
+  payload_fallbacks_json: string | null;
+  payload_kind: string;
+  payload_light_context: number | null;
+  payload_message: string | null;
+  payload_model: string | null;
+  payload_thinking: string | null;
+  payload_timeout_seconds: number | null;
+  payload_tools_allow_json: string | null;
+  running_at_ms: number | null;
   runtime_updated_at_ms: number | null;
+  schedule_error_count: number | null;
+  schedule_expr: string | null;
   schedule_identity: string | null;
+  schedule_kind: string;
+  schedule_tz: string | null;
+  session_key: string | null;
+  session_target: string;
   sort_order: Generated<number>;
+  stagger_ms: number | null;
   state_json: Generated<string>;
   store_key: string;
   updated_at: number;
+  wake_mode: string;
 }
 
 export interface CronRunLogs {
   created_at: number;
+  delivered: number | null;
+  delivery_error: string | null;
+  delivery_status: string | null;
+  diagnostics_summary: string | null;
+  duration_ms: number | null;
   entry_json: string;
+  error: string | null;
   job_id: string;
+  model: string | null;
+  next_run_at_ms: number | null;
+  provider: string | null;
+  run_at_ms: number | null;
+  run_id: string | null;
   seq: number;
+  session_id: string | null;
+  session_key: string | null;
+  status: string | null;
   store_key: string;
+  summary: string | null;
+  total_tokens: number | null;
   ts: number;
 }
 
@@ -148,13 +307,31 @@ export interface CurrentConversationBindings {
 }
 
 export interface DeliveryQueueEntries {
+  account_id: string | null;
+  channel: string | null;
   enqueued_at: number;
   entry_json: string;
+  entry_kind: string | null;
   failed_at: number | null;
   id: string;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  platform_send_started_at: number | null;
   queue_name: string;
+  recovery_state: string | null;
+  retry_count: Generated<number>;
+  session_key: string | null;
   status: string;
+  target: string | null;
   updated_at: number;
+}
+
+export interface DeviceAuthTokens {
+  device_id: string;
+  role: string;
+  scopes_json: string;
+  token: string;
+  updated_at_ms: number;
 }
 
 export interface DeviceBootstrapTokens {
@@ -167,6 +344,15 @@ export interface DeviceBootstrapTokens {
   token: string;
   token_key: string;
   ts: number;
+}
+
+export interface DeviceIdentities {
+  created_at_ms: number;
+  device_id: string;
+  identity_key: string;
+  private_key_pem: string;
+  public_key_pem: string;
+  updated_at_ms: number;
 }
 
 export interface DevicePairingPaired {
@@ -207,6 +393,35 @@ export interface DevicePairingPending {
   ts: number;
 }
 
+export interface DiagnosticEvents {
+  created_at: number;
+  event_key: string;
+  payload_json: string;
+  scope: string;
+}
+
+export interface DiagnosticStabilityBundles {
+  bundle_json: string;
+  bundle_key: string;
+  created_at: number;
+  generated_at: string;
+  reason: string;
+}
+
+export interface ExecApprovalsConfig {
+  agent_count: number;
+  allowlist_count: number;
+  auto_allow_skills: number | null;
+  config_key: string;
+  default_ask: string | null;
+  default_ask_fallback: string | null;
+  default_security: string | null;
+  has_socket_token: number;
+  raw_json: string;
+  socket_path: string | null;
+  updated_at_ms: number;
+}
+
 export interface FlowRuns {
   blocked_summary: string | null;
   blocked_task_id: string | null;
@@ -229,11 +444,91 @@ export interface FlowRuns {
   wait_json: string | null;
 }
 
-export interface Kv {
-  key: string;
-  scope: string;
-  updated_at: number;
-  value_json: string;
+export interface GatewayRestartHandoff {
+  created_at: number;
+  expires_at: number;
+  handoff_key: string;
+  intent_id: string;
+  kind: string;
+  pid: number;
+  process_instance_id: string | null;
+  reason: string | null;
+  restart_kind: string;
+  source: string;
+  supervisor_mode: string;
+  updated_at_ms: number;
+  version: number;
+}
+
+export interface GatewayRestartIntent {
+  created_at: number;
+  force: number | null;
+  intent_key: string;
+  kind: string;
+  pid: number;
+  updated_at_ms: number;
+  wait_ms: number | null;
+}
+
+export interface GatewayRestartSentinel {
+  continuation_json: string | null;
+  delivery_account_id: string | null;
+  delivery_channel: string | null;
+  delivery_to: string | null;
+  doctor_hint: string | null;
+  kind: string;
+  message: string | null;
+  payload_json: string;
+  sentinel_key: string;
+  session_key: string | null;
+  stats_json: string | null;
+  status: string;
+  thread_id: string | null;
+  ts: number;
+  updated_at_ms: number;
+  version: number;
+}
+
+export interface InstalledPluginIndex {
+  compat_registry_version: string;
+  diagnostics_json: string;
+  generated_at_ms: number;
+  host_contract_version: string;
+  index_key: string;
+  install_records_json: string;
+  migration_version: number;
+  plugins_json: string;
+  policy_hash: string;
+  refresh_reason: string | null;
+  updated_at_ms: number;
+  version: number;
+  warning: string | null;
+}
+
+export interface MacosPortGuardianRecords {
+  command: string;
+  mode: string;
+  pid: Generated<number>;
+  port: number;
+  timestamp: number;
+}
+
+export interface ManagedOutgoingImageRecords {
+  alt: string;
+  attachment_id: string;
+  created_at: string;
+  message_id: string | null;
+  original_content_type: string;
+  original_filename: string | null;
+  original_height: number | null;
+  original_media_id: string;
+  original_media_subdir: string;
+  original_size_bytes: number | null;
+  original_width: number | null;
+  record_json: string;
+  retention_class: string | null;
+  session_key: string;
+  updated_at: string | null;
 }
 
 export interface MediaBlobs {
@@ -267,6 +562,46 @@ export interface MigrationSources {
   source_size_bytes: number | null;
   status: string;
   target_table: string;
+}
+
+export interface ModelCapabilityCache {
+  context_window: number;
+  cost_cache_read: number;
+  cost_cache_write: number;
+  cost_input: number;
+  cost_output: number;
+  input_image: number;
+  input_text: number;
+  max_tokens: number;
+  model_id: string;
+  name: string;
+  provider_id: string;
+  reasoning: number;
+  supports_tools: number | null;
+  updated_at_ms: number;
+}
+
+export interface NativeHookRelayBridges {
+  expires_at_ms: number;
+  hostname: string;
+  pid: number;
+  port: number;
+  relay_id: string;
+  token: string;
+  updated_at_ms: number;
+}
+
+export interface NodeHostConfig {
+  config_key: string;
+  display_name: string | null;
+  gateway_host: string | null;
+  gateway_port: number | null;
+  gateway_tls: number | null;
+  gateway_tls_fingerprint: string | null;
+  node_id: string;
+  token: string | null;
+  updated_at_ms: number;
+  version: number;
 }
 
 export interface NodePairingPaired {
@@ -309,6 +644,15 @@ export interface NodePairingPending {
   version: string | null;
 }
 
+export interface PluginBindingApprovals {
+  account_id: string;
+  approved_at: number;
+  channel: string;
+  plugin_id: string;
+  plugin_name: string | null;
+  plugin_root: string;
+}
+
 export interface PluginBlobEntries {
   blob: Uint8Array;
   created_at: number;
@@ -329,9 +673,29 @@ export interface PluginStateEntries {
 }
 
 export interface SandboxRegistryEntries {
+  backend_id: string | null;
+  cdp_port: number | null;
+  config_hash: string | null;
+  config_label_kind: string | null;
   container_name: string;
+  created_at_ms: number | null;
   entry_json: string;
+  image: string | null;
+  last_used_at_ms: number | null;
+  no_vnc_port: number | null;
   registry_kind: string;
+  runtime_label: string | null;
+  session_key: string | null;
+  updated_at: number;
+}
+
+export interface SchemaMeta {
+  agent_id: string | null;
+  app_version: string | null;
+  created_at: number;
+  meta_key: string;
+  role: string;
+  schema_version: number;
   updated_at: number;
 }
 
@@ -350,6 +714,17 @@ export interface SkillUploads {
   size_bytes: number;
   slug: string;
   upload_id: string;
+}
+
+export interface StateLeases {
+  created_at: number;
+  expires_at: number | null;
+  heartbeat_at: number | null;
+  lease_key: string;
+  owner: string;
+  payload_json: string | null;
+  scope: string;
+  updated_at: number;
 }
 
 export interface SubagentRuns {
@@ -395,6 +770,7 @@ export interface SubagentRuns {
   started_at: number | null;
   suppress_announce_reason: string | null;
   task: string;
+  task_name: string | null;
   wake_on_descendant_settle: number | null;
   workspace_dir: string | null;
 }
@@ -440,36 +816,138 @@ export interface TuiLastSessions {
   updated_at: number;
 }
 
+export interface UpdateCheckState {
+  auto_first_seen_at: string | null;
+  auto_first_seen_tag: string | null;
+  auto_first_seen_version: string | null;
+  auto_install_id: string | null;
+  auto_last_attempt_at: string | null;
+  auto_last_attempt_version: string | null;
+  auto_last_success_at: string | null;
+  auto_last_success_version: string | null;
+  last_available_tag: string | null;
+  last_available_version: string | null;
+  last_checked_at: string | null;
+  last_notified_tag: string | null;
+  last_notified_version: string | null;
+  state_key: string;
+  updated_at_ms: number;
+}
+
+export interface VoicewakeRoutingConfig {
+  config_key: string;
+  default_target_agent_id: string | null;
+  default_target_mode: string;
+  default_target_session_key: string | null;
+  updated_at_ms: number;
+  version: number;
+}
+
+export interface VoicewakeRoutingRoutes {
+  config_key: string;
+  position: number;
+  target_agent_id: string | null;
+  target_mode: string;
+  target_session_key: string | null;
+  trigger: string;
+  updated_at_ms: number;
+}
+
+export interface VoicewakeTriggers {
+  config_key: string;
+  position: number;
+  trigger: string;
+  updated_at_ms: number;
+}
+
+export interface WebPushSubscriptions {
+  auth: string;
+  created_at_ms: number;
+  endpoint: string;
+  endpoint_hash: string;
+  p256dh: string;
+  subscription_id: string;
+  updated_at_ms: number;
+}
+
+export interface WebPushVapidKeys {
+  key_id: string;
+  private_key: string;
+  public_key: string;
+  subject: string;
+  updated_at_ms: number;
+}
+
+export interface WorkspaceSetupState {
+  bootstrap_seeded_at: string | null;
+  setup_completed_at: string | null;
+  updated_at: number;
+  version: number;
+  workspace_key: string;
+  workspace_path: string;
+}
+
 export interface DB {
   acp_replay_events: AcpReplayEvents;
   acp_replay_sessions: AcpReplaySessions;
   agent_databases: AgentDatabases;
+  agent_model_catalogs: AgentModelCatalogs;
+  android_notification_recent_packages: AndroidNotificationRecentPackages;
+  apns_registrations: ApnsRegistrations;
+  auth_profile_state: AuthProfileState;
+  auth_profile_stores: AuthProfileStores;
   backup_runs: BackupRuns;
   capture_blobs: CaptureBlobs;
   capture_events: CaptureEvents;
   capture_sessions: CaptureSessions;
+  channel_pairing_allow_entries: ChannelPairingAllowEntries;
+  channel_pairing_requests: ChannelPairingRequests;
   command_log_entries: CommandLogEntries;
   commitments: Commitments;
+  config_health_entries: ConfigHealthEntries;
   cron_jobs: CronJobs;
   cron_run_logs: CronRunLogs;
   current_conversation_bindings: CurrentConversationBindings;
   delivery_queue_entries: DeliveryQueueEntries;
+  device_auth_tokens: DeviceAuthTokens;
   device_bootstrap_tokens: DeviceBootstrapTokens;
+  device_identities: DeviceIdentities;
   device_pairing_paired: DevicePairingPaired;
   device_pairing_pending: DevicePairingPending;
+  diagnostic_events: DiagnosticEvents;
+  diagnostic_stability_bundles: DiagnosticStabilityBundles;
+  exec_approvals_config: ExecApprovalsConfig;
   flow_runs: FlowRuns;
-  kv: Kv;
+  gateway_restart_handoff: GatewayRestartHandoff;
+  gateway_restart_intent: GatewayRestartIntent;
+  gateway_restart_sentinel: GatewayRestartSentinel;
+  installed_plugin_index: InstalledPluginIndex;
+  macos_port_guardian_records: MacosPortGuardianRecords;
+  managed_outgoing_image_records: ManagedOutgoingImageRecords;
   media_blobs: MediaBlobs;
   migration_runs: MigrationRuns;
   migration_sources: MigrationSources;
+  model_capability_cache: ModelCapabilityCache;
+  native_hook_relay_bridges: NativeHookRelayBridges;
+  node_host_config: NodeHostConfig;
   node_pairing_paired: NodePairingPaired;
   node_pairing_pending: NodePairingPending;
+  plugin_binding_approvals: PluginBindingApprovals;
   plugin_blob_entries: PluginBlobEntries;
   plugin_state_entries: PluginStateEntries;
   sandbox_registry_entries: SandboxRegistryEntries;
+  schema_meta: SchemaMeta;
   skill_uploads: SkillUploads;
+  state_leases: StateLeases;
   subagent_runs: SubagentRuns;
   task_delivery_state: TaskDeliveryState;
   task_runs: TaskRuns;
   tui_last_sessions: TuiLastSessions;
+  update_check_state: UpdateCheckState;
+  voicewake_routing_config: VoicewakeRoutingConfig;
+  voicewake_routing_routes: VoicewakeRoutingRoutes;
+  voicewake_triggers: VoicewakeTriggers;
+  web_push_subscriptions: WebPushSubscriptions;
+  web_push_vapid_keys: WebPushVapidKeys;
+  workspace_setup_state: WorkspaceSetupState;
 }

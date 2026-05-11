@@ -5,8 +5,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "./subagent-registry.mocks.shared.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { captureEnv, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import {
@@ -32,6 +37,8 @@ import {
   saveSubagentRegistryToState,
 } from "./subagent-registry.store.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+
+type SubagentRegistryPersistenceTestDatabase = Pick<OpenClawStateKyselyDatabase, "subagent_runs">;
 
 const { announceSpy } = vi.hoisted(() => ({
   announceSpy: vi.fn(async () => true),
@@ -348,6 +355,38 @@ describe("subagent registry persistence", () => {
       childSessionKey: "agent:main:subagent:sqlite",
       requesterSessionKey: "agent:main:main",
       spawnMode: "run",
+    });
+  });
+
+  it("restores taskName from the typed SQLite column", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const record: SubagentRunRecord = {
+      runId: "run-sqlite-task-name",
+      childSessionKey: "agent:main:subagent:sqlite-task-name",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "typed task name recovery",
+      taskName: "typed_recovery",
+      cleanup: "keep",
+      createdAt: 1,
+      spawnMode: "run",
+    };
+
+    saveSubagentRegistryToState(new Map([[record.runId, record]]));
+    const stateDatabase = openOpenClawStateDatabase();
+    const db = getNodeSqliteKysely<SubagentRegistryPersistenceTestDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("subagent_runs")
+        .set({ payload_json: "{}" })
+        .where("run_id", "=", record.runId),
+    );
+
+    expect(loadSubagentRegistryFromState().get(record.runId)).toMatchObject({
+      runId: record.runId,
+      taskName: "typed_recovery",
     });
   });
 

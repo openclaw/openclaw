@@ -2,8 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { appendRawStream } from "./pi-embedded-subscribe.raw-stream.js";
 
 describe("appendRawStream", () => {
@@ -20,7 +20,7 @@ describe("appendRawStream", () => {
 
       appendRawStream({ type: "chunk", text: "hello" });
 
-      const entries = listOpenClawStateKvJson<Record<string, unknown>>("diagnostics.raw_stream", {
+      const entries = listDiagnosticEvents<Record<string, unknown>>("diagnostics.raw_stream", {
         env: process.env,
       });
       expect(entries).toHaveLength(1);

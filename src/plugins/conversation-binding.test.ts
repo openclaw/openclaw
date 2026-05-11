@@ -1,12 +1,17 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type {
   ConversationRef,
   SessionBindingAdapter,
   SessionBindingRecord,
 } from "../infra/outbound/session-binding-service.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -14,8 +19,11 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 const tempDirs: string[] = [];
 const tempRoot = makeTrackedTempDir("openclaw-plugin-binding", tempDirs);
 const stateDir = path.join(tempRoot, "state");
-const approvalsPath = path.join(tempRoot, "plugin-binding-approvals.json");
 const originalOpenClawStateDir = process.env.OPENCLAW_STATE_DIR;
+type ConversationBindingTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "plugin_binding_approvals"
+>;
 
 const sessionBindingState = vi.hoisted(() => {
   const records = new Map<string, SessionBindingRecord>();
@@ -94,20 +102,6 @@ const pluginRuntimeState = vi.hoisted(
       registry: null as unknown as PluginRegistry,
     }) satisfies { registry: PluginRegistry },
 );
-
-vi.mock("../infra/home-dir.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/home-dir.js")>("../infra/home-dir.js");
-  return {
-    ...actual,
-    expandHomePrefix: (value: string) => {
-      if (value === "~/.openclaw/plugin-binding-approvals.json") {
-        return approvalsPath;
-      }
-      return actual.expandHomePrefix(value);
-    },
-  };
-});
 
 vi.mock("./runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./runtime.js")>("./runtime.js");
@@ -427,7 +421,6 @@ describe("plugin conversation binding approvals", () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
     closeOpenClawStateDatabaseForTest();
     process.env.OPENCLAW_STATE_DIR = stateDir;
-    fs.rmSync(approvalsPath, { force: true });
     fs.rmSync(stateDir, { recursive: true, force: true });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "default" });
     unregisterSessionBindingAdapter({ channel: "discord", accountId: "work" });
@@ -475,6 +468,23 @@ describe("plugin conversation binding approvals", () => {
     const approved = await approveBindingRequest(firstRequest.approvalId, "allow-always");
 
     expect(approved.status).toBe("approved");
+    const database = openOpenClawStateDatabase({ env: process.env });
+    const db = getNodeSqliteKysely<ConversationBindingTestDatabase>(database.db);
+    expect(
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .selectFrom("plugin_binding_approvals")
+          .select(["plugin_id", "plugin_root", "channel", "account_id"]),
+      ).rows,
+    ).toEqual([
+      {
+        plugin_id: "codex",
+        plugin_root: "/plugins/codex-a",
+        channel: "discord",
+        account_id: "isolated",
+      },
+    ]);
 
     const sameScope = await requestPluginConversationBinding(
       createDiscordCodexBindRequest("channel:2", "Bind this conversation to Codex thread 456."),
@@ -553,7 +563,6 @@ describe("plugin conversation binding approvals", () => {
     expect(rebound.status).toBe("bound");
 
     first.__testing.reset();
-    fs.rmSync(approvalsPath, { force: true });
   });
 
   it("does not share persistent approvals across plugin roots even with the same plugin id", async () => {

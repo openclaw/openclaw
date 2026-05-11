@@ -1,30 +1,34 @@
 import fs from "node:fs";
 import path from "node:path";
-import { resolveAgentDir, resolveDefaultAgentDir, listAgentIds } from "../agents/agent-scope.js";
-import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import {
+  resolveAgentDir,
+  resolveDefaultAgentDir,
+  listAgentIds,
+} from "../../../agents/agent-scope.js";
+import { AUTH_STORE_VERSION } from "../../../agents/auth-profiles/constants.js";
 import {
   coercePersistedAuthProfileStore,
   loadPersistedAuthProfileStore,
   mergeAuthProfileStores,
-} from "../agents/auth-profiles/persisted.js";
+} from "../../../agents/auth-profiles/persisted.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   saveAuthProfileStore,
-} from "../agents/auth-profiles/store.js";
+} from "../../../agents/auth-profiles/store.js";
 import type {
   AuthProfileCredential,
   AuthProfileStore,
   OAuthCredentials,
-} from "../agents/auth-profiles/types.js";
-import { formatCliCommand } from "../cli/command-format.js";
-import { resolveOAuthDir, resolveStateDir } from "../config/paths.js";
-import type { AuthProfileConfig } from "../config/types.auth.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadJsonFile } from "../infra/json-file.js";
-import { note } from "../terminal/note.js";
-import { shortenHomePath } from "../utils.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
-import { resolveLegacyAuthProfilePath } from "./doctor/legacy/auth-profile-paths.js";
+} from "../../../agents/auth-profiles/types.js";
+import { formatCliCommand } from "../../../cli/command-format.js";
+import { resolveOAuthDir, resolveStateDir } from "../../../config/paths.js";
+import type { AuthProfileConfig } from "../../../config/types.auth.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { loadJsonFile } from "../../../infra/json-file.js";
+import { note } from "../../../terminal/note.js";
+import { shortenHomePath } from "../../../utils.js";
+import type { DoctorPrompter } from "../../doctor-prompter.js";
+import { resolveLegacyAuthProfilePath } from "./auth-profile-paths.js";
 
 type AuthProfileRepairCandidate = {
   agentDir?: string;

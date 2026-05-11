@@ -2,8 +2,15 @@ import crypto from "node:crypto";
 import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { Insertable, Selectable } from "kysely";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { pathExists } from "../infra/fs-safe.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import { sqliteNullableText } from "../infra/sqlite-row-values.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   exactWorkspaceEntryExists,
@@ -11,11 +18,11 @@ import {
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { readStringValue } from "../shared/string-coerce.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import { resolveWorkspaceTemplateDir } from "./workspace-templates.js";
@@ -31,8 +38,10 @@ export const DEFAULT_USER_FILENAME = "USER.md";
 export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
-const WORKSPACE_SETUP_STATE_SCOPE = "workspace.setup-state";
 const WORKSPACE_STATE_VERSION = 1;
+type WorkspaceSetupDatabase = Pick<OpenClawStateKyselyDatabase, "workspace_setup_state">;
+type WorkspaceSetupRow = Selectable<WorkspaceSetupDatabase["workspace_setup_state"]>;
+type WorkspaceSetupInsert = Insertable<WorkspaceSetupDatabase["workspace_setup_state"]>;
 const WORKSPACE_ONBOARDING_PROFILE_FILENAMES = [
   DEFAULT_SOUL_FILENAME,
   DEFAULT_IDENTITY_FILENAME,
@@ -311,30 +320,48 @@ function resolveWorkspaceStateKey(dir: string): string {
   return crypto.createHash("sha256").update(resolveUserPath(dir)).digest("hex");
 }
 
-function parseWorkspaceSetupStateValue(value: unknown): WorkspaceSetupState | null {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return null;
-  }
-  const parsed = value as {
-    bootstrapSeededAt?: unknown;
-    setupCompletedAt?: unknown;
-    onboardingCompletedAt?: unknown;
-  };
-  const legacyCompletedAt = readStringValue(parsed.onboardingCompletedAt);
+function rowToWorkspaceSetupState(row: WorkspaceSetupRow): WorkspaceSetupState {
   return {
     version: WORKSPACE_STATE_VERSION,
-    bootstrapSeededAt: readStringValue(parsed.bootstrapSeededAt),
-    setupCompletedAt: readStringValue(parsed.setupCompletedAt) ?? legacyCompletedAt,
+    bootstrapSeededAt: readStringValue(row.bootstrap_seeded_at),
+    setupCompletedAt: readStringValue(row.setup_completed_at),
+  };
+}
+
+function workspaceSetupStateToRow(params: {
+  dir: string;
+  state: WorkspaceSetupState;
+}): WorkspaceSetupInsert {
+  const resolvedDir = resolveUserPath(params.dir);
+  return {
+    workspace_key: resolveWorkspaceStateKey(resolvedDir),
+    workspace_path: resolvedDir,
+    version: WORKSPACE_STATE_VERSION,
+    bootstrap_seeded_at: sqliteNullableText(params.state.bootstrapSeededAt),
+    setup_completed_at: sqliteNullableText(params.state.setupCompletedAt),
+    updated_at: Date.now(),
   };
 }
 
 async function readWorkspaceSetupStateForResolvedDir(dir: string): Promise<WorkspaceSetupState> {
-  const key = resolveWorkspaceStateKey(dir);
-  const sqliteState = parseWorkspaceSetupStateValue(
-    readOpenClawStateKvJson(WORKSPACE_SETUP_STATE_SCOPE, key),
+  const database = openOpenClawStateDatabase();
+  const db = getNodeSqliteKysely<WorkspaceSetupDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("workspace_setup_state")
+      .select([
+        "workspace_key",
+        "workspace_path",
+        "version",
+        "bootstrap_seeded_at",
+        "setup_completed_at",
+        "updated_at",
+      ])
+      .where("workspace_key", "=", resolveWorkspaceStateKey(dir)),
   );
-  if (sqliteState) {
-    return sqliteState;
+  if (row) {
+    return rowToWorkspaceSetupState(row);
   }
   return {
     version: WORKSPACE_STATE_VERSION,
@@ -387,11 +414,18 @@ async function writeWorkspaceSetupStateForDir(
   dir: string,
   state: WorkspaceSetupState,
 ): Promise<void> {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    WORKSPACE_SETUP_STATE_SCOPE,
-    resolveWorkspaceStateKey(dir),
-    state as unknown as OpenClawStateJsonValue,
-  );
+  const row = workspaceSetupStateToRow({ dir, state });
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<WorkspaceSetupDatabase>(database.db);
+    const { workspace_key: _workspaceKey, ...updates } = row;
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("workspace_setup_state")
+        .values(row)
+        .onConflict((conflict) => conflict.column("workspace_key").doUpdateSet(updates)),
+    );
+  });
 }
 
 export async function readWorkspaceSetupStateForTests(dir: string): Promise<WorkspaceSetupState> {

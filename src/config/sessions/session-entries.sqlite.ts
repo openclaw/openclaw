@@ -30,10 +30,15 @@ export type ApplySqliteSessionEntriesPatchOptions = SqliteSessionEntriesOptions 
 };
 
 type SessionEntriesTable = OpenClawAgentKyselyDatabase["session_entries"];
-type SessionEntriesDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries">;
+type SessionsTable = OpenClawAgentKyselyDatabase["sessions"];
+type SessionEntriesDatabase = Pick<OpenClawAgentKyselyDatabase, "session_entries" | "sessions">;
 
 type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "session_key"> &
   Partial<Pick<Selectable<SessionEntriesTable>, "updated_at">>;
+type BoundSessionEntryRow = {
+  entry: Insertable<SessionEntriesTable>;
+  session: Insertable<SessionsTable>;
+};
 
 function resolveNow(options: SqliteSessionEntriesOptions): number {
   return options.now?.() ?? Date.now();
@@ -59,15 +64,72 @@ function serializeSessionEntry(sessionKey: string, entry: SessionEntry): string 
   return JSON.stringify(entries[sessionKey] ?? entry);
 }
 
+function nullableString(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+function sessionDisplayName(entry: SessionEntry): string | null {
+  return nullableString(entry.displayName) ?? nullableString(entry.label);
+}
+
+function resolveSessionCreatedAt(entry: SessionEntry, updatedAt: number): number {
+  for (const candidate of [entry.sessionStartedAt, entry.startedAt, entry.updatedAt, updatedAt]) {
+    if (typeof candidate === "number" && Number.isFinite(candidate) && candidate >= 0) {
+      return candidate;
+    }
+  }
+  return updatedAt;
+}
+
+function bindSessionRoot(params: {
+  sessionKey: string;
+  entry: SessionEntry;
+  updatedAt: number;
+}): Insertable<SessionsTable> {
+  const sessionId = nullableString(params.entry.sessionId) ?? params.sessionKey;
+  const updatedAt =
+    typeof params.entry.updatedAt === "number" && Number.isFinite(params.entry.updatedAt)
+      ? params.entry.updatedAt
+      : params.updatedAt;
+  return {
+    session_id: sessionId,
+    session_key: params.sessionKey,
+    created_at: resolveSessionCreatedAt(params.entry, updatedAt),
+    updated_at: updatedAt,
+    started_at:
+      typeof params.entry.startedAt === "number" && Number.isFinite(params.entry.startedAt)
+        ? params.entry.startedAt
+        : null,
+    ended_at:
+      typeof params.entry.endedAt === "number" && Number.isFinite(params.entry.endedAt)
+        ? params.entry.endedAt
+        : null,
+    status: nullableString(params.entry.status),
+    chat_type: nullableString(params.entry.chatType),
+    channel: nullableString(params.entry.channel) ?? nullableString(params.entry.lastChannel),
+    model_provider: nullableString(params.entry.modelProvider),
+    model: nullableString(params.entry.model),
+    agent_harness_id: nullableString(params.entry.agentHarnessId),
+    parent_session_key: nullableString(params.entry.parentSessionKey),
+    spawned_by: nullableString(params.entry.spawnedBy),
+    display_name: sessionDisplayName(params.entry),
+  };
+}
+
 function bindSessionEntry(params: {
   sessionKey: string;
   entry: SessionEntry;
   updatedAt: number;
-}): Insertable<SessionEntriesTable> {
+}): BoundSessionEntryRow {
+  const session = bindSessionRoot(params);
   return {
-    session_key: params.sessionKey,
-    entry_json: serializeSessionEntry(params.sessionKey, params.entry),
-    updated_at: params.entry.updatedAt ?? params.updatedAt,
+    session,
+    entry: {
+      session_key: params.sessionKey,
+      session_id: session.session_id,
+      entry_json: serializeSessionEntry(params.sessionKey, params.entry),
+      updated_at: session.updated_at,
+    },
   };
 }
 
@@ -77,7 +139,7 @@ function serializeExpectedSessionEntry(sessionKey: string, entry: SessionEntry):
 
 function upsertSessionEntries(
   database: OpenClawAgentDatabase,
-  rows: ReadonlyArray<Insertable<SessionEntriesTable>>,
+  rows: ReadonlyArray<BoundSessionEntryRow>,
 ): void {
   if (rows.length === 0) {
     return;
@@ -86,10 +148,34 @@ function upsertSessionEntries(
   executeSqliteQuerySync(
     database.db,
     db
+      .insertInto("sessions")
+      .values(rows.map((row) => row.session))
+      .onConflict((conflict) =>
+        conflict.column("session_id").doUpdateSet({
+          session_key: (eb) => eb.ref("excluded.session_key"),
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+          started_at: (eb) => eb.ref("excluded.started_at"),
+          ended_at: (eb) => eb.ref("excluded.ended_at"),
+          status: (eb) => eb.ref("excluded.status"),
+          chat_type: (eb) => eb.ref("excluded.chat_type"),
+          channel: (eb) => eb.ref("excluded.channel"),
+          model_provider: (eb) => eb.ref("excluded.model_provider"),
+          model: (eb) => eb.ref("excluded.model"),
+          agent_harness_id: (eb) => eb.ref("excluded.agent_harness_id"),
+          parent_session_key: (eb) => eb.ref("excluded.parent_session_key"),
+          spawned_by: (eb) => eb.ref("excluded.spawned_by"),
+          display_name: (eb) => eb.ref("excluded.display_name"),
+        }),
+      ),
+  );
+  executeSqliteQuerySync(
+    database.db,
+    db
       .insertInto("session_entries")
-      .values(rows)
+      .values(rows.map((row) => row.entry))
       .onConflict((conflict) =>
         conflict.column("session_key").doUpdateSet({
+          session_id: (eb) => eb.ref("excluded.session_id"),
           entry_json: (eb) => eb.ref("excluded.entry_json"),
           updated_at: (eb) => eb.ref("excluded.updated_at"),
         }),
@@ -206,9 +292,19 @@ export function deleteSqliteSessionEntry(
 ): boolean {
   return runOpenClawAgentWriteTransaction((database) => {
     const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("session_entries")
+        .select("session_id")
+        .where("session_key", "=", options.sessionKey),
+    );
+    if (!row) {
+      return false;
+    }
     const result = executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("session_entries").where("session_key", "=", options.sessionKey),
+      db.deleteFrom("sessions").where("session_id", "=", row.session_id),
     );
     return Number(result.numAffectedRows ?? 0) > 0;
   }, options);

@@ -138,11 +138,18 @@ export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
 export {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  createPluginBlobStore,
+  createPluginBlobSyncStore,
+  createPluginStateKeyedStore,
+  createPluginStateSyncKeyedStore,
+  type OpenKeyedStoreOptions,
+  type PluginBlobEntry,
+  type PluginBlobStore,
+  type PluginBlobSyncStore,
+  type PluginStateEntry,
+  type PluginStateKeyedStore,
+  type PluginStateSyncKeyedStore,
+} from "./plugin-state-runtime.js";
 export {
   appendSqliteSessionTranscriptEvent,
   hasSqliteSessionTranscriptEvents,

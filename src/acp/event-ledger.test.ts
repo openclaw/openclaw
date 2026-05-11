@@ -1,6 +1,8 @@
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./event-ledger.js";
@@ -8,6 +10,11 @@ import { createInMemoryAcpEventLedger, createSqliteAcpEventLedger } from "./even
 function stateDatabasePath(dir: string): string {
   return path.join(dir, "state", "openclaw.sqlite");
 }
+
+type AcpReplayTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "acp_replay_sessions" | "acp_replay_events"
+>;
 
 describe("ACP event ledger", () => {
   afterEach(() => {
@@ -139,19 +146,30 @@ describe("ACP event ledger", () => {
       closeOpenClawStateDatabaseForTest();
 
       const sqlite = requireNodeSqlite();
-      const db = new sqlite.DatabaseSync(dbPath);
+      const sqliteDb = new sqlite.DatabaseSync(dbPath);
+      const db = getNodeSqliteKysely<AcpReplayTestDatabase>(sqliteDb);
       try {
-        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_sessions").get()).toEqual({
-          count: 1,
-        });
-        expect(db.prepare("SELECT COUNT(*) AS count FROM acp_replay_events").get()).toEqual({
-          count: 1,
-        });
         expect(
-          db.prepare("SELECT COUNT(*) AS count FROM kv WHERE scope = 'acp_event_ledger'").get(),
-        ).toEqual({ count: 0 });
+          executeSqliteQueryTakeFirstSync(
+            sqliteDb,
+            db
+              .selectFrom("acp_replay_sessions")
+              .select((eb) => eb.fn.countAll<number>().as("count")),
+          ),
+        ).toEqual({ count: 1 });
+        expect(
+          executeSqliteQueryTakeFirstSync(
+            sqliteDb,
+            db.selectFrom("acp_replay_events").select((eb) => eb.fn.countAll<number>().as("count")),
+          ),
+        ).toEqual({ count: 1 });
+        expect(
+          sqliteDb
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'kv'")
+            .get(),
+        ).toBeUndefined();
       } finally {
-        db.close();
+        sqliteDb.close();
       }
     });
   });

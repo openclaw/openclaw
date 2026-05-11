@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE,
   buildRestartSuccessContinuation,
@@ -35,6 +35,47 @@ async function withRestartSentinelStateDir(run: () => Promise<void>): Promise<vo
   } finally {
     envSnapshot.restore();
   }
+}
+
+type RestartSentinelTestDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+
+function writeInvalidRestartSentinelRow(): void {
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<RestartSentinelTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("gateway_restart_sentinel").values({
+          sentinel_key: "current",
+          version: 2,
+          kind: "restart",
+          status: "ok",
+          ts: Date.now(),
+          session_key: null,
+          thread_id: null,
+          payload_json: JSON.stringify({ version: 2, payload: null }),
+          updated_at_ms: Date.now(),
+        }),
+      );
+    },
+    { env: process.env },
+  );
+}
+
+function corruptRestartSentinelPayloadJson(): void {
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<RestartSentinelTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("gateway_restart_sentinel")
+          .set({ payload_json: '{"kind":"restart","status":"error","ts":0}' })
+          .where("sentinel_key", "=", "current"),
+      );
+    },
+    { env: process.env },
+  );
 }
 
 describe("restart sentinel", () => {
@@ -68,17 +109,39 @@ describe("restart sentinel", () => {
 
   it("drops structurally invalid SQLite sentinel payloads", async () => {
     await withRestartSentinelStateDir(async () => {
-      writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-        "gateway.restart-sentinel",
-        "current",
-        { version: 2, payload: null },
-        { env: process.env },
-      );
+      writeInvalidRestartSentinelRow();
 
       await expect(readRestartSentinel()).resolves.toBeNull();
-      expect(
-        readOpenClawStateKvJson("gateway.restart-sentinel", "current", { env: process.env }),
-      ).toBeUndefined();
+    });
+  });
+
+  it("reads sentinel payloads from typed SQLite columns, not the debug JSON copy", async () => {
+    await withRestartSentinelStateDir(async () => {
+      const payload = {
+        kind: "restart" as const,
+        status: "ok" as const,
+        ts: Date.now(),
+        sessionKey: "agent:main:telegram:dm",
+        deliveryContext: {
+          channel: "telegram",
+          to: "-100123",
+          accountId: "bot-main",
+        },
+        threadId: "77",
+        message: "Restarted",
+        continuation: {
+          kind: "systemEvent" as const,
+          text: "Continue after restart",
+        },
+        doctorHint: "Run doctor",
+        stats: { mode: "manual", durationMs: 123 },
+      };
+      await writeRestartSentinel(payload);
+      corruptRestartSentinelPayloadJson();
+
+      const read = await readRestartSentinel();
+
+      expect(read?.payload).toMatchObject(payload);
     });
   });
 

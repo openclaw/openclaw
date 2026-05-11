@@ -2,13 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { writeRestartSentinel } from "../infra/restart-sentinel.js";
+import { clearRestartSentinel, writeRestartSentinel } from "../infra/restart-sentinel.js";
 import type {
   PluginHookGatewayContext,
   PluginHookGatewayStartEvent,
 } from "../plugins/hook-types.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 const hoisted = vi.hoisted(() => {
@@ -236,10 +235,10 @@ function firstGatewayStartCall(
 }
 
 describe("startGatewayPostAttachRuntime", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.stubEnv("OPENCLAW_SKIP_CHANNELS", "0");
     vi.stubEnv("OPENCLAW_SKIP_PROVIDERS", "0");
-    deleteOpenClawStateKvJson("gateway.restart-sentinel", "current", { env: process.env });
+    await clearRestartSentinel();
     hoisted.startPluginServices.mockClear();
     hoisted.startGmailWatcherWithLogs.mockClear();
     hoisted.loadInternalHooks.mockClear();

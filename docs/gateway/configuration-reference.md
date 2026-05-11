@@ -936,7 +936,7 @@ Notes:
 }
 ```
 
-- Per-agent profiles are stored in `state/openclaw.sqlite#kv/auth-profiles/<agentDir>`.
+- Per-agent profiles are stored in `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`.
 - SQLite auth-profile rows support value-level refs (`keyRef` for `api_key`, `tokenRef` for `token`) for static credential modes.
 - Legacy flat `auth-profiles.json` maps such as `{ "provider": { "apiKey": "..." } }` are not a runtime format; `openclaw doctor --fix` imports them as canonical `provider:default` API-key profiles.
 - OAuth-mode profiles (`auth.profiles.<id>.mode = "oauth"`) do not support SecretRef-backed auth-profile credentials.
@@ -1223,7 +1223,6 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
   cron: {
     enabled: true,
     maxConcurrentRuns: 2, // cron dispatch + isolated cron agent-turn execution
-    webhook: "https://example.invalid/legacy", // deprecated fallback for stored notify:true jobs
     webhookToken: "replace-with-dedicated-token", // optional bearer token for outbound webhook auth
     runLog: {
       maxBytes: "2mb", // default 2_000_000 bytes
@@ -1236,7 +1235,7 @@ Current builds no longer include the TCP bridge. Nodes connect over the Gateway 
 - `runLog.maxBytes`: approximate max serialized SQLite run-log bytes per job before pruning. Default: `2_000_000` bytes.
 - `runLog.keepLines`: newest rows retained when run-log pruning is triggered. Default: `2000`.
 - `webhookToken`: bearer token used for cron webhook POST delivery (`delivery.mode = "webhook"`), if omitted no auth header is sent.
-- `webhook`: deprecated legacy fallback webhook URL (http/https) used only for stored jobs that still have `notify: true`.
+- `webhook`: deprecated legacy migration fallback URL (http/https). Runtime does not read it; doctor can use it to translate legacy `notify: true` cron jobs into per-job `delivery.mode = "webhook"` plus `delivery.to`.
 
 ### `cron.retry`
 

@@ -1,9 +1,6 @@
 import {
-  deleteOpenClawStateKvJson,
   embeddedAgentLog,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
+  createPluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   ensureAuthProfileStore,
@@ -22,7 +19,9 @@ import type { CodexServiceTier } from "./protocol.js";
 
 const CODEX_APP_SERVER_NATIVE_AUTH_PROVIDER = "openai-codex";
 const PUBLIC_OPENAI_MODEL_PROVIDER = "openai";
-const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
+export const CODEX_APP_SERVER_BINDING_PLUGIN_ID = "codex";
+export const CODEX_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
+export const CODEX_APP_SERVER_BINDING_MAX_ENTRIES = 10_000;
 
 type ProviderAuthAliasLookupParams = Parameters<typeof resolveProviderIdForAuth>[1];
 type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
@@ -79,10 +78,20 @@ function normalizeCodexAppServerBindingIdentity(identity: CodexAppServerBindingI
   };
 }
 
-function codexAppServerBindingToJsonValue(
+function openCodexAppServerBindingStore() {
+  return createPluginStateSyncKeyedStore<CodexAppServerThreadBinding>(
+    CODEX_APP_SERVER_BINDING_PLUGIN_ID,
+    {
+      namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+      maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+    },
+  );
+}
+
+function codexAppServerBindingToPluginStateValue(
   binding: CodexAppServerThreadBinding,
-): OpenClawStateJsonValue {
-  return binding as unknown as OpenClawStateJsonValue;
+): CodexAppServerThreadBinding {
+  return JSON.parse(JSON.stringify(binding)) as CodexAppServerThreadBinding;
 }
 
 function normalizeCodexAppServerBinding(
@@ -141,12 +150,10 @@ export async function readCodexAppServerBinding(
   if (!normalized.primaryKey) {
     return undefined;
   }
-  let value = readOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
+  const store = openCodexAppServerBindingStore();
+  let value = store.lookup(normalized.primaryKey);
   if (value === undefined && normalized.sessionKey) {
-    value = readOpenClawStateKvJson(
-      CODEX_APP_SERVER_BINDING_KV_SCOPE,
-      `session-key:${normalized.sessionKey}`,
-    );
+    value = store.lookup(`session-key:${normalized.sessionKey}`);
   }
   if (value === undefined) {
     return undefined;
@@ -191,10 +198,9 @@ export async function writeCodexAppServerBinding(
     createdAt: binding.createdAt ?? now,
     updatedAt: now,
   };
-  writeOpenClawStateKvJson(
-    CODEX_APP_SERVER_BINDING_KV_SCOPE,
+  openCodexAppServerBindingStore().register(
     normalized.primaryKey,
-    codexAppServerBindingToJsonValue(payload),
+    codexAppServerBindingToPluginStateValue(payload),
   );
 }
 
@@ -259,7 +265,7 @@ export async function clearCodexAppServerBinding(
   identity: CodexAppServerBindingIdentity,
 ): Promise<void> {
   const normalized = normalizeCodexAppServerBindingIdentity(identity);
-  deleteOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, normalized.primaryKey);
+  openCodexAppServerBindingStore().delete(normalized.primaryKey);
 }
 
 export function isCodexAppServerNativeAuthProfile(

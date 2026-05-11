@@ -1,19 +1,17 @@
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  deleteOpenClawStateKvJson,
-  deleteOpenClawStateKvJsonInTransaction,
-  readOpenClawStateKvJson,
-  readOpenClawStateKvJsonResultFromDatabase,
-  writeOpenClawStateKvJson,
-  writeOpenClawStateKvJsonInTransaction,
-  type OpenClawStateJsonValue,
-} from "../../state/openclaw-state-kv.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { resolveAuthProfileStoreKey } from "./paths.js";
+import {
+  deleteAuthProfileStatePayload,
+  deleteAuthProfileStatePayloadInTransaction,
+  readAuthProfileStatePayloadResult,
+  readAuthProfileStatePayloadResultFromDatabase,
+  writeAuthProfileStatePayload as writeAuthProfileStatePayloadToSqlite,
+  writeAuthProfileStatePayloadInTransaction,
+  type AuthProfilePayloadValue,
+} from "./sqlite-storage.js";
 import type { AuthProfileState, AuthProfileStateStore, ProfileUsageStats } from "./types.js";
-
-export const AUTH_PROFILE_STATE_KV_SCOPE = "auth-profile-state";
 
 export function authProfileStateKey(agentDir?: string): string {
   return resolveAuthProfileStoreKey(agentDir);
@@ -80,19 +78,19 @@ export function mergeAuthProfileState(
   };
 }
 
-function authProfileStateToJsonValue(state: AuthProfileStateStore): OpenClawStateJsonValue {
-  return state as OpenClawStateJsonValue;
+function authProfileStateToPayloadValue(state: AuthProfileStateStore): AuthProfilePayloadValue {
+  return state as AuthProfilePayloadValue;
 }
 
 function writeAuthProfileStatePayload(key: string, payload: AuthProfileStateStore): void {
-  writeOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, key, authProfileStateToJsonValue(payload));
+  writeAuthProfileStatePayloadToSqlite(key, authProfileStateToPayloadValue(payload));
 }
 
 export function loadPersistedAuthProfileState(agentDir?: string): AuthProfileState {
   const key = authProfileStateKey(agentDir);
-  const sqliteState = readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, key);
-  if (sqliteState !== undefined) {
-    return coerceAuthProfileState(sqliteState);
+  const sqliteState = readAuthProfileStatePayloadResult(key);
+  if (sqliteState.exists && sqliteState.value !== undefined) {
+    return coerceAuthProfileState(sqliteState.value);
   }
 
   return {};
@@ -103,11 +101,7 @@ export function loadPersistedAuthProfileStateFromDatabase(
   agentDir?: string,
 ): AuthProfileState {
   const key = authProfileStateKey(agentDir);
-  const sqliteState = readOpenClawStateKvJsonResultFromDatabase(
-    database,
-    AUTH_PROFILE_STATE_KV_SCOPE,
-    key,
-  );
+  const sqliteState = readAuthProfileStatePayloadResultFromDatabase(database, key);
   if (sqliteState.exists && sqliteState.value !== undefined) {
     return coerceAuthProfileState(sqliteState.value);
   }
@@ -138,7 +132,7 @@ export function savePersistedAuthProfileState(
     store,
     key: authProfileStateKey(agentDir),
     write: (key, payload) => writeAuthProfileStatePayload(key, payload),
-    delete: (key) => deleteOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, key),
+    delete: (key) => deleteAuthProfileStatePayload(key),
   });
 }
 
@@ -152,15 +146,13 @@ export function savePersistedAuthProfileStateInTransaction(
     store,
     key: authProfileStateKey(agentDir),
     write: (key, payload) =>
-      writeOpenClawStateKvJsonInTransaction(
+      writeAuthProfileStatePayloadInTransaction(
         database,
-        AUTH_PROFILE_STATE_KV_SCOPE,
         key,
-        authProfileStateToJsonValue(payload),
+        authProfileStateToPayloadValue(payload),
         updatedAt,
       ),
-    delete: (key) =>
-      deleteOpenClawStateKvJsonInTransaction(database, AUTH_PROFILE_STATE_KV_SCOPE, key),
+    delete: (key) => deleteAuthProfileStatePayloadInTransaction(database, key),
   });
 }
 

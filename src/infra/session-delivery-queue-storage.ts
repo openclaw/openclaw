@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { Insertable, Selectable } from "kysely";
 import type { ChatType } from "../channels/chat-type.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -9,7 +10,6 @@ import {
 import {
   isDeliveryQueueEntryWithId,
   parseDeliveryQueueEntryJson,
-  type DeliveryQueueEntryJsonRow,
 } from "./delivery-queue-entry-json.js";
 import {
   executeSqliteQuerySync,
@@ -17,6 +17,7 @@ import {
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
+import { sqliteNullableNumber, sqliteNullableText } from "./sqlite-row-values.js";
 
 const QUEUE_NAME = "session-delivery";
 
@@ -67,6 +68,20 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
 };
 
 type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+type DeliveryQueueEntriesTable = OpenClawStateKyselyDatabase["delivery_queue_entries"];
+type DeliveryQueueEntryRow = Insertable<DeliveryQueueEntriesTable>;
+type DeliveryQueueEntryStoredRow = Selectable<DeliveryQueueEntriesTable>;
+type DeliveryQueueEntryFields = {
+  account_id: string | null;
+  channel: string | null;
+  entry_json: string;
+  last_attempt_at: number | null;
+  last_error: string | null;
+  retry_count: number;
+  session_key: string;
+  target: string | null;
+  updated_at: number;
+};
 
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
@@ -98,8 +113,110 @@ function isQueuedSessionDelivery(value: unknown): value is QueuedSessionDelivery
     : false;
 }
 
-function parseQueueEntry(row: DeliveryQueueEntryJsonRow | undefined): QueuedSessionDelivery | null {
-  return parseDeliveryQueueEntryJson(row, isQueuedSessionDelivery);
+function mergeStoredRoute(
+  entry: QueuedSessionDelivery,
+  row: DeliveryQueueEntryStoredRow,
+): QueuedSessionDelivery {
+  const accountId = sqliteNullableText(row.account_id);
+  const channel = sqliteNullableText(row.channel);
+  const target = sqliteNullableText(row.target);
+  if (!accountId && !channel && !target) {
+    return entry;
+  }
+  if (entry.kind === "agentTurn" && entry.route) {
+    return {
+      ...entry,
+      route: {
+        ...entry.route,
+        ...(accountId ? { accountId } : {}),
+        ...(channel ? { channel } : {}),
+        ...(target ? { to: target } : {}),
+      },
+    };
+  }
+  return {
+    ...entry,
+    deliveryContext: {
+      ...entry.deliveryContext,
+      ...(accountId ? { accountId } : {}),
+      ...(channel ? { channel } : {}),
+      ...(target ? { to: target } : {}),
+    },
+  };
+}
+
+function parseQueueEntry(
+  row: DeliveryQueueEntryStoredRow | undefined,
+): QueuedSessionDelivery | null {
+  const entry = parseDeliveryQueueEntryJson(row, isQueuedSessionDelivery);
+  if (!entry || !row) {
+    return entry;
+  }
+  return mergeStoredRoute(
+    {
+      ...entry,
+      id: row.id,
+      enqueuedAt: row.enqueued_at,
+      lastAttemptAt: sqliteNullableNumber(row.last_attempt_at) ?? undefined,
+      lastError: sqliteNullableText(row.last_error) ?? undefined,
+      retryCount: row.retry_count,
+      sessionKey: sqliteNullableText(row.session_key) ?? entry.sessionKey,
+    },
+    row,
+  );
+}
+
+function resolveSessionDeliveryRoute(entry: QueuedSessionDelivery): {
+  accountId: string | null;
+  channel: string | null;
+  target: string | null;
+} {
+  return {
+    accountId:
+      sqliteNullableText(entry.kind === "agentTurn" ? entry.route?.accountId : undefined) ??
+      sqliteNullableText(entry.deliveryContext?.accountId),
+    channel:
+      sqliteNullableText(entry.kind === "agentTurn" ? entry.route?.channel : undefined) ??
+      sqliteNullableText(entry.deliveryContext?.channel),
+    target:
+      sqliteNullableText(entry.kind === "agentTurn" ? entry.route?.to : undefined) ??
+      sqliteNullableText(entry.deliveryContext?.to),
+  };
+}
+
+function sessionDeliveryQueueEntryFields(
+  entry: QueuedSessionDelivery,
+  updatedAt: number,
+): DeliveryQueueEntryFields {
+  const route = resolveSessionDeliveryRoute(entry);
+  return {
+    account_id: route.accountId,
+    channel: route.channel,
+    entry_json: JSON.stringify(entry),
+    last_attempt_at: sqliteNullableNumber(entry.lastAttemptAt),
+    last_error: sqliteNullableText(entry.lastError),
+    retry_count: sqliteNullableNumber(entry.retryCount) ?? 0,
+    session_key: entry.sessionKey,
+    target: route.target,
+    updated_at: updatedAt,
+  };
+}
+
+function sessionDeliveryQueueEntryToRow(
+  entry: QueuedSessionDelivery,
+  updatedAt: number,
+): DeliveryQueueEntryRow {
+  return {
+    queue_name: QUEUE_NAME,
+    id: entry.id,
+    status: "pending",
+    entry_kind: entry.kind,
+    recovery_state: null,
+    platform_send_started_at: null,
+    enqueued_at: entry.enqueuedAt,
+    failed_at: null,
+    ...sessionDeliveryQueueEntryFields(entry, updatedAt),
+  };
 }
 
 function ensureSessionDeliveryQueueStorage(stateDir?: string): void {
@@ -125,27 +242,19 @@ export async function enqueueSessionDelivery(
     enqueuedAt: Date.now(),
     retryCount: 0,
   };
+  const now = Date.now();
   runOpenClawStateWriteTransaction((stateDatabase) => {
     const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
     executeSqliteQuerySync(
       stateDatabase.db,
       db
         .insertInto("delivery_queue_entries")
-        .values({
-          queue_name: QUEUE_NAME,
-          id,
-          status: "pending",
-          entry_json: JSON.stringify(entry),
-          enqueued_at: entry.enqueuedAt,
-          updated_at: Date.now(),
-          failed_at: null,
-        })
+        .values(sessionDeliveryQueueEntryToRow(entry, now))
         .onConflict((conflict) =>
           conflict.columns(["queue_name", "id"]).doUpdateSet({
             status: "pending",
-            entry_json: JSON.stringify(entry),
+            ...sessionDeliveryQueueEntryFields(entry, now),
             enqueued_at: entry.enqueuedAt,
-            updated_at: Date.now(),
             failed_at: null,
           }),
         ),
@@ -172,32 +281,33 @@ export async function failSessionDelivery(
   error: string,
   stateDir?: string,
 ): Promise<void> {
-  const entry = await loadPendingSessionDelivery(id, stateDir);
-  if (!entry) {
+  const now = Date.now();
+  let changed = 0n;
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    const result = executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("delivery_queue_entries")
+        .set((eb) => ({
+          last_attempt_at: now,
+          last_error: sqliteNullableText(error),
+          retry_count: eb("retry_count", "+", 1),
+          updated_at: now,
+        }))
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id)
+        .where("status", "=", "pending"),
+    );
+    changed = result.numAffectedRows ?? 0n;
+  }, databaseOptions(stateDir));
+  if (changed === 0n) {
     const missing = new Error(
       `session delivery queue entry not found: ${id}`,
     ) as NodeJS.ErrnoException;
     missing.code = "ENOENT";
     throw missing;
   }
-  entry.retryCount += 1;
-  entry.lastAttemptAt = Date.now();
-  entry.lastError = error;
-  runOpenClawStateWriteTransaction((stateDatabase) => {
-    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
-    executeSqliteQuerySync(
-      stateDatabase.db,
-      db
-        .updateTable("delivery_queue_entries")
-        .set({
-          entry_json: JSON.stringify(entry),
-          updated_at: Date.now(),
-        })
-        .where("queue_name", "=", QUEUE_NAME)
-        .where("id", "=", id)
-        .where("status", "=", "pending"),
-    );
-  }, databaseOptions(stateDir));
 }
 
 export async function loadPendingSessionDelivery(
@@ -210,7 +320,7 @@ export async function loadPendingSessionDelivery(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
-      .select(["entry_json"])
+      .selectAll()
       .where("queue_name", "=", QUEUE_NAME)
       .where("id", "=", id)
       .where("status", "=", "pending"),
@@ -227,7 +337,7 @@ export async function loadPendingSessionDeliveries(
     stateDatabase.db,
     db
       .selectFrom("delivery_queue_entries")
-      .select(["entry_json"])
+      .selectAll()
       .where("queue_name", "=", QUEUE_NAME)
       .where("status", "=", "pending")
       .orderBy("enqueued_at", "asc")
@@ -239,7 +349,6 @@ export async function loadPendingSessionDeliveries(
 }
 
 export async function moveSessionDeliveryToFailed(id: string, stateDir?: string): Promise<void> {
-  const entry = await loadPendingSessionDelivery(id, stateDir);
   const now = Date.now();
   runOpenClawStateWriteTransaction((stateDatabase) => {
     const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
@@ -251,7 +360,6 @@ export async function moveSessionDeliveryToFailed(id: string, stateDir?: string)
           status: "failed",
           updated_at: now,
           failed_at: now,
-          ...(entry ? { entry_json: JSON.stringify(entry) } : {}),
         })
         .where("queue_name", "=", QUEUE_NAME)
         .where("id", "=", id),

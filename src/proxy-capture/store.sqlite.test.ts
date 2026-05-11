@@ -133,7 +133,7 @@ describe("DebugProxyCaptureStore", () => {
 
       const schema = collectSqliteSchemaShape(store.db);
       expect(schema.capture_sessions).toBeDefined();
-      expect(schema.kv).toBeDefined();
+      expect(schema.kv).toBeUndefined();
       expect(store.listSessions(1)[0]?.id).toBe("shared-state-session");
     } finally {
       if (previousStateDir === undefined) {

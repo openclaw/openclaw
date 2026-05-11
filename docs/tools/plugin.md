@@ -579,8 +579,8 @@ explicit install is immediately loadable after restart.
 OpenClaw keeps a persisted local plugin registry as the cold read model for
 plugin inventory, contribution ownership, and startup planning. Install, update,
 uninstall, enable, and disable flows refresh that registry after changing plugin
-state. The global SQLite database keeps durable install metadata in the
-`installed_plugin_index/current` KV entry: top-level `installRecords` plus
+state. The global SQLite database keeps durable install metadata in the typed
+`installed_plugin_index` row: top-level `installRecords` plus
 rebuildable manifest metadata in `plugins`. If the registry is missing, stale,
 or invalid, `openclaw plugins registry
 --refresh` rebuilds its manifest view from install records, config policy, and

@@ -10,16 +10,12 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 
-type LockRow = {
-  value_json: string;
-};
-
 type LockValue = {
   owner: string;
   expiresAt: number;
 };
 
-type LockDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
+type LockDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
 export type OpenClawStateLockRetryOptions = {
   retries?: number;
@@ -60,22 +56,19 @@ const DEFAULT_RETRY_OPTIONS: Required<OpenClawStateLockRetryOptions> = {
   randomize: true,
 };
 
-function parseLockValue(row: LockRow | undefined): LockValue | null {
+function parseLockValue(
+  row: { owner: string; expires_at: number | null } | undefined,
+): LockValue | null {
   if (!row) {
     return null;
   }
-  try {
-    const parsed = JSON.parse(row.value_json) as Partial<LockValue>;
-    if (typeof parsed.owner === "string" && typeof parsed.expiresAt === "number") {
-      return {
-        owner: parsed.owner,
-        expiresAt: parsed.expiresAt,
-      };
-    }
-  } catch {
-    // Invalid lock rows are stale and overwritten by the next acquirer.
+  if (row.expires_at == null) {
+    return null;
   }
-  return null;
+  return {
+    owner: row.owner,
+    expiresAt: row.expires_at,
+  };
 }
 
 function resolveRetryOptions(
@@ -116,10 +109,10 @@ function tryAcquireOpenClawStateLock(params: {
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("kv")
-        .select(["value_json"])
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
         .where("scope", "=", params.scope)
-        .where("key", "=", params.key),
+        .where("lease_key", "=", params.key),
     );
     const current = parseLockValue(row);
     if (current && current.expiresAt > now && current.owner !== params.owner) {
@@ -128,16 +121,23 @@ function tryAcquireOpenClawStateLock(params: {
     executeSqliteQuerySync(
       database.db,
       db
-        .insertInto("kv")
+        .insertInto("state_leases")
         .values({
           scope: params.scope,
-          key: params.key,
-          value_json: JSON.stringify({ owner: params.owner, expiresAt }),
+          lease_key: params.key,
+          owner: params.owner,
+          expires_at: expiresAt,
+          heartbeat_at: now,
+          payload_json: null,
+          created_at: now,
           updated_at: now,
         })
         .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet({
-            value_json: JSON.stringify({ owner: params.owner, expiresAt }),
+          conflict.columns(["scope", "lease_key"]).doUpdateSet({
+            owner: params.owner,
+            expires_at: expiresAt,
+            heartbeat_at: now,
+            payload_json: null,
             updated_at: now,
           }),
         ),
@@ -157,10 +157,10 @@ function releaseOpenClawStateLock(params: {
     const row = executeSqliteQueryTakeFirstSync(
       database.db,
       db
-        .selectFrom("kv")
-        .select(["value_json"])
+        .selectFrom("state_leases")
+        .select(["owner", "expires_at"])
         .where("scope", "=", params.scope)
-        .where("key", "=", params.key),
+        .where("lease_key", "=", params.key),
     );
     const current = parseLockValue(row);
     if (current?.owner !== params.owner) {
@@ -168,7 +168,10 @@ function releaseOpenClawStateLock(params: {
     }
     executeSqliteQuerySync(
       database.db,
-      db.deleteFrom("kv").where("scope", "=", params.scope).where("key", "=", params.key),
+      db
+        .deleteFrom("state_leases")
+        .where("scope", "=", params.scope)
+        .where("lease_key", "=", params.key),
     );
   }, params.options);
 }

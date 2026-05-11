@@ -250,8 +250,6 @@ export function buildGatewayCronService(params: {
 
   const defaultAgentId = resolveDefaultAgentId(params.cfg);
   const runLogPrune = resolveCronRunLogPruneOptions(params.cfg.cron?.runLog);
-  const warnedLegacyWebhookJobs = new Set<string>();
-
   const runCronChangedHook = (evt: PluginHookCronChangedEvent) => {
     const hookRunner = getGlobalHookRunner();
     if (!hookRunner?.hasHooks("cron_changed")) {
@@ -428,9 +426,7 @@ export function buildGatewayCronService(params: {
           logger: cronLogger,
           resolveCronAgent,
           webhookToken: params.cfg.cron?.webhookToken,
-          legacyWebhook: params.cfg.cron?.webhook,
           globalFailureDestination: params.cfg.cron?.failureDestination,
-          warnedLegacyWebhookJobs,
         });
 
         void appendCronRunLogToSqlite(

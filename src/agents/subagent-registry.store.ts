@@ -4,6 +4,7 @@ import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { sqliteBooleanInteger, sqliteIntegerBoolean } from "../infra/sqlite-row-values.js";
 import { readStringValue } from "../shared/string-coerce.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -144,21 +145,8 @@ function normalizeNumber(value: number | bigint | null): number | undefined {
   return typeof value === "number" ? value : undefined;
 }
 
-function normalizeBoolean(value: number | bigint | null): boolean | undefined {
-  if (typeof value === "bigint") {
-    return value !== 0n;
-  }
-  return typeof value === "number" ? value !== 0 : undefined;
-}
-
-function booleanToInteger(value: boolean | undefined): number | null {
-  return typeof value === "boolean" ? (value ? 1 : 0) : null;
-}
-
 function rowToRunRecord(row: SubagentRunRow): SubagentRunRecord | null {
-  const payload = parseJsonValue<Partial<SubagentRunRecord>>(row.payload_json) ?? {};
   const raw: PersistedSubagentRunRecord = {
-    ...payload,
     runId: row.run_id,
     childSessionKey: row.child_session_key,
     controllerSessionKey: row.controller_session_key ?? undefined,
@@ -166,6 +154,7 @@ function rowToRunRecord(row: SubagentRunRow): SubagentRunRecord | null {
     requesterDisplayKey: row.requester_display_key,
     requesterOrigin: parseJsonValue<DeliveryContext>(row.requester_origin_json),
     task: row.task,
+    taskName: row.task_name ?? undefined,
     cleanup: row.cleanup === "delete" ? "delete" : "keep",
     label: row.label ?? undefined,
     model: row.model ?? undefined,
@@ -181,24 +170,24 @@ function rowToRunRecord(row: SubagentRunRow): SubagentRunRecord | null {
     outcome: parseJsonValue<SubagentRunOutcome>(row.outcome_json),
     archiveAtMs: normalizeNumber(row.archive_at_ms),
     cleanupCompletedAt: normalizeNumber(row.cleanup_completed_at),
-    cleanupHandled: normalizeBoolean(row.cleanup_handled),
+    cleanupHandled: sqliteIntegerBoolean(row.cleanup_handled),
     suppressAnnounceReason:
       row.suppress_announce_reason === "steer-restart" || row.suppress_announce_reason === "killed"
         ? row.suppress_announce_reason
         : undefined,
-    expectsCompletionMessage: normalizeBoolean(row.expects_completion_message),
+    expectsCompletionMessage: sqliteIntegerBoolean(row.expects_completion_message),
     announceRetryCount: normalizeNumber(row.announce_retry_count),
     lastAnnounceRetryAt: normalizeNumber(row.last_announce_retry_at),
     lastAnnounceDeliveryError: row.last_announce_delivery_error ?? undefined,
     endedReason: row.ended_reason as SubagentRunRecord["endedReason"],
     pauseReason: row.pause_reason === "sessions_yield" ? "sessions_yield" : undefined,
-    wakeOnDescendantSettle: normalizeBoolean(row.wake_on_descendant_settle),
+    wakeOnDescendantSettle: sqliteIntegerBoolean(row.wake_on_descendant_settle),
     frozenResultText: row.frozen_result_text ?? undefined,
     frozenResultCapturedAt: normalizeNumber(row.frozen_result_captured_at),
     fallbackFrozenResultText: row.fallback_frozen_result_text ?? undefined,
     fallbackFrozenResultCapturedAt: normalizeNumber(row.fallback_frozen_result_captured_at),
     endedHookEmittedAt: normalizeNumber(row.ended_hook_emitted_at),
-    pendingFinalDelivery: normalizeBoolean(row.pending_final_delivery),
+    pendingFinalDelivery: sqliteIntegerBoolean(row.pending_final_delivery),
     pendingFinalDeliveryCreatedAt: normalizeNumber(row.pending_final_delivery_created_at),
     pendingFinalDeliveryLastAttemptAt: normalizeNumber(row.pending_final_delivery_last_attempt_at),
     pendingFinalDeliveryAttemptCount: normalizeNumber(row.pending_final_delivery_attempt_count),
@@ -223,6 +212,7 @@ function runRecordToRow(record: SubagentRunRecord): Insertable<SubagentRunsTable
     requester_display_key: record.requesterDisplayKey,
     requester_origin_json: serializeJson(record.requesterOrigin),
     task: record.task,
+    task_name: record.taskName ?? null,
     cleanup: record.cleanup,
     label: record.label ?? null,
     model: record.model ?? null,
@@ -238,21 +228,21 @@ function runRecordToRow(record: SubagentRunRecord): Insertable<SubagentRunsTable
     outcome_json: serializeJson(record.outcome),
     archive_at_ms: record.archiveAtMs ?? null,
     cleanup_completed_at: record.cleanupCompletedAt ?? null,
-    cleanup_handled: booleanToInteger(record.cleanupHandled),
+    cleanup_handled: sqliteBooleanInteger(record.cleanupHandled),
     suppress_announce_reason: record.suppressAnnounceReason ?? null,
-    expects_completion_message: booleanToInteger(record.expectsCompletionMessage),
+    expects_completion_message: sqliteBooleanInteger(record.expectsCompletionMessage),
     announce_retry_count: record.announceRetryCount ?? null,
     last_announce_retry_at: record.lastAnnounceRetryAt ?? null,
     last_announce_delivery_error: record.lastAnnounceDeliveryError ?? null,
     ended_reason: record.endedReason ?? null,
     pause_reason: record.pauseReason ?? null,
-    wake_on_descendant_settle: booleanToInteger(record.wakeOnDescendantSettle),
+    wake_on_descendant_settle: sqliteBooleanInteger(record.wakeOnDescendantSettle),
     frozen_result_text: record.frozenResultText ?? null,
     frozen_result_captured_at: record.frozenResultCapturedAt ?? null,
     fallback_frozen_result_text: record.fallbackFrozenResultText ?? null,
     fallback_frozen_result_captured_at: record.fallbackFrozenResultCapturedAt ?? null,
     ended_hook_emitted_at: record.endedHookEmittedAt ?? null,
-    pending_final_delivery: booleanToInteger(record.pendingFinalDelivery),
+    pending_final_delivery: sqliteBooleanInteger(record.pendingFinalDelivery),
     pending_final_delivery_created_at: record.pendingFinalDeliveryCreatedAt ?? null,
     pending_final_delivery_last_attempt_at: record.pendingFinalDeliveryLastAttemptAt ?? null,
     pending_final_delivery_attempt_count: record.pendingFinalDeliveryAttemptCount ?? null,
@@ -277,6 +267,7 @@ function upsertSubagentRunRow(db: DatabaseSync, row: Insertable<SubagentRunsTabl
           requester_display_key: (eb) => eb.ref("excluded.requester_display_key"),
           requester_origin_json: (eb) => eb.ref("excluded.requester_origin_json"),
           task: (eb) => eb.ref("excluded.task"),
+          task_name: (eb) => eb.ref("excluded.task_name"),
           cleanup: (eb) => eb.ref("excluded.cleanup"),
           label: (eb) => eb.ref("excluded.label"),
           model: (eb) => eb.ref("excluded.model"),

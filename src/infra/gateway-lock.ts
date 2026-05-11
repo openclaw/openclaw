@@ -21,7 +21,7 @@ const DEFAULT_TIMEOUT_MS = 5000;
 const DEFAULT_POLL_INTERVAL_MS = 100;
 const DEFAULT_STALE_MS = 30_000;
 const DEFAULT_PORT_PROBE_TIMEOUT_MS = 1000;
-const GATEWAY_LOCK_KV_SCOPE = "gateway_locks";
+const GATEWAY_LOCK_SCOPE = "gateway_locks";
 
 type LockPayload = {
   pid: number;
@@ -40,7 +40,7 @@ const LockPayloadSchema = z.object({
 }) as z.ZodType<LockPayload>;
 
 type GatewayLockHandle = {
-  lockPath: string;
+  lockRef: string;
   configPath: string;
   release: () => Promise<void>;
 };
@@ -70,8 +70,7 @@ export class GatewayLockError extends Error {
 }
 
 type LockOwnerStatus = "alive" | "dead" | "unknown";
-type GatewayLockKvDatabase = Pick<OpenClawStateKyselyDatabase, "kv">;
-type GatewayLockKvRow = { value_json: string };
+type GatewayLockDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 type GatewayLockAcquireResult =
   | { acquired: true; payload: LockPayload }
   | { acquired: false; payload: LockPayload | null };
@@ -257,7 +256,11 @@ function resolveGatewayLockKey(env: NodeJS.ProcessEnv) {
   const stateDir = resolveStateDir(env);
   const configPath = resolveConfigPath(env, stateDir);
   const hash = createHash("sha256").update(configPath).digest("hex").slice(0, 16);
-  return { lockKey: hash, lockPath: `sqlite:${GATEWAY_LOCK_KV_SCOPE}/${hash}`, configPath };
+  return {
+    lockKey: hash,
+    lockRef: `sqlite:state_leases/${GATEWAY_LOCK_SCOPE}/${hash}`,
+    configPath,
+  };
 }
 
 function readGatewayLockPayload(
@@ -265,17 +268,17 @@ function readGatewayLockPayload(
   options: OpenClawStateDatabaseOptions,
 ): LockPayload | null {
   return runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
+    const db = getNodeSqliteKysely<GatewayLockDatabase>(database.db);
     const row =
       executeSqliteQueryTakeFirstSync(
         database.db,
         db
-          .selectFrom("kv")
-          .select(["value_json"])
-          .where("scope", "=", GATEWAY_LOCK_KV_SCOPE)
-          .where("key", "=", lockKey),
+          .selectFrom("state_leases")
+          .select(["payload_json"])
+          .where("scope", "=", GATEWAY_LOCK_SCOPE)
+          .where("lease_key", "=", lockKey),
       ) ?? null;
-    return row ? safeParseLockPayloadJson(row.value_json) : null;
+    return row?.payload_json ? safeParseLockPayloadJson(row.payload_json) : null;
   }, options);
 }
 
@@ -285,21 +288,30 @@ function writeGatewayLockPayload(
   options: OpenClawStateDatabaseOptions,
 ): void {
   runOpenClawStateWriteTransaction((database) => {
-    const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
+    const db = getNodeSqliteKysely<GatewayLockDatabase>(database.db);
+    const createdAt = Date.parse(payload.createdAt);
+    const now = Number.isFinite(createdAt) ? createdAt : Date.now();
     executeSqliteQuerySync(
       database.db,
       db
-        .insertInto("kv")
+        .insertInto("state_leases")
         .values({
-          scope: GATEWAY_LOCK_KV_SCOPE,
-          key: lockKey,
-          value_json: JSON.stringify(payload),
-          updated_at: Date.parse(payload.createdAt),
+          scope: GATEWAY_LOCK_SCOPE,
+          lease_key: lockKey,
+          owner: payload.token,
+          expires_at: now + DEFAULT_STALE_MS,
+          heartbeat_at: now,
+          payload_json: JSON.stringify(payload),
+          created_at: now,
+          updated_at: now,
         })
         .onConflict((conflict) =>
-          conflict.columns(["scope", "key"]).doUpdateSet({
-            value_json: JSON.stringify(payload),
-            updated_at: Date.parse(payload.createdAt),
+          conflict.columns(["scope", "lease_key"]).doUpdateSet({
+            owner: payload.token,
+            expires_at: now + DEFAULT_STALE_MS,
+            heartbeat_at: now,
+            payload_json: JSON.stringify(payload),
+            updated_at: now,
           }),
         ),
     );
@@ -310,20 +322,23 @@ function tryAcquireGatewayLockRow(params: {
   lockKey: string;
   payload: LockPayload;
   env: NodeJS.ProcessEnv;
+  staleMs: number;
 }): GatewayLockAcquireResult {
   return runOpenClawStateWriteTransaction(
     (database) => {
-      const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
+      const db = getNodeSqliteKysely<GatewayLockDatabase>(database.db);
       const existingRow =
         executeSqliteQueryTakeFirstSync(
           database.db,
           db
-            .selectFrom("kv")
-            .select(["value_json"])
-            .where("scope", "=", GATEWAY_LOCK_KV_SCOPE)
-            .where("key", "=", params.lockKey),
+            .selectFrom("state_leases")
+            .select(["payload_json"])
+            .where("scope", "=", GATEWAY_LOCK_SCOPE)
+            .where("lease_key", "=", params.lockKey),
         ) ?? null;
-      const existing = existingRow ? safeParseLockPayloadJson(existingRow.value_json) : null;
+      const existing = existingRow?.payload_json
+        ? safeParseLockPayloadJson(existingRow.payload_json)
+        : null;
       if (existing) {
         return { acquired: false, payload: existing };
       }
@@ -331,18 +346,24 @@ function tryAcquireGatewayLockRow(params: {
         executeSqliteQuerySync(
           database.db,
           db
-            .deleteFrom("kv")
-            .where("scope", "=", GATEWAY_LOCK_KV_SCOPE)
-            .where("key", "=", params.lockKey),
+            .deleteFrom("state_leases")
+            .where("scope", "=", GATEWAY_LOCK_SCOPE)
+            .where("lease_key", "=", params.lockKey),
         );
       }
+      const createdAt = Date.parse(params.payload.createdAt);
+      const now = Number.isFinite(createdAt) ? createdAt : Date.now();
       executeSqliteQuerySync(
         database.db,
-        db.insertInto("kv").values({
-          scope: GATEWAY_LOCK_KV_SCOPE,
-          key: params.lockKey,
-          value_json: JSON.stringify(params.payload),
-          updated_at: Date.parse(params.payload.createdAt),
+        db.insertInto("state_leases").values({
+          scope: GATEWAY_LOCK_SCOPE,
+          lease_key: params.lockKey,
+          owner: params.payload.token,
+          expires_at: now + params.staleMs,
+          heartbeat_at: now,
+          payload_json: JSON.stringify(params.payload),
+          created_at: now,
+          updated_at: now,
         }),
       );
       return { acquired: true, payload: params.payload };
@@ -358,26 +379,25 @@ function clearGatewayLockRowIfTokenMatches(params: {
 }): void {
   runOpenClawStateWriteTransaction(
     (database) => {
-      const db = getNodeSqliteKysely<GatewayLockKvDatabase>(database.db);
+      const db = getNodeSqliteKysely<GatewayLockDatabase>(database.db);
       const existingRow =
         executeSqliteQueryTakeFirstSync(
           database.db,
           db
-            .selectFrom("kv")
-            .select(["value_json"])
-            .where("scope", "=", GATEWAY_LOCK_KV_SCOPE)
-            .where("key", "=", params.lockKey),
+            .selectFrom("state_leases")
+            .select(["owner", "payload_json"])
+            .where("scope", "=", GATEWAY_LOCK_SCOPE)
+            .where("lease_key", "=", params.lockKey),
         ) ?? null;
-      const existing = existingRow ? safeParseLockPayloadJson(existingRow.value_json) : null;
-      if (existing?.token !== params.token) {
+      if (existingRow?.owner !== params.token) {
         return;
       }
       executeSqliteQuerySync(
         database.db,
         db
-          .deleteFrom("kv")
-          .where("scope", "=", GATEWAY_LOCK_KV_SCOPE)
-          .where("key", "=", params.lockKey),
+          .deleteFrom("state_leases")
+          .where("scope", "=", GATEWAY_LOCK_SCOPE)
+          .where("lease_key", "=", params.lockKey),
       );
     },
     { env: params.env },
@@ -404,7 +424,7 @@ export async function acquireGatewayLock(
   const now = opts.now ?? Date.now;
   const sleep =
     opts.sleep ?? (async (ms: number) => await new Promise((resolve) => setTimeout(resolve, ms)));
-  const { lockKey, lockPath, configPath } = resolveGatewayLockKey(env);
+  const { lockKey, lockRef, configPath } = resolveGatewayLockKey(env);
 
   const startedAt = now();
   let lastPayload: LockPayload | null = null;
@@ -421,10 +441,10 @@ export async function acquireGatewayLock(
       if (typeof startTime === "number" && Number.isFinite(startTime)) {
         payload.startTime = startTime;
       }
-      const acquired = tryAcquireGatewayLockRow({ lockKey, payload, env });
+      const acquired = tryAcquireGatewayLockRow({ lockKey, payload, env, staleMs });
       if (acquired.acquired) {
         return {
-          lockPath,
+          lockRef,
           configPath,
           release: async () => {
             clearGatewayLockRowIfTokenMatches({ lockKey, token: payload.token, env });
@@ -461,7 +481,7 @@ export async function acquireGatewayLock(
 
       await sleep(pollIntervalMs);
     } catch (err) {
-      throw new GatewayLockError(`failed to acquire gateway lock at ${lockPath}`, err);
+      throw new GatewayLockError(`failed to acquire gateway lock at ${lockRef}`, err);
     }
   }
 

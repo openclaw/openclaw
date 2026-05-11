@@ -1,9 +1,78 @@
-CREATE TABLE IF NOT EXISTS kv (
+CREATE TABLE IF NOT EXISTS auth_profile_stores (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  store_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS auth_profile_state (
+  store_key TEXT NOT NULL PRIMARY KEY,
+  state_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS diagnostic_events (
   scope TEXT NOT NULL,
-  key TEXT NOT NULL,
-  value_json TEXT NOT NULL,
+  event_key TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (scope, event_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_diagnostic_events_scope_created
+  ON diagnostic_events(scope, created_at, event_key);
+
+CREATE TABLE IF NOT EXISTS diagnostic_stability_bundles (
+  bundle_key TEXT NOT NULL PRIMARY KEY,
+  reason TEXT NOT NULL,
+  generated_at TEXT NOT NULL,
+  bundle_json TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_diagnostic_stability_bundles_created
+  ON diagnostic_stability_bundles(created_at DESC, bundle_key);
+
+CREATE TABLE IF NOT EXISTS state_leases (
+  scope TEXT NOT NULL,
+  lease_key TEXT NOT NULL,
+  owner TEXT NOT NULL,
+  expires_at INTEGER,
+  heartbeat_at INTEGER,
+  payload_json TEXT,
+  created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, key)
+  PRIMARY KEY (scope, lease_key)
+);
+
+CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
+  ON state_leases(expires_at, scope, lease_key)
+  WHERE expires_at IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_state_leases_owner
+  ON state_leases(owner, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS exec_approvals_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  raw_json TEXT NOT NULL,
+  socket_path TEXT,
+  has_socket_token INTEGER NOT NULL,
+  default_security TEXT,
+  default_ask TEXT,
+  default_ask_fallback TEXT,
+  auto_allow_skills INTEGER,
+  agent_count INTEGER NOT NULL,
+  allowlist_count INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS schema_meta (
+  meta_key TEXT NOT NULL PRIMARY KEY,
+  role TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  agent_id TEXT,
+  app_version TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS device_pairing_pending (
@@ -110,6 +179,342 @@ CREATE TABLE IF NOT EXISTS node_pairing_paired (
 
 CREATE INDEX IF NOT EXISTS idx_node_pairing_paired_approved
   ON node_pairing_paired(approved_at_ms DESC, node_id);
+
+CREATE TABLE IF NOT EXISTS device_identities (
+  identity_key TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  public_key_pem TEXT NOT NULL,
+  private_key_pem TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_identities_device
+  ON device_identities(device_id, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS device_auth_tokens (
+  device_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (device_id, role)
+);
+
+CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
+  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
+
+CREATE TABLE IF NOT EXISTS android_notification_recent_packages (
+  package_name TEXT NOT NULL PRIMARY KEY,
+  sort_order INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_android_notification_recent_packages_order
+  ON android_notification_recent_packages(sort_order, package_name);
+
+CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
+  pid INTEGER NOT NULL PRIMARY KEY,
+  port INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  timestamp REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
+  ON macos_port_guardian_records(port, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS workspace_setup_state (
+  workspace_key TEXT NOT NULL PRIMARY KEY,
+  workspace_path TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  bootstrap_seeded_at TEXT,
+  setup_completed_at TEXT,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workspace_setup_state_path
+  ON workspace_setup_state(workspace_path);
+
+CREATE TABLE IF NOT EXISTS native_hook_relay_bridges (
+  relay_id TEXT NOT NULL PRIMARY KEY,
+  pid INTEGER NOT NULL,
+  hostname TEXT NOT NULL,
+  port INTEGER NOT NULL,
+  token TEXT NOT NULL,
+  expires_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_native_hook_relay_bridges_expires
+  ON native_hook_relay_bridges(expires_at_ms, relay_id);
+
+CREATE TABLE IF NOT EXISTS model_capability_cache (
+  provider_id TEXT NOT NULL,
+  model_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  input_text INTEGER NOT NULL,
+  input_image INTEGER NOT NULL,
+  reasoning INTEGER NOT NULL,
+  supports_tools INTEGER,
+  context_window INTEGER NOT NULL,
+  max_tokens INTEGER NOT NULL,
+  cost_input REAL NOT NULL,
+  cost_output REAL NOT NULL,
+  cost_cache_read REAL NOT NULL,
+  cost_cache_write REAL NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (provider_id, model_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_capability_cache_provider_updated
+  ON model_capability_cache(provider_id, updated_at_ms DESC, model_id);
+
+CREATE TABLE IF NOT EXISTS agent_model_catalogs (
+  catalog_key TEXT NOT NULL PRIMARY KEY,
+  agent_dir TEXT NOT NULL,
+  raw_json TEXT NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_model_catalogs_agent_dir
+  ON agent_model_catalogs(agent_dir, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS managed_outgoing_image_records (
+  attachment_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  message_id TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT,
+  retention_class TEXT,
+  alt TEXT NOT NULL,
+  original_media_id TEXT NOT NULL,
+  original_media_subdir TEXT NOT NULL,
+  original_content_type TEXT NOT NULL,
+  original_width INTEGER,
+  original_height INTEGER,
+  original_size_bytes INTEGER,
+  original_filename TEXT,
+  record_json TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_session
+  ON managed_outgoing_image_records(session_key, created_at DESC, attachment_id);
+
+CREATE INDEX IF NOT EXISTS idx_managed_outgoing_images_message
+  ON managed_outgoing_image_records(session_key, message_id, attachment_id)
+  WHERE message_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS channel_pairing_requests (
+  channel_key TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  request_id TEXT NOT NULL,
+  code TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_seen_at TEXT NOT NULL,
+  meta_json TEXT,
+  PRIMARY KEY (channel_key, account_id, request_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_pairing_requests_code
+  ON channel_pairing_requests(channel_key, code);
+
+CREATE INDEX IF NOT EXISTS idx_channel_pairing_requests_created
+  ON channel_pairing_requests(channel_key, created_at, request_id);
+
+CREATE TABLE IF NOT EXISTS channel_pairing_allow_entries (
+  channel_key TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  entry TEXT NOT NULL,
+  sort_order INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (channel_key, account_id, entry)
+);
+
+CREATE INDEX IF NOT EXISTS idx_channel_pairing_allow_account
+  ON channel_pairing_allow_entries(channel_key, account_id, sort_order, entry);
+
+CREATE TABLE IF NOT EXISTS web_push_subscriptions (
+  endpoint_hash TEXT NOT NULL PRIMARY KEY,
+  subscription_id TEXT NOT NULL UNIQUE,
+  endpoint TEXT NOT NULL,
+  p256dh TEXT NOT NULL,
+  auth TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_web_push_subscriptions_updated
+  ON web_push_subscriptions(updated_at_ms DESC, subscription_id);
+
+CREATE TABLE IF NOT EXISTS web_push_vapid_keys (
+  key_id TEXT NOT NULL PRIMARY KEY,
+  public_key TEXT NOT NULL,
+  private_key TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS apns_registrations (
+  node_id TEXT NOT NULL PRIMARY KEY,
+  transport TEXT NOT NULL,
+  token TEXT,
+  relay_handle TEXT,
+  send_grant TEXT,
+  installation_id TEXT,
+  topic TEXT NOT NULL,
+  environment TEXT NOT NULL,
+  distribution TEXT,
+  token_debug_suffix TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_apns_registrations_updated
+  ON apns_registrations(updated_at_ms DESC, node_id);
+
+CREATE TABLE IF NOT EXISTS node_host_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  node_id TEXT NOT NULL,
+  token TEXT,
+  display_name TEXT,
+  gateway_host TEXT,
+  gateway_port INTEGER,
+  gateway_tls INTEGER,
+  gateway_tls_fingerprint TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voicewake_triggers (
+  config_key TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (config_key, position)
+);
+
+CREATE INDEX IF NOT EXISTS idx_voicewake_triggers_trigger
+  ON voicewake_triggers(config_key, trigger);
+
+CREATE TABLE IF NOT EXISTS voicewake_routing_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  default_target_mode TEXT NOT NULL,
+  default_target_agent_id TEXT,
+  default_target_session_key TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS voicewake_routing_routes (
+  config_key TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  trigger TEXT NOT NULL,
+  target_mode TEXT NOT NULL,
+  target_agent_id TEXT,
+  target_session_key TEXT,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (config_key, position),
+  FOREIGN KEY (config_key) REFERENCES voicewake_routing_config(config_key) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_voicewake_routing_routes_trigger
+  ON voicewake_routing_routes(config_key, trigger);
+
+CREATE TABLE IF NOT EXISTS update_check_state (
+  state_key TEXT NOT NULL PRIMARY KEY,
+  last_checked_at TEXT,
+  last_notified_version TEXT,
+  last_notified_tag TEXT,
+  last_available_version TEXT,
+  last_available_tag TEXT,
+  auto_install_id TEXT,
+  auto_first_seen_version TEXT,
+  auto_first_seen_tag TEXT,
+  auto_first_seen_at TEXT,
+  auto_last_attempt_version TEXT,
+  auto_last_attempt_at TEXT,
+  auto_last_success_version TEXT,
+  auto_last_success_at TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS config_health_entries (
+  config_path TEXT NOT NULL PRIMARY KEY,
+  last_known_good_json TEXT,
+  last_promoted_good_json TEXT,
+  last_observed_suspicious_signature TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS installed_plugin_index (
+  index_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  host_contract_version TEXT NOT NULL,
+  compat_registry_version TEXT NOT NULL,
+  migration_version INTEGER NOT NULL,
+  policy_hash TEXT NOT NULL,
+  generated_at_ms INTEGER NOT NULL,
+  refresh_reason TEXT,
+  install_records_json TEXT NOT NULL,
+  plugins_json TEXT NOT NULL,
+  diagnostics_json TEXT NOT NULL,
+  warning TEXT,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_installed_plugin_index_generated
+  ON installed_plugin_index(generated_at_ms DESC, index_key);
+
+CREATE TABLE IF NOT EXISTS gateway_restart_sentinel (
+  sentinel_key TEXT NOT NULL PRIMARY KEY,
+  version INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  ts INTEGER NOT NULL,
+  session_key TEXT,
+  thread_id TEXT,
+  delivery_channel TEXT,
+  delivery_to TEXT,
+  delivery_account_id TEXT,
+  message TEXT,
+  continuation_json TEXT,
+  doctor_hint TEXT,
+  stats_json TEXT,
+  payload_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_restart_sentinel_ts
+  ON gateway_restart_sentinel(ts DESC, sentinel_key);
+
+CREATE TABLE IF NOT EXISTS gateway_restart_intent (
+  intent_key TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  pid INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  force INTEGER,
+  wait_ms INTEGER,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
+  handoff_key TEXT NOT NULL PRIMARY KEY,
+  kind TEXT NOT NULL,
+  version INTEGER NOT NULL,
+  intent_id TEXT NOT NULL,
+  pid INTEGER NOT NULL,
+  process_instance_id TEXT,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  reason TEXT,
+  source TEXT NOT NULL,
+  restart_kind TEXT NOT NULL,
+  supervisor_mode TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_restart_handoff_expiry
+  ON gateway_restart_handoff(expires_at, pid);
 
 CREATE TABLE IF NOT EXISTS acp_replay_sessions (
   session_id TEXT NOT NULL PRIMARY KEY,
@@ -277,6 +682,16 @@ CREATE INDEX IF NOT EXISTS capture_events_flow_idx
 CREATE TABLE IF NOT EXISTS sandbox_registry_entries (
   registry_kind TEXT NOT NULL,
   container_name TEXT NOT NULL,
+  session_key TEXT,
+  backend_id TEXT,
+  runtime_label TEXT,
+  image TEXT,
+  created_at_ms INTEGER,
+  last_used_at_ms INTEGER,
+  config_label_kind TEXT,
+  config_hash TEXT,
+  cdp_port INTEGER,
+  no_vnc_port INTEGER,
   entry_json TEXT NOT NULL,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (registry_kind, container_name)
@@ -285,15 +700,44 @@ CREATE TABLE IF NOT EXISTS sandbox_registry_entries (
 CREATE INDEX IF NOT EXISTS idx_sandbox_registry_updated
   ON sandbox_registry_entries(registry_kind, updated_at DESC, container_name);
 
+CREATE INDEX IF NOT EXISTS idx_sandbox_registry_session
+  ON sandbox_registry_entries(registry_kind, session_key, last_used_at_ms DESC, container_name)
+  WHERE session_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_sandbox_registry_last_used
+  ON sandbox_registry_entries(registry_kind, last_used_at_ms DESC, container_name)
+  WHERE last_used_at_ms IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS commitments (
   id TEXT NOT NULL PRIMARY KEY,
   agent_id TEXT NOT NULL,
   session_key TEXT NOT NULL,
   channel TEXT NOT NULL,
+  account_id TEXT,
+  recipient_id TEXT,
+  thread_id TEXT,
+  sender_id TEXT,
+  kind TEXT NOT NULL,
+  sensitivity TEXT NOT NULL,
+  source TEXT NOT NULL,
   status TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  suggested_text TEXT NOT NULL,
+  dedupe_key TEXT NOT NULL,
+  confidence REAL NOT NULL,
   due_earliest_ms INTEGER NOT NULL,
   due_latest_ms INTEGER NOT NULL,
+  due_timezone TEXT NOT NULL,
+  source_message_id TEXT,
+  source_run_id TEXT,
+  created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
+  attempts INTEGER NOT NULL,
+  last_attempt_at_ms INTEGER,
+  sent_at_ms INTEGER,
+  dismissed_at_ms INTEGER,
+  snoozed_until_ms INTEGER,
+  expired_at_ms INTEGER,
   record_json TEXT NOT NULL
 );
 
@@ -303,11 +747,30 @@ CREATE INDEX IF NOT EXISTS idx_commitments_scope_due
 CREATE INDEX IF NOT EXISTS idx_commitments_status_due
   ON commitments(status, due_earliest_ms, due_latest_ms);
 
+CREATE INDEX IF NOT EXISTS idx_commitments_scope_dedupe
+  ON commitments(agent_id, session_key, channel, dedupe_key, status);
+
 CREATE TABLE IF NOT EXISTS cron_run_logs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   ts INTEGER NOT NULL,
+  status TEXT,
+  error TEXT,
+  summary TEXT,
+  diagnostics_summary TEXT,
+  delivery_status TEXT,
+  delivery_error TEXT,
+  delivered INTEGER,
+  session_id TEXT,
+  session_key TEXT,
+  run_id TEXT,
+  run_at_ms INTEGER,
+  duration_ms INTEGER,
+  next_run_at_ms INTEGER,
+  model TEXT,
+  provider TEXT,
+  total_tokens INTEGER,
   entry_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
   PRIMARY KEY (store_key, job_id, seq)
@@ -316,9 +779,73 @@ CREATE TABLE IF NOT EXISTS cron_run_logs (
 CREATE INDEX IF NOT EXISTS idx_cron_run_logs_store_ts
   ON cron_run_logs(store_key, ts DESC, seq DESC);
 
+CREATE INDEX IF NOT EXISTS idx_cron_run_logs_job_status
+  ON cron_run_logs(store_key, job_id, status, ts DESC, seq DESC);
+
+CREATE INDEX IF NOT EXISTS idx_cron_run_logs_delivery
+  ON cron_run_logs(store_key, delivery_status, ts DESC, seq DESC)
+  WHERE delivery_status IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS cron_jobs (
   store_key TEXT NOT NULL,
   job_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  description TEXT,
+  enabled INTEGER NOT NULL,
+  delete_after_run INTEGER,
+  created_at_ms INTEGER NOT NULL,
+  agent_id TEXT,
+  session_key TEXT,
+  schedule_kind TEXT NOT NULL,
+  schedule_expr TEXT,
+  schedule_tz TEXT,
+  every_ms INTEGER,
+  anchor_ms INTEGER,
+  at TEXT,
+  stagger_ms INTEGER,
+  session_target TEXT NOT NULL,
+  wake_mode TEXT NOT NULL,
+  payload_kind TEXT NOT NULL,
+  payload_message TEXT,
+  payload_model TEXT,
+  payload_fallbacks_json TEXT,
+  payload_thinking TEXT,
+  payload_timeout_seconds INTEGER,
+  payload_allow_unsafe_external_content INTEGER,
+  payload_external_content_source_json TEXT,
+  payload_light_context INTEGER,
+  payload_tools_allow_json TEXT,
+  delivery_mode TEXT,
+  delivery_channel TEXT,
+  delivery_to TEXT,
+  delivery_thread_id TEXT,
+  delivery_account_id TEXT,
+  delivery_best_effort INTEGER,
+  failure_delivery_mode TEXT,
+  failure_delivery_channel TEXT,
+  failure_delivery_to TEXT,
+  failure_delivery_account_id TEXT,
+  failure_alert_disabled INTEGER,
+  failure_alert_after INTEGER,
+  failure_alert_channel TEXT,
+  failure_alert_to TEXT,
+  failure_alert_cooldown_ms INTEGER,
+  failure_alert_include_skipped INTEGER,
+  failure_alert_mode TEXT,
+  failure_alert_account_id TEXT,
+  next_run_at_ms INTEGER,
+  running_at_ms INTEGER,
+  last_run_at_ms INTEGER,
+  last_run_status TEXT,
+  last_error TEXT,
+  last_duration_ms INTEGER,
+  consecutive_errors INTEGER,
+  consecutive_skipped INTEGER,
+  schedule_error_count INTEGER,
+  last_delivery_status TEXT,
+  last_delivery_error TEXT,
+  last_delivered INTEGER,
+  last_failure_alert_at_ms INTEGER,
   job_json TEXT NOT NULL,
   state_json TEXT NOT NULL DEFAULT '{}',
   runtime_updated_at_ms INTEGER,
@@ -330,6 +857,14 @@ CREATE TABLE IF NOT EXISTS cron_jobs (
 
 CREATE INDEX IF NOT EXISTS idx_cron_jobs_store_updated
   ON cron_jobs(store_key, sort_order ASC, updated_at DESC, job_id);
+
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_enabled_next_run
+  ON cron_jobs(store_key, enabled, next_run_at_ms, job_id)
+  WHERE next_run_at_ms IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_cron_jobs_agent_session
+  ON cron_jobs(agent_id, session_key, updated_at DESC, job_id)
+  WHERE agent_id IS NOT NULL OR session_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS command_log_entries (
   id TEXT NOT NULL PRIMARY KEY,
@@ -351,6 +886,16 @@ CREATE TABLE IF NOT EXISTS delivery_queue_entries (
   queue_name TEXT NOT NULL,
   id TEXT NOT NULL,
   status TEXT NOT NULL,
+  entry_kind TEXT,
+  session_key TEXT,
+  channel TEXT,
+  target TEXT,
+  account_id TEXT,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_attempt_at INTEGER,
+  last_error TEXT,
+  recovery_state TEXT,
+  platform_send_started_at INTEGER,
   entry_json TEXT NOT NULL,
   enqueued_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -363,6 +908,14 @@ CREATE INDEX IF NOT EXISTS idx_delivery_queue_pending
 
 CREATE INDEX IF NOT EXISTS idx_delivery_queue_failed
   ON delivery_queue_entries(queue_name, status, failed_at, id);
+
+CREATE INDEX IF NOT EXISTS idx_delivery_queue_session
+  ON delivery_queue_entries(queue_name, status, session_key, enqueued_at, id)
+  WHERE session_key IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_delivery_queue_target
+  ON delivery_queue_entries(queue_name, status, channel, target, enqueued_at, id)
+  WHERE channel IS NOT NULL AND target IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS task_runs (
   task_id TEXT NOT NULL PRIMARY KEY,
@@ -410,6 +963,7 @@ CREATE TABLE IF NOT EXISTS subagent_runs (
   requester_display_key TEXT NOT NULL,
   requester_origin_json TEXT,
   task TEXT NOT NULL,
+  task_name TEXT,
   cleanup TEXT NOT NULL,
   label TEXT,
   model TEXT,
@@ -481,6 +1035,19 @@ CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
   ON current_conversation_bindings(target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
   ON current_conversation_bindings(expires_at, binding_key);
+
+CREATE TABLE IF NOT EXISTS plugin_binding_approvals (
+  plugin_root TEXT NOT NULL,
+  channel TEXT NOT NULL,
+  account_id TEXT NOT NULL,
+  plugin_id TEXT NOT NULL,
+  plugin_name TEXT,
+  approved_at INTEGER NOT NULL,
+  PRIMARY KEY (plugin_root, channel, account_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_plugin_binding_approvals_plugin
+  ON plugin_binding_approvals(plugin_id, approved_at DESC);
 
 CREATE TABLE IF NOT EXISTS tui_last_sessions (
   scope_key TEXT NOT NULL PRIMARY KEY,

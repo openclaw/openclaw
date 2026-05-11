@@ -1111,7 +1111,7 @@ async function compactEmbeddedPiSessionDirectOnce(
           // so compaction and hook metrics are based on the same message set.
           session.agent.state.messages = dedupedValidated;
           // "Original" compaction metrics should describe the validated transcript that enters
-          // limiting/compaction, not the raw on-disk session snapshot.
+          // limiting/compaction, not the raw SQLite transcript snapshot.
           const originalMessages = session.messages.slice();
           const truncated = limitHistoryTurns(
             session.messages,

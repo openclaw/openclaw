@@ -3,9 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
-import { AUTH_PROFILE_STORE_KV_SCOPE, authProfileStoreKey } from "./auth-profiles/persisted.js";
-import { AUTH_PROFILE_STATE_KV_SCOPE, authProfileStateKey } from "./auth-profiles/state.js";
+import { authProfileStoreKey } from "./auth-profiles/persisted.js";
+import {
+  readAuthProfileStatePayloadResult,
+  readAuthProfileStorePayloadResult,
+} from "./auth-profiles/sqlite-storage.js";
+import { authProfileStateKey } from "./auth-profiles/state.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   ensureAuthProfileStoreForLocalUpdate,
@@ -41,7 +44,8 @@ function readRawPersistedAuthProfiles(agentDir?: string): {
   lastGood?: unknown;
   usageStats?: unknown;
 } {
-  const raw = readOpenClawStateKvJson(AUTH_PROFILE_STORE_KV_SCOPE, authProfileStoreKey(agentDir));
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir));
+  const raw = result.exists ? result.value : undefined;
   expect(raw).toBeTruthy();
   return raw as {
     profiles: Record<string, unknown>;
@@ -222,10 +226,8 @@ describe("saveAuthProfileStore", () => {
       expect(authProfiles.lastGood).toBeUndefined();
       expect(authProfiles.usageStats).toBeUndefined();
 
-      const sqliteState = readOpenClawStateKvJson(
-        AUTH_PROFILE_STATE_KV_SCOPE,
-        authProfileStateKey(agentDir),
-      ) as {
+      const sqliteStateResult = readAuthProfileStatePayloadResult(authProfileStateKey(agentDir));
+      const sqliteState = (sqliteStateResult.exists ? sqliteStateResult.value : undefined) as {
         order?: Record<string, string[]>;
         lastGood?: Record<string, string>;
         usageStats?: Record<string, { lastUsed?: number }>;

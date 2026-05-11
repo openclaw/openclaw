@@ -3,6 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -20,6 +26,11 @@ import {
 function createTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sqlite-transcript-"));
 }
+
+type TranscriptStoreTestDatabase = Pick<
+  OpenClawAgentKyselyDatabase,
+  "sessions" | "transcript_event_identities" | "transcript_events" | "transcript_snapshots"
+>;
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -100,11 +111,15 @@ describe("SQLite session transcript store", () => {
       env: { OPENCLAW_STATE_DIR: stateDir },
       agentId: "main",
     });
-    const identityRows = database.db
-      .prepare(
-        "SELECT message_idempotency_key FROM transcript_event_identities WHERE session_id = ? AND message_idempotency_key IS NOT NULL",
-      )
-      .all("session-1");
+    const db = getNodeSqliteKysely<TranscriptStoreTestDatabase>(database.db);
+    const identityRows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("transcript_event_identities")
+        .select("message_idempotency_key")
+        .where("session_id", "=", "session-1")
+        .where("message_idempotency_key", "is not", null),
+    ).rows;
     expect(identityRows).toEqual([{ message_idempotency_key: "idem-1" }]);
   });
 
@@ -262,8 +277,61 @@ describe("SQLite session transcript store", () => {
     );
 
     const agentDatabase = openOpenClawAgentDatabase({ env, agentId: "main" });
+    const db = getNodeSqliteKysely<TranscriptStoreTestDatabase>(agentDatabase.db);
     expect(
-      agentDatabase.db.prepare("SELECT COUNT(*) AS count FROM transcript_snapshots").get(),
+      executeSqliteQueryTakeFirstSync(
+        agentDatabase.db,
+        db.selectFrom("transcript_snapshots").select((eb) => eb.fn.countAll<number>().as("count")),
+      ),
+    ).toEqual({ count: 0 });
+  });
+
+  it("anchors transcript rows to the canonical session root", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    appendSqliteSessionTranscriptEvent({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      event: { type: "session", id: "session-1" },
+      now: () => 100,
+    });
+    recordSqliteSessionTranscriptSnapshot({
+      env,
+      agentId: "main",
+      sessionId: "session-1",
+      snapshotId: "snapshot-1",
+      reason: "compaction",
+      eventCount: 1,
+      createdAt: 200,
+    });
+
+    const agentDatabase = openOpenClawAgentDatabase({ env, agentId: "main" });
+    const db = getNodeSqliteKysely<TranscriptStoreTestDatabase>(agentDatabase.db);
+    expect(
+      executeSqliteQuerySync(
+        agentDatabase.db,
+        db.selectFrom("sessions").select(["session_id", "updated_at"]),
+      ).rows,
+    ).toEqual([{ session_id: "session-1", updated_at: 200 }]);
+
+    executeSqliteQuerySync(
+      agentDatabase.db,
+      db.deleteFrom("sessions").where("session_id", "=", "session-1"),
+    );
+
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        agentDatabase.db,
+        db.selectFrom("transcript_events").select((eb) => eb.fn.countAll<number>().as("count")),
+      ),
+    ).toEqual({ count: 0 });
+    expect(
+      executeSqliteQueryTakeFirstSync(
+        agentDatabase.db,
+        db.selectFrom("transcript_snapshots").select((eb) => eb.fn.countAll<number>().as("count")),
+      ),
     ).toEqual({ count: 0 });
   });
 });

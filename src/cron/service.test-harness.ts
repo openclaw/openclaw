@@ -248,7 +248,6 @@ export function createMockCronStateForJobs(params: {
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),
     warnedDisabled: false,
-    warnedMissingSessionTargetJobIds: new Set<string>(),
     deps: {
       storeKey: "mock",
       cronEnabled: true,

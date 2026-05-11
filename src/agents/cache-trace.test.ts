@@ -4,8 +4,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createCacheTrace } from "./cache-trace.js";
 
 describe("createCacheTrace", () => {
@@ -83,7 +83,7 @@ describe("createCacheTrace", () => {
       expect(trace?.destination).toBe("sqlite://state/diagnostics/cache-trace");
       trace?.recordStage("session:loaded", { messages: [] });
 
-      const entries = listOpenClawStateKvJson<Record<string, unknown>>("diagnostics.cache_trace", {
+      const entries = listDiagnosticEvents<Record<string, unknown>>("diagnostics.cache_trace", {
         env,
       });
       expect(entries).toHaveLength(1);

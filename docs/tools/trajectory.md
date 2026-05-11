@@ -116,7 +116,7 @@ An exported bundle can contain:
 | File                  | Contents                                                                                                                      |
 | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
 | `manifest.json`       | Bundle schema, source files, event counts, and generated file list                                                            |
-| `events.jsonl`        | Ordered runtime and transcript timeline                                                                                       |
+| `events.jsonl`        | Exported ordered runtime and transcript timeline                                                                              |
 | `session-branch.json` | Redacted active transcript branch and session header                                                                          |
 | `metadata.json`       | OpenClaw version, OS/runtime, model, config snapshot, plugins, skills, and prompt metadata                                    |
 | `artifacts.json`      | Final status, errors, usage, prompt cache, compaction count, assistant text, tool metadata, and SQLite tool-artifact metadata |

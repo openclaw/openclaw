@@ -4,8 +4,8 @@ import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { listDiagnosticEvents } from "../infra/diagnostic-events-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,
@@ -117,7 +117,7 @@ function resolveProviderBaseUrl(model: LiveResolvedModel["model"]): string | und
 }
 
 async function readCacheTraceEvents(sessionId: string): Promise<CacheTraceEvent[]> {
-  return listOpenClawStateKvJson<CacheTraceEvent>("diagnostics.cache_trace")
+  return listDiagnosticEvents<CacheTraceEvent>("diagnostics.cache_trace")
     .map((entry) => entry.value)
     .filter((event) => event.sessionId === sessionId);
 }

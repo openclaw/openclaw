@@ -55,7 +55,7 @@ const loadAuthProfiles = (agentId: string) => {
   }) as {
     profiles?: Record<string, { provider?: string; type?: string; token?: string; key?: string }>;
   } | null;
-  const authLocation = `${resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateRoot })}#kv/auth-profiles/${agentDir}`;
+  const authLocation = `${resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: stateRoot })}#table/auth_profile_stores/${agentDir}`;
   if (!store) {
     throw new Error(`Missing SQLite auth store: ${authLocation}`);
   }

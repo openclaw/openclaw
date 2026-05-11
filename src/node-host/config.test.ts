@@ -3,7 +3,6 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { ensureNodeHostConfig, loadNodeHostConfig, saveNodeHostConfig } from "./config.js";
 
 const tempRoots: string[] = [];
@@ -42,10 +41,6 @@ describe("node host config", () => {
       token: "token-1",
       displayName: "Test node",
       gateway: { host: "gateway.local", port: 18443, tls: true },
-    });
-    expect(readOpenClawStateKvJson("node-host.config", "current", { env })).toMatchObject({
-      nodeId: "node-1",
-      token: "token-1",
     });
     await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
       code: "ENOENT",

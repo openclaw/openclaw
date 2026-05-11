@@ -49,7 +49,7 @@ class CameraHandler(
     } catch (err: Throwable) {
       val (code, message) = invokeErrorFromThrowable(err)
       GatewaySession.InvokeResult.error(code = code, message = message)
-  }
+    }
 
   suspend fun handleSnap(paramsJson: String?): GatewaySession.InvokeResult {
     fun camLog(msg: String) {

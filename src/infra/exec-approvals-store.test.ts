@@ -2,8 +2,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
 
@@ -33,6 +35,7 @@ let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 const tempDirs: string[] = [];
 const originalOpenClawHome = process.env.OPENCLAW_HOME;
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+type ExecApprovalsTestDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
 
 beforeAll(async () => {
   ({
@@ -89,8 +92,13 @@ function readApprovalsFile(): ExecApprovalsFile {
 }
 
 function readSqliteRaw(): string | undefined {
-  const value = readOpenClawStateKvJson("exec.approvals", "current");
-  return typeof value === "string" ? value : undefined;
+  const database = openOpenClawStateDatabase();
+  const db = getNodeSqliteKysely<ExecApprovalsTestDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("exec_approvals_config").select("raw_json").where("config_key", "=", "current"),
+  );
+  return typeof row?.raw_json === "string" ? row.raw_json : undefined;
 }
 
 function requireRecord(value: unknown): Record<string, unknown> {
@@ -121,7 +129,9 @@ describe("exec approvals store helpers", () => {
     expect(resolveExecApprovalsStoreLocationForDisplay()).toContain(
       path.join(process.env.OPENCLAW_STATE_DIR ?? "", "state", "openclaw.sqlite"),
     );
-    expect(resolveExecApprovalsStoreLocationForDisplay()).toContain("#kv/exec.approvals/current");
+    expect(resolveExecApprovalsStoreLocationForDisplay()).toContain(
+      "#table/exec_approvals_config/current",
+    );
     expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
     );

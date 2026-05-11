@@ -1,8 +1,3 @@
-import {
-  deleteOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { clearCurrentPluginMetadataSnapshotState } from "./current-plugin-metadata-state.js";
@@ -12,11 +7,10 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index-install-records.js";
 import { diffInstalledPluginIndexInvalidationReasons } from "./installed-plugin-index-invalidation.js";
 import {
-  INSTALLED_PLUGIN_INDEX_KV_KEY,
-  INSTALLED_PLUGIN_INDEX_KV_SCOPE,
+  deletePersistedInstalledPluginIndexFromSqliteSync,
   readPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndexSync,
-  resolveInstalledPluginIndexStateDbOptions,
+  writePersistedInstalledPluginIndexToSqliteSync,
 } from "./installed-plugin-index-persisted-read.js";
 import {
   resolveCompatRegistryVersion,
@@ -57,12 +51,7 @@ export async function writePersistedInstalledPluginIndex(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
 ): Promise<void> {
-  writeOpenClawStateKvJson(
-    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-    INSTALLED_PLUGIN_INDEX_KV_KEY,
-    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
-    resolveInstalledPluginIndexStateDbOptions(options),
-  );
+  writePersistedInstalledPluginIndexToSqliteSync(withInstalledPluginIndexWarning(index), options);
   clearCurrentPluginMetadataSnapshotState();
 }
 
@@ -70,23 +59,14 @@ export function writePersistedInstalledPluginIndexSync(
   index: InstalledPluginIndex,
   options: InstalledPluginIndexStoreOptions = {},
 ): void {
-  writeOpenClawStateKvJson(
-    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-    INSTALLED_PLUGIN_INDEX_KV_KEY,
-    withInstalledPluginIndexWarning(index) as unknown as OpenClawStateJsonValue,
-    resolveInstalledPluginIndexStateDbOptions(options),
-  );
+  writePersistedInstalledPluginIndexToSqliteSync(withInstalledPluginIndexWarning(index), options);
   clearCurrentPluginMetadataSnapshotState();
 }
 
 export function deletePersistedInstalledPluginIndexSync(
   options: InstalledPluginIndexStoreOptions = {},
 ): boolean {
-  const removed = deleteOpenClawStateKvJson(
-    INSTALLED_PLUGIN_INDEX_KV_SCOPE,
-    INSTALLED_PLUGIN_INDEX_KV_KEY,
-    resolveInstalledPluginIndexStateDbOptions(options),
-  );
+  const removed = deletePersistedInstalledPluginIndexFromSqliteSync(options);
   if (removed) {
     clearCurrentPluginMetadataSnapshotState();
   }

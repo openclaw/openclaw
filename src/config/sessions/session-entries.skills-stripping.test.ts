@@ -8,6 +8,12 @@ import {
   hydrateResolvedSkillsAsync,
 } from "../../agents/skills/snapshot-hydration.js";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
+import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
@@ -22,6 +28,7 @@ vi.mock("../config.js", async () => ({
 }));
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-skills-strip-" });
+type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
 
 function makeFixtureSkill(name: string, bodySize = 3000): Skill {
   // 3KB body simulates a realistic SKILL.md.
@@ -83,22 +90,44 @@ describe("session entry persistence strips resolvedSkills", () => {
 
   function readStoredEntryJson(sessionKey: string): string | undefined {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    const row = database.db
-      .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
-      .get(sessionKey) as { entry_json?: string } | undefined;
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("session_entries").select("entry_json").where("session_key", "=", sessionKey),
+    );
     return row?.entry_json;
   }
 
   function seedRawSessionEntry(sessionKey: string, entry: SessionEntry): void {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    database.db
-      .prepare(
-        `
-          INSERT INTO session_entries (session_key, entry_json, updated_at)
-          VALUES (?, ?, ?)
-        `,
-      )
-      .run(sessionKey, JSON.stringify(entry), entry.updatedAt ?? Date.now());
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const updatedAt = entry.updatedAt ?? Date.now();
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("sessions")
+        .values({
+          session_id: entry.sessionId,
+          session_key: sessionKey,
+          created_at: updatedAt,
+          updated_at: updatedAt,
+        })
+        .onConflict((conflict) =>
+          conflict.column("session_id").doUpdateSet({
+            session_key: (eb) => eb.ref("excluded.session_key"),
+            updated_at: (eb) => eb.ref("excluded.updated_at"),
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_entries").values({
+        session_key: sessionKey,
+        session_id: entry.sessionId,
+        entry_json: JSON.stringify(entry),
+        updated_at: updatedAt,
+      }),
+    );
   }
 
   function readStoredEntries(): Record<string, SessionEntry> {

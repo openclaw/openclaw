@@ -210,7 +210,7 @@ describe("Engine contract tests", () => {
     );
   });
 
-  it("delegateCompactionToRuntime reuses the legacy runtime bridge", async () => {
+  it("delegateCompactionToRuntime reuses the built-in compaction adapter", async () => {
     const compactRuntimeSpy = installCompactRuntimeSpy();
     const result = await delegateCompactionToRuntime({
       sessionId: "s2",

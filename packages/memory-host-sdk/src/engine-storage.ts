@@ -12,6 +12,7 @@ export {
   parseEmbedding,
   remapChunkLines,
   runWithConcurrency,
+  serializeEmbedding,
   type MemoryChunk,
   type MemoryFileEntry,
 } from "./host/internal.js";

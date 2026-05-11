@@ -1,6 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -19,6 +21,8 @@ import {
   type TaskFlowRecord,
 } from "./task-flow-registry.types.js";
 import { parseTaskNotifyPolicy } from "./task-registry.types.js";
+
+type TaskFlowRegistryTestDatabase = Pick<OpenClawStateKyselyDatabase, "flow_runs">;
 
 function createStoredFlow(): TaskFlowRecord {
   return {
@@ -154,9 +158,12 @@ describe("task-flow-registry store runtime", () => {
         status: "running",
       });
 
-      openOpenClawStateDatabase()
-        .db.prepare("UPDATE flow_runs SET status = ? WHERE flow_id = ?")
-        .run("done", created.flowId);
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.updateTable("flow_runs").set({ status: "done" }).where("flow_id", "=", created.flowId),
+      );
 
       expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
         "Invalid persisted task flow status",

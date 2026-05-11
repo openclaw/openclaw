@@ -2,13 +2,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import type { PluginCandidate } from "./discovery.js";
 import {
   inspectPersistedInstalledPluginIndex,
   readPersistedInstalledPluginIndex,
   refreshPersistedInstalledPluginIndex,
   writePersistedInstalledPluginIndex,
+  writePersistedInstalledPluginIndexSync,
 } from "./installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -22,10 +22,6 @@ afterEach(() => {
 
 function makeTempDir() {
   return makeTrackedTempDir("openclaw-installed-plugin-index-store", tempDirs);
-}
-
-function obsoleteIndexPath(stateDir: string): string {
-  return path.join(stateDir, "plugins", "installs.json");
 }
 
 function createIndex(overrides: Partial<InstalledPluginIndex> = {}): InstalledPluginIndex {
@@ -148,17 +144,12 @@ async function expectPersistedIndex(
 describe("installed plugin index persistence", () => {
   it("writes and reads the installed plugin index from SQLite", async () => {
     const stateDir = makeTempDir();
-    const filePath = obsoleteIndexPath(stateDir);
     const index = createIndex();
 
     await writePersistedInstalledPluginIndex(index, { stateDir });
 
-    expect(fs.existsSync(filePath)).toBe(false);
-    expect(
-      readOpenClawStateKvJson("installed_plugin_index", "current", {
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      }),
-    ).toMatchObject({
+    expect(fs.existsSync(path.join(stateDir, "plugins"))).toBe(false);
+    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toMatchObject({
       warning: expect.stringContaining("DO NOT EDIT."),
       plugins: [expect.objectContaining({ pluginId: "demo" })],
     });
@@ -169,13 +160,9 @@ describe("installed plugin index persistence", () => {
     const stateDir = makeTempDir();
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
 
-    writeOpenClawStateKvJson(
-      "installed_plugin_index",
-      "current",
-      { version: 999 },
-      {
-        env: { OPENCLAW_STATE_DIR: stateDir },
-      },
+    writePersistedInstalledPluginIndexSync(
+      createIndex({ version: 999 as InstalledPluginIndex["version"] }),
+      { stateDir },
     );
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });

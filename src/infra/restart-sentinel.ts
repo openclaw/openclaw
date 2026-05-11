@@ -1,11 +1,16 @@
+import type { Insertable, Selectable } from "kysely";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 export type RestartSentinelLog = {
   stdoutTail?: string | null;
@@ -68,8 +73,107 @@ export type RestartSentinel = {
 export const DEFAULT_RESTART_SUCCESS_CONTINUATION_MESSAGE =
   "The gateway restart completed successfully. Tell the user OpenClaw restarted successfully and continue any pending work.";
 
-const RESTART_SENTINEL_KV_SCOPE = "gateway.restart-sentinel";
-const RESTART_SENTINEL_KV_KEY = "current";
+const RESTART_SENTINEL_KEY = "current";
+
+type RestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+type RestartSentinelRow = Selectable<RestartSentinelDatabase["gateway_restart_sentinel"]>;
+type RestartSentinelInsert = Insertable<RestartSentinelDatabase["gateway_restart_sentinel"]>;
+
+function restartSentinelToRow(payload: RestartSentinelPayload): RestartSentinelInsert {
+  return {
+    sentinel_key: RESTART_SENTINEL_KEY,
+    version: 1,
+    kind: payload.kind,
+    status: payload.status,
+    ts: payload.ts,
+    session_key: payload.sessionKey ?? null,
+    thread_id: payload.threadId ?? null,
+    delivery_channel: payload.deliveryContext?.channel ?? null,
+    delivery_to: payload.deliveryContext?.to ?? null,
+    delivery_account_id: payload.deliveryContext?.accountId ?? null,
+    message: payload.message ?? null,
+    continuation_json: payload.continuation ? JSON.stringify(payload.continuation) : null,
+    doctor_hint: payload.doctorHint ?? null,
+    stats_json: payload.stats ? JSON.stringify(payload.stats) : null,
+    payload_json: JSON.stringify(payload),
+    updated_at_ms: Date.now(),
+  };
+}
+
+function parseJsonRecord(value: string | null): Record<string, unknown> | null {
+  if (!value) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseRestartSentinelContinuation(
+  value: string | null,
+): RestartSentinelContinuation | null {
+  const parsed = parseJsonRecord(value);
+  if (!parsed) {
+    return null;
+  }
+  if (parsed.kind === "systemEvent" && typeof parsed.text === "string") {
+    return { kind: "systemEvent", text: parsed.text };
+  }
+  if (parsed.kind === "agentTurn" && typeof parsed.message === "string") {
+    return { kind: "agentTurn", message: parsed.message };
+  }
+  return null;
+}
+
+function rowToRestartSentinel(row: RestartSentinelRow): RestartSentinel | null {
+  if (row.version !== 1) {
+    return null;
+  }
+  return {
+    version: 1,
+    payload: {
+      kind: row.kind as RestartSentinelPayload["kind"],
+      status: row.status as RestartSentinelPayload["status"],
+      ts: row.ts,
+      ...(row.session_key ? { sessionKey: row.session_key } : {}),
+      ...(row.delivery_channel || row.delivery_to || row.delivery_account_id
+        ? {
+            deliveryContext: {
+              ...(row.delivery_channel ? { channel: row.delivery_channel } : {}),
+              ...(row.delivery_to ? { to: row.delivery_to } : {}),
+              ...(row.delivery_account_id ? { accountId: row.delivery_account_id } : {}),
+            },
+          }
+        : {}),
+      ...(row.thread_id ? { threadId: row.thread_id } : {}),
+      ...(row.message != null ? { message: row.message } : {}),
+      ...(row.continuation_json
+        ? { continuation: parseRestartSentinelContinuation(row.continuation_json) }
+        : {}),
+      ...(row.doctor_hint != null ? { doctorHint: row.doctor_hint } : {}),
+      ...(row.stats_json ? { stats: parseJsonRecord(row.stats_json) as RestartSentinelStats } : {}),
+    },
+  };
+}
+
+function readRestartSentinelRow(env: NodeJS.ProcessEnv): RestartSentinelRow | null {
+  const database = openOpenClawStateDatabase({ env });
+  const db = getNodeSqliteKysely<RestartSentinelDatabase>(database.db);
+  return (
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("gateway_restart_sentinel")
+        .selectAll()
+        .where("sentinel_key", "=", RESTART_SENTINEL_KEY),
+    ) ?? null
+  );
+}
 
 export function formatDoctorNonInteractiveHint(
   env: Record<string, string | undefined> = process.env as Record<string, string | undefined>,
@@ -81,11 +185,19 @@ export async function writeRestartSentinel(
   payload: RestartSentinelPayload,
   env: NodeJS.ProcessEnv = process.env,
 ) {
-  const data: RestartSentinel = { version: 1, payload };
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    RESTART_SENTINEL_KV_SCOPE,
-    RESTART_SENTINEL_KV_KEY,
-    data as unknown as OpenClawStateJsonValue,
+  const row = restartSentinelToRow(payload);
+  const { sentinel_key: _sentinelKey, ...updates } = row;
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<RestartSentinelDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("gateway_restart_sentinel")
+          .values(row)
+          .onConflict((conflict) => conflict.column("sentinel_key").doUpdateSet(updates)),
+      );
+    },
     { env },
   );
 }
@@ -155,7 +267,16 @@ export async function markUpdateRestartSentinelFailure(
 }
 
 export async function clearRestartSentinel(env: NodeJS.ProcessEnv = process.env) {
-  deleteOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, { env });
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<RestartSentinelDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("gateway_restart_sentinel").where("sentinel_key", "=", RESTART_SENTINEL_KEY),
+      );
+    },
+    { env },
+  );
 }
 
 export function buildRestartSuccessContinuation(params: {
@@ -174,15 +295,13 @@ export function buildRestartSuccessContinuation(params: {
 export async function readRestartSentinel(
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<RestartSentinel | null> {
-  const parsed = readOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, {
-    env,
-  });
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+  const row = readRestartSentinelRow(env);
+  if (!row) {
     return null;
   }
-  const sentinel = parsed as unknown as RestartSentinel;
-  if (sentinel.version !== 1 || !sentinel.payload) {
-    deleteOpenClawStateKvJson(RESTART_SENTINEL_KV_SCOPE, RESTART_SENTINEL_KV_KEY, { env });
+  const sentinel = rowToRestartSentinel(row);
+  if (!sentinel) {
+    await clearRestartSentinel(env);
     return null;
   }
   return sentinel;

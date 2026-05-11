@@ -1,10 +1,11 @@
 import { normalizeOptionalString } from "../shared/string-coerce.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 export type VoiceWakeConfig = {
   triggers: string[];
@@ -12,8 +13,9 @@ export type VoiceWakeConfig = {
 };
 
 const DEFAULT_TRIGGERS = ["openclaw", "claude", "computer"];
-const VOICEWAKE_SCOPE = "voicewake";
 const VOICEWAKE_CONFIG_KEY = "triggers";
+
+type VoiceWakeDatabase = Pick<OpenClawStateKyselyDatabase, "voicewake_triggers">;
 
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
@@ -31,20 +33,27 @@ export function defaultVoiceWakeTriggers() {
 }
 
 export async function loadVoiceWakeConfig(baseDir?: string): Promise<VoiceWakeConfig> {
-  const existing = readOpenClawStateKvJson(
-    VOICEWAKE_SCOPE,
-    VOICEWAKE_CONFIG_KEY,
-    sqliteOptionsForBaseDir(baseDir),
-  ) as Partial<VoiceWakeConfig> | undefined;
-  if (!existing) {
+  const database = openOpenClawStateDatabase(sqliteOptionsForBaseDir(baseDir));
+  const db = getNodeSqliteKysely<VoiceWakeDatabase>(database.db);
+  const rows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("voicewake_triggers")
+      .select(["trigger", "updated_at_ms"])
+      .where("config_key", "=", VOICEWAKE_CONFIG_KEY)
+      .orderBy("position", "asc"),
+  ).rows;
+  if (rows.length === 0) {
     return { triggers: defaultVoiceWakeTriggers(), updatedAtMs: 0 };
   }
+  const updatedAtMs = Math.max(
+    ...rows.map((row) =>
+      typeof row.updated_at_ms === "bigint" ? Number(row.updated_at_ms) : row.updated_at_ms,
+    ),
+  );
   return {
-    triggers: sanitizeTriggers(existing.triggers),
-    updatedAtMs:
-      typeof existing.updatedAtMs === "number" && existing.updatedAtMs > 0
-        ? existing.updatedAtMs
-        : 0,
+    triggers: sanitizeTriggers(rows.map((row) => row.trigger)),
+    updatedAtMs: Number.isFinite(updatedAtMs) && updatedAtMs > 0 ? updatedAtMs : 0,
   };
 }
 
@@ -57,12 +66,7 @@ export async function setVoiceWakeTriggers(
     triggers: sanitized,
     updatedAtMs: Date.now(),
   };
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    VOICEWAKE_SCOPE,
-    VOICEWAKE_CONFIG_KEY,
-    next as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForBaseDir(baseDir),
-  );
+  writeVoiceWakeConfigSnapshot(next, baseDir);
   return next;
 }
 
@@ -75,10 +79,24 @@ export function normalizeVoiceWakeConfigSnapshot(raw: unknown): VoiceWakeConfig 
 }
 
 export function writeVoiceWakeConfigSnapshot(config: VoiceWakeConfig, baseDir?: string): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    VOICEWAKE_SCOPE,
-    VOICEWAKE_CONFIG_KEY,
-    config as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForBaseDir(baseDir),
-  );
+  const triggers = sanitizeTriggers(config.triggers);
+  const updatedAtMs = config.updatedAtMs > 0 ? Math.floor(config.updatedAtMs) : 0;
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<VoiceWakeDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("voicewake_triggers").where("config_key", "=", VOICEWAKE_CONFIG_KEY),
+    );
+    for (const [position, trigger] of triggers.entries()) {
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("voicewake_triggers").values({
+          config_key: VOICEWAKE_CONFIG_KEY,
+          position,
+          trigger,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+    }
+  }, sqliteOptionsForBaseDir(baseDir));
 }

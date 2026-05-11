@@ -21,7 +21,7 @@ An **agent** is a fully scoped brain with its own:
 Auth profiles are **per-agent**. Each agent reads from its own:
 
 ```text
-~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>
+~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>
 ```
 
 <Note>

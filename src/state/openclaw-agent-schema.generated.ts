@@ -3,29 +3,64 @@
  * Please do not edit it manually.
  */
 
-export const OPENCLAW_AGENT_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS kv (
-  scope TEXT NOT NULL,
-  key TEXT NOT NULL,
-  value_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL,
-  PRIMARY KEY (scope, key)
+export const OPENCLAW_AGENT_SCHEMA_SQL = `CREATE TABLE IF NOT EXISTS schema_meta (
+  meta_key TEXT NOT NULL PRIMARY KEY,
+  role TEXT NOT NULL,
+  schema_version INTEGER NOT NULL,
+  agent_id TEXT,
+  app_version TEXT,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS sessions (
+  session_id TEXT NOT NULL PRIMARY KEY,
+  session_key TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  started_at INTEGER,
+  ended_at INTEGER,
+  status TEXT,
+  chat_type TEXT,
+  channel TEXT,
+  model_provider TEXT,
+  model TEXT,
+  agent_harness_id TEXT,
+  parent_session_key TEXT,
+  spawned_by TEXT,
+  display_name TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
+  ON sessions(updated_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_created_at
+  ON sessions(created_at DESC, session_id);
+
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_session_key
+  ON sessions(session_key);
 
 CREATE TABLE IF NOT EXISTS session_entries (
   session_key TEXT NOT NULL PRIMARY KEY,
+  session_id TEXT NOT NULL,
   entry_json TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_entries_updated_at
   ON session_entries(updated_at DESC, session_key);
+
+CREATE INDEX IF NOT EXISTS idx_agent_session_entries_session_id
+  ON session_entries(session_id);
 
 CREATE TABLE IF NOT EXISTS transcript_events (
   session_id TEXT NOT NULL,
   seq INTEGER NOT NULL,
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
-  PRIMARY KEY (session_id, seq)
+  PRIMARY KEY (session_id, seq),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_transcript_events_updated
@@ -59,7 +94,8 @@ CREATE TABLE IF NOT EXISTS transcript_snapshots (
   event_count INTEGER NOT NULL,
   created_at INTEGER NOT NULL,
   metadata_json TEXT NOT NULL,
-  PRIMARY KEY (session_id, snapshot_id)
+  PRIMARY KEY (session_id, snapshot_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
 CREATE TABLE IF NOT EXISTS vfs_entries (
@@ -112,7 +148,8 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   run_id TEXT,
   seq INTEGER NOT NULL,
   event_json TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_events_session
@@ -123,43 +160,72 @@ CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_events_run
   WHERE run_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS memory_index_meta (
-  key TEXT PRIMARY KEY,
-  value TEXT NOT NULL
+  meta_key TEXT NOT NULL PRIMARY KEY,
+  schema_version INTEGER NOT NULL,
+  provider TEXT NOT NULL,
+  model TEXT NOT NULL,
+  provider_key TEXT,
+  sources_json TEXT NOT NULL,
+  scope_hash TEXT NOT NULL,
+  chunk_tokens INTEGER NOT NULL,
+  chunk_overlap INTEGER NOT NULL,
+  vector_dims INTEGER,
+  fts_tokenizer TEXT NOT NULL,
+  config_hash TEXT,
+  updated_at INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS memory_index_files (
-  path TEXT PRIMARY KEY,
-  source TEXT NOT NULL DEFAULT 'memory',
+CREATE TABLE IF NOT EXISTS memory_index_sources (
+  source_kind TEXT NOT NULL DEFAULT 'memory',
+  source_key TEXT NOT NULL,
+  path TEXT,
+  session_id TEXT,
   hash TEXT NOT NULL,
   mtime INTEGER NOT NULL,
-  size INTEGER NOT NULL
+  size INTEGER NOT NULL,
+  PRIMARY KEY (source_kind, source_key),
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_sources_session
+  ON memory_index_sources(session_id)
+  WHERE session_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS memory_index_chunks (
   id TEXT PRIMARY KEY,
+  source_kind TEXT NOT NULL DEFAULT 'memory',
+  source_key TEXT NOT NULL,
   path TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'memory',
+  session_id TEXT,
   start_line INTEGER NOT NULL,
   end_line INTEGER NOT NULL,
   hash TEXT NOT NULL,
   model TEXT NOT NULL,
   text TEXT NOT NULL,
-  embedding TEXT NOT NULL,
-  updated_at INTEGER NOT NULL
+  embedding BLOB NOT NULL,
+  embedding_dims INTEGER,
+  updated_at INTEGER NOT NULL,
+  FOREIGN KEY (source_kind, source_key)
+    REFERENCES memory_index_sources(source_kind, source_key) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES sessions(session_id) ON DELETE CASCADE
 );
+
+CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
+  ON memory_index_chunks(source_kind, source_key);
 
 CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path
   ON memory_index_chunks(path);
 
-CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_source
-  ON memory_index_chunks(source);
+CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_session
+  ON memory_index_chunks(session_id)
+  WHERE session_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS memory_embedding_cache (
   provider TEXT NOT NULL,
   model TEXT NOT NULL,
   provider_key TEXT NOT NULL,
   hash TEXT NOT NULL,
-  embedding TEXT NOT NULL,
+  embedding BLOB NOT NULL,
   dims INTEGER,
   updated_at INTEGER NOT NULL,
   PRIMARY KEY (provider, model, provider_key, hash)

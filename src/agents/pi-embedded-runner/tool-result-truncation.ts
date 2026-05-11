@@ -31,11 +31,6 @@ const MAX_TOOL_RESULT_CONTEXT_SHARE = 0.3;
 export const DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS = 16_000;
 
 /**
- * Backwards-compatible alias for older call sites/tests.
- */
-export const HARD_MAX_TOOL_RESULT_CHARS = DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-
-/**
  * Minimum characters to keep when truncating.
  * We always keep at least the first portion so the model understands
  * what was in the content.

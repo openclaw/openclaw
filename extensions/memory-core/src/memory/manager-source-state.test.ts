@@ -15,8 +15,8 @@ describe("memory source state", () => {
           all: (...args) => {
             calls.push({ sql, args });
             return [
-              { path: "memory/one.md", hash: "hash-1" },
-              { path: "memory/two.md", hash: "hash-2" },
+              { sourceKey: "memory/one.md", path: "memory/one.md", hash: "hash-1" },
+              { sourceKey: "memory/two.md", path: "memory/two.md", hash: "hash-2" },
             ];
           },
           get: () => undefined,
@@ -27,8 +27,8 @@ describe("memory source state", () => {
 
     expect(calls).toEqual([{ sql: MEMORY_SOURCE_FILE_STATE_SQL, args: ["memory"] }]);
     expect(state.rows).toEqual([
-      { path: "memory/one.md", hash: "hash-1" },
-      { path: "memory/two.md", hash: "hash-2" },
+      { sourceKey: "memory/one.md", path: "memory/one.md", hash: "hash-1" },
+      { sourceKey: "memory/two.md", path: "memory/two.md", hash: "hash-2" },
     ]);
     expect(state.hashes).toEqual(
       new Map([
@@ -51,8 +51,8 @@ describe("memory source state", () => {
         }),
       },
       source: "sessions",
-      path: "transcript:main:thread",
-      existingHashes: new Map([["transcript:main:thread", "hash-from-snapshot"]]),
+      sourceKey: "session:thread",
+      existingHashes: new Map([["session:thread", "hash-from-snapshot"]]),
     });
 
     expect(hash).toBe("hash-from-snapshot");
@@ -72,7 +72,7 @@ describe("memory source state", () => {
         }),
       },
       source: "sessions",
-      path: "transcript:main:thread",
+      sourceKey: "session:thread",
       existingHashes: null,
     });
 
@@ -80,7 +80,7 @@ describe("memory source state", () => {
     expect(calls).toEqual([
       {
         sql: MEMORY_SOURCE_FILE_HASH_SQL,
-        args: ["transcript:main:thread", "sessions"],
+        args: ["session:thread", "sessions"],
       },
     ]);
   });

@@ -3,7 +3,6 @@ package ai.openclaw.app.gateway
 import android.content.Context
 import android.util.Base64
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
 import java.io.File
 import java.security.MessageDigest
 
@@ -18,8 +17,7 @@ data class DeviceIdentity(
 class DeviceIdentityStore(
   context: Context,
 ) {
-  private val json = Json { ignoreUnknownKeys = true }
-  private val kvStore = OpenClawSQLiteKVStore(context)
+  private val stateStore = OpenClawSQLiteStateStore(context)
   private val legacyIdentityFile = File(context.filesDir, "openclaw/identity/device.json")
 
   @Volatile private var cachedIdentity: DeviceIdentity? = null
@@ -111,29 +109,32 @@ class DeviceIdentityStore(
     }
 
   private fun load(): DeviceIdentity? {
-    val raw = kvStore.readString(IDENTITY_SCOPE, IDENTITY_KEY) ?: return null
-    return readIdentity(raw)
+    val row = stateStore.readDeviceIdentity(IDENTITY_KEY) ?: return null
+    return readIdentity(row)
       ?: throw IllegalStateException(
         "Stored OpenClaw device identity is invalid. Run openclaw doctor --fix.",
       )
   }
 
-  private fun readIdentity(raw: String): DeviceIdentity? {
-    return try {
-      val decoded = json.decodeFromString(PersistedDeviceIdentity.serializer(), raw)
-      decoded.toRuntimeIdentity()
-    } catch (_: Throwable) {
-      null
-    }
-  }
+  private fun readIdentity(row: OpenClawSQLiteDeviceIdentityRow): DeviceIdentity? =
+    PersistedDeviceIdentity(
+      deviceId = row.deviceId,
+      publicKeyPem = row.publicKeyPem,
+      privateKeyPem = row.privateKeyPem,
+      createdAtMs = row.createdAtMs,
+    ).toRuntimeIdentity()
 
   private fun save(identity: DeviceIdentity) {
-    val encoded =
-      json.encodeToString(
-        PersistedDeviceIdentity.serializer(),
-        PersistedDeviceIdentity.fromRuntimeIdentity(identity),
-      )
-    kvStore.writeString(IDENTITY_SCOPE, IDENTITY_KEY, encoded)
+    val persisted = PersistedDeviceIdentity.fromRuntimeIdentity(identity)
+    stateStore.writeDeviceIdentity(
+      OpenClawSQLiteDeviceIdentityRow(
+        deviceId = persisted.deviceId,
+        publicKeyPem = persisted.publicKeyPem,
+        privateKeyPem = persisted.privateKeyPem,
+        createdAtMs = persisted.createdAtMs,
+      ),
+      identityKey = IDENTITY_KEY,
+    )
   }
 
   private fun generate(): DeviceIdentity {
@@ -223,15 +224,13 @@ class DeviceIdentityStore(
   }
 
   companion object {
-    private const val IDENTITY_SCOPE = "identity.device"
     private const val IDENTITY_KEY = "default"
     private const val ED25519_KEY_SIZE = 32
     private val HEX = "0123456789abcdef".toCharArray()
     private val PUBLIC_KEY_INFO_PREFIX =
       byteArrayOf(0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00)
 
-    private fun ByteArray.startsWith(prefix: ByteArray): Boolean =
-      size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
+    private fun ByteArray.startsWith(prefix: ByteArray): Boolean = size >= prefix.size && prefix.indices.all { this[it] == prefix[it] }
 
     private fun encodePem(
       label: String,

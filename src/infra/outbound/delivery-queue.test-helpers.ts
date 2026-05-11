@@ -73,6 +73,33 @@ export function readQueuedEntry(tmpDir: string, id: string): Record<string, unkn
   return parseEntry(row, id);
 }
 
+export function readQueuedEntryStorageFields(
+  tmpDir: string,
+  id: string,
+): Record<string, unknown> | undefined {
+  const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
+  const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+  return executeSqliteQueryTakeFirstSync(
+    stateDatabase.db,
+    db
+      .selectFrom("delivery_queue_entries")
+      .select([
+        "account_id",
+        "channel",
+        "entry_kind",
+        "last_attempt_at",
+        "last_error",
+        "platform_send_started_at",
+        "recovery_state",
+        "retry_count",
+        "session_key",
+        "target",
+      ])
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("id", "=", id),
+  );
+}
+
 export function readFailedQueuedEntry(tmpDir: string, id: string): Record<string, unknown> | null {
   const stateDatabase = openOpenClawStateDatabase(databaseOptions(tmpDir));
   const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
@@ -101,6 +128,28 @@ export function readPendingQueuedEntries(tmpDir: string): Record<string, unknown
       .orderBy("enqueued_at", "asc")
       .orderBy("id", "asc"),
   ).rows.map((row) => JSON.parse(row.entry_json) as Record<string, unknown>);
+}
+
+export function writeQueuedEntryJsonForTest(
+  tmpDir: string,
+  id: string,
+  entry: Record<string, unknown>,
+): void {
+  runOpenClawStateWriteTransaction((stateDatabase) => {
+    const db = getNodeSqliteKysely<DeliveryQueueDatabase>(stateDatabase.db);
+    executeSqliteQuerySync(
+      stateDatabase.db,
+      db
+        .updateTable("delivery_queue_entries")
+        .set({
+          entry_json: JSON.stringify(entry),
+          updated_at: Date.now(),
+        })
+        .where("queue_name", "=", QUEUE_NAME)
+        .where("id", "=", id)
+        .where("status", "=", "pending"),
+    );
+  }, databaseOptions(tmpDir));
 }
 
 export function setQueuedEntryState(
@@ -144,6 +193,25 @@ export function setQueuedEntryState(
         .set({
           entry_json: JSON.stringify(entry),
           enqueued_at: typeof entry.enqueuedAt === "number" ? entry.enqueuedAt : Date.now(),
+          last_attempt_at:
+            typeof entry.lastAttemptAt === "number" && Number.isFinite(entry.lastAttemptAt)
+              ? entry.lastAttemptAt
+              : null,
+          last_error: typeof entry.lastError === "string" ? entry.lastError : null,
+          platform_send_started_at:
+            typeof entry.platformSendStartedAt === "number" &&
+            Number.isFinite(entry.platformSendStartedAt)
+              ? entry.platformSendStartedAt
+              : null,
+          recovery_state:
+            entry.recoveryState === "send_attempt_started" ||
+            entry.recoveryState === "unknown_after_send"
+              ? entry.recoveryState
+              : null,
+          retry_count:
+            typeof entry.retryCount === "number" && Number.isFinite(entry.retryCount)
+              ? entry.retryCount
+              : 0,
           updated_at: Date.now(),
         })
         .where("queue_name", "=", QUEUE_NAME)

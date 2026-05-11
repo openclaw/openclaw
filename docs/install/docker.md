@@ -269,7 +269,7 @@ volume spec on bare environments.
 That mounted config directory is where OpenClaw keeps:
 
 - `openclaw.json` for behavior config
-- `state/openclaw.sqlite#kv/auth-profiles/<agentDir>` for stored provider OAuth/API-key auth
+- `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` for stored provider OAuth/API-key auth
 - `.env` for env-backed runtime secrets such as `OPENCLAW_GATEWAY_TOKEN`
 
 The auth-profile secret key directory stores the local encryption key used for

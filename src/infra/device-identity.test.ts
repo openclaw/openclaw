@@ -1,6 +1,9 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
+  DeviceIdentityMigrationRequiredError,
   deriveDeviceIdFromPublicKey,
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
@@ -24,6 +27,37 @@ async function withIdentity(
 }
 
 describe("device identity crypto helpers", () => {
+  it("fails closed for legacy identities even when the state env is injected", async () => {
+    await withTempDir("openclaw-device-identity-legacy-env-", async (dir) => {
+      const env = { ...process.env, OPENCLAW_STATE_DIR: dir };
+      const original = loadOrCreateDeviceIdentity({
+        env,
+        key: "seed",
+      });
+      const legacyPath = path.join(dir, "identity", "device.json");
+      await fs.mkdir(path.dirname(legacyPath), { recursive: true });
+      await fs.writeFile(
+        legacyPath,
+        `${JSON.stringify(
+          {
+            version: 1,
+            deviceId: original.deviceId,
+            publicKeyPem: original.publicKeyPem,
+            privateKeyPem: original.privateKeyPem,
+            createdAtMs: Date.now(),
+          },
+          null,
+          2,
+        )}\n`,
+        "utf8",
+      );
+
+      expect(() => loadOrCreateDeviceIdentity({ env })).toThrow(
+        DeviceIdentityMigrationRequiredError,
+      );
+    });
+  });
+
   it("loads an existing identity from SQLite", async () => {
     await withTempDir("openclaw-device-identity-readonly-", async (dir) => {
       const store = { env: { ...process.env, OPENCLAW_STATE_DIR: dir }, key: "readonly" };

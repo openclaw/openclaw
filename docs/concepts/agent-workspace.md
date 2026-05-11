@@ -108,7 +108,7 @@ If any bootstrap file is missing, OpenClaw injects a "missing file" marker into 
 These live under `~/.openclaw/` and should NOT be committed to the workspace repo:
 
 - `~/.openclaw/openclaw.json` (config)
-- `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>` (model auth profiles: OAuth + API keys)
+- `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` (model auth profiles: OAuth + API keys)
 - `~/.openclaw/agents/<agentId>/agent/codex-home/` (per-agent Codex runtime account, config, skills, plugins, and native thread state)
 - `~/.openclaw/credentials/` (channel/provider state plus legacy OAuth import data)
 - `~/.openclaw/state/openclaw.sqlite` (shared gateway state and database registry)

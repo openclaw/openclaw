@@ -254,7 +254,7 @@ function assertCutoverPreinstalled() {
     throw new Error(`invalid kitchen-sink cutover preinstall spec: ${preinstallSpec}`);
   }
 
-  const record = readInstalledPluginRecords({ allowLegacyFile: true })[pluginId];
+  const record = readInstalledPluginRecords()[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink cutover preinstall record for ${pluginId}`);
   }
@@ -376,7 +376,7 @@ function assertInstalled() {
   }
   assertExpectedDiagnostics(surfaceMode, errorMessages);
 
-  const record = readInstalledPluginRecords({ allowLegacyFile: true })[pluginId];
+  const record = readInstalledPluginRecords()[pluginId];
   if (!record) {
     throw new Error(`missing kitchen-sink install record for ${pluginId}`);
   }
@@ -431,7 +431,7 @@ function assertRemoved() {
     throw new Error(`kitchen-sink plugin still listed after uninstall: ${pluginId}`);
   }
 
-  const records = readInstalledPluginRecords({ allowLegacyFile: true });
+  const records = readInstalledPluginRecords();
   if (records[pluginId]) {
     throw new Error(`kitchen-sink install record still present after uninstall: ${pluginId}`);
   }

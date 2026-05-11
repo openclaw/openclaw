@@ -8,6 +8,8 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 const sourceRoots = ["src", "extensions", "packages", "ui", "apps"];
 const bridgeContractRoots = [...sourceRoots, "test"];
 const sourceExtensions = new Set([".ts", ".tsx", ".mts", ".js", ".mjs", ".swift", ".kt"]);
+const displayPathRoots = ["docs", "scripts"];
+const displayPathExtensions = new Set([".md", ".mdx", ".ts", ".tsx", ".mts", ".js", ".mjs", ".sh"]);
 
 const legacyStoreMarkers = [
   { label: "sessions.json", pattern: /\bsessions\.json\b/u },
@@ -83,6 +85,7 @@ const legacyStoreMarkers = [
     pattern:
       /\bmemory[/\\]\.dreams[/\\](?:daily-ingestion|session-ingestion|short-term-recall|phase-signals)\.json\b/u,
   },
+  { label: "file-shaped memory index table", pattern: /\bmemory_index_files\b/u },
   {
     label: "memory-core dreaming promotion lock",
     pattern: /\bmemory[/\\]\.dreams[/\\]short-term-promotion\.lock\b/u,
@@ -384,6 +387,21 @@ const forbiddenGenericMemoryIndexSqlMarkers = [
   },
 ];
 
+const forbiddenEmbeddingJsonMarkers = [
+  {
+    label: "embedding TEXT schema",
+    pattern: /\bembedding\s+TEXT\b/iu,
+  },
+  {
+    label: "embedding JSON array write",
+    pattern: /\bJSON\.stringify\(\s*embedding\s*\)/u,
+  },
+  {
+    label: "embedding raw ArrayBuffer write",
+    pattern: /\bnew\s+Float32Array\(\s*embedding\s*\)\.buffer\b/u,
+  },
+];
+
 const forbiddenRootDoctorLegacyModuleMarkers = [
   {
     label: "root doctor SQLite state importer module",
@@ -414,6 +432,11 @@ const forbiddenRootDoctorLegacyModuleMarkers = [
     label: "root doctor legacy OAuth repair module",
     pattern:
       /(?:^|[/\\])doctor-auth-legacy-oauth(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-auth-legacy-oauth\.js(?:['"`])/u,
+  },
+  {
+    label: "root doctor flat auth profile importer module",
+    pattern:
+      /(?:^|[/\\])doctor-auth-flat-profiles(?:\.test)?\.(?:ts|js)\b|(?:['"`])(?:\.{1,2}\/)+doctor-auth-flat-profiles\.js(?:['"`])/u,
   },
 ];
 
@@ -513,6 +536,44 @@ async function collectSourceFiles(root, options = {}) {
   return files;
 }
 
+async function collectFilesWithExtensions(root, extensions) {
+  let entries;
+  try {
+    entries = await fs.readdir(root, { withFileTypes: true });
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return [];
+    }
+    throw error;
+  }
+
+  const files = [];
+  for (const entry of entries) {
+    const entryPath = path.join(root, entry.name);
+    if (entry.isDirectory()) {
+      if (
+        entry.name === "node_modules" ||
+        entry.name === "dist" ||
+        entry.name === ".turbo" ||
+        entry.name === ".build"
+      ) {
+        continue;
+      }
+      files.push(...(await collectFilesWithExtensions(entryPath, extensions)));
+      continue;
+    }
+    if (!entry.isFile() || !extensions.has(path.extname(entry.name))) {
+      continue;
+    }
+    const relativePath = toPosixPath(path.relative(repoRoot, entryPath));
+    if (isGeneratedPath(relativePath)) {
+      continue;
+    }
+    files.push({ absolutePath: entryPath, relativePath });
+  }
+  return files;
+}
+
 function lineForIndex(content, index) {
   return content.slice(0, index).split("\n").length;
 }
@@ -566,6 +627,15 @@ function findViolations(content, relativePath) {
       });
     }
   }
+  for (const marker of forbiddenEmbeddingJsonMarkers) {
+    for (const match of content.matchAll(new RegExp(marker.pattern, "gu"))) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
   return violations;
 }
 
@@ -607,6 +677,30 @@ function findRootDoctorLegacyModuleViolations(content, relativePath) {
   return violations;
 }
 
+function findDisplayPathViolations(content, relativePath) {
+  const violations = [];
+  const displayPathMarkers = [
+    {
+      label: "legacy auth profile KV display path",
+      pattern: /(?:#|SQLite\s+`)kv\/auth-profiles\b/gu,
+    },
+    {
+      label: "legacy pairing KV display path",
+      pattern: /SQLite\s+`kv`\s+scope\s+`pairing\.channel`/gu,
+    },
+  ];
+  for (const marker of displayPathMarkers) {
+    for (const match of content.matchAll(marker.pattern)) {
+      violations.push({
+        path: relativePath,
+        line: lineForIndex(content, match.index ?? 0),
+        label: marker.label,
+      });
+    }
+  }
+  return violations;
+}
+
 async function main() {
   const runtimeFiles = (
     await Promise.all(sourceRoots.map((root) => collectSourceFiles(path.join(repoRoot, root))))
@@ -630,6 +724,17 @@ async function main() {
     const content = await fs.readFile(file.absolutePath, "utf8");
     violations.push(...findBridgeContractViolations(content, file.relativePath));
     violations.push(...findRootDoctorLegacyModuleViolations(content, file.relativePath));
+  }
+  const displayPathFiles = (
+    await Promise.all(
+      displayPathRoots.map((root) =>
+        collectFilesWithExtensions(path.join(repoRoot, root), displayPathExtensions),
+      ),
+    )
+  ).flat();
+  for (const file of displayPathFiles) {
+    const content = await fs.readFile(file.absolutePath, "utf8");
+    violations.push(...findDisplayPathViolations(content, file.relativePath));
   }
 
   if (violations.length === 0) {

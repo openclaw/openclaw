@@ -1,14 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/store.js";
+import { loadPersistedAuthProfileStore } from "../../../agents/auth-profiles/persisted.js";
+import { clearRuntimeAuthProfileStoreSnapshots } from "../../../agents/auth-profiles/store.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
-} from "../test-utils/openclaw-test-state.js";
-import { maybeRepairLegacyFlatAuthProfileStores } from "./doctor-auth-flat-profiles.js";
-import type { DoctorPrompter } from "./doctor-prompter.js";
+} from "../../../test-utils/openclaw-test-state.js";
+import type { DoctorPrompter } from "../../doctor-prompter.js";
+import { maybeRepairLegacyFlatAuthProfileStores } from "./auth-flat-profiles.js";
 
 const states: OpenClawTestState[] = [];
 

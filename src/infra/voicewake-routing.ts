@@ -3,12 +3,17 @@ import {
   isValidAgentId,
   normalizeAgentId,
 } from "../routing/session-key.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 type VoiceWakeRouteTarget =
   | { mode: "current"; agentId?: undefined; sessionKey?: undefined }
@@ -29,7 +34,6 @@ export type VoiceWakeRoutingConfig = {
 
 const MAX_VOICEWAKE_ROUTES = 32;
 const MAX_VOICEWAKE_TRIGGER_LENGTH = 64;
-const VOICEWAKE_ROUTING_SCOPE = "voicewake";
 const VOICEWAKE_ROUTING_CONFIG_KEY = "routing";
 
 const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
@@ -39,8 +43,32 @@ const DEFAULT_ROUTING: VoiceWakeRoutingConfig = {
   updatedAtMs: 0,
 };
 
+type VoiceWakeRoutingDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "voicewake_routing_config" | "voicewake_routing_routes"
+>;
+
+type VoiceWakeRoutingConfigRow = {
+  version: number | bigint;
+  default_target_mode: string;
+  default_target_agent_id: string | null;
+  default_target_session_key: string | null;
+  updated_at_ms: number | bigint;
+};
+
+type VoiceWakeRoutingRouteRow = {
+  trigger: string;
+  target_mode: string;
+  target_agent_id: string | null;
+  target_session_key: string | null;
+};
+
 function sqliteOptionsForBaseDir(baseDir: string | undefined): OpenClawStateDatabaseOptions {
   return baseDir ? { env: { ...process.env, OPENCLAW_STATE_DIR: baseDir } } : {};
+}
+
+function sqliteIntegerToNumber(value: number | bigint): number {
+  return typeof value === "bigint" ? Number(value) : value;
 }
 
 export function normalizeVoiceWakeTriggerWord(value: string): string {
@@ -98,6 +126,42 @@ function normalizeRouteRule(value: unknown): VoiceWakeRouteRule | null {
     return null;
   }
   return { trigger, target };
+}
+
+function targetToRowColumns(target: VoiceWakeRouteTarget) {
+  if ("agentId" in target && target.agentId) {
+    return {
+      target_mode: "agent",
+      target_agent_id: target.agentId,
+      target_session_key: null,
+    };
+  }
+  if ("sessionKey" in target && target.sessionKey) {
+    return {
+      target_mode: "session",
+      target_agent_id: null,
+      target_session_key: target.sessionKey,
+    };
+  }
+  return {
+    target_mode: "current",
+    target_agent_id: null,
+    target_session_key: null,
+  };
+}
+
+function rowColumnsToTarget(row: {
+  target_mode: string;
+  target_agent_id: string | null;
+  target_session_key: string | null;
+}): VoiceWakeRouteTarget {
+  if (row.target_mode === "agent" && row.target_agent_id) {
+    return { agentId: row.target_agent_id };
+  }
+  if (row.target_mode === "session" && row.target_session_key) {
+    return { sessionKey: row.target_session_key };
+  }
+  return { mode: "current" };
 }
 
 function isCanonicalAgentSessionKey(value: string): boolean {
@@ -266,15 +330,45 @@ export function normalizeVoiceWakeRoutingConfig(input: unknown): VoiceWakeRoutin
 export async function loadVoiceWakeRoutingConfig(
   baseDir?: string,
 ): Promise<VoiceWakeRoutingConfig> {
-  const existing = readOpenClawStateKvJson(
-    VOICEWAKE_ROUTING_SCOPE,
-    VOICEWAKE_ROUTING_CONFIG_KEY,
-    sqliteOptionsForBaseDir(baseDir),
+  const database = openOpenClawStateDatabase(sqliteOptionsForBaseDir(baseDir));
+  const db = getNodeSqliteKysely<VoiceWakeRoutingDatabase>(database.db);
+  const configRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("voicewake_routing_config")
+      .select([
+        "version",
+        "default_target_mode",
+        "default_target_agent_id",
+        "default_target_session_key",
+        "updated_at_ms",
+      ])
+      .where("config_key", "=", VOICEWAKE_ROUTING_CONFIG_KEY),
   );
-  if (!existing) {
+  if (!configRow) {
     return { ...DEFAULT_ROUTING };
   }
-  return normalizeVoiceWakeRoutingConfig(existing);
+  const routeRows = executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("voicewake_routing_routes")
+      .select(["trigger", "target_mode", "target_agent_id", "target_session_key"])
+      .where("config_key", "=", VOICEWAKE_ROUTING_CONFIG_KEY)
+      .orderBy("position", "asc"),
+  ).rows;
+  return normalizeVoiceWakeRoutingConfig({
+    version: sqliteIntegerToNumber((configRow as VoiceWakeRoutingConfigRow).version),
+    defaultTarget: rowColumnsToTarget({
+      target_mode: (configRow as VoiceWakeRoutingConfigRow).default_target_mode,
+      target_agent_id: (configRow as VoiceWakeRoutingConfigRow).default_target_agent_id,
+      target_session_key: (configRow as VoiceWakeRoutingConfigRow).default_target_session_key,
+    }),
+    routes: (routeRows as VoiceWakeRoutingRouteRow[]).map((row) => ({
+      trigger: row.trigger,
+      target: rowColumnsToTarget(row),
+    })),
+    updatedAtMs: sqliteIntegerToNumber((configRow as VoiceWakeRoutingConfigRow).updated_at_ms),
+  });
 }
 
 export async function setVoiceWakeRoutingConfig(
@@ -286,12 +380,7 @@ export async function setVoiceWakeRoutingConfig(
     ...normalized,
     updatedAtMs: Date.now(),
   };
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    VOICEWAKE_ROUTING_SCOPE,
-    VOICEWAKE_ROUTING_CONFIG_KEY,
-    next as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForBaseDir(baseDir),
-  );
+  writeVoiceWakeRoutingConfigSnapshot(next, baseDir);
   return next;
 }
 
@@ -299,12 +388,55 @@ export function writeVoiceWakeRoutingConfigSnapshot(
   config: VoiceWakeRoutingConfig,
   baseDir?: string,
 ): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    VOICEWAKE_ROUTING_SCOPE,
-    VOICEWAKE_ROUTING_CONFIG_KEY,
-    config as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForBaseDir(baseDir),
-  );
+  const normalized = normalizeVoiceWakeRoutingConfig(config);
+  const updatedAtMs = normalized.updatedAtMs > 0 ? normalized.updatedAtMs : 0;
+  const defaultTarget = targetToRowColumns(normalized.defaultTarget);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<VoiceWakeRoutingDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("voicewake_routing_config")
+        .values({
+          config_key: VOICEWAKE_ROUTING_CONFIG_KEY,
+          version: normalized.version,
+          default_target_mode: defaultTarget.target_mode,
+          default_target_agent_id: defaultTarget.target_agent_id,
+          default_target_session_key: defaultTarget.target_session_key,
+          updated_at_ms: updatedAtMs,
+        })
+        .onConflict((conflict) =>
+          conflict.column("config_key").doUpdateSet({
+            version: normalized.version,
+            default_target_mode: defaultTarget.target_mode,
+            default_target_agent_id: defaultTarget.target_agent_id,
+            default_target_session_key: defaultTarget.target_session_key,
+            updated_at_ms: updatedAtMs,
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("voicewake_routing_routes")
+        .where("config_key", "=", VOICEWAKE_ROUTING_CONFIG_KEY),
+    );
+    for (const [position, route] of normalized.routes.entries()) {
+      const target = targetToRowColumns(route.target);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("voicewake_routing_routes").values({
+          config_key: VOICEWAKE_ROUTING_CONFIG_KEY,
+          position,
+          trigger: route.trigger,
+          target_mode: target.target_mode,
+          target_agent_id: target.target_agent_id,
+          target_session_key: target.target_session_key,
+          updated_at_ms: updatedAtMs,
+        }),
+      );
+    }
+  }, sqliteOptionsForBaseDir(baseDir));
 }
 
 type VoiceWakeResolvedRoute = { mode: "current" } | { agentId: string } | { sessionKey: string };

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
-import { AUTH_PROFILE_STORE_KV_SCOPE } from "./path-constants.js";
 
 export function resolveAuthProfileStoreAgentDir(agentDir?: string): string {
   return resolveUserPath(agentDir ?? resolveDefaultAgentDir({}));
@@ -16,7 +15,7 @@ export function resolveAuthProfileStoreLocationForDisplay(
   agentDir?: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return `${resolveOpenClawStateSqlitePath(env)}#kv/${AUTH_PROFILE_STORE_KV_SCOPE}/${resolveAuthProfileStoreKey(agentDir)}`;
+  return `${resolveOpenClawStateSqlitePath(env)}#table/auth_profile_stores/${resolveAuthProfileStoreKey(agentDir)}`;
 }
 
 export const OAUTH_REFRESH_LOCK_SCOPE = "auth.oauth-refresh";

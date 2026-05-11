@@ -16,10 +16,9 @@ import {
   buildSessionTranscriptEntry,
   listSessionTranscriptScopesForAgent,
   readSessionTranscriptDeltaStats,
-  sessionTranscriptKeyForScope,
   type SessionTranscriptEntry,
   type SessionTranscriptScope,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import {
   buildFileEntry,
   ensureMemoryIndexSchema,
@@ -68,6 +67,17 @@ type MemorySyncProgressState = {
 
 type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
 
+function memoryEntrySourceKey(entry: MemoryIndexEntry, source: MemorySource): string {
+  if (source === "sessions" && "scope" in entry) {
+    return `session:${entry.scope.sessionId}`;
+  }
+  return entry.path;
+}
+
+function sessionTranscriptSourceKeyForScope(scope: Pick<SessionTranscriptScope, "sessionId">) {
+  return `session:${scope.sessionId}`;
+}
+
 function sessionTranscriptScopeKey(scope: Pick<SessionTranscriptScope, "agentId" | "sessionId">) {
   return `${scope.agentId}\0${scope.sessionId}`;
 }
@@ -80,9 +90,9 @@ function sessionTranscriptScopeFromKey(key: string): SessionTranscriptScope | nu
   return { agentId, sessionId };
 }
 
-const META_KEY = "memory_index_meta_v1";
+const META_KEY = "current";
 const META_TABLE = MEMORY_INDEX_TABLE_NAMES.meta;
-const FILES_TABLE = MEMORY_INDEX_TABLE_NAMES.files;
+const SOURCES_TABLE = MEMORY_INDEX_TABLE_NAMES.sources;
 const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
 const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
 const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
@@ -335,7 +345,7 @@ export abstract class MemoryManagerSyncOps {
     if (sources.length === 0) {
       return { sql: "", params: [] };
     }
-    const column = alias ? `${alias}.source` : "source";
+    const column = alias ? `${alias}.source_kind` : "source_kind";
     const placeholders = sources.map(() => "?").join(", ");
     return { sql: ` AND ${column} IN (${placeholders})`, params: sources };
   }
@@ -349,6 +359,7 @@ export abstract class MemoryManagerSyncOps {
     const result = ensureMemoryIndexSchema({
       db: this.db,
       embeddingCacheTable: EMBEDDING_CACHE_TABLE,
+      skipCoreTables: true,
       cacheEnabled: this.cache.enabled,
       ftsTable: FTS_TABLE,
       ftsEnabled: this.fts.enabled,
@@ -620,21 +631,21 @@ export abstract class MemoryManagerSyncOps {
     needsFullReindex: boolean;
     progress?: MemorySyncProgressState;
   }) {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM ${FILES_TABLE} WHERE path = ? AND source = ?`,
+    const deleteSourceByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?`,
+    const deleteChunksByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available && sqliteTableExists(this.db, VECTOR_TABLE)
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
           )
         : null;
     const deleteFtsRowsByPathAndSource =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ?`)
+        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE source_key = ? AND source = ?`)
         : null;
 
     const files = await listMemoryFiles(
@@ -663,7 +674,9 @@ export abstract class MemoryManagerSyncOps {
     });
     const existingRows = existingState.rows;
     const existingHashes = existingState.hashes;
-    const activePaths = new Set(fileEntries.map((entry) => entry.path));
+    const activeSourceKeys = new Set(
+      fileEntries.map((entry) => memoryEntrySourceKey(entry, "memory")),
+    );
     if (params.progress) {
       params.progress.total += fileEntries.length;
       params.progress.report({
@@ -674,7 +687,8 @@ export abstract class MemoryManagerSyncOps {
     }
 
     const tasks = fileEntries.map((entry) => async () => {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const sourceKey = memoryEntrySourceKey(entry, "memory");
+      if (!params.needsFullReindex && existingHashes.get(sourceKey) === entry.hash) {
         if (params.progress) {
           params.progress.completed += 1;
           params.progress.report({
@@ -696,19 +710,19 @@ export abstract class MemoryManagerSyncOps {
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
     for (const stale of existingRows) {
-      if (activePaths.has(stale.path)) {
+      if (activeSourceKeys.has(stale.sourceKey)) {
         continue;
       }
-      deleteFileByPathAndSource.run(stale.path, "memory");
+      deleteSourceByKeyAndKind.run(stale.sourceKey, "memory");
       if (deleteVectorRowsByPathAndSource) {
         try {
-          deleteVectorRowsByPathAndSource.run(stale.path, "memory");
+          deleteVectorRowsByPathAndSource.run(stale.sourceKey, "memory");
         } catch {}
       }
-      deleteChunksByPathAndSource.run(stale.path, "memory");
+      deleteChunksByKeyAndKind.run(stale.sourceKey, "memory");
       if (deleteFtsRowsByPathAndSource) {
         try {
-          deleteFtsRowsByPathAndSource.run(stale.path, "memory");
+          deleteFtsRowsByPathAndSource.run(stale.sourceKey, "memory");
         } catch {}
       }
     }
@@ -719,21 +733,23 @@ export abstract class MemoryManagerSyncOps {
     targetSessionTranscriptKeys?: string[];
     progress?: MemorySyncProgressState;
   }) {
-    const deleteFileByPathAndSource = this.db.prepare(
-      `DELETE FROM ${FILES_TABLE} WHERE path = ? AND source = ?`,
+    const deleteSourceByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
-    const deleteChunksByPathAndSource = this.db.prepare(
-      `DELETE FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?`,
+    const deleteChunksByKeyAndKind = this.db.prepare(
+      `DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`,
     );
     const deleteVectorRowsByPathAndSource =
       this.vector.enabled && this.vector.available && sqliteTableExists(this.db, VECTOR_TABLE)
         ? this.db.prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
           )
         : null;
     const deleteFtsRowsByPathSourceAndModel =
       this.fts.enabled && this.fts.available
-        ? this.db.prepare(`DELETE FROM ${FTS_TABLE} WHERE path = ? AND source = ? AND model = ?`)
+        ? this.db.prepare(
+            `DELETE FROM ${FTS_TABLE} WHERE source_key = ? AND source = ? AND model = ?`,
+          )
         : null;
 
     const targetSessionTranscriptKeys =
@@ -756,9 +772,9 @@ export abstract class MemoryManagerSyncOps {
             db: this.db,
             source: "sessions",
           }).rows,
-      sessionTranscriptKeyForScope,
+      sessionTranscriptSourceKeyForScope,
     });
-    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
+    const { activeSourceKeys, existingRows, existingHashes, indexAll } = sessionPlan;
     log.debug("memory sync: indexing session transcripts", {
       transcripts: transcripts.length,
       indexAll,
@@ -806,7 +822,7 @@ export abstract class MemoryManagerSyncOps {
         const existingHash = resolveMemorySourceExistingHash({
           db: this.db,
           source: "sessions",
-          path: entry.path,
+          sourceKey: memoryEntrySourceKey(entry, "sessions"),
           existingHashes,
         });
         if (!params.needsFullReindex && existingHash === entry.hash) {
@@ -835,7 +851,7 @@ export abstract class MemoryManagerSyncOps {
     });
     await runWithConcurrency(tasks, this.getIndexConcurrency());
 
-    if (activePaths === null) {
+    if (activeSourceKeys === null) {
       // Targeted syncs only refresh the requested transcripts and should not
       // prune unrelated session rows without a full directory enumeration.
       return;
@@ -845,20 +861,20 @@ export abstract class MemoryManagerSyncOps {
     const yieldAfterStaleSessionRow = createSessionSyncYield(staleRows.length);
     for (const stale of staleRows) {
       try {
-        if (activePaths.has(stale.path)) {
+        if (activeSourceKeys.has(stale.sourceKey)) {
           continue;
         }
-        deleteFileByPathAndSource.run(stale.path, "sessions");
+        deleteSourceByKeyAndKind.run(stale.sourceKey, "sessions");
         if (deleteVectorRowsByPathAndSource) {
           try {
-            deleteVectorRowsByPathAndSource.run(stale.path, "sessions");
+            deleteVectorRowsByPathAndSource.run(stale.sourceKey, "sessions");
           } catch {}
         }
-        deleteChunksByPathAndSource.run(stale.path, "sessions");
+        deleteChunksByKeyAndKind.run(stale.sourceKey, "sessions");
         if (deleteFtsRowsByPathSourceAndModel) {
           try {
             deleteFtsRowsByPathSourceAndModel.run(
-              stale.path,
+              stale.sourceKey,
               "sessions",
               this.provider?.model ?? "fts-only",
             );
@@ -1130,7 +1146,7 @@ export abstract class MemoryManagerSyncOps {
   }
 
   private resetIndex() {
-    this.db.exec(`DELETE FROM ${FILES_TABLE}`);
+    this.db.exec(`DELETE FROM ${SOURCES_TABLE}`);
     this.db.exec(`DELETE FROM ${CHUNKS_TABLE}`);
     if (this.fts.enabled && this.fts.available) {
       try {
@@ -1144,16 +1160,45 @@ export abstract class MemoryManagerSyncOps {
   }
 
   protected readMeta(): MemoryIndexMeta | null {
-    const row = this.db.prepare(`SELECT value FROM ${META_TABLE} WHERE key = ?`).get(META_KEY) as
-      | { value: string }
+    const row = this.db
+      .prepare(
+        `SELECT schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at FROM ${META_TABLE} WHERE meta_key = ?`,
+      )
+      .get(META_KEY) as
+      | {
+          schema_version: number;
+          provider: string;
+          model: string;
+          provider_key: string | null;
+          sources_json: string;
+          scope_hash: string;
+          chunk_tokens: number;
+          chunk_overlap: number;
+          vector_dims: number | null;
+          fts_tokenizer: string;
+          config_hash: string | null;
+          updated_at: number;
+        }
       | undefined;
-    if (!row?.value) {
+    if (!row) {
       this.lastMetaSerialized = null;
       return null;
     }
     try {
-      const parsed = JSON.parse(row.value) as MemoryIndexMeta;
-      this.lastMetaSerialized = row.value;
+      const parsed: MemoryIndexMeta = {
+        provider: row.provider,
+        model: row.model,
+        providerKey: row.provider_key ?? undefined,
+        sources: JSON.parse(row.sources_json) as MemoryIndexMeta["sources"],
+        scopeHash: row.scope_hash,
+        chunkTokens: row.chunk_tokens,
+        chunkOverlap: row.chunk_overlap,
+        ftsTokenizer: row.fts_tokenizer,
+      };
+      if (typeof row.vector_dims === "number") {
+        parsed.vectorDims = row.vector_dims;
+      }
+      this.lastMetaSerialized = JSON.stringify(parsed);
       return parsed;
     } catch {
       this.lastMetaSerialized = null;
@@ -1168,9 +1213,37 @@ export abstract class MemoryManagerSyncOps {
     }
     this.db
       .prepare(
-        `INSERT INTO ${META_TABLE} (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value`,
+        `INSERT INTO ${META_TABLE} (meta_key, schema_version, provider, model, provider_key, sources_json, scope_hash, chunk_tokens, chunk_overlap, vector_dims, fts_tokenizer, config_hash, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(meta_key) DO UPDATE SET
+           schema_version=excluded.schema_version,
+           provider=excluded.provider,
+           model=excluded.model,
+           provider_key=excluded.provider_key,
+           sources_json=excluded.sources_json,
+           scope_hash=excluded.scope_hash,
+           chunk_tokens=excluded.chunk_tokens,
+           chunk_overlap=excluded.chunk_overlap,
+           vector_dims=excluded.vector_dims,
+           fts_tokenizer=excluded.fts_tokenizer,
+           config_hash=excluded.config_hash,
+           updated_at=excluded.updated_at`,
       )
-      .run(META_KEY, value);
+      .run(
+        META_KEY,
+        1,
+        meta.provider,
+        meta.model,
+        meta.providerKey ?? null,
+        JSON.stringify(meta.sources ?? []),
+        meta.scopeHash ?? "",
+        meta.chunkTokens,
+        meta.chunkOverlap,
+        meta.vectorDims ?? null,
+        meta.ftsTokenizer ?? "unicode61",
+        value,
+        Date.now(),
+      );
     this.lastMetaSerialized = value;
   }
 }

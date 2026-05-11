@@ -16,14 +16,10 @@ struct DeviceIdentityStoreTests {
             #expect(FileManager.default.fileExists(atPath: Self.databaseURL(stateDir: stateDir).path))
             #expect(!FileManager.default.fileExists(atPath: Self.legacyIdentityURL(stateDir: stateDir).path))
 
-            let stored = try #require(OpenClawSQLiteKVStore.readJSONData(
-                scope: "identity.device",
-                key: "default"))
-            let object = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any])
-            #expect(object["version"] as? Int == 1)
-            #expect(object["deviceId"] as? String == identity.deviceId)
-            #expect((object["publicKeyPem"] as? String)?.contains("BEGIN PUBLIC KEY") == true)
-            #expect((object["privateKeyPem"] as? String)?.contains("BEGIN PRIVATE KEY") == true)
+            let stored = try #require(OpenClawSQLiteStateStore.readDeviceIdentity())
+            #expect(stored.deviceId == identity.deviceId)
+            #expect(stored.publicKeyPem.contains("BEGIN PUBLIC KEY"))
+            #expect(stored.privateKeyPem.contains("BEGIN PRIVATE KEY"))
         }
     }
 
@@ -37,10 +33,13 @@ struct DeviceIdentityStoreTests {
                 privateKeyPem: Self.pem(
                     label: "PRIVATE KEY",
                     body: "MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f"))
-            try OpenClawSQLiteKVStore.writeJSONData(
-                scope: "identity.device",
-                key: "default",
-                data: stored)
+            let object = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any])
+            try OpenClawSQLiteStateStore.writeDeviceIdentity(
+                identity: OpenClawSQLiteDeviceIdentityRow(
+                    deviceId: try #require(object["deviceId"] as? String),
+                    publicKeyPem: try #require(object["publicKeyPem"] as? String),
+                    privateKeyPem: try #require(object["privateKeyPem"] as? String),
+                    createdAtMs: try #require(object["createdAtMs"] as? Int)))
 
             let identity = DeviceIdentityStore.loadOrCreate()
 
@@ -86,13 +85,11 @@ struct DeviceIdentityStoreTests {
             #expect(DeviceAuthStore.loadToken(deviceId: "device-1", role: "gateway")?.token == "token-1")
             #expect(!FileManager.default.fileExists(atPath: Self.legacyAuthURL(stateDir: stateDir).path))
 
-            let stored = try #require(OpenClawSQLiteKVStore.readJSONData(
-                scope: "identity.device-auth",
-                key: "default"))
-            let object = try #require(try JSONSerialization.jsonObject(with: stored) as? [String: Any])
-            #expect(object["deviceId"] as? String == "device-1")
-            let tokens = try #require(object["tokens"] as? [String: Any])
-            #expect(tokens["gateway"] != nil)
+            let stored = try #require(OpenClawSQLiteStateStore.readDeviceAuthToken(
+                deviceId: "device-1",
+                role: "gateway"))
+            #expect(stored.token == "token-1")
+            #expect(stored.scopesJSON.contains("read"))
 
             DeviceAuthStore.clearToken(deviceId: "device-1", role: "gateway")
             #expect(DeviceAuthStore.loadToken(deviceId: "device-1", role: "gateway") == nil)

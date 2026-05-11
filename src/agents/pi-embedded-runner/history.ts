@@ -99,8 +99,8 @@ export function getHistoryLimitFromSessionKey(
     return undefined;
   }
 
-  // For DM sessions: per-DM override -> dmHistoryLimit.
-  // Accept both "direct" (new) and "dm" (legacy) for backward compat.
+  // For direct-message sessions: per-peer override -> dmHistoryLimit.
+  // Channel session keys may use either "direct" or "dm" for that marker.
   if (kind === "dm" || kind === "direct") {
     if (userId && providerConfig.dms?.[userId]?.historyLimit !== undefined) {
       return providerConfig.dms[userId].historyLimit;

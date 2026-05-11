@@ -1,7 +1,10 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { captureEnv } from "../test-utils/env.js";
+import {
+  readUpdateCheckStateFromSqlite,
+  writeUpdateCheckStateToSqlite,
+} from "./update-check-state.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
 vi.mock("./openclaw-root.js", async () => {
@@ -148,14 +151,7 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    const parsed = readOpenClawStateKvJson("runtime.update-check", "state", {
-      env: process.env,
-    }) as {
-      lastNotifiedVersion?: string;
-      lastNotifiedTag?: string;
-      lastAvailableVersion?: string;
-      lastAvailableTag?: string;
-    };
+    const parsed = readUpdateCheckStateFromSqlite(process.env);
     return { log, parsed };
   }
 
@@ -229,15 +225,13 @@ describe("update-startup", () => {
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
-    writeOpenClawStateKvJson(
-      "runtime.update-check",
-      "state",
+    writeUpdateCheckStateToSqlite(
       {
         lastCheckedAt: new Date(Date.now()).toISOString(),
         lastAvailableVersion: "2.0.0",
         lastAvailableTag: "latest",
       },
-      { env: process.env },
+      process.env,
     );
 
     const onUpdateAvailableChange = vi.fn();
@@ -299,11 +293,7 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
-    expect(
-      readOpenClawStateKvJson("runtime.update-check", "state", {
-        env: process.env,
-      }),
-    ).toBeUndefined();
+    expect(readUpdateCheckStateFromSqlite(process.env)).toEqual({});
   });
 
   it("defers stable auto-update until rollout window is due", async () => {

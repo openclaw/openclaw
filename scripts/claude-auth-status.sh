@@ -7,7 +7,7 @@ set -euo pipefail
 CLAUDE_CREDS="$HOME/.claude/.credentials.json"
 OPENCLAW_STATE="${OPENCLAW_STATE_DIR:-$HOME/.openclaw}"
 OPENCLAW_AGENT_DIR="$OPENCLAW_STATE/agents/main/agent"
-OPENCLAW_AUTH_STORE="$OPENCLAW_STATE/state/openclaw.sqlite#kv/auth-profiles/$OPENCLAW_AGENT_DIR"
+OPENCLAW_AUTH_STORE="$OPENCLAW_STATE/state/openclaw.sqlite#table/auth_profile_stores/$OPENCLAW_AGENT_DIR"
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -28,9 +28,9 @@ import { DatabaseSync } from "node:sqlite";
 const [, , dbPath, key] = process.argv;
 const db = new DatabaseSync(dbPath, { readOnly: true });
 try {
-  const row = db.prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?").get("auth-profiles", key);
-  if (typeof row?.value_json === "string") {
-    process.stdout.write(row.value_json);
+  const row = db.prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?").get(key);
+  if (typeof row?.store_json === "string") {
+    process.stdout.write(row.store_json);
   }
 } finally {
   db.close();
@@ -141,7 +141,7 @@ check_openclaw_auth() {
         return $?
     fi
 
-    if [ ! -f "$OPENCLAW_AUTH" ]; then
+    if [ -z "$OPENCLAW_AUTH_JSON" ]; then
         echo "MISSING"
         return 1
     fi
@@ -150,7 +150,7 @@ check_openclaw_auth() {
     expires=$(jq -r '
         [.profiles | to_entries[] | select(.value.provider == "anthropic") | .value.expires]
         | max // 0
-    ' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+    ' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "0")
 
     calc_status_from_expires "$expires"
 }
@@ -167,7 +167,7 @@ if [ "$OUTPUT_MODE" = "json" ]; then
         openclaw_expires=$(json_expires_for_anthropic_any)
     else
         claude_expires=$(jq -r '.claudeAiOauth.expiresAt // 0' "$CLAUDE_CREDS" 2>/dev/null || echo "0")
-        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' "$OPENCLAW_AUTH" 2>/dev/null || echo "0")
+        openclaw_expires=$(jq -r '.profiles["anthropic:default"].expires // 0' <<<"$OPENCLAW_AUTH_JSON" 2>/dev/null || echo "0")
     fi
 
     jq -n \

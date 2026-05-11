@@ -10,10 +10,14 @@ vi.mock("../../../terminal/note.js", () => ({
 }));
 
 import { loadSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
+import { createPluginStateSyncKeyedStore } from "../../../plugin-state/plugin-state-store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../../../state/openclaw-state-kv.js";
 import { noteSessionTranscriptHealth } from "./session-transcript-health.js";
+
+const CODEX_APP_SERVER_BINDING_PLUGIN_ID = "codex";
+const CODEX_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
+const CODEX_APP_SERVER_BINDING_MAX_ENTRIES = 10_000;
 
 function countNonEmptyLines(value: string): number {
   let count = 0;
@@ -205,7 +209,12 @@ describe("doctor session transcript repair", () => {
     await noteSessionTranscriptHealth({ shouldRepair: true, sessionDirs: [sessionsDir] });
 
     await expect(fs.access(sidecarPath)).rejects.toThrow();
-    expect(readOpenClawStateKvJson("codex_app_server_thread_bindings", "session-1")).toMatchObject({
+    expect(
+      createPluginStateSyncKeyedStore<Record<string, unknown>>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+        namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+        maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+      }).lookup("session-1"),
+    ).toMatchObject({
       schemaVersion: 1,
       threadId: "thread-123",
       sessionId: "session-1",

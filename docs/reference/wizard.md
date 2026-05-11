@@ -63,12 +63,12 @@ For a high-level overview, see [Onboarding (CLI)](/start/wizard).
     - Pick a default model from detected options (or enter provider/model manually). For best quality and lower prompt-injection risk, choose the strongest latest-generation model available in your provider stack.
     - Onboarding runs a model check and warns if the configured model is unknown or missing auth.
     - API key storage mode defaults to plaintext auth-profile values. Use `--secret-input-mode ref` to store env-backed refs instead (for example `keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" }`).
-    - Auth profiles live in `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>` (API keys + OAuth). `~/.openclaw/credentials/oauth.json` is legacy import-only.
+    - Auth profiles live in `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` (API keys + OAuth). `~/.openclaw/credentials/oauth.json` is legacy import-only.
     - More detail: [/concepts/oauth](/concepts/oauth)
     <Note>
     Headless/server tip: complete OAuth on a machine with a browser, then copy
     that agent's SQLite auth-profile row (for example
-    `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`, or the
+    `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`, or the
     matching `$OPENCLAW_STATE_DIR/...` path) to the gateway host. `credentials/oauth.json`
     is only a legacy import source.
     </Note>

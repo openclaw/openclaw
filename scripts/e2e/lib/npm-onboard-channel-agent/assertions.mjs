@@ -5,15 +5,17 @@ import { DatabaseSync } from "node:sqlite";
 const command = process.argv[2];
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 
-function readOpenClawStateKvJson(stateDir, scope, key) {
+function readAuthProfileStorePayload(stateDir, storeKey) {
   const dbPath = path.join(stateDir, "state", "openclaw.sqlite");
   if (!fs.existsSync(dbPath)) {
     throw new Error(`missing OpenClaw state database: ${dbPath}`);
   }
   const db = new DatabaseSync(dbPath, { readOnly: true });
   try {
-    const row = db.prepare("SELECT value_json FROM kv WHERE scope = ? AND key = ?").get(scope, key);
-    return typeof row?.value_json === "string" ? JSON.parse(row.value_json) : undefined;
+    const row = db
+      .prepare("SELECT store_json FROM auth_profile_stores WHERE store_key = ?")
+      .get(storeKey);
+    return typeof row?.store_json === "string" ? JSON.parse(row.store_json) : undefined;
   } finally {
     db.close();
   }
@@ -32,7 +34,7 @@ function assertOnboardState() {
   if (!fs.existsSync(agentDir)) {
     throw new Error("onboard did not create main agent dir");
   }
-  const authStore = readOpenClawStateKvJson(stateDir, "auth-profiles", agentDir);
+  const authStore = readAuthProfileStorePayload(stateDir, agentDir);
   const authRaw = JSON.stringify(authStore ?? {});
   if (!authStore || !authRaw.includes("OPENAI_API_KEY")) {
     throw new Error("auth profile did not persist OPENAI_API_KEY env ref");

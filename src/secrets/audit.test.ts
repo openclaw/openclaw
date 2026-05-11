@@ -3,13 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
-  AUTH_PROFILE_STORE_KV_SCOPE,
   authProfileStoreKey,
   savePersistedAuthProfileSecretsStore,
 } from "../agents/auth-profiles/persisted.js";
+import { deleteAuthProfileStorePayload } from "../agents/auth-profiles/sqlite-storage.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { writeStoredModelsConfigRaw } from "../agents/models-config-store.js";
-import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { runSecretsAudit } from "./audit.js";
 
 type AuditFixture = {
@@ -54,7 +53,7 @@ function writeAuthProfileStore(
 }
 
 function deleteAuthProfileStore(fixture: AuditFixture): void {
-  deleteOpenClawStateKvJson(AUTH_PROFILE_STORE_KV_SCOPE, authProfileStoreKey(fixture.agentDir), {
+  deleteAuthProfileStorePayload(authProfileStoreKey(fixture.agentDir), {
     env: fixture.env,
   });
 }

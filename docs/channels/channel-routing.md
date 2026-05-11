@@ -128,16 +128,15 @@ Example:
 
 ## Session storage
 
-Canonical session metadata lives in the shared state database:
+Canonical session metadata lives in SQLite:
 
-- `~/.openclaw/state/openclaw.sqlite`
-- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
+- `~/.openclaw/state/openclaw.sqlite` registers agents and shared control-plane rows.
+- `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` stores that
+  agent's session rows and transcript events.
 
 Legacy `sessions.json` indexes are imported by `openclaw doctor --fix` and
-removed after SQLite has the rows. Custom offline repair stores can still use an
-explicit `--store` path, but per-agent runtime metadata should go through the
-shared state database. Startup does not import or rewrite legacy session
-indexes.
+removed after SQLite has the rows. Runtime metadata should go through the
+agent's SQLite database. Startup does not import or rewrite legacy session indexes.
 
 Gateway and ACP session discovery read SQLite metadata. JSONL transcript files
 are legacy doctor-import inputs or explicit export artifacts only; runtime code

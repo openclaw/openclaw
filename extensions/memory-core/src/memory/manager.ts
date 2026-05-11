@@ -563,12 +563,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     if (!this.fts.enabled || !this.fts.available) {
       return [];
     }
-    const sourceFilter = this.buildSourceFilter(undefined, sourceFilterList);
+    const sourceFilter = this.buildFtsSourceFilter(sourceFilterList);
     // In FTS-only mode (no provider), search all models; otherwise filter by current provider's model
     const providerModel = this.provider?.model;
     const results = await searchKeyword({
       db: this.db,
       ftsTable: FTS_TABLE,
+      chunksTable: CHUNKS_TABLE,
+      requireChunkBacklink: true,
       providerModel,
       query,
       ftsTokenizer: this.settings.store.fts.tokenizer,
@@ -580,6 +582,18 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       boostFallbackRanking: options?.boostFallbackRanking,
     });
     return results.map((entry) => entry as MemorySearchResult & { id: string; textScore: number });
+  }
+
+  private buildFtsSourceFilter(sourcesOverride?: MemorySource[]): {
+    sql: string;
+    params: MemorySource[];
+  } {
+    const sources = sourcesOverride ?? Array.from(this.sources);
+    if (sources.length === 0) {
+      return { sql: "", params: [] };
+    }
+    const placeholders = sources.map(() => "?").join(", ");
+    return { sql: ` AND source IN (${placeholders})`, params: sources };
   }
 
   private mergeHybridResults(params: {

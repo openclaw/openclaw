@@ -651,7 +651,10 @@ export function isPluginStateDatabaseOpen(): boolean {
 
 export function clearPluginStateDatabaseForTests(): void {
   const store = openPluginStateDatabase("clear");
-  store.db.exec("DELETE FROM plugin_state_entries;");
+  executeSqliteQuerySync(
+    store.db,
+    getPluginStateKysely(store.db).deleteFrom("plugin_state_entries"),
+  );
 }
 
 export function seedPluginStateDatabaseEntriesForTests(

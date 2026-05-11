@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { listSessionTranscriptScopesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { listSessionTranscriptScopesForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import {
   MEMORY_INDEX_TABLE_NAMES,
   type MemoryEmbeddingProbeResult,

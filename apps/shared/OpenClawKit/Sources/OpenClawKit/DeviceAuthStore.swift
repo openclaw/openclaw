@@ -14,20 +14,12 @@ public struct DeviceAuthEntry: Codable, Sendable {
     }
 }
 
-private struct DeviceAuthStoreFile: Codable {
-    var version: Int
-    var deviceId: String
-    var tokens: [String: DeviceAuthEntry]
-}
-
 public enum DeviceAuthStore {
-    private static let stateScope = "identity.device-auth"
-    private static let stateKey = "default"
-
     public static func loadToken(deviceId: String, role: String) -> DeviceAuthEntry? {
-        guard let store = readStore(), store.deviceId == deviceId else { return nil }
         let role = self.normalizeRole(role)
-        return store.tokens[role]
+        guard let row = OpenClawSQLiteStateStore.readDeviceAuthToken(deviceId: deviceId, role: role)
+        else { return nil }
+        return self.entry(from: row)
     }
 
     public static func storeToken(
@@ -37,31 +29,27 @@ public enum DeviceAuthStore {
         scopes: [String] = []) -> DeviceAuthEntry
     {
         let normalizedRole = self.normalizeRole(role)
-        var next = self.readStore()
-        if next?.deviceId != deviceId {
-            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
-        }
         let entry = DeviceAuthEntry(
             token: token,
             role: normalizedRole,
             scopes: normalizeScopes(scopes),
             updatedAtMs: Int(Date().timeIntervalSince1970 * 1000))
-        if next == nil {
-            next = DeviceAuthStoreFile(version: 1, deviceId: deviceId, tokens: [:])
-        }
-        next?.tokens[normalizedRole] = entry
-        if let store = next {
-            self.writeStore(store)
+        do {
+            if let currentDeviceId = OpenClawSQLiteStateStore.readLatestDeviceAuthDeviceId(),
+               currentDeviceId != deviceId
+            {
+                try OpenClawSQLiteStateStore.deleteAllDeviceAuthTokens()
+            }
+            try OpenClawSQLiteStateStore.upsertDeviceAuthToken(self.row(deviceId: deviceId, entry: entry))
+        } catch {
+            // best-effort only
         }
         return entry
     }
 
     public static func clearToken(deviceId: String, role: String) {
-        guard var store = readStore(), store.deviceId == deviceId else { return }
         let normalizedRole = self.normalizeRole(role)
-        guard store.tokens[normalizedRole] != nil else { return }
-        store.tokens.removeValue(forKey: normalizedRole)
-        self.writeStore(store)
+        try? OpenClawSQLiteStateStore.deleteDeviceAuthToken(deviceId: deviceId, role: normalizedRole)
     }
 
     private static func normalizeRole(_ role: String) -> String {
@@ -75,23 +63,34 @@ public enum DeviceAuthStore {
         return Array(Set(trimmed)).sorted()
     }
 
-    private static func readStore() -> DeviceAuthStoreFile? {
-        guard let data = OpenClawSQLiteKVStore.readJSONData(scope: self.stateScope, key: self.stateKey) else {
-            return nil
-        }
-        guard let decoded = try? JSONDecoder().decode(DeviceAuthStoreFile.self, from: data) else {
-            return nil
-        }
-        guard decoded.version == 1 else { return nil }
-        return decoded
+    private static func entry(from row: OpenClawSQLiteDeviceAuthTokenRow) -> DeviceAuthEntry {
+        DeviceAuthEntry(
+            token: row.token,
+            role: row.role,
+            scopes: self.decodeScopes(row.scopesJSON),
+            updatedAtMs: row.updatedAtMs)
     }
 
-    private static func writeStore(_ store: DeviceAuthStoreFile) {
-        do {
-            let data = try JSONEncoder().encode(store)
-            try OpenClawSQLiteKVStore.writeJSONData(scope: self.stateScope, key: self.stateKey, data: data)
-        } catch {
-            // best-effort only
-        }
+    private static func row(deviceId: String, entry: DeviceAuthEntry) -> OpenClawSQLiteDeviceAuthTokenRow {
+        OpenClawSQLiteDeviceAuthTokenRow(
+            deviceId: deviceId,
+            role: entry.role,
+            token: entry.token,
+            scopesJSON: self.encodeScopes(entry.scopes),
+            updatedAtMs: entry.updatedAtMs)
+    }
+
+    private static func encodeScopes(_ scopes: [String]) -> String {
+        guard let data = try? JSONEncoder().encode(scopes),
+              let raw = String(data: data, encoding: .utf8)
+        else { return "[]" }
+        return raw
+    }
+
+    private static func decodeScopes(_ raw: String) -> [String] {
+        guard let data = raw.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else { return [] }
+        return decoded
     }
 }

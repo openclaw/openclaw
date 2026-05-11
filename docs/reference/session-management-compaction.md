@@ -53,14 +53,15 @@ OpenClaw persists sessions in two layers:
    - Stored in SQLite for OpenClaw-owned runtime paths; JSONL files are legacy
      doctor-import inputs or explicit support artifacts, not runtime
      compatibility sidecars
-   - Runtime code passes structured agent/session scope. There is no active
-     transcript file and no canonical transcript URI.
-   - Scoped latest/tail assistant-text lookups, session exports, `before_reset`
-     hook payloads, silent session rotations, chat history, TUI history,
-     recovery, managed media indexing, token estimation, title/preview/usage
-     helpers, and bounded session inspection read the scoped SQLite transcript.
-   - Pre-compaction checkpoints are SQLite transcript snapshots. OpenClaw does
-     not create `.checkpoint.*.jsonl` copies on the runtime path.
+
+- Runtime code passes structured agent/session scope. There is no active
+  transcript file, URI, or locator layer.
+- Scoped latest/tail assistant-text lookups, session exports, `before_reset`
+  hook payloads, silent session rotations, chat history, TUI history,
+  recovery, managed media indexing, token estimation, title/preview/usage
+  helpers, and bounded session inspection read the scoped SQLite transcript.
+- Pre-compaction checkpoints are SQLite transcript snapshots. OpenClaw does
+  not create `.checkpoint.*.jsonl` copies on the runtime path.
 
 Gateway history readers should avoid materializing the whole transcript unless
 the surface explicitly needs arbitrary historical access. First-page history,
@@ -178,7 +179,6 @@ The store's value type is `SessionEntry` in `src/config/sessions/types.ts`.
 
 Key fields (not exhaustive):
 
-- `sessionId`: current SQLite transcript id for the session row
 - `sessionStartedAt`: start timestamp for the current `sessionId`; daily reset
   freshness uses this. Legacy rows may derive it from the JSONL session header.
 - `lastInteractionAt`: last real user/channel interaction timestamp; idle reset
@@ -187,8 +187,8 @@ Key fields (not exhaustive):
   time for idle freshness.
 - `updatedAt`: last store-row mutation timestamp, used for listing and
   bookkeeping. It is not the authority for daily/idle reset freshness.
-- `sessionId`: current SQLite transcript id; callers pass structured scope
-  instead of a transcript path override
+- `sessionId`: current SQLite transcript id; callers pass structured
+  `{ agentId, sessionId }` scope instead of a transcript path override
 - `chatType`: `direct | group | room` (helps UIs and send policy)
 - `provider`, `subject`, `room`, `space`, `displayName`: metadata for group/channel labeling
 - Toggles:

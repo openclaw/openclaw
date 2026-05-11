@@ -53,7 +53,7 @@ const mocks = vi.hoisted(() => {
     resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
     resolveAuthProfileStoreLocationForDisplay: vi.fn(
       (agentDir?: string) =>
-        `/tmp/openclaw.sqlite#kv/auth-profiles/${agentDir ?? "/tmp/openclaw-agent"}`,
+        `/tmp/openclaw.sqlite#table/auth_profile_stores/${agentDir ?? "/tmp/openclaw-agent"}`,
     ),
     resolveProfileUnusableUntilForDisplay: vi.fn().mockReturnValue(undefined),
     resolveEnvApiKey: vi.fn((provider: string) => {
@@ -370,7 +370,7 @@ describe("modelsStatusCommand auth overview", () => {
     expect(payload.defaultModel).toBe("anthropic/claude-opus-4-6");
     expect(payload.configPath).toBe("/tmp/openclaw-dev/openclaw.json");
     expect(payload.auth.storeLocation).toBe(
-      "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-agent",
+      "/tmp/openclaw.sqlite#table/auth_profile_stores//tmp/openclaw-agent",
     );
     expect(payload.auth.shellEnvFallback.enabled).toBe(true);
     expect(payload.auth.shellEnvFallback.appliedKeys).toContain("OPENAI_API_KEY");
@@ -435,7 +435,7 @@ describe("modelsStatusCommand auth overview", () => {
     const payload = parseFirstJsonLog(localRuntime);
     expect(payload.agentDir).toBe("/tmp/openclaw-isolated-agent");
     expect(payload.auth.storeLocation).toBe(
-      "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-isolated-agent",
+      "/tmp/openclaw.sqlite#table/auth_profile_stores//tmp/openclaw-isolated-agent",
     );
   });
 
@@ -467,7 +467,7 @@ describe("modelsStatusCommand auth overview", () => {
         ).find((provider) => provider.provider === "openai-codex");
         expect(openAiCodex?.effective).toEqual({
           kind: "profiles",
-          detail: "/tmp/openclaw.sqlite#kv/auth-profiles//tmp/openclaw-agent-custom",
+          detail: "/tmp/openclaw.sqlite#table/auth_profile_stores//tmp/openclaw-agent-custom",
         });
       },
     );

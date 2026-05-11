@@ -5,6 +5,8 @@ import {
   appendAssistantMessageToSessionTranscript,
   appendExactAssistantMessageToSessionTranscript,
 } from "../config/sessions/transcript.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   connectReq,
@@ -20,6 +22,7 @@ installGatewayTestHooks();
 const AUTH_HEADER = { Authorization: "Bearer test-gateway-token-1234567890" };
 const READ_SCOPE_HEADER = { "x-openclaw-scopes": "operator.read" };
 const AGENT_ID = "main";
+type SessionHistoryTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
 
 async function configureSessionRowTarget(): Promise<void> {
   await seedGatewaySessionEntries({ entries: {} });
@@ -329,29 +332,58 @@ describe("session history HTTP endpoints", () => {
     });
     runOpenClawAgentWriteTransaction(
       (database) => {
-        const insert = database.db.prepare(`
-        INSERT INTO session_entries (session_key, entry_json, updated_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(session_key) DO UPDATE SET
-          entry_json = excluded.entry_json,
-          updated_at = excluded.updated_at
-      `);
-        insert.run(
-          "agent:main:main",
-          JSON.stringify({
+        const db = getNodeSqliteKysely<SessionHistoryTestDatabase>(database.db);
+        for (const row of [
+          {
             sessionId: "sess-stale-main",
+            sessionKey: "agent:main:main",
             updatedAt: 1,
-          }),
-          1,
-        );
-        insert.run(
-          "agent:main:MAIN",
-          JSON.stringify({
+          },
+          {
             sessionId: "sess-fresh-main",
+            sessionKey: "agent:main:MAIN",
             updatedAt: 2,
-          }),
-          2,
-        );
+          },
+        ]) {
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .insertInto("sessions")
+              .values({
+                session_id: row.sessionId,
+                session_key: row.sessionKey,
+                created_at: row.updatedAt,
+                updated_at: row.updatedAt,
+              })
+              .onConflict((conflict) =>
+                conflict.column("session_id").doUpdateSet({
+                  session_key: (eb) => eb.ref("excluded.session_key"),
+                  updated_at: (eb) => eb.ref("excluded.updated_at"),
+                }),
+              ),
+          );
+          executeSqliteQuerySync(
+            database.db,
+            db
+              .insertInto("session_entries")
+              .values({
+                session_key: row.sessionKey,
+                session_id: row.sessionId,
+                entry_json: JSON.stringify({
+                  sessionId: row.sessionId,
+                  updatedAt: row.updatedAt,
+                }),
+                updated_at: row.updatedAt,
+              })
+              .onConflict((conflict) =>
+                conflict.column("session_key").doUpdateSet({
+                  session_id: (eb) => eb.ref("excluded.session_id"),
+                  entry_json: (eb) => eb.ref("excluded.entry_json"),
+                  updated_at: (eb) => eb.ref("excluded.updated_at"),
+                }),
+              ),
+          );
+        }
       },
       { agentId: AGENT_ID },
     );

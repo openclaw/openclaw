@@ -56,7 +56,7 @@ To reduce that, OpenClaw treats the SQLite auth-profile row as a **token sink**:
 
 Secrets are stored in agent auth stores:
 
-- Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
+- Auth profiles (OAuth + API keys + optional value-level refs): `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
 - Legacy compatibility file: `~/.openclaw/agents/<agentId>/agent/auth.json`
   (static `api_key` entries are scrubbed when discovered)
 
@@ -138,7 +138,8 @@ Profiles store an `expires` timestamp.
 At runtime:
 
 - if `expires` is in the future → use the stored access token
-- if expired → refresh (under a file lock) and overwrite the stored credentials
+- if expired → refresh under the SQLite auth-profile refresh lock and overwrite
+  the stored credentials
 - if a secondary agent reads an inherited main-agent OAuth profile, refresh
   writes back to the main agent store instead of copying the refresh token into
   the secondary agent store

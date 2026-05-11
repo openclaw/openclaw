@@ -21,8 +21,12 @@ import {
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { loadExecApprovals, saveExecApprovals } from "../infra/exec-approvals.js";
 import type { ExecHostResponse } from "../infra/exec-host.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { deleteOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { buildSystemRunApprovalPlan } from "./invoke-system-run-plan.js";
 import { handleSystemRunInvoke } from "./invoke-system-run.js";
 import type { HandleSystemRunInvokeOptions } from "./invoke-system-run.js";
@@ -36,6 +40,7 @@ type MockedRunViaMacAppExecHost = Mock<HandleSystemRunInvokeOptions["runViaMacAp
 type MockedSendInvokeResult = Mock<HandleSystemRunInvokeOptions["sendInvokeResult"]>;
 type MockedSendExecFinishedEvent = Mock<HandleSystemRunInvokeOptions["sendExecFinishedEvent"]>;
 type MockedSendNodeEvent = Mock<HandleSystemRunInvokeOptions["sendNodeEvent"]>;
+type ExecApprovalsTestDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
 
 describe("handleSystemRunInvoke mac app exec host routing", () => {
   let sharedFixtureRoot = "";
@@ -74,13 +79,13 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     previousStateDir = process.env.OPENCLAW_STATE_DIR;
     process.env.OPENCLAW_HOME = sharedOpenClawHome;
     process.env.OPENCLAW_STATE_DIR = sharedStateDir;
-    deleteOpenClawStateKvJson("exec.approvals", "current");
+    clearExecApprovalsConfig();
     clearRuntimeConfigSnapshot();
   });
 
   afterEach(() => {
     clearRuntimeConfigSnapshot();
-    deleteOpenClawStateKvJson("exec.approvals", "current");
+    clearExecApprovalsConfig();
     closeOpenClawStateDatabaseForTest();
     if (previousOpenClawHome === undefined) {
       delete process.env.OPENCLAW_HOME;
@@ -93,6 +98,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       process.env.OPENCLAW_STATE_DIR = previousStateDir;
     }
   });
+
+  function clearExecApprovalsConfig(): void {
+    const database = openOpenClawStateDatabase();
+    const db = getNodeSqliteKysely<ExecApprovalsTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("exec_approvals_config").where("config_key", "=", "current"),
+    );
+  }
 
   function createLocalRunResult(stdout = "local-ok") {
     return {

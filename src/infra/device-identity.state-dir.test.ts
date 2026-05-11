@@ -2,7 +2,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   restoreStateDirEnv,
   setStateDirEnv,
@@ -17,6 +18,9 @@ import {
   loadOrCreateDeviceIdentity,
   writeStoredDeviceIdentitySnapshot,
 } from "./device-identity.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+
+type DeviceIdentityTestDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
 
 describe("device identity state dir defaults", () => {
   it("stores the default identity under OPENCLAW_STATE_DIR", async () => {
@@ -89,10 +93,19 @@ describe("device identity state dir defaults", () => {
 
   it("fails closed when the SQLite identity row is invalid", async () => {
     await withStateDirEnv("openclaw-identity-state-", async () => {
-      writeOpenClawStateKvJson("identity.device", "default", {
-        version: 1,
-        deviceId: "broken",
-      });
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<DeviceIdentityTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("device_identities").values({
+          identity_key: "default",
+          device_id: "broken",
+          public_key_pem: "-----BEGIN PUBLIC KEY-----broken",
+          private_key_pem: "-----BEGIN PRIVATE KEY-----broken",
+          created_at_ms: 1,
+          updated_at_ms: 1,
+        }),
+      );
 
       expect(() => loadOrCreateDeviceIdentity()).toThrow(DeviceIdentityStorageError);
     });

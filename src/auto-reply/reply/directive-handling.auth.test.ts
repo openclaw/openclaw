@@ -41,7 +41,8 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   },
   isProfileInCooldown: () => false,
   resolveAuthProfileDisplayLabel: ({ profileId }: { profileId: string }) => profileId,
-  resolveAuthProfileStoreLocationForDisplay: () => "/tmp/openclaw.sqlite#kv/auth-profiles/main",
+  resolveAuthProfileStoreLocationForDisplay: () =>
+    "/tmp/openclaw.sqlite#table/auth_profile_stores/main",
 }));
 
 vi.mock("../../agents/model-selection.js", () => ({

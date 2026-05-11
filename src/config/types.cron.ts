@@ -34,8 +34,8 @@ export type CronConfig = {
   /** Override default retry policy for one-shot jobs on transient errors. */
   retry?: CronRetryConfig;
   /**
-   * @deprecated Legacy fallback webhook URL used only for stored jobs with notify=true.
-   * Prefer per-job delivery.mode="webhook" with delivery.to.
+   * @deprecated Doctor-only fallback for translating legacy notify=true jobs.
+   * Runtime cron delivery uses per-job delivery.mode="webhook" with delivery.to.
    */
   webhook?: string;
   /** Bearer token for cron webhook POST delivery. */

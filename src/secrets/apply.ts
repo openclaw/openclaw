@@ -5,11 +5,17 @@ import { isDeepStrictEqual } from "node:util";
 import { resolveAgentConfig } from "../agents/agent-scope.js";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
 import {
-  AUTH_PROFILE_STORE_KV_SCOPE,
   authProfileStoreKey,
   buildPersistedAuthProfileSecretsStore,
   coercePersistedAuthProfileStore,
 } from "../agents/auth-profiles/persisted.js";
+import {
+  deleteAuthProfileStorePayload,
+  readAuthProfileStorePayloadResult,
+  writeAuthProfileStorePayload,
+  type AuthProfilePayloadReadResult,
+  type AuthProfilePayloadValue,
+} from "../agents/auth-profiles/sqlite-storage.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
   replaceConfigFile,
@@ -21,13 +27,6 @@ import type { ConfigWriteOptions } from "../config/io.js";
 import { coerceSecretRef, type SecretProviderConfig } from "../config/types.secrets.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJsonResult,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-  type OpenClawStateKvJsonReadResult,
-} from "../state/openclaw-state-kv.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
 import { listAuthProfileStoreAgentDirs } from "./auth-store-paths.js";
@@ -92,7 +91,7 @@ type MutableAuthProfileStore = Record<string, unknown> & {
   profiles: Record<string, unknown>;
 };
 
-type AuthStoreSnapshot = OpenClawStateKvJsonReadResult;
+type AuthStoreSnapshot = AuthProfilePayloadReadResult;
 
 export type SecretsApplyResult = {
   mode: "dry-run" | "write";
@@ -731,11 +730,9 @@ function readPersistedAuthProfileStoreObject(params: {
   agentDir: string;
   env: NodeJS.ProcessEnv;
 }): Record<string, unknown> | null {
-  const result = readOpenClawStateKvJsonResult(
-    AUTH_PROFILE_STORE_KV_SCOPE,
-    authProfileStoreKey(params.agentDir),
-    { env: params.env },
-  );
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(params.agentDir), {
+    env: params.env,
+  });
   return result.exists && isRecord(result.value) ? result.value : null;
 }
 
@@ -758,10 +755,9 @@ function persistProjectedAuthProfileStore(params: {
     version: AUTH_STORE_VERSION,
     profiles: {},
   };
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    AUTH_PROFILE_STORE_KV_SCOPE,
+  writeAuthProfileStorePayload(
     authProfileStoreKey(params.agentDir),
-    buildPersistedAuthProfileSecretsStore(coerced) as unknown as OpenClawStateJsonValue,
+    buildPersistedAuthProfileSecretsStore(coerced) as unknown as AuthProfilePayloadValue,
     { env: params.env },
   );
 }
@@ -776,11 +772,7 @@ function captureAuthStoreSnapshot(params: {
   }
   params.snapshots.set(
     params.agentDir,
-    readOpenClawStateKvJsonResult(
-      AUTH_PROFILE_STORE_KV_SCOPE,
-      authProfileStoreKey(params.agentDir),
-      { env: params.env },
-    ),
+    readAuthProfileStorePayloadResult(authProfileStoreKey(params.agentDir), { env: params.env }),
   );
 }
 
@@ -791,11 +783,11 @@ function restoreAuthStoreSnapshot(params: {
 }): void {
   const key = authProfileStoreKey(params.agentDir);
   if (!params.snapshot.exists || params.snapshot.value === undefined) {
-    deleteOpenClawStateKvJson(AUTH_PROFILE_STORE_KV_SCOPE, key, { env: params.env });
+    deleteAuthProfileStorePayload(key, { env: params.env });
     return;
   }
   const { value, updatedAt } = params.snapshot;
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(AUTH_PROFILE_STORE_KV_SCOPE, key, value, {
+  writeAuthProfileStorePayload(key, value, {
     env: params.env,
     now: () => updatedAt,
   });

@@ -23,6 +23,7 @@ export {
   requireNodeSqlite,
   resolveMemoryBackendConfig,
   runWithConcurrency,
+  serializeEmbedding,
   statRegularFile,
 } from "../../packages/memory-host-sdk/src/engine-storage.js";
 

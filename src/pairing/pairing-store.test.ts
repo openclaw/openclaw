@@ -13,9 +13,10 @@ import {
   vi,
 } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
-import { deleteOpenClawStateKvScope } from "../state/openclaw-state-kv.js";
-import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 
 vi.mock("../channels/plugins/pairing.js", () => ({
@@ -29,8 +30,10 @@ import {
   listChannelPairingRequests,
   readChannelAllowFromStore,
   readChannelAllowFromStoreSync,
+  readChannelPairingStateSnapshot,
   removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
+  writeChannelPairingStateSnapshot,
 } from "./pairing-store.js";
 
 let fixtureRoot = "";
@@ -41,6 +44,10 @@ type ChannelPairingTestState = {
   requests: Array<Record<string, unknown>>;
   allowFrom?: Record<string, string[]>;
 };
+type ChannelPairingTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "channel_pairing_requests" | "channel_pairing_allow_entries"
+>;
 
 let randomIntSpy: MockInstance<RandomIntSync>;
 let nextRandomInt = 0;
@@ -100,21 +107,19 @@ function resolveAllowFromFilePath(stateDir: string, channel: string, accountId?:
 function clearOAuthFixtures(stateDir: string) {
   clearPairingAllowFromReadCacheForTest();
   fsSync.rmSync(resolveOAuthDir(process.env, stateDir), { recursive: true, force: true });
-  deleteOpenClawStateKvScope("pairing.channel", {
+  const database = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
   });
+  const db = getNodeSqliteKysely<ChannelPairingTestDatabase>(database.db);
+  executeSqliteQuerySync(database.db, db.deleteFrom("channel_pairing_requests"));
+  executeSqliteQuerySync(database.db, db.deleteFrom("channel_pairing_allow_entries"));
 }
 
 function readChannelPairingTestState(stateDir: string, channel: string): ChannelPairingTestState {
-  return (
-    (readOpenClawStateKvJson("pairing.channel", channel, {
-      env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    }) as ChannelPairingTestState | undefined) ?? {
-      version: 1,
-      requests: [],
-      allowFrom: {},
-    }
-  );
+  return readChannelPairingStateSnapshot(channel, {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
+  }) as ChannelPairingTestState;
 }
 
 function writeChannelPairingTestState(
@@ -122,8 +127,9 @@ function writeChannelPairingTestState(
   channel: string,
   state: ChannelPairingTestState,
 ) {
-  writeOpenClawStateKvJson("pairing.channel", channel, state, {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  writeChannelPairingStateSnapshot(channel, state, {
+    ...process.env,
+    OPENCLAW_STATE_DIR: stateDir,
   });
 }
 
@@ -548,8 +554,8 @@ describe("pairing store", () => {
       expect(allPending.map((entry) => entry.id)).toEqual([
         "pending-alpha",
         "pending-beta",
-        "pending-gamma",
         "pending-delta",
+        "pending-gamma",
       ]);
     });
   });

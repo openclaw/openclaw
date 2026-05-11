@@ -5,6 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSqliteSessionTranscriptEvents } from "../config/sessions/transcript-store.sqlite.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
 import { createPinnedLookup } from "../infra/net/ssrf.js";
 import {
   readMediaBuffer,
@@ -12,8 +17,11 @@ import {
   setMediaStoreNetworkDepsForTest,
 } from "../media/store.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson, writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 
 const authorizeGatewayHttpRequestOrReplyMock = vi.fn();
 const resolveOpenAiCompatibleHttpOperatorScopesMock = vi.fn();
@@ -39,6 +47,7 @@ const {
   createManagedOutgoingImageBlocks,
   handleManagedOutgoingImageHttpRequest,
   resolveManagedImageAttachmentLimits,
+  writeManagedImageRecord,
 } = await import("./managed-image-attachments.js");
 
 type RequestResult = {
@@ -156,23 +165,77 @@ async function createFixture(
       filename: "cat.png",
     },
   };
-  writeOpenClawStateKvJson("managed_outgoing_image_records", attachmentId, record, {
-    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  });
+  await writeManagedImageRecord(record as Parameters<typeof writeManagedImageRecord>[0], stateDir);
   return { attachmentId, sessionKey, originalPath };
 }
+
+type ManagedImageTestDatabase = Pick<OpenClawStateKyselyDatabase, "managed_outgoing_image_records">;
 
 function readManagedImageRecordFromSqlite(
   stateDir: string,
   attachmentId: string,
 ): Record<string, unknown> {
-  const value = readOpenClawStateKvJson("managed_outgoing_image_records", attachmentId, {
+  const database = openOpenClawStateDatabase({
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-  }) as Record<string, unknown> | undefined;
-  if (!value) {
+  });
+  const db = getNodeSqliteKysely<ManagedImageTestDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db
+      .selectFrom("managed_outgoing_image_records")
+      .select([
+        "attachment_id",
+        "session_key",
+        "message_id",
+        "created_at",
+        "updated_at",
+        "retention_class",
+        "alt",
+        "original_media_id",
+        "original_media_subdir",
+        "original_content_type",
+        "original_width",
+        "original_height",
+        "original_size_bytes",
+        "original_filename",
+      ])
+      .where("attachment_id", "=", attachmentId),
+  );
+  if (!row) {
     throw new Error(`Expected managed image record ${attachmentId}`);
   }
-  return value;
+  return {
+    attachmentId: row.attachment_id,
+    sessionKey: row.session_key,
+    messageId: row.message_id,
+    createdAt: row.created_at,
+    ...(row.updated_at ? { updatedAt: row.updated_at } : {}),
+    ...(row.retention_class ? { retentionClass: row.retention_class } : {}),
+    alt: row.alt,
+    original: {
+      mediaId: row.original_media_id,
+      mediaSubdir: row.original_media_subdir,
+      contentType: row.original_content_type,
+      width: row.original_width,
+      height: row.original_height,
+      sizeBytes: row.original_size_bytes,
+      filename: row.original_filename,
+    },
+  };
+}
+
+function corruptManagedImageRecordJson(stateDir: string, attachmentId: string): void {
+  const database = openOpenClawStateDatabase({
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+  const db = getNodeSqliteKysely<ManagedImageTestDatabase>(database.db);
+  executeSqliteQuerySync(
+    database.db,
+    db
+      .updateTable("managed_outgoing_image_records")
+      .set({ record_json: '{"attachmentId":"wrong","original":{"mediaId":"wrong.png"}}' })
+      .where("attachment_id", "=", attachmentId),
+  );
 }
 
 async function requestManagedImage(params: {
@@ -312,6 +375,21 @@ describe("handleManagedOutgoingImageHttpRequest", () => {
     expect(result.statusCode).toBe(200);
     expect(result.headers["content-type"]).toBe("image/png");
     expect(result.headers["content-disposition"]).toContain("inline");
+    expect(result.body.toString("utf-8")).toBe("original-image");
+  });
+
+  it("serves from typed SQLite columns, not the debug JSON copy", async () => {
+    const { attachmentId, sessionKey } = await createFixture(stateDir);
+    corruptManagedImageRecordJson(stateDir, attachmentId);
+
+    const { result } = await requestManagedImage({
+      stateDir,
+      pathName: `/api/chat/media/outgoing/${encodeURIComponent(sessionKey)}/${attachmentId}/full`,
+      authResponse: { authMethod: "token" },
+    });
+
+    expect(result.statusCode).toBe(200);
+    expect(result.headers["content-type"]).toBe("image/png");
     expect(result.body.toString("utf-8")).toBe("original-image");
   });
 

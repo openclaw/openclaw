@@ -11,6 +11,7 @@ import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -37,6 +38,7 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
 };
 
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
+type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 
 const cachedDatabases = new Map<string, OpenClawAgentDatabase>();
 
@@ -73,9 +75,34 @@ function ensureOpenClawAgentDatabasePermissions(pathname: string): void {
   }
 }
 
-function ensureAgentSchema(db: DatabaseSync): void {
+function ensureAgentSchema(db: DatabaseSync, agentId: string): void {
   db.exec(OPENCLAW_AGENT_SCHEMA_SQL);
   db.exec(`PRAGMA user_version = ${OPENCLAW_AGENT_SCHEMA_VERSION};`);
+  const now = Date.now();
+  const kysely = getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db);
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("schema_meta")
+      .values({
+        meta_key: "primary",
+        role: "agent",
+        schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        agent_id: agentId,
+        app_version: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflict((conflict) =>
+        conflict.column("meta_key").doUpdateSet({
+          role: "agent",
+          schema_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+          agent_id: agentId,
+          app_version: null,
+          updated_at: now,
+        }),
+      ),
+  );
 }
 
 function registerAgentDatabase(params: {
@@ -157,7 +184,7 @@ export function openOpenClawAgentDatabase(
   db.exec("PRAGMA synchronous = NORMAL;");
   db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   db.exec("PRAGMA foreign_keys = ON;");
-  ensureAgentSchema(db);
+  ensureAgentSchema(db, agentId);
   ensureOpenClawAgentDatabasePermissions(pathname);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

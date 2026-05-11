@@ -1039,6 +1039,10 @@
       "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-qmd.js"
     },
+    "./plugin-sdk/memory-core-host-engine-session-transcripts": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-session-transcripts.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-session-transcripts.js"
+    },
     "./plugin-sdk/memory-core-host-engine-storage": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-storage.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-storage.js"

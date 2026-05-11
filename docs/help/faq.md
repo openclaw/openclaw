@@ -563,7 +563,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     | --------------------------------------------------------------- | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                             | Main config (JSON5)                                                |
     | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                    | Legacy OAuth doctor-import input                                   |
-    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#kv/auth-profiles/<agentDir>` | Auth profiles (OAuth, API keys, and optional `keyRef`/`tokenRef`) |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>` | Auth profiles (OAuth, API keys, and optional `keyRef`/`tokenRef`) |
     | `$OPENCLAW_STATE_DIR/secrets.json`                              | Optional file-backed secret payload for `file` SecretRef providers |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`          | Legacy compatibility file (static `api_key` entries scrubbed)      |
     | `$OPENCLAW_STATE_DIR/credentials/`                              | Provider state (e.g. `whatsapp/<accountId>/creds.json`)            |

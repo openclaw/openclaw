@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
 import { performance } from "node:perf_hooks";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { writeDiagnosticEvent } from "./diagnostic-events-store.js";
 import { isDiagnosticFlagEnabled } from "./diagnostic-flags.js";
 import { isTruthyEnvValue } from "./env.js";
 
@@ -175,7 +175,7 @@ export function emitDiagnosticsTimelineEvent(
   }
   const payload = buildTimelineEventPayload(event, env);
   try {
-    writeOpenClawStateKvJson(
+    writeDiagnosticEvent(
       OPENCLAW_DIAGNOSTICS_TIMELINE_SCOPE,
       createTimelineEventKey(payload),
       payload,

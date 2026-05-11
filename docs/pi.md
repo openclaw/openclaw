@@ -1,43 +1,63 @@
 ---
-summary: "Architecture of OpenClaw's embedded Pi agent integration and session lifecycle"
-title: "Pi integration architecture"
+summary: "Architecture of OpenClaw's embedded agent runtime and SQLite-backed session lifecycle"
+title: "Embedded agent runtime architecture"
 read_when:
-  - Understanding Pi SDK integration design in OpenClaw
-  - Modifying agent session lifecycle, tooling, or provider wiring for Pi
+  - Understanding OpenClaw embedded agent runtime design
+  - Modifying agent session lifecycle, tooling, provider wiring, or transcript storage
+  - Auditing the internal pi-coding-agent dependency boundary
 ---
 
-OpenClaw integrates with [pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent) and its sibling packages (`pi-ai`, `pi-agent-core`, `pi-tui`) to power its AI agent capabilities.
+OpenClaw owns the embedded agent runtime. It still imports selected
+[pi-coding-agent](https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent)
+packages for agent-loop, provider, and TUI primitives, but runtime identity,
+prompts, tools, auth selection, session state, transcripts, diagnostics, and
+persistence are OpenClaw-owned.
 
 ## Overview
 
-OpenClaw uses the pi SDK to embed an AI coding agent into its messaging gateway architecture. Instead of spawning pi as a subprocess or using RPC mode, OpenClaw directly imports and instantiates pi's `AgentSession` via `createAgentSession()`. This embedded approach provides:
+OpenClaw embeds the agent loop in-process instead of spawning an external CLI or
+using RPC mode. The current implementation constructs the upstream
+`AgentSession` through a narrow contract module, then supplies OpenClaw-owned
+runtime surfaces around it:
 
-- Full control over session lifecycle and event handling
-- Custom tool injection (messaging, sandbox, channel-specific actions)
-- System prompt customization per channel/context
-- Session persistence with branching/compaction support
+- SQLite-backed session and transcript persistence
+- OpenClaw tool injection for messaging, sandboxing, VFS, browser, cron, gateway,
+  and channel actions
+- OpenClaw system prompt construction per channel, workspace, and context
 - Multi-account auth profile rotation with failover
 - Provider-agnostic model switching
+- Event subscription, streaming, diagnostics, and compaction policy
 
-## Package dependencies
+Legacy JSON, JSONL, and transcript files are doctor migration inputs only. The
+runtime never chooses a transcript file, derives a transcript locator, or writes
+session JSONL.
+
+## External package boundary
 
 ```json
 {
-  "@earendil-works/pi-agent-core": "0.74.0",
-  "@earendil-works/pi-ai": "0.74.0",
-  "@earendil-works/pi-coding-agent": "0.74.0",
-  "@earendil-works/pi-tui": "0.74.0"
+  "@mariozechner/pi-agent-core": "0.73.1",
+  "@mariozechner/pi-ai": "0.73.1",
+  "@mariozechner/pi-coding-agent": "0.73.1",
+  "@mariozechner/pi-tui": "0.73.1"
 }
 ```
 
-| Package           | Purpose                                                                              |
-| ----------------- | ------------------------------------------------------------------------------------ |
-| `pi-ai`           | Core LLM abstractions: `Model`, `streamSimple`, message types, provider APIs         |
-| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                     |
-| `pi-coding-agent` | High-level SDK: `createAgentSession`, `AuthStorage`, `ModelRegistry`, built-in tools |
-| `pi-tui`          | Terminal UI components (used in OpenClaw's local TUI mode)                           |
+OpenClaw treats these as implementation dependencies, not as owners of
+OpenClaw runtime state.
+
+| Package           | OpenClaw use                                                                        |
+| ----------------- | ----------------------------------------------------------------------------------- |
+| `pi-ai`           | LLM abstractions: `Model`, `streamSimple`, message types, provider APIs             |
+| `pi-agent-core`   | Agent loop, tool execution, `AgentMessage` types                                    |
+| `pi-coding-agent` | Narrow SDK entry: `createAgentSession`, `AuthStorage`, `ModelRegistry`, tool shapes |
+| `pi-tui`          | Terminal UI primitives for OpenClaw's local TUI mode                                |
 
 ## File structure
+
+Several file names still include `pi` because they started as the integration
+layer. Treat them as OpenClaw runtime modules unless the code explicitly imports
+an upstream package boundary.
 
 ```
 src/agents/
@@ -141,7 +161,8 @@ directories instead of under `src/agents/tools`, for example:
 
 ### 1. Running an Embedded Agent
 
-The main entry point is `runEmbeddedPiAgent()` in `pi-embedded-runner/run.ts`:
+The main entry point is still named `runEmbeddedPiAgent()` in
+`pi-embedded-runner/run.ts`. It runs an OpenClaw-owned embedded session:
 
 ```typescript
 import { runEmbeddedPiAgent } from "./agents/pi-embedded-runner.js";
@@ -163,9 +184,11 @@ const result = await runEmbeddedPiAgent({
 });
 ```
 
-### 2. Session Creation
+### 2. Session creation
 
-Inside `runEmbeddedAttempt()` (called by `runEmbeddedPiAgent()`), the pi SDK is used:
+Inside `runEmbeddedAttempt()` (called by `runEmbeddedPiAgent()`), OpenClaw
+creates the upstream session with OpenClaw-owned managers, tools, prompts, auth,
+and persistence:
 
 ```typescript
 import {
@@ -185,7 +208,6 @@ await resourceLoader.reload();
 const sessionManager = openTranscriptSessionManagerForSession({
   agentId: params.agentId,
   sessionId: params.sessionId,
-  cwd: resolvedWorkspace,
 });
 
 const { session } = await createAgentSession({
@@ -205,9 +227,11 @@ const { session } = await createAgentSession({
 applySystemPromptOverrideToSession(session, systemPromptOverride);
 ```
 
-### 3. Event Subscription
+### 3. Event subscription
 
-`subscribeEmbeddedPiSession()` subscribes to pi's `AgentSession` events:
+`subscribeEmbeddedPiSession()` subscribes to upstream `AgentSession` events and
+translates them into OpenClaw callbacks, transcript writes, and streaming reply
+blocks:
 
 ```typescript
 const subscription = subscribeEmbeddedPiSession({
@@ -250,17 +274,23 @@ to re-inject image payloads.
 
 ### Tool pipeline
 
-1. **Base Tools**: pi's `codingTools` (read, bash, edit, write)
-2. **Custom Replacements**: OpenClaw replaces bash with `exec`/`process`, customizes read/edit/write for sandbox
-3. **OpenClaw Tools**: messaging, browser, canvas, sessions, cron, gateway, etc.
-4. **Channel Tools**: Discord/Telegram/Slack/WhatsApp-specific action tools
-5. **Policy Filtering**: Tools filtered by profile, provider, agent, group, sandbox policies
-6. **Schema Normalization**: Schemas cleaned for Gemini/OpenAI quirks
-7. **AbortSignal Wrapping**: Tools wrapped to respect abort signals
+1. **Upstream shapes**: OpenClaw adapts upstream tool definitions where needed
+2. **Custom replacements**: OpenClaw replaces bash with `exec`/`process` and
+   customizes read/edit/write for sandbox and VFS behavior
+3. **OpenClaw tools**: messaging, browser, canvas, sessions, cron, gateway, and
+   other runtime tools
+4. **Channel tools**: Discord/Telegram/Slack/WhatsApp-specific action tools
+5. **Policy filtering**: tools filtered by profile, provider, agent, group, and
+   sandbox policy
+6. **Schema normalization**: schemas cleaned for Gemini/OpenAI quirks
+7. **AbortSignal wrapping**: tools wrapped to respect abort signals
 
 ### Tool definition adapter
 
-pi-agent-core's `AgentTool` has a different `execute` signature than pi-coding-agent's `ToolDefinition`. The adapter in `pi-tool-definition-adapter.ts` bridges this:
+`pi-agent-core`'s `AgentTool` has a different `execute` signature than
+`pi-coding-agent`'s `ToolDefinition`. The adapter in
+`pi-tool-definition-adapter.ts` keeps that nullable/signature detail at one
+boundary:
 
 ```typescript
 export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
@@ -270,7 +300,7 @@ export function toToolDefinitions(tools: AnyAgentTool[]): ToolDefinition[] {
     description: tool.description ?? "",
     parameters: tool.parameters,
     execute: async (toolCallId, params, onUpdate, _ctx, signal) => {
-      // pi-coding-agent signature differs from pi-agent-core
+      // Upstream pi-coding-agent signature differs from pi-agent-core.
       return await tool.execute(toolCallId, params, signal, onUpdate);
     },
   }));
@@ -387,9 +417,11 @@ if (fallbackConfigured && isFailoverErrorMessage(errorText)) {
 }
 ```
 
-## Pi extensions
+## Runtime extensions
 
-OpenClaw loads custom pi extensions for specialized behavior:
+OpenClaw loads custom runtime extensions for specialized behavior. These
+extensions use the upstream extension mechanism, but their policy and state are
+OpenClaw-owned.
 
 ### Compaction safeguard
 
@@ -514,40 +546,47 @@ if (sandboxRoot) {
 
 ## TUI Integration
 
-OpenClaw also has a local TUI mode that uses pi-tui components directly:
+OpenClaw also has a local TUI mode that uses `pi-tui` components directly:
 
 ```typescript
 // src/tui/tui.ts
 import { ... } from "@earendil-works/pi-tui";
 ```
 
-This provides the interactive terminal experience similar to pi's native mode.
+This provides OpenClaw's interactive terminal experience without moving session
+state back to upstream files.
 
-## Key differences from Pi CLI
+## Key differences from the upstream CLI
 
-| Aspect          | Pi CLI                  | OpenClaw Embedded                                                                                                   |
+| Aspect          | Upstream CLI            | OpenClaw embedded                                                                                                   |
 | --------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------------- |
-| Invocation      | `pi` command / RPC      | SDK via `createAgentSession()`                                                                                      |
+| Invocation      | External command / RPC  | In-process session via `createAgentSession()`                                                                       |
 | Tools           | Default coding tools    | Custom OpenClaw tool suite                                                                                          |
-| System prompt   | AGENTS.md + prompts     | Dynamic per-channel/context                                                                                         |
+| System prompt   | Upstream prompt stack   | Dynamic OpenClaw prompt per channel, workspace, and context                                                         |
 | Session storage | `~/.pi/agent/sessions/` | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite` plus `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite` |
 | Auth            | Single credential       | Multi-profile with rotation                                                                                         |
-| Extensions      | Loaded from disk        | Programmatic + disk paths                                                                                           |
+| Extensions      | Loaded from disk        | OpenClaw policy with programmatic and disk paths                                                                    |
 | Event handling  | TUI rendering           | Callback-based (onBlockReply, etc.)                                                                                 |
 
 ## Future considerations
 
 Areas for potential rework:
 
-1. **Tool signature alignment**: Currently adapting between pi-agent-core and pi-coding-agent signatures
-2. **Transcript writer wrapping**: `guardSessionManager` adds tool-result safety around the SQLite writer but increases complexity
-3. **Extension loading**: Could use pi's `ResourceLoader` more directly
-4. **Streaming handler complexity**: `subscribeEmbeddedPiSession` has grown large
-5. **Provider quirks**: Many provider-specific codepaths that pi could potentially handle
+1. **Naming cleanup**: Historical `pi-*` file names can move toward OpenClaw
+   runtime names once imports are fully quarantined.
+2. **Tool signature alignment**: Upstream tool signature adapters should stay at
+   one boundary.
+3. **Transcript writer wrapping**: `guardSessionManager` adds tool-result safety
+   around the SQLite writer but increases complexity.
+4. **Extension loading**: OpenClaw should keep policy ownership while shrinking
+   the integration surface.
+5. **Streaming handler complexity**: `subscribeEmbeddedPiSession` has grown large.
+6. **Provider quirks**: Provider-specific codepaths should keep moving toward
+   owner modules or typed runtime helpers.
 
 ## Tests
 
-Pi integration coverage spans these suites:
+Embedded runtime coverage spans these suites:
 
 - `src/agents/pi-*.test.ts`
 - `src/agents/pi-embedded-*.test.ts`

@@ -24,7 +24,6 @@ let isOversizedToolResult: typeof import("./tool-result-truncation.js").isOversi
 let sessionLikelyHasOversizedToolResults: typeof import("./tool-result-truncation.js").sessionLikelyHasOversizedToolResults;
 let estimateToolResultReductionPotential: typeof import("./tool-result-truncation.js").estimateToolResultReductionPotential;
 let DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS;
-let HARD_MAX_TOOL_RESULT_CHARS: typeof import("./tool-result-truncation.js").HARD_MAX_TOOL_RESULT_CHARS;
 let resolveLiveToolResultMaxChars: typeof import("./tool-result-truncation.js").resolveLiveToolResultMaxChars;
 let tmpDir: string | undefined;
 
@@ -41,7 +40,6 @@ async function loadFreshToolResultTruncationModuleForTest() {
     sessionLikelyHasOversizedToolResults,
     estimateToolResultReductionPotential,
     DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
-    HARD_MAX_TOOL_RESULT_CHARS,
     resolveLiveToolResultMaxChars,
   } = await import("./tool-result-truncation.js"));
 }
@@ -229,14 +227,13 @@ describe("calculateMaxToolResultChars", () => {
     expect(large).toBeGreaterThan(small);
   });
 
-  it("exports the live cap through both constant names", () => {
+  it("exports the live tool-result cap", () => {
     expect(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS).toBe(16_000);
-    expect(HARD_MAX_TOOL_RESULT_CHARS).toBe(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
-  it("caps at HARD_MAX_TOOL_RESULT_CHARS for very large windows", () => {
+  it("caps at DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS for very large windows", () => {
     const result = calculateMaxToolResultChars(2_000_000); // 2M token window
-    expect(result).toBeLessThanOrEqual(HARD_MAX_TOOL_RESULT_CHARS);
+    expect(result).toBeLessThanOrEqual(DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS);
   });
 
   it("caps 128K contexts at the live tool-result ceiling", () => {

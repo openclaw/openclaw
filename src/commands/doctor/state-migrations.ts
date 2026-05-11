@@ -1471,7 +1471,7 @@ function collectCoreLegacyStateMigrationPlans(params: {
       kind: "custom",
       label: "Current conversation bindings",
       sourcePath: currentConversationBindingsPath,
-      targetTable: "kv",
+      targetTable: "current_conversation_bindings",
       recordCount: 1,
       apply: () => {
         const result = importLegacyCurrentConversationBindingsToSqlite(

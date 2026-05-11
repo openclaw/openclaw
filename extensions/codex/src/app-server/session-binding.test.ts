@@ -1,16 +1,18 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { writeOpenClawStateKvJson } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  CODEX_APP_SERVER_BINDING_NAMESPACE,
+  CODEX_APP_SERVER_BINDING_PLUGIN_ID,
   clearCodexAppServerBinding,
   readCodexAppServerBinding,
   writeCodexAppServerBinding,
   type CodexAppServerAuthProfileLookup,
 } from "./session-binding.js";
 
-const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
 let tempDir: string;
 let previousStateDir: string | undefined;
 
@@ -29,18 +31,11 @@ const nativeAuthLookup: Pick<CodexAppServerAuthProfileLookup, "authProfileStore"
   },
 };
 
-async function writeCodexCliAuthFile(codexHome: string): Promise<void> {
-  await fs.mkdir(codexHome, { recursive: true });
-  await fs.writeFile(
-    path.join(codexHome, "auth.json"),
-    `${JSON.stringify({
-      tokens: {
-        access_token: "cli-access-token",
-        refresh_token: "cli-refresh-token",
-        account_id: "account-cli",
-      },
-    })}\n`,
-  );
+function writeRawCodexAppServerBinding(key: string, value: unknown): void {
+  createPluginStateSyncKeyedStore<unknown>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  }).register(key, value);
 }
 
 describe("codex app-server session binding", () => {
@@ -115,7 +110,7 @@ describe("codex app-server session binding", () => {
 
   it("rejects old plugin app policy entries that duplicate the app id", async () => {
     const sessionId = "session";
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
+    writeRawCodexAppServerBinding(sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
       sessionId,
@@ -194,7 +189,7 @@ describe("codex app-server session binding", () => {
 
   it("normalizes older Codex-native bindings that stored public OpenAI provider", async () => {
     const sessionId = "session";
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
+    writeRawCodexAppServerBinding(sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
       sessionId,
@@ -214,7 +209,7 @@ describe("codex app-server session binding", () => {
 
   it("normalizes legacy fast service tier bindings to Codex priority", async () => {
     const sessionId = "session";
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, {
+    writeRawCodexAppServerBinding(sessionId, {
       schemaVersion: 1,
       threadId: "thread-123",
       sessionId,

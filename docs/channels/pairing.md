@@ -80,8 +80,8 @@ Access groups are documented in detail here: [Access groups](/channels/access-gr
 
 Stored in `~/.openclaw/state/openclaw.sqlite`:
 
-- Pending requests: SQLite `kv` scope `pairing.channel`
-- Approved allowlist store: same SQLite record, account-scoped by channel account ID
+- Pending requests: `channel_pairing_requests`
+- Approved allowlist entries: `channel_pairing_allow_entries`, account-scoped by channel account ID
 
 Account scoping behavior:
 

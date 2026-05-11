@@ -642,7 +642,8 @@ releases.
   | `plugin-sdk/memory-core-engine-runtime` | Memory engine runtime facade | Memory index/search runtime facade |
   | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine | Memory host foundation engine exports |
   | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding engine | Memory embedding contracts, registry access, local provider, and generic batch/remote helpers; concrete remote providers live in their owning plugins |
-  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports |
+  | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine | Memory host QMD engine exports; new code should use `memory-core-host-engine-session-transcripts` for SQLite transcript indexing helpers |
+  | `plugin-sdk/memory-core-host-engine-session-transcripts` | Memory host SQLite session transcript engine | Memory host SQLite session transcript indexing exports |
   | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine | Memory host storage engine exports |
   | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers | Memory host multimodal helpers |
   | `plugin-sdk/memory-core-host-query` | Memory host query helpers | Memory host query helpers |

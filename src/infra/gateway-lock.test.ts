@@ -5,7 +5,11 @@ import net from "node:net";
 import path from "node:path";
 import { setTimeout as nativeSleep } from "node:timers/promises";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import {
   __testing,
@@ -13,8 +17,10 @@ import {
   GatewayLockError,
   type GatewayLockOptions,
 } from "./gateway-lock.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "./kysely-sync.js";
 
 type GatewayLock = NonNullable<Awaited<ReturnType<typeof acquireGatewayLock>>>;
+type GatewayLockTestDatabase = Pick<OpenClawStateKyselyDatabase, "state_leases">;
 
 const fixtureRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-gateway-lock-" });
 let fixtureRoot = "";
@@ -183,6 +189,24 @@ describe("gateway lock", () => {
     const env = await makeEnv();
     const lock = await acquireForTest(env, { timeoutMs: 50 });
     const acquiredLock = expectGatewayLock(lock);
+    const { lockKey } = resolveLockIdentity(env);
+    const database = openOpenClawStateDatabase({ env });
+    const db = getNodeSqliteKysely<GatewayLockTestDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("state_leases")
+        .select(["scope", "lease_key", "owner", "expires_at", "payload_json"])
+        .where("scope", "=", "gateway_locks")
+        .where("lease_key", "=", lockKey),
+    );
+    expect(row).toMatchObject({
+      scope: "gateway_locks",
+      lease_key: lockKey,
+      owner: expect.any(String),
+      expires_at: expect.any(Number),
+      payload_json: expect.any(String),
+    });
 
     const pending = acquireForTest(env, {
       timeoutMs: 15,

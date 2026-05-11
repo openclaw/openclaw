@@ -3,7 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.NotificationForwardingPolicy
 import ai.openclaw.app.NotificationPackageFilterMode
-import ai.openclaw.app.gateway.OpenClawSQLiteKVStore
+import ai.openclaw.app.gateway.OpenClawSQLiteStateStore
 import ai.openclaw.app.isWithinQuietHours
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -26,10 +26,8 @@ class DeviceNotificationListenerServiceTest {
   @Test
   fun recentPackages_readsSqliteRows() {
     val context = RuntimeEnvironment.getApplication()
-    OpenClawSQLiteKVStore(context).writeString(
-      "android.notifications",
-      "recent-packages",
-      """["com.example.one","com.example.two"]""",
+    OpenClawSQLiteStateStore(context).replaceRecentNotificationPackages(
+      listOf("com.example.one", "com.example.two"),
     )
 
     val packages = DeviceNotificationListenerService.recentPackages(context)
@@ -40,10 +38,8 @@ class DeviceNotificationListenerServiceTest {
   @Test
   fun recentPackages_trimsDedupesAndPreservesRecencyOrder() {
     val context = RuntimeEnvironment.getApplication()
-    OpenClawSQLiteKVStore(context).writeString(
-      "android.notifications",
-      "recent-packages",
-      """[" com.example.recent ","","com.example.other","com.example.recent","com.example.third",null]""",
+    OpenClawSQLiteStateStore(context).replaceRecentNotificationPackages(
+      listOf(" com.example.recent ", "", "com.example.other", "com.example.recent", "com.example.third"),
     )
 
     val packages = DeviceNotificationListenerService.recentPackages(context)

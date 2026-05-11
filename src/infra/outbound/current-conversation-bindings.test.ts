@@ -2,7 +2,13 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  type OpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import {
   __testing,
@@ -59,6 +65,22 @@ function setMinimalCurrentConversationRegistry(): void {
       },
     ]),
   );
+}
+
+type CurrentConversationBindingsTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
+
+function getCurrentConversationBindingsTestDb(): {
+  database: OpenClawStateDatabase;
+  db: ReturnType<typeof getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>>;
+} {
+  const database = openOpenClawStateDatabase();
+  return {
+    database,
+    db: getNodeSqliteKysely<CurrentConversationBindingsTestDatabase>(database.db),
+  };
 }
 
 describe("generic current-conversation bindings", () => {
@@ -187,6 +209,55 @@ describe("generic current-conversation bindings", () => {
       bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
+  });
+
+  it("reloads persisted bindings from typed columns, not the debug JSON copy", async () => {
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:acp:workspace-dm",
+      targetKind: "session",
+      conversation: {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "user:U123",
+      },
+      metadata: {
+        label: "workspace-dm",
+      },
+    });
+    const { database, db } = getCurrentConversationBindingsTestDb();
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("current_conversation_bindings")
+        .set({
+          record_json: JSON.stringify({
+            bindingId: "generic:wrong",
+            targetSessionKey: "agent:wrong",
+            conversation: {
+              channel: "wrong",
+              accountId: "wrong",
+              conversationId: "wrong",
+            },
+            status: "ended",
+            boundAt: 1,
+          }),
+        })
+        .where("binding_key", "=", "workspace\u241fdefault\u241f\u241fuser:U123"),
+    );
+
+    __testing.resetCurrentConversationBindingsForTests();
+
+    const resolved = resolveGenericCurrentConversationBinding({
+      channel: "workspace",
+      accountId: "default",
+      conversationId: "user:U123",
+    });
+    expectBindingFields(resolved, {
+      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      targetSessionKey: "agent:codex:acp:workspace-dm",
+      status: "active",
+    });
+    expectBindingMetadata(resolved, { label: "workspace-dm" });
   });
 
   it("drops self-parent conversation refs when storing generic current bindings", async () => {

@@ -3,14 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../../state/openclaw-state-kv.js";
+import { readAuthProfileStatePayloadResult } from "./sqlite-storage.js";
 import {
   authProfileStateKey,
   loadPersistedAuthProfileState,
   savePersistedAuthProfileState,
 } from "./state.js";
-
-const AUTH_PROFILE_STATE_KV_SCOPE = "auth-profile-state";
 
 describe("auth profile runtime state persistence", () => {
   let stateRoot = "";
@@ -56,8 +54,6 @@ describe("auth profile runtime state persistence", () => {
 
     expect(savePersistedAuthProfileState({}, agentDir)).toBeNull();
 
-    expect(
-      readOpenClawStateKvJson(AUTH_PROFILE_STATE_KV_SCOPE, authProfileStateKey(agentDir)),
-    ).toBeUndefined();
+    expect(readAuthProfileStatePayloadResult(authProfileStateKey(agentDir)).exists).toBe(false);
   });
 });

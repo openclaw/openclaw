@@ -3,6 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
+import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
@@ -10,6 +16,7 @@ import type { InternalHookEvent } from "../../internal-hook-types.js";
 import commandLogger from "./handler.js";
 
 const originalStateDir = process.env.OPENCLAW_STATE_DIR;
+type CommandLogTestDatabase = Pick<OpenClawStateKyselyDatabase, "command_log_entries">;
 
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-command-logger-"));
@@ -46,18 +53,13 @@ describe("command logger hook", () => {
     await commandLogger(createCommandEvent());
 
     const database = openOpenClawStateDatabase();
-    const rows = database.db
-      .prepare(
-        "SELECT timestamp_ms, action, session_key, sender_id, source, entry_json FROM command_log_entries",
-      )
-      .all() as Array<{
-      timestamp_ms: number;
-      action: string;
-      session_key: string;
-      sender_id: string;
-      source: string;
-      entry_json: string;
-    }>;
+    const db = getNodeSqliteKysely<CommandLogTestDatabase>(database.db);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("command_log_entries")
+        .select(["timestamp_ms", "action", "session_key", "sender_id", "source", "entry_json"]),
+    ).rows;
 
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
@@ -85,9 +87,11 @@ describe("command logger hook", () => {
     await commandLogger(createCommandEvent({ type: "session", action: "compact" }));
 
     const database = openOpenClawStateDatabase();
-    const row = database.db.prepare("SELECT COUNT(*) AS count FROM command_log_entries").get() as {
-      count: number;
-    };
+    const db = getNodeSqliteKysely<CommandLogTestDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db.selectFrom("command_log_entries").select((eb) => eb.fn.countAll<number>().as("count")),
+    );
     expect(row.count).toBe(0);
   });
 });

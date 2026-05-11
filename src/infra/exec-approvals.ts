@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import type { Insertable } from "kysely";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -6,20 +7,25 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "../shared/string-coerce.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import { resolveAllowAlwaysPatternEntries } from "./exec-approvals-allowlist.js";
 import type { ExecCommandSegment } from "./exec-approvals-analysis.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { expandHomePrefix } from "./home-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+import { sqliteBooleanInteger } from "./sqlite-row-values.js";
 export * from "./exec-approvals-analysis.js";
 export * from "./exec-approvals-allowlist.js";
 export type { ExecAllowlistEntry } from "./exec-approvals.types.js";
@@ -212,8 +218,10 @@ const DEFAULT_ASK: ExecAsk = "off";
 export const DEFAULT_EXEC_APPROVAL_ASK_FALLBACK: ExecSecurity = "full";
 const DEFAULT_AUTO_ALLOW_SKILLS = false;
 const DEFAULT_SOCKET = "~/.openclaw/exec-approvals.sock";
-const EXEC_APPROVALS_KV_SCOPE = "exec.approvals";
-const EXEC_APPROVALS_KV_KEY = "current";
+const EXEC_APPROVALS_CONFIG_KEY = "current";
+
+type ExecApprovalsDatabase = Pick<OpenClawStateKyselyDatabase, "exec_approvals_config">;
+type ExecApprovalsConfigInsert = Insertable<ExecApprovalsDatabase["exec_approvals_config"]>;
 
 function hashExecApprovalsRaw(raw: string | null): string {
   return crypto
@@ -225,7 +233,7 @@ function hashExecApprovalsRaw(raw: string | null): string {
 export function resolveExecApprovalsStoreLocationForDisplay(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
-  return `${resolveOpenClawStateSqlitePath(env)}#kv/${EXEC_APPROVALS_KV_SCOPE}/${EXEC_APPROVALS_KV_KEY}`;
+  return `${resolveOpenClawStateSqlitePath(env)}#table/exec_approvals_config/${EXEC_APPROVALS_CONFIG_KEY}`;
 }
 
 export function resolveExecApprovalsSocketPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -426,30 +434,78 @@ function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptio
   return { env };
 }
 
-function readExecApprovalsRawFromSqlite(env: NodeJS.ProcessEnv = process.env): string | null {
-  const value = readOpenClawStateKvJson(
-    EXEC_APPROVALS_KV_SCOPE,
-    EXEC_APPROVALS_KV_KEY,
-    sqliteOptionsForEnv(env),
-  );
-  return typeof value === "string" ? value : null;
+function execApprovalsRawToRow(raw: string, updatedAtMs: number): ExecApprovalsConfigInsert {
+  const file = parseExecApprovalsRaw(raw);
+  const agents = Object.values(file.agents ?? {});
+  const allowlistCount = agents.reduce((count, agent) => count + (agent.allowlist?.length ?? 0), 0);
+  return {
+    config_key: EXEC_APPROVALS_CONFIG_KEY,
+    raw_json: raw,
+    socket_path: file.socket?.path ?? null,
+    has_socket_token: file.socket?.token ? 1 : 0,
+    default_security: file.defaults?.security ?? null,
+    default_ask: file.defaults?.ask ?? null,
+    default_ask_fallback: file.defaults?.askFallback ?? null,
+    auto_allow_skills: sqliteBooleanInteger(file.defaults?.autoAllowSkills),
+    agent_count: agents.length,
+    allowlist_count: allowlistCount,
+    updated_at_ms: updatedAtMs,
+  };
 }
 
-function writeExecApprovalsRawToSqlite(raw: string, env: NodeJS.ProcessEnv = process.env): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    EXEC_APPROVALS_KV_SCOPE,
-    EXEC_APPROVALS_KV_KEY,
-    raw,
-    sqliteOptionsForEnv(env),
-  );
+function readExecApprovalsRawFromSqlite(env: NodeJS.ProcessEnv = process.env): string | null {
+  const database = openOpenClawStateDatabase(sqliteOptionsForEnv(env));
+  const db = getNodeSqliteKysely<ExecApprovalsDatabase>(database.db);
+  const row =
+    executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("exec_approvals_config")
+        .select(["raw_json"])
+        .where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
+    ) ?? null;
+  return row?.raw_json ?? null;
+}
+
+export function writeExecApprovalsRawToSqlite(
+  raw: string,
+  env: NodeJS.ProcessEnv = process.env,
+): void {
+  const updatedAtMs = Date.now();
+  const row = execApprovalsRawToRow(raw, updatedAtMs);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<ExecApprovalsDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("exec_approvals_config")
+        .values(row)
+        .onConflict((conflict) =>
+          conflict.column("config_key").doUpdateSet({
+            raw_json: row.raw_json,
+            socket_path: row.socket_path,
+            has_socket_token: row.has_socket_token,
+            default_security: row.default_security,
+            default_ask: row.default_ask,
+            default_ask_fallback: row.default_ask_fallback,
+            auto_allow_skills: row.auto_allow_skills,
+            agent_count: row.agent_count,
+            allowlist_count: row.allowlist_count,
+            updated_at_ms: row.updated_at_ms,
+          }),
+        ),
+    );
+  }, sqliteOptionsForEnv(env));
 }
 
 function deleteExecApprovalsSqliteState(env: NodeJS.ProcessEnv = process.env): void {
-  deleteOpenClawStateKvJson(
-    EXEC_APPROVALS_KV_SCOPE,
-    EXEC_APPROVALS_KV_KEY,
-    sqliteOptionsForEnv(env),
-  );
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<ExecApprovalsDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("exec_approvals_config").where("config_key", "=", EXEC_APPROVALS_CONFIG_KEY),
+    );
+  }, sqliteOptionsForEnv(env));
 }
 
 function parseExecApprovalsRaw(raw: string | null): ExecApprovalsFile {

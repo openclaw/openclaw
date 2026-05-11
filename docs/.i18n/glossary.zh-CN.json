@@ -124,6 +124,14 @@
     "target": "Pi"
   },
   {
+    "source": "Embedded agent runtime architecture",
+    "target": "嵌入式 agent 运行时架构"
+  },
+  {
+    "source": "Embedded agent runtime development workflow",
+    "target": "嵌入式 agent 运行时开发工作流"
+  },
+  {
     "source": "Agent runtimes",
     "target": "Agent Runtimes"
   },

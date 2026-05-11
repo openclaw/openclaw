@@ -197,8 +197,8 @@ inside every shard.
   - Runs a deterministic built-app Docker smoke for embedded runtime context
     transcripts. It verifies hidden OpenClaw runtime context is persisted as a
     non-display custom message instead of leaking into the visible user turn,
-    then seeds an affected broken session JSONL and verifies
-    `openclaw doctor --fix` rewrites it to the active branch with a backup.
+    then seeds an affected legacy session JSONL and verifies
+    `openclaw doctor --fix` imports the repaired active branch into SQLite.
 - `pnpm test:docker:npm-telegram-live`
   - Installs an OpenClaw package candidate in Docker, runs installed-package
     onboarding, configures Telegram through the installed CLI, then reuses the

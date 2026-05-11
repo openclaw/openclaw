@@ -8,18 +8,17 @@ import {
 import type { TranscriptEntry as SessionTranscriptEntry } from "../../../agents/transcript/session-transcript-types.js";
 import { resolveStateDir } from "../../../config/paths.js";
 import { replaceSqliteSessionTranscriptEvents } from "../../../config/sessions/transcript-store.sqlite.js";
+import { createPluginStateSyncKeyedStore } from "../../../plugin-state/plugin-state-store.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../../routing/session-key.js";
-import {
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../../../state/openclaw-state-kv.js";
 import { note } from "../../../terminal/note.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveLegacyAgentSessionDirs } from "./session-dirs.js";
 import { migrateLegacyTranscriptEntries } from "./session-transcript.js";
 
 const CODEX_APP_SERVER_BINDING_SIDECAR_SUFFIX = ".codex-app-server.json";
-const CODEX_APP_SERVER_BINDING_KV_SCOPE = "codex_app_server_thread_bindings";
+const CODEX_APP_SERVER_BINDING_PLUGIN_ID = "codex";
+const CODEX_APP_SERVER_BINDING_NAMESPACE = "app-server-thread-bindings";
+const CODEX_APP_SERVER_BINDING_MAX_ENTRIES = 10_000;
 
 type TranscriptEntry = Record<string, unknown> & {
   id?: unknown;
@@ -321,7 +320,7 @@ async function resolveCodexAppServerBindingSessionId(
 function normalizeCodexAppServerBindingPayload(
   sessionId: string,
   value: unknown,
-): OpenClawStateJsonValue | undefined {
+): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return undefined;
   }
@@ -350,7 +349,18 @@ function normalizeCodexAppServerBindingPayload(
         : undefined,
     createdAt: typeof parsed.createdAt === "string" ? parsed.createdAt : new Date().toISOString(),
     updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : new Date().toISOString(),
-  } as OpenClawStateJsonValue;
+  };
+}
+
+function writeCodexAppServerBindingSidecarImport(
+  sessionId: string,
+  payload: Record<string, unknown>,
+): void {
+  const value = JSON.parse(JSON.stringify(payload)) as Record<string, unknown>;
+  createPluginStateSyncKeyedStore<Record<string, unknown>>(CODEX_APP_SERVER_BINDING_PLUGIN_ID, {
+    namespace: CODEX_APP_SERVER_BINDING_NAMESPACE,
+    maxEntries: CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
+  }).register(sessionId, value);
 }
 
 async function migrateCodexAppServerBindingSidecar(params: {
@@ -381,7 +391,7 @@ async function migrateCodexAppServerBindingSidecar(params: {
         removedSource: false,
       };
     }
-    writeOpenClawStateKvJson(CODEX_APP_SERVER_BINDING_KV_SCOPE, sessionId, payload);
+    writeCodexAppServerBindingSidecarImport(sessionId, payload);
     await fs.rm(params.filePath, { force: true });
     return {
       filePath: params.filePath,

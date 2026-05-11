@@ -23,14 +23,10 @@ type CurrentConversationBindingsTestDatabase = Pick<
   "current_conversation_bindings"
 >;
 type PluginStateTestDatabase = Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">;
-type MigrationSourceRow = {
-  migration_kind: string;
-  source_path: string;
-  target_table: string;
-  status: string;
-  source_sha256: string | null;
-  removed_source: number;
-};
+type MigrationMetadataTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "migration_runs" | "migration_sources"
+>;
 
 vi.mock("../../channels/plugins/bundled.js", () => {
   function fileExists(filePath: string): boolean {
@@ -365,15 +361,14 @@ describe("state migrations", () => {
     expect(compaction.parentId).toBe(secondMessage.id);
     expect(compaction.firstKeptEntryId).toBe(firstMessage.id);
     expect(compaction).not.toHaveProperty("firstKeptEntryIndex");
-    const migrationRows = database.db
-      .prepare(
-        `
-          SELECT status, report_json
-          FROM migration_runs
-          ORDER BY started_at DESC
-        `,
-      )
-      .all() as Array<{ status: string; report_json: string }>;
+    const migrationDb = getNodeSqliteKysely<MigrationMetadataTestDatabase>(database.db);
+    const migrationRows = executeSqliteQuerySync(
+      database.db,
+      migrationDb
+        .selectFrom("migration_runs")
+        .select(["status", "report_json"])
+        .orderBy("started_at", "desc"),
+    ).rows;
     expect(migrationRows).toHaveLength(1);
     expect(migrationRows[0]?.status).toBe("completed");
     const report = JSON.parse(migrationRows[0]?.report_json ?? "{}") as {
@@ -413,15 +408,19 @@ describe("state migrations", () => {
         }),
       ]),
     );
-    const sourceRows = database.db
-      .prepare(
-        `
-          SELECT migration_kind, source_path, target_table, source_sha256, removed_source
-          FROM migration_sources
-          ORDER BY source_path ASC
-        `,
-      )
-      .all() as MigrationSourceRow[];
+    const sourceRows = executeSqliteQuerySync(
+      database.db,
+      migrationDb
+        .selectFrom("migration_sources")
+        .select([
+          "migration_kind",
+          "source_path",
+          "target_table",
+          "source_sha256",
+          "removed_source",
+        ])
+        .orderBy("source_path", "asc"),
+    ).rows;
     expect(sourceRows).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -578,15 +577,14 @@ describe("state migrations", () => {
     });
 
     const database = openOpenClawStateDatabase({ env });
-    const rows = database.db
-      .prepare(
-        `
-          SELECT source_path, target_table, status, removed_source
-          FROM migration_sources
-          WHERE source_path = ?
-        `,
-      )
-      .all(sourcePath) as MigrationSourceRow[];
+    const migrationDb = getNodeSqliteKysely<MigrationMetadataTestDatabase>(database.db);
+    const rows = executeSqliteQuerySync(
+      database.db,
+      migrationDb
+        .selectFrom("migration_sources")
+        .select(["source_path", "target_table", "status", "removed_source"])
+        .where("source_path", "=", sourcePath),
+    ).rows;
 
     expect(rows).toEqual([
       expect.objectContaining({

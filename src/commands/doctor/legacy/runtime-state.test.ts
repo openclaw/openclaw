@@ -1,14 +1,23 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { authProfileStateKey } from "../../../agents/auth-profiles/state.js";
+import { loadPersistedAuthProfileStateFromDatabase } from "../../../agents/auth-profiles/state.js";
 import { readStoredModelsConfigRaw } from "../../../agents/models-config-store.js";
 import { loadCommitmentStore } from "../../../commitments/store.js";
+import { readConfigHealthStateFromSqlite } from "../../../config/health-state.js";
 import { resolveOAuthDir } from "../../../config/paths.js";
 import { loadDeviceAuthStore } from "../../../infra/device-auth-store.js";
 import { listDevicePairing } from "../../../infra/device-pairing.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../../infra/kysely-sync.js";
 import { loadApnsRegistration } from "../../../infra/push-apns.js";
 import { listWebPushSubscriptions } from "../../../infra/push-web.js";
+import { readUpdateCheckStateFromSqlite } from "../../../infra/update-check-state.js";
+import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
+import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { readMediaBuffer } from "../../../media/store.js";
 import {
   MEMORY_CORE_DAILY_INGESTION_STATE_NAMESPACE,
@@ -28,8 +37,9 @@ import {
   listChannelPairingRequests,
   readChannelAllowFromStore,
 } from "../../../pairing/pairing-store.js";
+import { readPersistedInstalledPluginIndex } from "../../../plugins/installed-plugin-index-store.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
-import { readOpenClawStateKvJson } from "../../../state/openclaw-state-kv.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { withTempDir } from "../../../test-utils/temp-dir.js";
 import { readTtsUserPrefs, SQLITE_TTS_PREFS_REF } from "../../../tts/tts-prefs-store.js";
@@ -435,6 +445,23 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           })}\n`,
           "utf8",
         );
+        await fs.writeFile(
+          path.join(stateDir, "plugin-binding-approvals.json"),
+          `${JSON.stringify({
+            version: 1,
+            approvals: [
+              {
+                pluginRoot: "/plugins/legacy",
+                pluginId: "legacy-plugin",
+                pluginName: "Legacy Plugin",
+                channel: "Discord",
+                accountId: "default",
+                approvedAt: 1777118400000,
+              },
+            ],
+          })}\n`,
+          "utf8",
+        );
 
         await maybeRepairLegacyRuntimeStateFiles({
           prompter: { shouldRepair: true },
@@ -455,9 +482,17 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           displayName: "Legacy Node",
           gateway: { host: "gateway.local", port: 18443, tls: true },
         });
-        expect(readOpenClawStateKvJson("exec.approvals", "current", { env })).toContain(
-          '"security":"allowlist"',
+        const stateDatabase = openOpenClawStateDatabase({ env });
+        const stateDb = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(stateDatabase.db);
+        const execApprovalsRow = executeSqliteQueryTakeFirstSync(
+          stateDatabase.db,
+          stateDb
+            .selectFrom("exec_approvals_config")
+            .select(["raw_json", "default_security"])
+            .where("config_key", "=", "current"),
         );
+        expect(execApprovalsRow?.raw_json).toContain('"security":"allowlist"');
+        expect(execApprovalsRow?.default_security).toBe("allowlist");
         await expect(fs.stat(execApprovalsPath)).rejects.toMatchObject({ code: "ENOENT" });
         await expect(fs.stat(path.join(stateDir, "node.json"))).rejects.toMatchObject({
           code: "ENOENT",
@@ -494,14 +529,14 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(loadApnsRegistration("ios-node", stateDir)).resolves.toMatchObject({
           nodeId: "ios-node",
         });
-        expect(readOpenClawStateKvJson("runtime.update-check", "state", { env })).toMatchObject({
+        expect(readUpdateCheckStateFromSqlite(env)).toMatchObject({
           lastAvailableVersion: "2.0.0",
           lastAvailableTag: "latest",
         });
         await expect(fs.stat(path.join(stateDir, "update-check.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(readOpenClawStateKvJson("config.health", "current", { env })).toMatchObject({
+        expect(readConfigHealthStateFromSqlite(env, () => stateDir)).toMatchObject({
           entries: {
             "/tmp/openclaw.json": {
               lastKnownGood: {
@@ -514,20 +549,23 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(
           fs.stat(path.join(stateDir, "logs", "config-health.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect(
-          readOpenClawStateKvJson(
-            "managed_outgoing_image_records",
-            "11111111-1111-4111-8111-111111111111",
-            { env },
-          ),
-        ).toMatchObject({
-          sessionKey: "agent:main:main",
-          alt: "legacy image",
-          original: {
-            mediaId: "11111111-1111-4111-8111-111111111111.png",
-            mediaSubdir: "outgoing/originals",
+        const managedImageRow = executeSqliteQueryTakeFirstSync(
+          stateDatabase.db,
+          stateDb
+            .selectFrom("managed_outgoing_image_records")
+            .select("record_json")
+            .where("attachment_id", "=", "11111111-1111-4111-8111-111111111111"),
+        );
+        expect(managedImageRow ? JSON.parse(managedImageRow.record_json) : undefined).toMatchObject(
+          {
+            sessionKey: "agent:main:main",
+            alt: "legacy image",
+            original: {
+              mediaId: "11111111-1111-4111-8111-111111111111.png",
+              mediaSubdir: "outgoing/originals",
+            },
           },
-        });
+        );
         await expect(
           readMediaBuffer("11111111-1111-4111-8111-111111111111.png", "outgoing/originals"),
         ).resolves.toMatchObject({
@@ -546,9 +584,13 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
           code: "ENOENT",
         });
         expect(
-          openOpenClawStateDatabase({ env })
-            .db.prepare("SELECT child_session_key FROM subagent_runs WHERE run_id = ?")
-            .get("run-legacy"),
+          executeSqliteQueryTakeFirstSync(
+            stateDatabase.db,
+            stateDb
+              .selectFrom("subagent_runs")
+              .select("child_session_key")
+              .where("run_id", "=", "run-legacy"),
+          ),
         ).toEqual({ child_session_key: "agent:main:subagent:legacy" });
         await expect(fs.stat(path.join(stateDir, "subagents", "runs.json"))).rejects.toMatchObject({
           code: "ENOENT",
@@ -570,21 +612,19 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(fs.stat(path.join(stateDir, "settings", "tts.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(readOpenClawStateKvJson("voicewake", "triggers", { env })).toMatchObject({
+        await expect(loadVoiceWakeConfig(stateDir)).resolves.toMatchObject({
           triggers: ["wake"],
         });
         await expect(
           fs.stat(path.join(stateDir, "settings", "voicewake.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect(readOpenClawStateKvJson("voicewake", "routing", { env })).toMatchObject({
+        await expect(loadVoiceWakeRoutingConfig(stateDir)).resolves.toMatchObject({
           routes: [{ trigger: "robot wake", target: { agentId: "main" } }],
         });
         await expect(
           fs.stat(path.join(stateDir, "settings", "voicewake-routing.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect(
-          readOpenClawStateKvJson("auth-profile-state", authProfileStateKey(agentDir), { env }),
-        ).toMatchObject({
+        expect(loadPersistedAuthProfileStateFromDatabase(stateDatabase, agentDir)).toMatchObject({
           order: { openai: ["openai:default"] },
           lastGood: { openai: "openai:default" },
         });
@@ -593,33 +633,63 @@ describe("maybeRepairLegacyRuntimeStateFiles", () => {
         await expect(fs.stat(path.join(agentDir, "models.json"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(
-          readOpenClawStateKvJson("openrouter_model_capabilities", "models", { env }),
-        ).toMatchObject({
-          models: {
-            "acme/legacy": {
-              name: "Legacy OpenRouter",
-              contextWindow: 123,
-              maxTokens: 456,
-            },
-          },
+        const openRouterModelRow = executeSqliteQueryTakeFirstSync(
+          stateDatabase.db,
+          stateDb
+            .selectFrom("model_capability_cache")
+            .select(["provider_id", "name", "context_window", "max_tokens"])
+            .where("provider_id", "=", "openrouter")
+            .where("model_id", "=", "acme/legacy"),
+        );
+        expect(openRouterModelRow).toMatchObject({
+          provider_id: "openrouter",
+          name: "Legacy OpenRouter",
+          context_window: 123,
+          max_tokens: 456,
         });
         await expect(
           fs.stat(path.join(stateDir, "cache", "openrouter-models.json")),
         ).rejects.toMatchObject({ code: "ENOENT" });
-        expect(readOpenClawStateKvJson("installed_plugin_index", "current", { env })).toMatchObject(
-          {
-            installRecords: {
-              "legacy-plugin": {
-                source: "npm",
-                spec: "legacy-plugin@1.0.0",
-              },
+        await expect(readPersistedInstalledPluginIndex({ env })).resolves.toMatchObject({
+          installRecords: {
+            "legacy-plugin": {
+              source: "npm",
+              spec: "legacy-plugin@1.0.0",
             },
-            plugins: [expect.objectContaining({ pluginId: "legacy-plugin" })],
           },
-        );
+          plugins: [expect.objectContaining({ pluginId: "legacy-plugin" })],
+        });
         await expect(
           fs.stat(path.join(stateDir, "plugins", "installs.json")),
+        ).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(
+          executeSqliteQuerySync(
+            stateDatabase.db,
+            stateDb
+              .selectFrom("plugin_binding_approvals")
+              .select([
+                "plugin_root",
+                "plugin_id",
+                "plugin_name",
+                "channel",
+                "account_id",
+                "approved_at",
+              ]),
+          ).rows,
+        ).toEqual([
+          {
+            plugin_root: "/plugins/legacy",
+            plugin_id: "legacy-plugin",
+            plugin_name: "Legacy Plugin",
+            channel: "discord",
+            account_id: "default",
+            approved_at: 1777118400000,
+          },
+        ]);
+        await expect(
+          fs.stat(path.join(stateDir, "plugin-binding-approvals.json")),
         ).rejects.toMatchObject({
           code: "ENOENT",
         });

@@ -304,7 +304,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor scans all installed plugin manifests for deprecated top-level capability keys (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders`). When found, it offers to move them into the `contracts` object and rewrite the manifest file in-place. This migration is idempotent; if the `contracts` key already has the same values, the legacy key is removed without duplicating the data.
   </Accordion>
   <Accordion title="3b. Legacy cron store migrations">
-    Doctor also checks for a legacy cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden), imports it into the shared SQLite state database, and normalizes old job shapes that the scheduler still accepts for compatibility.
+    Doctor also checks for a legacy cron job store (`~/.openclaw/cron/jobs.json` by default, or `cron.store` when overridden), normalizes old job shapes, and imports the canonical rows into the shared SQLite state database before the scheduler sees them.
 
     Current cron cleanups include:
 

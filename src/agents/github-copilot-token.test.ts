@@ -1,8 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import { COPILOT_INTEGRATION_ID, buildCopilotIdeHeaders } from "./copilot-dynamic-headers.js";
 import {
   deriveCopilotApiBaseUrlFromToken,
   resolveCopilotApiToken,
@@ -116,8 +119,41 @@ describe("resolveCopilotApiToken", () => {
 
       expect(fetchImpl).toHaveBeenCalledTimes(1);
       expect(first.source).toBe("fetched:https://api.github.com/copilot_internal/v2/token");
-      expect(second.source).toBe("cache:sqlite:provider.github-copilot.token/default");
+      expect(second.source).toBe(
+        "cache:sqlite:plugin_state_entries/github-copilot/token-cache/default",
+      );
       expect(second.baseUrl).toBe("https://api.example.com");
+      const stateDatabase = openOpenClawStateDatabase({ env });
+      const stateDb = getNodeSqliteKysely<
+        Pick<OpenClawStateKyselyDatabase, "plugin_state_entries">
+      >(stateDatabase.db);
+      const cacheRow = executeSqliteQueryTakeFirstSync(
+        stateDatabase.db,
+        stateDb
+          .selectFrom("plugin_state_entries")
+          .select(["plugin_id", "namespace", "entry_key", "value_json"])
+          .where("plugin_id", "=", "github-copilot")
+          .where("namespace", "=", "token-cache")
+          .where("entry_key", "=", "default"),
+      );
+      expect(cacheRow).toMatchObject({
+        plugin_id: "github-copilot",
+        namespace: "token-cache",
+        entry_key: "default",
+      });
+      expect(JSON.parse(cacheRow?.value_json ?? "{}")).toMatchObject({
+        token: "copilot-token;proxy-ep=proxy.example.com;",
+        integrationId: COPILOT_INTEGRATION_ID,
+      });
+      expect(
+        stateDatabase.db
+          .prepare(
+            `SELECT name FROM sqlite_master
+             WHERE type = 'table'
+               AND name = 'github_copilot_token_cache'`,
+          )
+          .get(),
+      ).toBeUndefined();
       expect(fs.existsSync(path.join(stateDir, "credentials", "github-copilot.token.json"))).toBe(
         false,
       );

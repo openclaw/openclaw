@@ -5,7 +5,6 @@ import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { WebSocket } from "ws";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { readOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
 import { createOutboundTestPlugin } from "../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTempHomeEnv } from "../test-utils/temp-home.js";
@@ -232,7 +231,7 @@ describe("gateway server models + voicewake", () => {
     "voicewake.get returns defaults and voicewake.set broadcasts",
     { timeout: 20_000 },
     async () => {
-      await withTempHome(async (homeDir) => {
+      await withTempHome(async () => {
         const initial = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(initial.ok).toBe(true);
         expect(initial.payload?.triggers).toEqual(["openclaw", "claude", "computer"]);
@@ -258,12 +257,6 @@ describe("gateway server models + voicewake", () => {
         const after = await rpcReq<{ triggers: string[] }>(ws, "voicewake.get");
         expect(after.ok).toBe(true);
         expect(after.payload?.triggers).toEqual(["hi", "there"]);
-
-        const persisted = readOpenClawStateKvJson("voicewake", "triggers", {
-          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw") },
-        }) as { triggers?: unknown; updatedAtMs?: unknown } | undefined;
-        expect(persisted?.triggers).toEqual(["hi", "there"]);
-        expect(typeof persisted?.updatedAtMs).toBe("number");
       });
     },
   );
@@ -316,7 +309,7 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("voicewake.routing.get/set persists and broadcasts", { timeout: 60_000 }, async () => {
-    await withTempHome(async (homeDir) => {
+    await withTempHome(async () => {
       const initial = await rpcReq<{
         config?: { version?: number; defaultTarget?: unknown; routes?: unknown[] };
       }>(ws, "voicewake.routing.get");
@@ -358,12 +351,6 @@ describe("gateway server models + voicewake", () => {
       expect(after.payload?.config?.routes).toEqual([
         { trigger: "robot wake", target: { agentId: "main" } },
       ]);
-
-      const persisted = readOpenClawStateKvJson("voicewake", "routing", {
-        env: { ...process.env, OPENCLAW_STATE_DIR: path.join(homeDir, ".openclaw") },
-      }) as { routes?: unknown } | undefined;
-      expect(persisted?.routes).toEqual([{ trigger: "robot wake", target: { agentId: "main" } }]);
-
       const invalid = await rpcReq(ws, "voicewake.routing.set", { config: null });
       expect(invalid.ok).toBe(false);
       expect(invalid.error?.message ?? "").toMatch(

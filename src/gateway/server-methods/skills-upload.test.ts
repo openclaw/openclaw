@@ -4,6 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import type { GatewayRequestHandlers } from "./types.js";
 
 const agentScopeState = vi.hoisted(() => ({
@@ -18,6 +21,7 @@ const replaceFileState = vi.hoisted(() => ({
   publishFailureTarget: "",
   publishFailures: 0,
 }));
+type SkillUploadTestDatabase = Pick<OpenClawStateKyselyDatabase, "skill_uploads">;
 
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/agent-scope.js")>();
@@ -192,11 +196,15 @@ async function uploadArchive(
 }
 
 async function expireUploadedSkill(uploadId: string): Promise<void> {
-  const { runOpenClawStateWriteTransaction } = await import("../../state/openclaw-state-db.js");
   runOpenClawStateWriteTransaction((database) => {
-    database.db
-      .prepare("UPDATE skill_uploads SET expires_at = ? WHERE upload_id = ?")
-      .run(Date.now() - 1, uploadId);
+    const db = getNodeSqliteKysely<SkillUploadTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("skill_uploads")
+        .set({ expires_at: Date.now() - 1 })
+        .where("upload_id", "=", uploadId),
+    );
   });
 }
 

@@ -2,6 +2,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,6 +16,8 @@ import { createSqliteVirtualAgentFs } from "./virtual-agent-fs.sqlite.js";
 function createTempStateDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-vfs-"));
 }
+
+type VirtualAgentFsTestDatabase = Pick<OpenClawAgentKyselyDatabase, "vfs_entries">;
 
 afterEach(() => {
   closeOpenClawAgentDatabasesForTest();
@@ -218,9 +222,16 @@ describe("SqliteVirtualAgentFs", () => {
     });
 
     scratch.writeFile("/reports/summary.txt", "hello");
-    openOpenClawAgentDatabase({ agentId: "main", env })
-      .db.prepare("UPDATE vfs_entries SET kind = ? WHERE namespace = ? AND path = ?")
-      .run("socket", "scratch", "/reports/summary.txt");
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const db = getNodeSqliteKysely<VirtualAgentFsTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("vfs_entries")
+        .set({ kind: "socket" })
+        .where("namespace", "=", "scratch")
+        .where("path", "=", "/reports/summary.txt"),
+    );
 
     expect(() => scratch.stat("/reports/summary.txt")).toThrow("Invalid persisted VFS entry kind");
     expect(() => scratch.readFile("/reports/summary.txt")).toThrow(

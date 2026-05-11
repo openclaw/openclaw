@@ -116,7 +116,7 @@ async function runGatewayConfigHealth(ctx: DoctorHealthFlowContext): Promise<voi
 
 async function runAuthProfileHealth(ctx: DoctorHealthFlowContext): Promise<void> {
   const { maybeRepairLegacyFlatAuthProfileStores } =
-    await import("../commands/doctor-auth-flat-profiles.js");
+    await import("../commands/doctor/legacy/auth-flat-profiles.js");
   const { maybeRepairLegacyOAuthProfileIds } =
     await import("../commands/doctor/legacy/oauth-profile-ids.js");
   const { noteAuthProfileHealth, noteLegacyCodexProviderOverride } =

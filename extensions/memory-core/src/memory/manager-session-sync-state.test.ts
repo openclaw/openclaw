@@ -12,22 +12,22 @@ describe("memory session sync state", () => {
       targetSessionTranscriptKeys: null,
       dirtySessionTranscripts: new Set(),
       existingRows: [
-        { path: "transcript:main:a", hash: "hash-a" },
-        { path: "transcript:main:b", hash: "hash-b" },
+        { sourceKey: "session:a", path: "transcript:main:a", hash: "hash-a" },
+        { sourceKey: "session:b", path: "transcript:main:b", hash: "hash-b" },
       ],
-      sessionTranscriptKeyForScope: (scope) => `transcript:${scope.agentId}:${scope.sessionId}`,
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(true);
-    expect(plan.activePaths).toEqual(new Set(["transcript:main:a", "transcript:main:b"]));
+    expect(plan.activeSourceKeys).toEqual(new Set(["session:a", "session:b"]));
     expect(plan.existingRows).toEqual([
-      { path: "transcript:main:a", hash: "hash-a" },
-      { path: "transcript:main:b", hash: "hash-b" },
+      { sourceKey: "session:a", path: "transcript:main:a", hash: "hash-a" },
+      { sourceKey: "session:b", path: "transcript:main:b", hash: "hash-b" },
     ]);
     expect(plan.existingHashes).toEqual(
       new Map([
-        ["transcript:main:a", "hash-a"],
-        ["transcript:main:b", "hash-b"],
+        ["session:a", "hash-a"],
+        ["session:b", "hash-b"],
       ]),
     );
   });
@@ -39,14 +39,22 @@ describe("memory session sync state", () => {
       targetSessionTranscriptKeys: new Set(["main\0targeted-first"]),
       dirtySessionTranscripts: new Set(["main\0targeted-first"]),
       existingRows: [
-        { path: "transcript:main:targeted-first", hash: "hash-first" },
-        { path: "transcript:main:targeted-second", hash: "hash-second" },
+        {
+          sourceKey: "session:targeted-first",
+          path: "transcript:main:targeted-first",
+          hash: "hash-first",
+        },
+        {
+          sourceKey: "session:targeted-second",
+          path: "transcript:main:targeted-second",
+          hash: "hash-second",
+        },
       ],
-      sessionTranscriptKeyForScope: (scope) => `transcript:${scope.agentId}:${scope.sessionId}`,
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(true);
-    expect(plan.activePaths).toBeNull();
+    expect(plan.activeSourceKeys).toBeNull();
     expect(plan.existingRows).toBeNull();
     expect(plan.existingHashes).toBeNull();
   });
@@ -58,10 +66,10 @@ describe("memory session sync state", () => {
       targetSessionTranscriptKeys: null,
       dirtySessionTranscripts: new Set(["main\0incremental"]),
       existingRows: [],
-      sessionTranscriptKeyForScope: (scope) => `transcript:${scope.agentId}:${scope.sessionId}`,
+      sessionTranscriptSourceKeyForScope: (scope) => `session:${scope.sessionId}`,
     });
 
     expect(plan.indexAll).toBe(false);
-    expect(plan.activePaths).toEqual(new Set(["transcript:main:incremental"]));
+    expect(plan.activeSourceKeys).toEqual(new Set(["session:incremental"]));
   });
 });

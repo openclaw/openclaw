@@ -1,12 +1,13 @@
 import fs from "node:fs";
 import process from "node:process";
+import type { Insertable, Selectable } from "kysely";
 import { registerFatalErrorHook } from "../infra/fatal-error-hooks.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  listOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import {
   getDiagnosticStabilitySnapshot,
   MAX_DIAGNOSTIC_STABILITY_LIMIT,
@@ -20,8 +21,8 @@ export const DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION = 20;
 export const MAX_DIAGNOSTIC_STABILITY_BUNDLE_BYTES = 5 * 1024 * 1024;
 
 const SAFE_REASON_CODE = /^[A-Za-z0-9_.:-]{1,120}$/u;
-const STABILITY_BUNDLE_KV_SCOPE = "diagnostics.stability";
-const STABILITY_BUNDLE_KV_KEY_PREFIX = "bundle:";
+const STABILITY_BUNDLE_SQLITE_SCOPE = "diagnostics.stability";
+const STABILITY_BUNDLE_KEY_PREFIX = "bundle:";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
 
@@ -90,6 +91,22 @@ export type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
 
 let fatalHookUnsubscribe: (() => void) | null = null;
 
+type DiagnosticStabilityBundlesDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "diagnostic_stability_bundles"
+>;
+
+type DiagnosticStabilityBundleTable = Selectable<
+  DiagnosticStabilityBundlesDatabase["diagnostic_stability_bundles"]
+>;
+type DiagnosticStabilityBundleRow = Pick<
+  DiagnosticStabilityBundleTable,
+  "bundle_key" | "bundle_json" | "created_at"
+>;
+type DiagnosticStabilityBundleInsert = Insertable<
+  DiagnosticStabilityBundlesDatabase["diagnostic_stability_bundles"]
+>;
+
 function normalizeReason(reason: string): string {
   return SAFE_REASON_CODE.test(reason) ? reason : "unknown";
 }
@@ -113,11 +130,74 @@ function stateDbOptionsForLocation(options: DiagnosticStabilityBundleLocationOpt
 }
 
 function buildBundleKey(now: Date, reason: string): string {
-  return `${STABILITY_BUNDLE_KV_KEY_PREFIX}${formatBundleTimestamp(now)}:${process.pid}:${normalizeReason(reason)}`;
+  return `${STABILITY_BUNDLE_KEY_PREFIX}${formatBundleTimestamp(now)}:${process.pid}:${normalizeReason(reason)}`;
 }
 
 function bundleSqlitePath(key: string): string {
-  return `sqlite:${STABILITY_BUNDLE_KV_SCOPE}/${key}`;
+  return `sqlite:${STABILITY_BUNDLE_SQLITE_SCOPE}/${key}`;
+}
+
+function rowCreatedAt(row: Pick<DiagnosticStabilityBundleRow, "created_at">): number {
+  return row.created_at;
+}
+
+function listDiagnosticStabilityBundleRows(
+  options: DiagnosticStabilityBundleLocationOptions,
+): DiagnosticStabilityBundleRow[] {
+  const database = openOpenClawStateDatabase(stateDbOptionsForLocation(options));
+  const db = getNodeSqliteKysely<DiagnosticStabilityBundlesDatabase>(database.db);
+  return executeSqliteQuerySync(
+    database.db,
+    db
+      .selectFrom("diagnostic_stability_bundles")
+      .select(["bundle_key", "bundle_json", "created_at"])
+      .orderBy("created_at", "desc")
+      .orderBy("bundle_key", "asc"),
+  ).rows;
+}
+
+function deleteDiagnosticStabilityBundle(
+  key: string,
+  options: DiagnosticStabilityBundleLocationOptions,
+): void {
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<DiagnosticStabilityBundlesDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("diagnostic_stability_bundles").where("bundle_key", "=", key),
+    );
+  }, stateDbOptionsForLocation(options));
+}
+
+export function writeDiagnosticStabilityBundleSnapshotSync(params: {
+  key: string;
+  bundle: DiagnosticStabilityBundle;
+  env?: NodeJS.ProcessEnv;
+  now?: () => number;
+}): void {
+  const createdAt = params.now?.() ?? Date.now();
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<DiagnosticStabilityBundlesDatabase>(database.db);
+      const bundleJson = JSON.stringify(params.bundle);
+      const row: DiagnosticStabilityBundleInsert = {
+        bundle_key: params.key,
+        reason: params.bundle.reason,
+        generated_at: params.bundle.generatedAt,
+        bundle_json: bundleJson,
+        created_at: createdAt,
+      };
+      const { bundle_key: _bundleKey, ...updates } = row;
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("diagnostic_stability_bundles")
+          .values(row)
+          .onConflict((conflict) => conflict.column("bundle_key").doUpdateSet(updates)),
+      );
+    },
+    params.env ? { env: params.env } : {},
+  );
 }
 
 function readErrorCode(error: unknown): string | undefined {
@@ -510,14 +590,11 @@ function parseDiagnosticStabilityBundle(value: unknown): DiagnosticStabilityBund
 export function listDiagnosticStabilityBundlesSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): DiagnosticStabilityBundleEntry[] {
-  return listOpenClawStateKvJson<DiagnosticStabilityBundle>(
-    STABILITY_BUNDLE_KV_SCOPE,
-    stateDbOptionsForLocation(options),
-  )
-    .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
+  return listDiagnosticStabilityBundleRows(options)
+    .filter((entry) => entry.bundle_key.startsWith(STABILITY_BUNDLE_KEY_PREFIX))
     .map((entry) => ({
-      path: bundleSqlitePath(entry.key),
-      mtimeMs: entry.updatedAt,
+      path: bundleSqlitePath(entry.bundle_key),
+      mtimeMs: rowCreatedAt(entry),
     }))
     .toSorted((a, b) => b.mtimeMs - a.mtimeMs || b.path.localeCompare(a.path));
 }
@@ -549,23 +626,22 @@ export function readLatestDiagnosticStabilityBundleSync(
   options: DiagnosticStabilityBundleLocationOptions = {},
 ): ReadDiagnosticStabilityBundleResult {
   try {
-    const latest = listOpenClawStateKvJson<DiagnosticStabilityBundle>(
-      STABILITY_BUNDLE_KV_SCOPE,
-      stateDbOptionsForLocation(options),
-    )
-      .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
-      .toSorted((a, b) => b.updatedAt - a.updatedAt || b.key.localeCompare(a.key))[0];
+    const latest = listDiagnosticStabilityBundleRows(options)
+      .filter((entry) => entry.bundle_key.startsWith(STABILITY_BUNDLE_KEY_PREFIX))
+      .toSorted(
+        (a, b) => rowCreatedAt(b) - rowCreatedAt(a) || b.bundle_key.localeCompare(a.bundle_key),
+      )[0];
     if (!latest) {
       return {
         status: "missing",
-        dir: `sqlite:${STABILITY_BUNDLE_KV_SCOPE}`,
+        dir: `sqlite:${STABILITY_BUNDLE_SQLITE_SCOPE}`,
       };
     }
     return {
       status: "found",
-      path: bundleSqlitePath(latest.key),
-      mtimeMs: latest.updatedAt,
-      bundle: parseDiagnosticStabilityBundle(latest.value),
+      path: bundleSqlitePath(latest.bundle_key),
+      mtimeMs: rowCreatedAt(latest),
+      bundle: parseDiagnosticStabilityBundle(JSON.parse(latest.bundle_json)),
     };
   } catch (error) {
     return { status: "failed", error };
@@ -580,16 +656,14 @@ function pruneOldBundles(
     return;
   }
   try {
-    const dbOptions = stateDbOptionsForLocation(options);
-    const entries = listOpenClawStateKvJson<DiagnosticStabilityBundle>(
-      STABILITY_BUNDLE_KV_SCOPE,
-      dbOptions,
-    )
-      .filter((entry) => entry.key.startsWith(STABILITY_BUNDLE_KV_KEY_PREFIX))
-      .toSorted((a, b) => b.updatedAt - a.updatedAt || b.key.localeCompare(a.key));
+    const entries = listDiagnosticStabilityBundleRows(options)
+      .filter((entry) => entry.bundle_key.startsWith(STABILITY_BUNDLE_KEY_PREFIX))
+      .toSorted(
+        (a, b) => rowCreatedAt(b) - rowCreatedAt(a) || b.bundle_key.localeCompare(a.bundle_key),
+      );
 
     for (const entry of entries.slice(retention)) {
-      deleteOpenClawStateKvJson(STABILITY_BUNDLE_KV_SCOPE, entry.key, dbOptions);
+      deleteDiagnosticStabilityBundle(entry.bundle_key, options);
     }
   } catch {
     // Retention cleanup must not block failure handling.
@@ -629,15 +703,12 @@ export function writeDiagnosticStabilityBundleSync(
     };
 
     const key = buildBundleKey(now, reason);
-    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-      STABILITY_BUNDLE_KV_SCOPE,
+    writeDiagnosticStabilityBundleSnapshotSync({
       key,
-      bundle as unknown as OpenClawStateJsonValue,
-      {
-        ...stateDbOptionsForLocation(options),
-        now: () => now.getTime(),
-      },
-    );
+      bundle,
+      env: stateDbOptionsForLocation(options).env,
+      now: () => now.getTime(),
+    });
     pruneOldBundles(options, options.retention ?? DEFAULT_DIAGNOSTIC_STABILITY_BUNDLE_RETENTION);
     return { status: "written", path: bundleSqlitePath(key), bundle };
   } catch (error) {

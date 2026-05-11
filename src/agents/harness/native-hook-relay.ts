@@ -8,16 +8,21 @@ import {
   type ServerResponse,
 } from "node:http";
 import path from "node:path";
+import type { Insertable, Selectable } from "kysely";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { PluginApprovalResolutions } from "../../plugins/types.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { runBeforeToolCallHook } from "../pi-tools.before-tool-call.js";
 import { normalizeToolName } from "../tool-policy.js";
 import { callGatewayTool } from "../tools/gateway.js";
@@ -174,7 +179,6 @@ const MAX_PERMISSION_ALLOW_ALWAYS_ENTRIES = 512;
 const MAX_NATIVE_HOOK_BRIDGE_BODY_BYTES = 5_000_000;
 const MAX_NATIVE_HOOK_BRIDGE_RESPONSE_BYTES = 5_000_000;
 const NATIVE_HOOK_BRIDGE_RETRY_INTERVAL_MS = 25;
-const NATIVE_HOOK_RELAY_BRIDGE_SCOPE = "native-hook-relay.bridge";
 const ANSI_ESCAPE_PATTERN = new RegExp(`${String.fromCharCode(27)}\\[[0-?]*[ -/]*[@-~]`, "g");
 const relays = new Map<string, NativeHookRelayRegistration>();
 const relayBridges = new Map<string, NativeHookRelayBridgeRegistration>();
@@ -227,6 +231,14 @@ type NativeHookRelayBridgeRecord = {
   token: string;
   expiresAtMs: number;
 };
+
+type NativeHookRelayBridgeDatabase = Pick<OpenClawStateKyselyDatabase, "native_hook_relay_bridges">;
+type NativeHookRelayBridgeRow = Selectable<
+  NativeHookRelayBridgeDatabase["native_hook_relay_bridges"]
+>;
+type NativeHookRelayBridgeInsert = Insertable<
+  NativeHookRelayBridgeDatabase["native_hook_relay_bridges"]
+>;
 
 let nativeHookRelayPermissionApprovalRequester: NativeHookRelayPermissionApprovalRequester =
   requestNativeHookRelayPermissionApproval;
@@ -645,10 +657,16 @@ function readNativeHookRelayBridgeRecordIfExists(
   relayId: string,
 ): NativeHookRelayBridgeRecord | undefined {
   try {
-    const parsed: unknown = readOpenClawStateKvJson(
-      NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
-      nativeHookRelayBridgeKey(relayId),
+    const database = openOpenClawStateDatabase();
+    const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("native_hook_relay_bridges")
+        .select(["relay_id", "pid", "hostname", "port", "token", "expires_at_ms", "updated_at_ms"])
+        .where("relay_id", "=", relayId),
     );
+    const parsed: unknown = row ? rowToNativeHookRelayBridgeRecord(row) : undefined;
     if (isNativeHookRelayBridgeRecord(parsed, relayId)) {
       return parsed;
     }
@@ -656,6 +674,34 @@ function readNativeHookRelayBridgeRecordIfExists(
     log.debug("failed to read native hook relay bridge record", { error, relayId });
   }
   return undefined;
+}
+
+function rowToNativeHookRelayBridgeRecord(
+  row: NativeHookRelayBridgeRow,
+): NativeHookRelayBridgeRecord {
+  return {
+    version: 1,
+    relayId: row.relay_id,
+    pid: row.pid,
+    hostname: row.hostname,
+    port: row.port,
+    token: row.token,
+    expiresAtMs: row.expires_at_ms,
+  };
+}
+
+function nativeHookRelayBridgeRecordToRow(
+  record: NativeHookRelayBridgeRecord,
+): NativeHookRelayBridgeInsert {
+  return {
+    relay_id: record.relayId,
+    pid: record.pid,
+    hostname: record.hostname,
+    port: record.port,
+    token: record.token,
+    expires_at_ms: record.expiresAtMs,
+    updated_at_ms: Date.now(),
+  };
 }
 
 function isNativeHookRelayBridgeRecord(
@@ -791,19 +837,28 @@ function isRetryableNativeHookRelayBridgeError(error: unknown): boolean {
 }
 
 function writeNativeHookRelayBridgeRecord(record: NativeHookRelayBridgeRecord): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
-    nativeHookRelayBridgeKey(record.relayId),
-    record as unknown as OpenClawStateJsonValue,
-  );
+  const row = nativeHookRelayBridgeRecordToRow(record);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
+    const { relay_id: _relayId, ...updates } = row;
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("native_hook_relay_bridges")
+        .values(row)
+        .onConflict((conflict) => conflict.column("relay_id").doUpdateSet(updates)),
+    );
+  });
 }
 
 function deleteNativeHookRelayBridgeRecord(relayId: string): void {
-  deleteOpenClawStateKvJson(NATIVE_HOOK_RELAY_BRIDGE_SCOPE, nativeHookRelayBridgeKey(relayId));
-}
-
-function nativeHookRelayBridgeKey(relayId: string): string {
-  return createHash("sha256").update(relayId).digest("hex").slice(0, 32);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<NativeHookRelayBridgeDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("native_hook_relay_bridges").where("relay_id", "=", relayId),
+    );
+  });
 }
 
 function delay(ms: number): Promise<void> {
@@ -1685,11 +1740,15 @@ export const __testing = {
     return record ? { ...record } : undefined;
   },
   setNativeHookRelayBridgeRecordForTests(relayId: string, record: Record<string, unknown>): void {
-    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-      NATIVE_HOOK_RELAY_BRIDGE_SCOPE,
-      nativeHookRelayBridgeKey(relayId),
-      record as OpenClawStateJsonValue,
-    );
+    writeNativeHookRelayBridgeRecord({
+      version: 1,
+      relayId: typeof record.relayId === "string" ? record.relayId : relayId,
+      pid: typeof record.pid === "number" ? record.pid : process.pid,
+      hostname: typeof record.hostname === "string" ? record.hostname : "127.0.0.1",
+      port: typeof record.port === "number" ? record.port : 1,
+      token: typeof record.token === "string" ? record.token : "test-token",
+      expiresAtMs: typeof record.expiresAtMs === "number" ? record.expiresAtMs : Date.now(),
+    });
   },
   formatPermissionApprovalDescriptionForTests(
     request: NativeHookRelayPermissionApprovalRequest,

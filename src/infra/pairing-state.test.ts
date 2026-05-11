@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { pruneExpiredPending, reconcilePendingPairingRequests } from "./pairing-state.js";
+import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  pruneExpiredPending,
+  readPairingStateRecord,
+  reconcilePendingPairingRequests,
+  writePairingStateRecord,
+} from "./pairing-state.js";
 
 describe("pairing state helpers", () => {
   it("prunes only entries older than the ttl", () => {
@@ -70,6 +76,57 @@ describe("pairing state helpers", () => {
     expect(persist).toHaveBeenCalledOnce();
     expect(pendingById).toEqual({
       "req-3": { requestId: "req-3", deviceId: "device-2", ts: 3, isRepair: true },
+    });
+  });
+
+  it("prunes stale sqlite rows while retaining current pairing rows", async () => {
+    await withTempDir("openclaw-pairing-state-", async (baseDir) => {
+      writePairingStateRecord({
+        baseDir,
+        subdir: "devices",
+        key: "pending",
+        value: {
+          "req-stale": {
+            requestId: "req-stale",
+            deviceId: "device-stale",
+            publicKey: "stale-key",
+            ts: 1,
+          },
+          "req-retained": {
+            requestId: "req-retained",
+            deviceId: "device-retained",
+            publicKey: "retained-key",
+            ts: 2,
+          },
+        },
+      });
+
+      writePairingStateRecord({
+        baseDir,
+        subdir: "devices",
+        key: "pending",
+        value: {
+          "req-retained": {
+            requestId: "req-retained",
+            deviceId: "device-retained",
+            publicKey: "retained-key-2",
+            ts: 3,
+          },
+        },
+      });
+
+      expect(
+        readPairingStateRecord<{ publicKey: string }>({
+          baseDir,
+          subdir: "devices",
+          key: "pending",
+        }),
+      ).toEqual({
+        "req-retained": expect.objectContaining({
+          publicKey: "retained-key-2",
+          ts: 3,
+        }),
+      });
     });
   });
 });

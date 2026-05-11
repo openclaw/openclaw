@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { listOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { listDiagnosticEvents } from "./diagnostic-events-store.js";
 import {
   emitDiagnosticsTimelineEvent,
   flushDiagnosticsTimelineForTest,
@@ -30,7 +30,7 @@ async function createTimelineEnv() {
 
 async function readTimeline(env: NodeJS.ProcessEnv) {
   await flushDiagnosticsTimelineForTest();
-  return listOpenClawStateKvJson<Record<string, unknown>>("diagnostics.timeline", { env }).map(
+  return listDiagnosticEvents<Record<string, unknown>>("diagnostics.timeline", { env }).map(
     (entry) => entry.value,
   );
 }

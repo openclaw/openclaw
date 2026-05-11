@@ -1014,7 +1014,7 @@ plugin index entry with `source: "path"` and a workspace-relative
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
 surface. The persisted plugin index in the global SQLite
-`installed_plugin_index/current` KV entry is the install source of truth and can
+`installed_plugin_index` table is the install source of truth and can
 be refreshed without loading plugin runtime modules. Its `installRecords` map is
 durable even when a plugin manifest is missing or invalid; its `plugins` array
 is a rebuildable manifest view.

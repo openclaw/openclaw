@@ -3,7 +3,7 @@ package ai.openclaw.app.node
 import ai.openclaw.app.NotificationBurstLimiter
 import ai.openclaw.app.SecurePrefs
 import ai.openclaw.app.allowsPackage
-import ai.openclaw.app.gateway.OpenClawSQLiteKVStore
+import ai.openclaw.app.gateway.OpenClawSQLiteStateStore
 import ai.openclaw.app.isWithinQuietHours
 import android.app.Notification
 import android.app.NotificationManager
@@ -13,13 +13,9 @@ import android.content.Context
 import android.content.Intent
 import android.service.notification.NotificationListenerService
 import android.service.notification.StatusBarNotification
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.put
 
 private const val MAX_NOTIFICATION_TEXT_CHARS = 512
@@ -282,10 +278,7 @@ class DeviceNotificationListenerService : NotificationListenerService() {
   }
 
   companion object {
-    private const val recentPackagesScope = "android.notifications"
-    private const val recentPackagesKey = "recent-packages"
     private const val recentPackagesLimit = 64
-    private val recentPackagesJson = Json { ignoreUnknownKeys = true }
 
     @Volatile private var activeService: DeviceNotificationListenerService? = null
 
@@ -297,13 +290,9 @@ class DeviceNotificationListenerService : NotificationListenerService() {
       nodeEventSink = sink
     }
 
-    fun recentPackages(context: Context): List<String> {
-      val stored =
-        OpenClawSQLiteKVStore(context)
-          .readString(recentPackagesScope, recentPackagesKey)
-          ?: return emptyList()
-      return decodeRecentPackages(stored)
-    }
+    fun recentPackages(context: Context): List<String> =
+      OpenClawSQLiteStateStore(context)
+        .readRecentNotificationPackages(recentPackagesLimit)
 
     fun isAccessEnabled(context: Context): Boolean {
       val manager = context.getSystemService(NotificationManager::class.java) ?: return false
@@ -357,27 +346,8 @@ class DeviceNotificationListenerService : NotificationListenerService() {
           .filter { it != normalized }
           .take(recentPackagesLimit - 1)
       val updated = listOf(normalized) + existing
-      OpenClawSQLiteKVStore(service.applicationContext)
-        .writeString(
-          recentPackagesScope,
-          recentPackagesKey,
-          JsonArray(updated.map { JsonPrimitive(it) }).toString(),
-        )
-    }
-
-    private fun decodeRecentPackages(raw: String): List<String> {
-      return runCatching {
-        val element = recentPackagesJson.parseToJsonElement(raw)
-        val array = element as? JsonArray ?: return@runCatching emptyList()
-        array
-          .mapNotNull { item ->
-            when (item) {
-              is JsonNull -> null
-              is JsonPrimitive -> item.contentOrNull?.trim()?.takeIf { it.isNotEmpty() }
-              else -> null
-            }
-          }.distinct()
-      }.getOrDefault(emptyList())
+      OpenClawSQLiteStateStore(service.applicationContext)
+        .replaceRecentNotificationPackages(updated, recentPackagesLimit)
     }
   }
 

@@ -65,9 +65,10 @@ export type SqliteSessionTranscriptSnapshot = SqliteSessionTranscriptScope & {
 
 type TranscriptEventsTable = OpenClawAgentKyselyDatabase["transcript_events"];
 type TranscriptEventIdentitiesTable = OpenClawAgentKyselyDatabase["transcript_event_identities"];
+type SessionsTable = OpenClawAgentKyselyDatabase["sessions"];
 type AgentTranscriptDatabase = Pick<
   OpenClawAgentKyselyDatabase,
-  "transcript_event_identities" | "transcript_events" | "transcript_snapshots"
+  "sessions" | "transcript_event_identities" | "transcript_events" | "transcript_snapshots"
 >;
 
 function normalizeSessionId(value: string): string {
@@ -122,6 +123,52 @@ function readNextTranscriptSeq(database: OpenClawAgentDatabase, sessionId: strin
       .where("session_id", "=", sessionId),
   );
   return typeof row?.next_seq === "bigint" ? Number(row.next_seq) : (row?.next_seq ?? 0);
+}
+
+function bindTranscriptSessionRoot(params: {
+  sessionId: string;
+  updatedAt: number;
+}): Insertable<SessionsTable> {
+  return {
+    session_id: params.sessionId,
+    session_key: params.sessionId,
+    created_at: params.updatedAt,
+    updated_at: params.updatedAt,
+    started_at: null,
+    ended_at: null,
+    status: null,
+    chat_type: null,
+    channel: null,
+    model_provider: null,
+    model: null,
+    agent_harness_id: null,
+    parent_session_key: null,
+    spawned_by: null,
+    display_name: null,
+  };
+}
+
+function ensureTranscriptSessionRoot(params: {
+  database: OpenClawAgentDatabase;
+  sessionId: string;
+  updatedAt: number;
+}): void {
+  executeSqliteQuerySync(
+    params.database.db,
+    getAgentTranscriptKysely(params.database.db)
+      .insertInto("sessions")
+      .values(
+        bindTranscriptSessionRoot({
+          sessionId: params.sessionId,
+          updatedAt: params.updatedAt,
+        }),
+      )
+      .onConflict((conflict) =>
+        conflict.column("session_id").doUpdateSet({
+          updated_at: (eb) => eb.ref("excluded.updated_at"),
+        }),
+      ),
+  );
 }
 
 function readLatestTranscriptTailEventId(
@@ -453,9 +500,10 @@ export function getSqliteSessionTranscriptStats(
 export function appendSqliteSessionTranscriptEvent(
   options: AppendSqliteSessionTranscriptEventOptions,
 ): { seq: number } {
-  const { agentId, sessionId } = normalizeTranscriptScope(options);
+  const { sessionId } = normalizeTranscriptScope(options);
   const now = options.now?.() ?? Date.now();
   const seq = runOpenClawAgentWriteTransaction((database) => {
+    ensureTranscriptSessionRoot({ database, sessionId, updatedAt: now });
     const nextSeq = readNextTranscriptSeq(database, sessionId);
     const event =
       options.parentMode === "database-tail"
@@ -477,11 +525,12 @@ export function appendSqliteSessionTranscriptEvent(
 export function appendSqliteSessionTranscriptMessage(
   options: AppendSqliteSessionTranscriptMessageOptions,
 ): { messageId: string } {
-  const { agentId, sessionId } = normalizeTranscriptScope(options);
+  const { sessionId } = normalizeTranscriptScope(options);
   const now = options.now?.() ?? Date.now();
   const idempotencyKey = readMessageIdempotencyKey(options.message);
   const messageId = runOpenClawAgentWriteTransaction((database) => {
     const db = getAgentTranscriptKysely(database.db);
+    ensureTranscriptSessionRoot({ database, sessionId, updatedAt: now });
     let nextSeq = readNextTranscriptSeq(database, sessionId);
 
     if (nextSeq === 0) {
@@ -552,9 +601,10 @@ export function appendSqliteSessionTranscriptMessage(
 export function replaceSqliteSessionTranscriptEvents(
   options: ReplaceSqliteSessionTranscriptEventsOptions,
 ): { replaced: number } {
-  const { agentId, sessionId } = normalizeTranscriptScope(options);
+  const { sessionId } = normalizeTranscriptScope(options);
   const now = options.now?.() ?? Date.now();
   runOpenClawAgentWriteTransaction((database) => {
+    ensureTranscriptSessionRoot({ database, sessionId, updatedAt: now });
     executeSqliteQuerySync(
       database.db,
       getAgentTranscriptKysely(database.db)
@@ -623,6 +673,7 @@ export function recordSqliteSessionTranscriptSnapshot(
   const eventCount = Math.max(0, Math.floor(options.eventCount));
   const createdAt = options.createdAt ?? Date.now();
   runOpenClawAgentWriteTransaction((database) => {
+    ensureTranscriptSessionRoot({ database, sessionId, updatedAt: createdAt });
     executeSqliteQuerySync(
       database.db,
       getAgentTranscriptKysely(database.db)

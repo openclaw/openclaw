@@ -317,18 +317,18 @@ describe("exec approvals policy helpers", () => {
       },
       configPath: "tools.exec",
       scopeLabel: "tools.exec",
-      hostPath: "/tmp/node-openclaw.sqlite#kv/exec.approvals/current",
+      hostPath: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current",
     });
 
     expect(summary.security.hostSource).toBe(
-      "/tmp/node-openclaw.sqlite#kv/exec.approvals/current defaults.security",
+      "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.security",
     );
     expect(summary.ask.hostSource).toBe(
-      "/tmp/node-openclaw.sqlite#kv/exec.approvals/current defaults.ask",
+      "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.ask",
     );
     expect(summary.askFallback).toEqual({
       effective: "deny",
-      source: "/tmp/node-openclaw.sqlite#kv/exec.approvals/current defaults.askFallback",
+      source: "/tmp/node-openclaw.sqlite#table/exec_approvals_config/current defaults.askFallback",
     });
   });
 

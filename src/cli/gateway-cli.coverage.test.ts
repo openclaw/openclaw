@@ -5,7 +5,7 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { withEnvOverride } from "../config/test-helpers.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { writeDiagnosticStabilityBundleSnapshotSync } from "../logging/diagnostic-stability-bundle.js";
 import { registerGatewayCli } from "./gateway-cli.js";
 
 type DiscoveredBeacon = Awaited<
@@ -231,15 +231,12 @@ describe("gateway-cli coverage", () => {
           },
         },
       };
-      writeOpenClawStateKvJson(
-        "diagnostics.stability",
-        "bundle:2026-04-22T12-00-00-000Z:123:test",
+      writeDiagnosticStabilityBundleSnapshotSync({
+        key: "bundle:2026-04-22T12-00-00-000Z:123:test",
         bundle,
-        {
-          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-          now: () => Date.parse("2026-04-22T12:00:00.000Z"),
-        },
-      );
+        env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+        now: () => Date.parse("2026-04-22T12:00:00.000Z"),
+      });
 
       await withEnvOverride({ OPENCLAW_STATE_DIR: tempDir }, async () => {
         await runGatewayCommand(["gateway", "stability", "--bundle", "latest"]);

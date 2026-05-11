@@ -12,21 +12,19 @@ describe("memory FTS state", () => {
 
   it("only removes rows for the active model when a provider is active", () => {
     db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE memory_index_chunks_fts (path TEXT, source TEXT, model TEXT)");
-    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
-      "memory/2026-01-12.md",
-      "memory",
-      "mock-embed",
+    db.exec(
+      "CREATE TABLE memory_index_chunks_fts (source_key TEXT, path TEXT, source TEXT, model TEXT)",
     );
-    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
-      "memory/2026-01-12.md",
-      "memory",
-      "other-model",
-    );
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (source_key, path, source, model) VALUES (?, ?, ?, ?)",
+    ).run("memory/2026-01-12.md", "memory/2026-01-12.md", "memory", "mock-embed");
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (source_key, path, source, model) VALUES (?, ?, ?, ?)",
+    ).run("memory/2026-01-12.md", "memory/2026-01-12.md", "memory", "other-model");
 
     deleteMemoryFtsRows({
       db,
-      path: "memory/2026-01-12.md",
+      sourceKey: "memory/2026-01-12.md",
       source: "memory",
       currentModel: "mock-embed",
     });
@@ -41,21 +39,19 @@ describe("memory FTS state", () => {
 
   it("removes all rows for the path in FTS-only mode", () => {
     db = new DatabaseSync(":memory:");
-    db.exec("CREATE TABLE memory_index_chunks_fts (path TEXT, source TEXT, model TEXT)");
-    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
-      "memory/2026-01-12.md",
-      "memory",
-      "mock-embed",
+    db.exec(
+      "CREATE TABLE memory_index_chunks_fts (source_key TEXT, path TEXT, source TEXT, model TEXT)",
     );
-    db.prepare("INSERT INTO memory_index_chunks_fts (path, source, model) VALUES (?, ?, ?)").run(
-      "memory/2026-01-12.md",
-      "memory",
-      "fts-only",
-    );
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (source_key, path, source, model) VALUES (?, ?, ?, ?)",
+    ).run("memory/2026-01-12.md", "memory/2026-01-12.md", "memory", "mock-embed");
+    db.prepare(
+      "INSERT INTO memory_index_chunks_fts (source_key, path, source, model) VALUES (?, ?, ?, ?)",
+    ).run("memory/2026-01-12.md", "memory/2026-01-12.md", "memory", "fts-only");
 
     deleteMemoryFtsRows({
       db,
-      path: "memory/2026-01-12.md",
+      sourceKey: "memory/2026-01-12.md",
       source: "memory",
     });
 

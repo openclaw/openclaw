@@ -40,8 +40,8 @@ class DeviceIdentityStoreTest {
     assertTrue(File(app.filesDir, "openclaw/state/openclaw.sqlite").exists())
     val persisted = readIdentityRow()
     assertNotNull(persisted)
-    assertTrue(persisted?.contains("\"publicKeyPem\"") == true)
-    assertTrue(persisted?.contains("\"privateKeyPem\"") == true)
+    assertTrue(persisted?.contains("-----BEGIN PUBLIC KEY-----") == true)
+    assertTrue(persisted?.contains("-----BEGIN PRIVATE KEY-----") == true)
   }
 
   @Test
@@ -59,18 +59,13 @@ class DeviceIdentityStoreTest {
       MC4CAQAwBQYDK2VwBCIEIAABAgMEBQYHCAkKCwwNDg8QERITFBUWFxgZGhscHR4f
       -----END PRIVATE KEY-----
       """.trimIndent()
-    OpenClawSQLiteKVStore(app).writeString(
-      "identity.device",
-      "default",
-      """
-      {
-        "version":1,
-        "deviceId":"56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
-        "publicKeyPem":${jsonString(publicKeyPem)},
-        "privateKeyPem":${jsonString(privateKeyPem)},
-        "createdAtMs":1700000000000
-      }
-      """.trimIndent(),
+    OpenClawSQLiteStateStore(app).writeDeviceIdentity(
+      OpenClawSQLiteDeviceIdentityRow(
+        deviceId = "56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c",
+        publicKeyPem = publicKeyPem,
+        privateKeyPem = privateKeyPem,
+        createdAtMs = 1_700_000_000_000L,
+      ),
     )
 
     val identity = DeviceIdentityStore(app).loadOrCreate()
@@ -105,27 +100,11 @@ class DeviceIdentityStoreTest {
       .use { db ->
         db
           .rawQuery(
-            "SELECT value_json FROM kv WHERE scope = ? AND key = ?",
-            arrayOf("identity.device", "default"),
+            "SELECT public_key_pem, private_key_pem FROM device_identities WHERE identity_key = ?",
+            arrayOf("default"),
           ).use { cursor ->
-            if (cursor.moveToFirst()) cursor.getString(0) else null
+            if (cursor.moveToFirst()) "${cursor.getString(0)}\n${cursor.getString(1)}" else null
           }
       }
   }
-
-  private fun jsonString(value: String): String =
-    buildString {
-      append('"')
-      for (ch in value) {
-        when (ch) {
-          '\\' -> append("\\\\")
-          '"' -> append("\\\"")
-          '\n' -> append("\\n")
-          '\r' -> append("\\r")
-          '\t' -> append("\\t")
-          else -> append(ch)
-        }
-      }
-      append('"')
-    }
 }

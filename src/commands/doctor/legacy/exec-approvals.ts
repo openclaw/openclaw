@@ -1,18 +1,8 @@
 import fs from "node:fs";
+import { writeExecApprovalsRawToSqlite } from "../../../infra/exec-approvals.js";
 import { expandHomePrefix } from "../../../infra/home-dir.js";
-import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
-import {
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../../../state/openclaw-state-kv.js";
 
-const EXEC_APPROVALS_KV_SCOPE = "exec.approvals";
-const EXEC_APPROVALS_KV_KEY = "current";
 const LEGACY_EXEC_APPROVALS_FILE = "~/.openclaw/exec-approvals.json";
-
-function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
-}
 
 function readLegacyExecApprovalsRaw(env: NodeJS.ProcessEnv = process.env): {
   raw: string | null;
@@ -41,12 +31,7 @@ export function importLegacyExecApprovalsFileToSqlite(env: NodeJS.ProcessEnv = p
   if (!legacy.exists || legacy.raw === null) {
     return { imported: false };
   }
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    EXEC_APPROVALS_KV_SCOPE,
-    EXEC_APPROVALS_KV_KEY,
-    legacy.raw,
-    sqliteOptionsForEnv(env),
-  );
+  writeExecApprovalsRawToSqlite(legacy.raw, env);
   fs.rmSync(legacy.path, { force: true });
   return { imported: true };
 }

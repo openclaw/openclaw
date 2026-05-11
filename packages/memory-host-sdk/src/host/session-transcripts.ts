@@ -31,9 +31,9 @@ export type SessionTranscriptScope = {
 export type SessionTranscriptEntry = {
   scope: SessionTranscriptScope;
   /**
-   * Memory-index source key. For SQLite session transcripts this is
-   * `transcript:<agentId>:<sessionId>`, not a filesystem path or transcript
-   * locator.
+   * Search/display path for SQLite transcript hits. Durable identity is the
+   * source row (`source_kind=sessions`, `source_key=session:<sessionId>`) plus
+   * `session_id`, not this value.
    */
   path: string;
   mtimeMs: number;

@@ -44,12 +44,12 @@ describe("auth profile path helpers (direct-import coverage attribution)", () =>
     expect(resolved.endsWith(path.join("agents", "main", "agent"))).toBe(true);
   });
 
-  it("resolves the display location as a SQLite KV target", () => {
+  it("resolves the display location as a SQLite table target", () => {
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     const resolved = resolveAuthProfileStoreLocationForDisplay(agentDir, {
       OPENCLAW_STATE_DIR: stateDir,
     });
-    expect(resolved).toContain("openclaw.sqlite#kv/auth-profiles/");
+    expect(resolved).toContain("openclaw.sqlite#table/auth_profile_stores/");
     expect(resolved).toContain(agentDir);
   });
 

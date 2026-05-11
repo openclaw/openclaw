@@ -81,14 +81,13 @@ function installRecords() {
   return withSqliteDatabase(stateDatabasePath(), (db) => {
     const row = db
       .prepare(
-        "SELECT value_json FROM kv WHERE scope = 'installed_plugin_index' AND key = 'current'",
+        "SELECT install_records_json FROM installed_plugin_index WHERE index_key = 'current'",
       )
       .get();
-    if (!row?.value_json) {
+    if (!row?.install_records_json) {
       return {};
     }
-    const index = JSON.parse(String(row.value_json));
-    return index.installRecords ?? {};
+    return JSON.parse(String(row.install_records_json));
   });
 }
 

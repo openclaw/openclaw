@@ -282,7 +282,9 @@ describe("formatAssistantErrorText", () => {
   });
 
   it("returns a contention-specific message for OAuth refresh lock timeouts", () => {
-    const msg = makeAssistantError("file lock timeout for /tmp/openclaw-oauth-refresh.lock");
+    const msg = makeAssistantError(
+      "Timed out acquiring SQLite state lock auth.oauth-refresh:sha256-abcd",
+    );
     expect(formatAssistantErrorText(msg)).toBe(
       "Authentication refresh is already in progress elsewhere and this attempt timed out waiting for it. Retry in a moment.",
     );

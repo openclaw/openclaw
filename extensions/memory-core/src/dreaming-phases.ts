@@ -6,7 +6,7 @@ import {
   buildSessionTranscriptEntry,
   listSessionTranscriptScopesForAgent,
   sessionTranscriptKeyForScope,
-} from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+} from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import type { MemorySearchResult } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import {
   appendDreamingSessionIngestionLines,

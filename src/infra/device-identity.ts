@@ -1,12 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { Insertable, Selectable } from "kysely";
 import { resolveStateDir } from "../config/paths.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJsonResult,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
 export type DeviceIdentity = {
   deviceId: string;
@@ -22,8 +28,11 @@ export type StoredDeviceIdentity = {
   createdAtMs: number;
 };
 
-const DEVICE_IDENTITY_SCOPE = "identity.device";
 const DEVICE_IDENTITY_KEY = "default";
+
+type DeviceIdentityDatabase = Pick<OpenClawStateKyselyDatabase, "device_identities">;
+type DeviceIdentityRow = Selectable<DeviceIdentityDatabase["device_identities"]>;
+type DeviceIdentityInsert = Insertable<DeviceIdentityDatabase["device_identities"]>;
 
 export type DeviceIdentityStoreOptions = {
   env?: NodeJS.ProcessEnv;
@@ -55,8 +64,7 @@ function normalizeIdentityStoreOptions(
   return {
     env,
     key,
-    checkLegacyIdentity:
-      options.checkLegacyIdentity ?? (key === DEVICE_IDENTITY_KEY && options.env === undefined),
+    checkLegacyIdentity: options.checkLegacyIdentity ?? key === DEVICE_IDENTITY_KEY,
   };
 }
 
@@ -116,15 +124,53 @@ function parseStoredIdentity(value: unknown): StoredDeviceIdentity | null {
   return value as StoredDeviceIdentity;
 }
 
+function rowToStoredIdentity(row: DeviceIdentityRow): StoredDeviceIdentity {
+  return {
+    version: 1,
+    deviceId: row.device_id,
+    publicKeyPem: row.public_key_pem,
+    privateKeyPem: row.private_key_pem,
+    createdAtMs: row.created_at_ms,
+  };
+}
+
+function storedIdentityToRow(
+  key: string,
+  stored: StoredDeviceIdentity,
+  updatedAtMs: number,
+): DeviceIdentityInsert {
+  return {
+    identity_key: key,
+    device_id: stored.deviceId,
+    public_key_pem: stored.publicKeyPem,
+    private_key_pem: stored.privateKeyPem,
+    created_at_ms: stored.createdAtMs,
+    updated_at_ms: updatedAtMs,
+  };
+}
+
+function deriveStoredDeviceIdOrThrow(stored: StoredDeviceIdentity): string {
+  const derivedId = deriveDeviceIdFromPublicKey(stored.publicKeyPem);
+  if (!derivedId) {
+    throw new DeviceIdentityStorageError(
+      'Stored device identity is invalid. Run "openclaw doctor --fix" before starting the gateway or connecting this client.',
+    );
+  }
+  return derivedId;
+}
+
 function readStoredIdentity(options?: DeviceIdentityStoreOptions): StoredDeviceIdentity | null {
   const store = normalizeIdentityStoreOptions(options);
-  const result = readOpenClawStateKvJsonResult(DEVICE_IDENTITY_SCOPE, store.key, {
-    env: store.env,
-  });
-  if (!result.exists) {
+  const database = openOpenClawStateDatabase({ env: store.env });
+  const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
+  const row = executeSqliteQueryTakeFirstSync(
+    database.db,
+    db.selectFrom("device_identities").selectAll().where("identity_key", "=", store.key),
+  );
+  if (!row) {
     return null;
   }
-  const parsed = parseStoredIdentity(result.value);
+  const parsed = parseStoredIdentity(rowToStoredIdentity(row));
   if (!parsed) {
     throw new DeviceIdentityStorageError(
       'Stored device identity is invalid. Run "openclaw doctor --fix" before starting the gateway or connecting this client.',
@@ -152,10 +198,26 @@ function writeStoredIdentity(
   options?: DeviceIdentityStoreOptions,
 ): void {
   const store = normalizeIdentityStoreOptions(options);
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    DEVICE_IDENTITY_SCOPE,
-    store.key,
-    stored as unknown as OpenClawStateJsonValue,
+  const row = storedIdentityToRow(store.key, stored, Date.now());
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<DeviceIdentityDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .insertInto("device_identities")
+          .values(row)
+          .onConflict((conflict) =>
+            conflict.column("identity_key").doUpdateSet({
+              device_id: row.device_id,
+              public_key_pem: row.public_key_pem,
+              private_key_pem: row.private_key_pem,
+              created_at_ms: row.created_at_ms,
+              updated_at_ms: row.updated_at_ms,
+            }),
+          ),
+      );
+    },
     { env: store.env },
   );
 }
@@ -164,7 +226,7 @@ export function loadOrCreateDeviceIdentity(options?: DeviceIdentityStoreOptions)
   const store = normalizeIdentityStoreOptions(options);
   const parsed = readStoredIdentity(store);
   if (parsed) {
-    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    const derivedId = deriveStoredDeviceIdOrThrow(parsed);
     if (derivedId && derivedId !== parsed.deviceId) {
       const updated: StoredDeviceIdentity = {
         ...parsed,
@@ -208,7 +270,7 @@ export function loadDeviceIdentityIfPresent(
     if (!parsed) {
       return null;
     }
-    const derivedId = fingerprintPublicKey(parsed.publicKeyPem);
+    const derivedId = deriveDeviceIdFromPublicKey(parsed.publicKeyPem);
     if (!derivedId || derivedId !== parsed.deviceId) {
       return null;
     }

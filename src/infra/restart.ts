@@ -1,18 +1,23 @@
 import { spawnSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
+import type { Insertable, Selectable } from "kysely";
 import { getRuntimeConfig } from "../config/config.js";
 import {
   resolveGatewayLaunchAgentLabel,
   resolveGatewaySystemdServiceName,
 } from "../daemon/constants.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } from "./restart-stale-pids.js";
 import type { RestartAttempt } from "./restart.types.js";
 import { relaunchGatewayScheduledTask } from "./windows-task-restart.js";
@@ -26,9 +31,14 @@ const DEFAULT_DEFERRAL_STILL_PENDING_WARN_MS = 30_000;
 export const DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS = 300_000;
 const RESTART_COOLDOWN_MS = 30_000;
 const LAUNCHCTL_ALREADY_LOADED_EXIT_CODE = 37;
-const GATEWAY_RESTART_INTENT_KV_SCOPE = "gateway.restart-intent";
-const GATEWAY_RESTART_INTENT_KV_KEY = "current";
+const GATEWAY_RESTART_INTENT_KEY = "current";
 const GATEWAY_RESTART_INTENT_TTL_MS = 60_000;
+
+type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
+type GatewayRestartIntentRow = Selectable<GatewayRestartIntentDatabase["gateway_restart_intent"]>;
+type GatewayRestartIntentInsert = Insertable<
+  GatewayRestartIntentDatabase["gateway_restart_intent"]
+>;
 
 const restartLog = createSubsystemLogger("restart");
 
@@ -107,6 +117,32 @@ function normalizeRestartIntentPid(pid: number | undefined): number | null {
   return typeof pid === "number" && Number.isSafeInteger(pid) && pid > 0 ? pid : null;
 }
 
+function gatewayRestartIntentToRow(
+  payload: GatewayRestartIntentPayload,
+): GatewayRestartIntentInsert {
+  return {
+    intent_key: GATEWAY_RESTART_INTENT_KEY,
+    kind: payload.kind,
+    pid: payload.pid,
+    created_at: payload.createdAt,
+    force: payload.force ? 1 : null,
+    wait_ms: payload.waitMs ?? null,
+    updated_at_ms: Date.now(),
+  };
+}
+
+function rowToGatewayRestartIntent(
+  row: GatewayRestartIntentRow,
+): GatewayRestartIntentPayload | null {
+  return parseGatewayRestartIntent({
+    kind: row.kind,
+    pid: row.pid,
+    createdAt: row.created_at,
+    ...(row.force ? { force: true } : {}),
+    ...(typeof row.wait_ms === "number" ? { waitMs: row.wait_ms } : {}),
+  });
+}
+
 export function writeGatewayRestartIntentSync(opts: {
   env?: NodeJS.ProcessEnv;
   targetPid?: number;
@@ -129,10 +165,19 @@ export function writeGatewayRestartIntentSync(opts: {
         ? { waitMs: Math.floor(opts.intent.waitMs) }
         : {}),
     };
-    writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-      GATEWAY_RESTART_INTENT_KV_SCOPE,
-      GATEWAY_RESTART_INTENT_KV_KEY,
-      payload as unknown as OpenClawStateJsonValue,
+    const row = gatewayRestartIntentToRow(payload);
+    const { intent_key: _intentKey, ...updates } = row;
+    runOpenClawStateWriteTransaction(
+      (database) => {
+        const db = getNodeSqliteKysely<GatewayRestartIntentDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db
+            .insertInto("gateway_restart_intent")
+            .values(row)
+            .onConflict((conflict) => conflict.column("intent_key").doUpdateSet(updates)),
+        );
+      },
       { env },
     );
     return true;
@@ -143,9 +188,18 @@ export function writeGatewayRestartIntentSync(opts: {
 }
 
 export function clearGatewayRestartIntentSync(env: NodeJS.ProcessEnv = process.env): void {
-  deleteOpenClawStateKvJson(GATEWAY_RESTART_INTENT_KV_SCOPE, GATEWAY_RESTART_INTENT_KV_KEY, {
-    env,
-  });
+  runOpenClawStateWriteTransaction(
+    (database) => {
+      const db = getNodeSqliteKysely<GatewayRestartIntentDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .deleteFrom("gateway_restart_intent")
+          .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY),
+      );
+    },
+    { env },
+  );
 }
 
 function parseGatewayRestartIntent(parsed: unknown): GatewayRestartIntentPayload | null {
@@ -178,17 +232,26 @@ export function consumeGatewayRestartIntentPayloadSync(
   env: NodeJS.ProcessEnv = process.env,
   now = Date.now(),
 ): GatewayRestartIntent | null {
-  const raw = readOpenClawStateKvJson(
-    GATEWAY_RESTART_INTENT_KV_SCOPE,
-    GATEWAY_RESTART_INTENT_KV_KEY,
-    { env },
-  );
+  let payload: GatewayRestartIntentPayload | null = null;
+  try {
+    const database = openOpenClawStateDatabase({ env });
+    const db = getNodeSqliteKysely<GatewayRestartIntentDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("gateway_restart_intent")
+        .selectAll()
+        .where("intent_key", "=", GATEWAY_RESTART_INTENT_KEY),
+    );
+    payload = row ? rowToGatewayRestartIntent(row) : null;
+  } catch {
+    payload = null;
+  }
   try {
     clearGatewayRestartIntentSync(env);
   } catch {
     // best-effort cleanup
   }
-  const payload = parseGatewayRestartIntent(raw);
   if (!payload) {
     return null;
   }

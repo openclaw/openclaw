@@ -117,7 +117,6 @@ function recordToRow(record: SessionBindingRecord): Insertable<CurrentConversati
 }
 
 function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord | null {
-  const parsed = parseJsonRecord(row.record_json) ?? {};
   const conversation = normalizeConversationRef({
     channel: row.channel,
     accountId: row.account_id,
@@ -129,7 +128,6 @@ function rowToRecord(row: CurrentConversationBindingRow): SessionBindingRecord |
     return null;
   }
   return {
-    ...(parsed as Partial<SessionBindingRecord>),
     bindingId: buildBindingId(conversation),
     targetSessionKey,
     targetKind: row.target_kind === "subagent" ? "subagent" : "session",

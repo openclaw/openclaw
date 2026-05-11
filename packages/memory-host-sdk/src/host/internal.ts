@@ -486,13 +486,47 @@ export function remapChunkLines(chunks: MemoryChunk[], lineMap: number[] | undef
   }
 }
 
-export function parseEmbedding(raw: string): number[] {
+export function serializeEmbedding(embedding: number[]): Uint8Array {
+  const bytes = new Uint8Array(embedding.length * 4);
+  const view = new DataView(bytes.buffer);
+  for (let index = 0; index < embedding.length; index += 1) {
+    const value = embedding[index] ?? 0;
+    view.setFloat32(index * 4, Number.isFinite(value) ? value : 0, true);
+  }
+  return bytes;
+}
+
+export function parseEmbedding(raw: unknown): number[] {
+  if (raw instanceof ArrayBuffer) {
+    return parseEmbeddingBytes(raw);
+  }
+  if (ArrayBuffer.isView(raw)) {
+    return parseEmbeddingBytes(raw);
+  }
+  if (typeof raw !== "string") {
+    return [];
+  }
   try {
     const parsed = JSON.parse(raw) as number[];
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
   }
+}
+
+function parseEmbeddingBytes(raw: ArrayBuffer | ArrayBufferView): number[] {
+  const buffer = raw instanceof ArrayBuffer ? raw : raw.buffer;
+  const byteOffset = raw instanceof ArrayBuffer ? 0 : raw.byteOffset;
+  const byteLength = raw instanceof ArrayBuffer ? raw.byteLength : raw.byteLength;
+  if (byteLength === 0 || byteLength % 4 !== 0) {
+    return [];
+  }
+  const view = new DataView(buffer, byteOffset, byteLength);
+  const embedding: number[] = [];
+  for (let offset = 0; offset < byteLength; offset += 4) {
+    embedding.push(view.getFloat32(offset, true));
+  }
+  return embedding;
 }
 
 export function cosineSimilarity(a: number[], b: number[]): number {

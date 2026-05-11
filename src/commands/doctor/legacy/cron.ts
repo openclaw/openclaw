@@ -286,11 +286,13 @@ export async function maybeRepairLegacyCronStore(params: {
     legacyWebhook,
   });
   const dreamingMigration = migrateLegacyDreamingPayloadShape(rawJobs);
+  const hasUnresolvedNotifyFallback = notifyMigration.warnings.length > 0;
   const changed =
-    normalized.mutated ||
-    notifyMigration.changed ||
-    dreamingMigration.changed ||
-    hasLegacyStoreFile;
+    !hasUnresolvedNotifyFallback &&
+    (normalized.mutated ||
+      notifyMigration.changed ||
+      dreamingMigration.changed ||
+      hasLegacyStoreFile);
   const hasLegacyImportWork = hasLegacyStateSidecar || hasLegacyRunLogs;
   if (!changed && !hasLegacyImportWork && notifyMigration.warnings.length === 0) {
     return;

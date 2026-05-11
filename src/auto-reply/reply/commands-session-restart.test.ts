@@ -6,7 +6,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 type ScheduleGatewayRestartArgs = Parameters<typeof scheduleGatewaySigusr1Restart>[0];
 
 const mocks = vi.hoisted(() => ({
-  deleteOpenClawStateKvJson: vi.fn(),
+  clearRestartSentinel: vi.fn(async () => undefined),
   isRestartEnabled: vi.fn(() => true),
   extractDeliveryInfo: vi.fn(() => ({
     deliveryContext: {
@@ -22,12 +22,6 @@ const mocks = vi.hoisted(() => ({
     scheduled: true,
   })),
   triggerOpenClawRestart: vi.fn(() => ({ ok: true, method: "launchctl" })),
-}));
-
-vi.mock("../../state/openclaw-state-kv.js", () => ({
-  deleteOpenClawStateKvJson: mocks.deleteOpenClawStateKvJson,
-  readOpenClawStateKvJson: vi.fn(() => null),
-  writeOpenClawStateKvJson: vi.fn(),
 }));
 
 vi.mock("../../config/commands.flags.js", () => ({
@@ -62,6 +56,7 @@ vi.mock("../../infra/restart-sentinel.js", async () => {
   );
   return {
     ...actual,
+    clearRestartSentinel: mocks.clearRestartSentinel,
     formatDoctorNonInteractiveHint: mocks.formatDoctorNonInteractiveHint,
     writeRestartSentinel: mocks.writeRestartSentinel,
   };
@@ -114,7 +109,7 @@ describe("handleRestartCommand", () => {
   beforeEach(() => {
     mocks.isRestartEnabled.mockReset();
     mocks.isRestartEnabled.mockReturnValue(true);
-    mocks.deleteOpenClawStateKvJson.mockClear();
+    mocks.clearRestartSentinel.mockClear();
     mocks.extractDeliveryInfo.mockClear();
     mocks.formatDoctorNonInteractiveHint.mockClear();
     mocks.writeRestartSentinel.mockClear();
@@ -218,10 +213,6 @@ describe("handleRestartCommand", () => {
     const result = await handleRestartCommand(restartCommandParams(), true);
 
     expect(result?.reply?.text).toContain("Restart failed");
-    expect(mocks.deleteOpenClawStateKvJson).toHaveBeenCalledWith(
-      "gateway.restart-sentinel",
-      "current",
-      expect.any(Object),
-    );
+    expect(mocks.clearRestartSentinel).toHaveBeenCalledTimes(1);
   });
 });

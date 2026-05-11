@@ -27,7 +27,7 @@ struct ExecApprovalsStoreRefactorTests {
             let secondSnapshot = ExecApprovalsStore.readSnapshot()
 
             #expect(firstSnapshot.hash == secondSnapshot.hash)
-            #expect(firstSnapshot.path.contains("openclaw.sqlite#kv/exec.approvals/current"))
+            #expect(firstSnapshot.path.contains("openclaw.sqlite#table/exec_approvals_config/current"))
             #expect(FileManager().fileExists(atPath: ExecApprovalsStore.databaseURL().path))
             #expect(!FileManager().fileExists(atPath: stateDir.appendingPathComponent("exec-approvals.json").path))
             let storedRaw = try Self.readStoredApprovalsRaw()
@@ -92,7 +92,7 @@ struct ExecApprovalsStoreRefactorTests {
         }
         defer { sqlite3_close(db) }
 
-        let sql = "SELECT value_json FROM kv WHERE scope = 'exec.approvals' AND key = 'current'"
+        let sql = "SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'"
         var statement: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else {
             defer { sqlite3_finalize(statement) }
@@ -103,7 +103,6 @@ struct ExecApprovalsStoreRefactorTests {
         guard sqlite3_step(statement) == SQLITE_ROW, let rawText = sqlite3_column_text(statement, 0) else {
             return nil
         }
-        let valueJSON = String(cString: UnsafeRawPointer(rawText).assumingMemoryBound(to: CChar.self))
-        return try JSONDecoder().decode(String.self, from: Data(valueJSON.utf8))
+        return String(cString: UnsafeRawPointer(rawText).assumingMemoryBound(to: CChar.self))
     }
 }

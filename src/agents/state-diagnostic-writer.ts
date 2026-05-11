@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { writeOpenClawStateKvJson } from "../state/openclaw-state-kv.js";
+import { writeDiagnosticEvent } from "../infra/diagnostic-events-store.js";
 
 export type StateDiagnosticWriter = {
   destination: string;
@@ -40,7 +40,7 @@ export function getStateDiagnosticWriter(
         .digest("hex")
         .slice(0, 16);
       const entryKey = `${Date.now().toString(36)}-${(seq += 1).toString(36)}-${digest}`;
-      writeOpenClawStateKvJson(options.scope, entryKey, value, { env: options.env });
+      writeDiagnosticEvent(options.scope, entryKey, value, { env: options.env });
       return "queued";
     },
   };

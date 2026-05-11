@@ -72,7 +72,7 @@ let cachedDatabase: OpenClawStateDatabase | null = null;
 
 type OpenClawStateMetadataDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "backup_runs" | "migration_runs" | "migration_sources"
+  "backup_runs" | "migration_runs" | "migration_sources" | "schema_meta"
 >;
 
 function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv): void {
@@ -99,6 +99,31 @@ function ensureOpenClawStatePermissions(pathname: string, env: NodeJS.ProcessEnv
 function ensureSchema(db: DatabaseSync): void {
   db.exec(OPENCLAW_STATE_SCHEMA_SQL);
   db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};`);
+  const now = Date.now();
+  const kysely = getNodeSqliteKysely<OpenClawStateMetadataDatabase>(db);
+  executeSqliteQuerySync(
+    db,
+    kysely
+      .insertInto("schema_meta")
+      .values({
+        meta_key: "primary",
+        role: "global",
+        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+        agent_id: null,
+        app_version: null,
+        created_at: now,
+        updated_at: now,
+      })
+      .onConflict((conflict) =>
+        conflict.column("meta_key").doUpdateSet({
+          role: "global",
+          schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+          agent_id: null,
+          app_version: null,
+          updated_at: now,
+        }),
+      ),
+  );
 }
 
 function resolveDatabasePath(options: OpenClawStateDatabaseOptions = {}): string {

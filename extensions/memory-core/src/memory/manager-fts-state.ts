@@ -7,18 +7,18 @@ import {
 export function deleteMemoryFtsRows(params: {
   db: DatabaseSync;
   tableName?: string;
-  path: string;
+  sourceKey: string;
   source: MemorySource;
   currentModel?: string;
 }): void {
   const tableName = params.tableName ?? MEMORY_INDEX_TABLE_NAMES.fts;
   if (params.currentModel) {
     params.db
-      .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ? AND model = ?`)
-      .run(params.path, params.source, params.currentModel);
+      .prepare(`DELETE FROM ${tableName} WHERE source_key = ? AND source = ? AND model = ?`)
+      .run(params.sourceKey, params.source, params.currentModel);
     return;
   }
   params.db
-    .prepare(`DELETE FROM ${tableName} WHERE path = ? AND source = ?`)
-    .run(params.path, params.source);
+    .prepare(`DELETE FROM ${tableName} WHERE source_key = ? AND source = ?`)
+    .run(params.sourceKey, params.source);
 }

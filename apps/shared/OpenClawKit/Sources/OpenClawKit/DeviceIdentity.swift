@@ -43,8 +43,7 @@ enum DeviceIdentityPaths {
 }
 
 public enum DeviceIdentityStore {
-    private static let stateScope = "identity.device"
-    private static let stateKey = "default"
+    private static let identityKey = "default"
     private static let ed25519SPKIPrefix = Data([
         0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65,
         0x70, 0x03, 0x21, 0x00,
@@ -55,14 +54,12 @@ public enum DeviceIdentityStore {
     ])
 
     public static func loadOrCreate() -> DeviceIdentity {
-        if let data = OpenClawSQLiteKVStore.readJSONData(scope: self.stateScope, key: self.stateKey) {
-            switch self.decodeStoredIdentity(data) {
+        if let row = OpenClawSQLiteStateStore.readDeviceIdentity(key: self.identityKey) {
+            switch self.decodeStoredIdentity(self.storedIdentity(from: row)) {
             case .identity(let decoded):
                 return decoded
             case .recognizedInvalid:
                 preconditionFailure("Stored OpenClaw device identity is invalid. Run openclaw doctor --fix.")
-            case .unknown:
-                preconditionFailure("Stored OpenClaw device identity is unreadable. Run openclaw doctor --fix.")
             }
         }
         if self.legacyIdentityMigrationRequired() {
@@ -88,27 +85,30 @@ public enum DeviceIdentityStore {
     private enum DecodeResult {
         case identity(DeviceIdentity)
         case recognizedInvalid
-        case unknown
     }
 
-    private static func decodeStoredIdentity(_ data: Data) -> DecodeResult {
-        let decoder = JSONDecoder()
-        if let decoded = try? decoder.decode(StoredDeviceIdentity.self, from: data) {
-            guard decoded.version == 1,
-                  let publicKeyData = self.rawPublicKey(fromPEM: decoded.publicKeyPem),
-                  let privateKeyData = self.rawPrivateKey(fromPEM: decoded.privateKeyPem),
-                  self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
-            else {
-                return .recognizedInvalid
-            }
-            return .identity(DeviceIdentity(
-                deviceId: self.deviceId(publicKeyData: publicKeyData),
-                publicKey: publicKeyData.base64EncodedString(),
-                privateKey: privateKeyData.base64EncodedString(),
-                createdAtMs: decoded.createdAtMs))
-        }
+    private static func storedIdentity(from row: OpenClawSQLiteDeviceIdentityRow) -> StoredDeviceIdentity {
+        StoredDeviceIdentity(
+            version: 1,
+            deviceId: row.deviceId,
+            publicKeyPem: row.publicKeyPem,
+            privateKeyPem: row.privateKeyPem,
+            createdAtMs: row.createdAtMs)
+    }
 
-        return self.hasRecognizedIdentityShape(data) ? .recognizedInvalid : .unknown
+    private static func decodeStoredIdentity(_ decoded: StoredDeviceIdentity) -> DecodeResult {
+        guard decoded.version == 1,
+              let publicKeyData = self.rawPublicKey(fromPEM: decoded.publicKeyPem),
+              let privateKeyData = self.rawPrivateKey(fromPEM: decoded.privateKeyPem),
+              self.keyPairMatches(publicKeyData: publicKeyData, privateKeyData: privateKeyData)
+        else {
+            return .recognizedInvalid
+        }
+        return .identity(DeviceIdentity(
+            deviceId: self.deviceId(publicKeyData: publicKeyData),
+            publicKey: publicKeyData.base64EncodedString(),
+            privateKey: privateKeyData.base64EncodedString(),
+            createdAtMs: decoded.createdAtMs))
     }
 
     public static func signPayload(_ payload: String, identity: DeviceIdentity) -> String? {
@@ -190,22 +190,20 @@ public enum DeviceIdentityStore {
         return "-----BEGIN \(label)-----\n\(chunks)\n-----END \(label)-----\n"
     }
 
-    private static func hasRecognizedIdentityShape(_ data: Data) -> Bool {
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-            return false
-        }
-        return object.keys.contains("publicKeyPem")
-            || object.keys.contains("privateKeyPem")
-    }
-
     private static func deviceId(publicKeyData: Data) -> String {
         SHA256.hash(data: publicKeyData).compactMap { String(format: "%02x", $0) }.joined()
     }
 
     private static func save(_ identity: DeviceIdentity) {
         do {
-            let data = try JSONEncoder().encode(self.storedIdentity(from: identity))
-            try OpenClawSQLiteKVStore.writeJSONData(scope: self.stateScope, key: self.stateKey, data: data)
+            let stored = self.storedIdentity(from: identity)
+            try OpenClawSQLiteStateStore.writeDeviceIdentity(
+                key: self.identityKey,
+                identity: OpenClawSQLiteDeviceIdentityRow(
+                    deviceId: stored.deviceId,
+                    publicKeyPem: stored.publicKeyPem,
+                    privateKeyPem: stored.privateKeyPem,
+                    createdAtMs: stored.createdAtMs))
         } catch {
             preconditionFailure("Failed to persist OpenClaw device identity in SQLite: \(error)")
         }

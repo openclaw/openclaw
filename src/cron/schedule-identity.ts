@@ -18,9 +18,8 @@ function schedulePayloadFromRecord(
   | { kind: "cron"; expr: string; tz?: string; staggerMs?: number }
   | undefined {
   const rawKind = readString(schedule, "kind")?.toLowerCase();
-  const expr = readString(schedule, "expr") ?? readString(schedule, "cron");
+  const expr = readString(schedule, "expr");
   const at = readString(schedule, "at");
-  const atMs = readNumber(schedule, "atMs");
   const everyMs = readNumber(schedule, "everyMs");
   const anchorMs = readNumber(schedule, "anchorMs");
   const tz = readString(schedule, "tz");
@@ -28,7 +27,7 @@ function schedulePayloadFromRecord(
   const kind =
     rawKind === "at" || rawKind === "every" || rawKind === "cron"
       ? rawKind
-      : at || atMs !== undefined
+      : at
         ? "at"
         : everyMs !== undefined
           ? "every"
@@ -37,11 +36,7 @@ function schedulePayloadFromRecord(
             : undefined;
 
   if (kind === "at") {
-    return at
-      ? { kind: "at", at }
-      : atMs !== undefined
-        ? { kind: "at", at: String(atMs) }
-        : undefined;
+    return at ? { kind: "at", at } : undefined;
   }
   if (kind === "every" && everyMs !== undefined) {
     return { kind: "every", everyMs, anchorMs };

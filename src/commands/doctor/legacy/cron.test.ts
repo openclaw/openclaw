@@ -420,7 +420,8 @@ describe("maybeRepairLegacyCronStore", () => {
     });
 
     const persisted = await loadCronStore(resolveCronStoreKey());
-    expect((persisted.jobs[0] as Record<string, unknown> | undefined)?.notify).toBe(true);
+    expect(persisted.jobs).toEqual([]);
+    await expect(fs.stat(storePath)).resolves.toBeTruthy();
     expectNoteContaining(
       'uses legacy notify fallback alongside delivery mode "announce"',
       "Doctor warnings",

@@ -21,7 +21,7 @@ vi.mock("undici", () => ({
   setGlobalDispatcher: vi.fn(),
 }));
 
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-qmd", () => {
+vi.mock("openclaw/plugin-sdk/memory-core-host-engine-session-transcripts", () => {
   return {
     buildSessionTranscriptEntry: buildSessionTranscriptEntryMock,
     listSessionTranscriptScopesForAgent: vi.fn(async () => []),

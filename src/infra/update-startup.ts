@@ -5,33 +5,16 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
-import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
 import { VERSION } from "../version.js";
 import { isTruthyEnvValue } from "./env.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { normalizeUpdateChannel, DEFAULT_PACKAGE_CHANNEL } from "./update-channels.js";
+import {
+  readUpdateCheckStateFromSqlite,
+  writeUpdateCheckStateToSqlite,
+  type UpdateCheckState,
+} from "./update-check-state.js";
 import { compareSemverStrings, resolveNpmChannelTag, checkUpdateStatus } from "./update-check.js";
-
-type UpdateCheckState = {
-  lastCheckedAt?: string;
-  lastNotifiedVersion?: string;
-  lastNotifiedTag?: string;
-  lastAvailableVersion?: string;
-  lastAvailableTag?: string;
-  autoInstallId?: string;
-  autoFirstSeenVersion?: string;
-  autoFirstSeenTag?: string;
-  autoFirstSeenAt?: string;
-  autoLastAttemptVersion?: string;
-  autoLastAttemptAt?: string;
-  autoLastSuccessVersion?: string;
-  autoLastSuccessAt?: string;
-};
 
 type AutoUpdatePolicy = {
   enabled: boolean;
@@ -64,8 +47,6 @@ export function resetUpdateAvailableStateForTest(): void {
   updateAvailableCache = null;
 }
 
-const UPDATE_CHECK_SCOPE = "runtime.update-check";
-const UPDATE_CHECK_KEY = "state";
 const UPDATE_CHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const AUTO_UPDATE_COMMAND_TIMEOUT_MS = 45 * 60 * 1000;
@@ -121,29 +102,12 @@ function resolveCheckIntervalMs(cfg: OpenClawConfig): number {
   return UPDATE_CHECK_INTERVAL_MS;
 }
 
-function sqliteOptionsForEnv(env: NodeJS.ProcessEnv): OpenClawStateDatabaseOptions {
-  return { env };
-}
-
-function coerceUpdateCheckState(value: unknown): UpdateCheckState {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as UpdateCheckState)
-    : {};
-}
-
 function readState(env: NodeJS.ProcessEnv = process.env): UpdateCheckState {
-  return coerceUpdateCheckState(
-    readOpenClawStateKvJson(UPDATE_CHECK_SCOPE, UPDATE_CHECK_KEY, sqliteOptionsForEnv(env)),
-  );
+  return readUpdateCheckStateFromSqlite(env);
 }
 
 function writeState(state: UpdateCheckState, env: NodeJS.ProcessEnv = process.env): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    UPDATE_CHECK_SCOPE,
-    UPDATE_CHECK_KEY,
-    state as unknown as OpenClawStateJsonValue,
-    sqliteOptionsForEnv(env),
-  );
+  writeUpdateCheckStateToSqlite(state, env);
 }
 
 function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | null): boolean {

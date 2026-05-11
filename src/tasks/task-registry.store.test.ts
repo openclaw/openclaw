@@ -1,6 +1,8 @@
 import { statSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -16,8 +18,11 @@ import {
   configureTaskRegistryRuntime,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
-import { loadTaskRegistryStateFromSqlite } from "./task-registry.store.sqlite.js";
-import type { TaskRecord } from "./task-registry.types.js";
+import {
+  loadTaskRegistryStateFromSqlite,
+  saveTaskRegistryStateToSqlite,
+} from "./task-registry.store.sqlite.js";
+import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
   parseTaskDeliveryStatus,
@@ -28,6 +33,10 @@ import {
 } from "./task-registry.types.js";
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+type TaskRegistryTestDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "task_delivery_state" | "task_runs"
+>;
 
 function requireFirstUpsertParams(upsertTaskWithDeliveryState: ReturnType<typeof vi.fn>): unknown {
   const params = upsertTaskWithDeliveryState.mock.calls[0]?.[0];
@@ -146,9 +155,12 @@ describe("task-registry store runtime", () => {
           notifyPolicy: "silent",
         });
 
-        openOpenClawStateDatabase()
-          .db.prepare("UPDATE task_runs SET status = ? WHERE task_id = ?")
-          .run("done", created.taskId);
+        const database = openOpenClawStateDatabase();
+        const db = getNodeSqliteKysely<TaskRegistryTestDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          db.updateTable("task_runs").set({ status: "done" }).where("task_id", "=", created.taskId),
+        );
 
         expect(() => loadTaskRegistryStateFromSqlite()).toThrow("Invalid persisted task status");
       },
@@ -346,6 +358,51 @@ describe("task-registry store runtime", () => {
       taskKind: "video_generation",
       runId: "run-task-kind-restore",
     });
+  });
+
+  it("prunes stale sqlite delivery state while retaining current rows", async () => {
+    await withOpenClawTestState(
+      { layout: "state-only", prefix: "openclaw-task-delivery-prune-" },
+      async () => {
+        const taskA = createStoredTask();
+        const taskB: TaskRecord = {
+          ...createStoredTask(),
+          taskId: "task-retained-delivery-b",
+          runId: "run-retained-delivery-b",
+        };
+        const deliveryA: TaskDeliveryState = {
+          taskId: taskA.taskId,
+          lastNotifiedEventAt: 100,
+        };
+        const deliveryB: TaskDeliveryState = {
+          taskId: taskB.taskId,
+          lastNotifiedEventAt: 200,
+        };
+
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [taskA.taskId, taskA],
+            [taskB.taskId, taskB],
+          ]),
+          deliveryStates: new Map([
+            [deliveryA.taskId, deliveryA],
+            [deliveryB.taskId, deliveryB],
+          ]),
+        });
+
+        saveTaskRegistryStateToSqlite({
+          tasks: new Map([
+            [taskA.taskId, taskA],
+            [taskB.taskId, taskB],
+          ]),
+          deliveryStates: new Map([[deliveryB.taskId, deliveryB]]),
+        });
+
+        const restored = loadTaskRegistryStateFromSqlite();
+        expect(restored.deliveryStates.has(taskA.taskId)).toBe(false);
+        expect(restored.deliveryStates.get(taskB.taskId)).toEqual(deliveryB);
+      },
+    );
   });
 
   it("hardens the sqlite task store directory and file modes", async () => {

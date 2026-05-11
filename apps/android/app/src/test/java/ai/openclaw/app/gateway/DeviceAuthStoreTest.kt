@@ -1,8 +1,8 @@
 package ai.openclaw.app.gateway
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -38,10 +38,10 @@ class DeviceAuthStoreTest {
     assertEquals("operator", entry?.role)
     assertEquals(listOf("operator.read", "operator.write"), entry?.scopes)
     assertTrue((entry?.updatedAtMs ?: 0L) > 0L)
-    val raw = OpenClawSQLiteKVStore(app).readString("identity.device-auth", "default")
-    assertNotNull(raw)
-    assertTrue(raw?.contains("\"deviceId\":\"device-1\"") == true)
-    assertTrue(raw?.contains("\"operator-token\"") == true)
+    val row = OpenClawSQLiteStateStore(app).readDeviceAuthToken("device-1", "operator")
+    assertNotNull(row)
+    assertEquals("operator-token", row?.token)
+    assertEquals("""["operator.read","operator.write"]""", row?.scopesJson)
   }
 
   @Test
@@ -53,8 +53,6 @@ class DeviceAuthStoreTest {
     store.clearToken("device-1", "operator")
 
     assertNull(store.loadEntry("device-1", "operator"))
-    val raw = OpenClawSQLiteKVStore(app).readString("identity.device-auth", "default")
-    assertNotNull(raw)
-    assertTrue(raw?.contains("operator-token") == false)
+    assertNull(OpenClawSQLiteStateStore(app).readDeviceAuthToken("device-1", "operator"))
   }
 }

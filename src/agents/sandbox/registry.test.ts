@@ -1,7 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 
 const { TEST_STATE_DIR, SANDBOX_STATE_DIR, SANDBOX_CONTAINERS_DIR, SANDBOX_BROWSERS_DIR } =
   vi.hoisted(() => {
@@ -95,6 +104,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   }
 }
 
+function getSandboxRegistryTestDb() {
+  const stateDatabase = openOpenClawStateDatabase();
+  return {
+    database: stateDatabase,
+    db: getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "sandbox_registry_entries">>(
+      stateDatabase.db,
+    ),
+  };
+}
+
 describe("registry race safety", () => {
   it("reads a single SQLite entry without scanning the full registry", async () => {
     await updateRegistry(containerEntry({ containerName: "container-x", sessionKey: "sess:x" }));
@@ -125,6 +144,80 @@ describe("registry race safety", () => {
           sessionKey: "sess:x",
         }),
       ],
+    });
+  });
+
+  it("stores hot container registry metadata in typed SQLite columns", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "container-hot",
+        backendId: "docker",
+        runtimeLabel: "Docker",
+        sessionKey: "sess:hot",
+        image: "openclaw-sandbox:hot",
+        createdAtMs: 10,
+        lastUsedAtMs: 20,
+        configLabelKind: "Image",
+        configHash: "abc",
+      }),
+    );
+
+    const { database, db } = getSandboxRegistryTestDb();
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("sandbox_registry_entries")
+        .select([
+          "session_key",
+          "backend_id",
+          "runtime_label",
+          "image",
+          "created_at_ms",
+          "last_used_at_ms",
+          "config_label_kind",
+          "config_hash",
+        ])
+        .where("registry_kind", "=", "containers")
+        .where("container_name", "=", "container-hot"),
+    );
+    expect(row).toMatchObject({
+      session_key: "sess:hot",
+      backend_id: "docker",
+      runtime_label: "Docker",
+      image: "openclaw-sandbox:hot",
+      created_at_ms: 10,
+      last_used_at_ms: 20,
+      config_label_kind: "Image",
+      config_hash: "abc",
+    });
+  });
+
+  it("reads container registry state from typed columns, not the debug JSON copy", async () => {
+    await updateRegistry(
+      containerEntry({
+        containerName: "container-row-source",
+        sessionKey: "sess:row",
+        image: "openclaw-sandbox:row",
+        createdAtMs: 50,
+        lastUsedAtMs: 60,
+      }),
+    );
+    const { database, db } = getSandboxRegistryTestDb();
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("sandbox_registry_entries")
+        .set({ entry_json: JSON.stringify({ containerName: "wrong", sessionKey: "wrong" }) })
+        .where("registry_kind", "=", "containers")
+        .where("container_name", "=", "container-row-source"),
+    );
+
+    await expect(readRegistryEntry("container-row-source")).resolves.toMatchObject({
+      containerName: "container-row-source",
+      sessionKey: "sess:row",
+      image: "openclaw-sandbox:row",
+      createdAtMs: 50,
+      lastUsedAtMs: 60,
     });
   });
 
@@ -206,6 +299,48 @@ describe("registry race safety", () => {
           sessionKey: "sess:browser",
         }),
       ],
+    });
+  });
+
+  it("stores hot browser registry metadata in typed SQLite columns", async () => {
+    await updateBrowserRegistry(
+      browserEntry({
+        containerName: "browser-hot",
+        sessionKey: "sess:browser",
+        image: "openclaw-browser:hot",
+        createdAtMs: 30,
+        lastUsedAtMs: 40,
+        configHash: "def",
+        cdpPort: 9333,
+        noVncPort: 6080,
+      }),
+    );
+
+    const { database, db } = getSandboxRegistryTestDb();
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("sandbox_registry_entries")
+        .select([
+          "session_key",
+          "image",
+          "created_at_ms",
+          "last_used_at_ms",
+          "config_hash",
+          "cdp_port",
+          "no_vnc_port",
+        ])
+        .where("registry_kind", "=", "browsers")
+        .where("container_name", "=", "browser-hot"),
+    );
+    expect(row).toMatchObject({
+      session_key: "sess:browser",
+      image: "openclaw-browser:hot",
+      created_at_ms: 30,
+      last_used_at_ms: 40,
+      config_hash: "def",
+      cdp_port: 9333,
+      no_vnc_port: 6080,
     });
   });
 

@@ -1,5 +1,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../../auto-reply/templating.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -11,6 +13,7 @@ import type { SessionEntry } from "./types.js";
 
 const CANONICAL_KEY = "agent:main:webchat:dm:mixed-user";
 const MIXED_CASE_KEY = "Agent:Main:WebChat:DM:MiXeD-User";
+type SessionEntriesTestDatabase = Pick<OpenClawAgentKyselyDatabase, "sessions" | "session_entries">;
 
 function createInboundContext(): MsgContext {
   return {
@@ -62,14 +65,34 @@ describe("SQLite session row key normalization", () => {
 
   function seedRawSessionEntry(sessionKey: string, entry: SessionEntry): void {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
-    database.db
-      .prepare(
-        `
-          INSERT INTO session_entries (session_key, entry_json, updated_at)
-          VALUES (?, ?, ?)
-        `,
-      )
-      .run(sessionKey, JSON.stringify(entry), entry.updatedAt ?? Date.now());
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    const updatedAt = entry.updatedAt ?? Date.now();
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .insertInto("sessions")
+        .values({
+          session_id: entry.sessionId,
+          session_key: sessionKey,
+          created_at: updatedAt,
+          updated_at: updatedAt,
+        })
+        .onConflict((conflict) =>
+          conflict.column("session_id").doUpdateSet({
+            session_key: (eb) => eb.ref("excluded.session_key"),
+            updated_at: (eb) => eb.ref("excluded.updated_at"),
+          }),
+        ),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("session_entries").values({
+        session_key: sessionKey,
+        session_id: entry.sessionId,
+        entry_json: JSON.stringify(entry),
+        updated_at: updatedAt,
+      }),
+    );
   }
 
   it("records inbound metadata under a canonical lowercase key", async () => {

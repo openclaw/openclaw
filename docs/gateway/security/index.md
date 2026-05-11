@@ -241,8 +241,8 @@ Use this when auditing access or deciding what to back up:
 - **Telegram bot token**: config/env or `channels.telegram.tokenFile` (regular file only; symlinks rejected)
 - **Discord bot token**: config/env or SecretRef (env/file/exec providers)
 - **Slack tokens**: config/env (`channels.slack.*`)
-- **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite` (`kv` scope `pairing.channel`)
-- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#kv/auth-profiles/<agentDir>`
+- **Pairing allowlists**: `~/.openclaw/state/openclaw.sqlite#table/channel_pairing_allow_entries`
+- **Model auth profiles**: `~/.openclaw/state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`
 - **Codex runtime state**: `~/.openclaw/agents/<agentId>/agent/codex-home/`
 - **File-backed secrets payload (optional)**: `~/.openclaw/secrets.json`
 - **Legacy OAuth import**: `~/.openclaw/credentials/oauth.json`
@@ -977,7 +977,7 @@ Assume anything under `~/.openclaw/` (or `$OPENCLAW_STATE_DIR/`) may contain sec
 
 - `openclaw.json`: config may include tokens (gateway, remote gateway), provider settings, and allowlists.
 - `credentials/**`: channel credentials (example: WhatsApp creds), pairing allowlists, legacy OAuth imports.
-- `state/openclaw.sqlite#kv/auth-profiles/<agentDir>`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
+- `state/openclaw.sqlite#table/auth_profile_stores/<agentDir>`: API keys, token profiles, OAuth tokens, and optional `keyRef`/`tokenRef`.
 - `agents/<agentId>/agent/codex-home/**`: per-agent Codex app-server account, config, skills, plugins, native thread state, and diagnostics.
 - `secrets.json` (optional): file-backed secret payload used by `file` SecretRef providers (`secrets.providers`).
 - `agents/<agentId>/agent/auth.json`: legacy compatibility file. Static `api_key` entries are scrubbed when discovered.

@@ -292,8 +292,22 @@ export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
 export function saveTaskRegistryStateToSqlite(snapshot: TaskRegistryStoreSnapshot) {
   withWriteTransaction(({ db }) => {
     const kysely = getTaskRegistryKysely(db);
-    executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
-    executeSqliteQuerySync(db, kysely.deleteFrom("task_runs"));
+    const taskIds = [...snapshot.tasks.keys()];
+    if (taskIds.length === 0) {
+      executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
+      executeSqliteQuerySync(db, kysely.deleteFrom("task_runs"));
+      return;
+    }
+    const deliveryTaskIds = [...snapshot.deliveryStates.keys()];
+    executeSqliteQuerySync(db, kysely.deleteFrom("task_runs").where("task_id", "not in", taskIds));
+    if (deliveryTaskIds.length === 0) {
+      executeSqliteQuerySync(db, kysely.deleteFrom("task_delivery_state"));
+    } else {
+      executeSqliteQuerySync(
+        db,
+        kysely.deleteFrom("task_delivery_state").where("task_id", "not in", deliveryTaskIds),
+      );
+    }
     for (const task of snapshot.tasks.values()) {
       upsertTaskRow(db, bindTaskRecordBase(task));
     }

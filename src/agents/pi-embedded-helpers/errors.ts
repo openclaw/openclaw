@@ -481,8 +481,7 @@ function isOAuthRefreshTimeoutMessage(raw: string): boolean {
 function isOAuthRefreshContentionMessage(raw: string): boolean {
   return (
     /\brefresh_contention\b/i.test(raw) ||
-    (/\bfile lock timeout\b/i.test(raw) &&
-      /(?:\/|\\|^)(?:oauth-refresh|openclaw-oauth-refresh)[^/\n\\]*?(?:\.lock)?\b/i.test(raw))
+    /\bTimed out acquiring SQLite state lock auth\.oauth-refresh:/i.test(raw)
   );
 }
 

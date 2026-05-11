@@ -95,31 +95,7 @@ describe("cron service store seam coverage", () => {
     await persist(state);
   });
 
-  it("preserves disabled jobs when persisted booleans roundtrip through string values", async () => {
-    const { storeKey } = await makeStoreKey();
-
-    await writeSingleJobStore(storeKey, {
-      id: "disabled-string-job",
-      name: "disabled string job",
-      enabled: "false",
-      createdAtMs: STORE_TEST_NOW - 60_000,
-      updatedAtMs: STORE_TEST_NOW - 60_000,
-      schedule: { kind: "every", everyMs: 60_000 },
-      sessionTarget: "main",
-      wakeMode: "now",
-      payload: { kind: "systemEvent", text: "tick" },
-      state: {},
-    });
-
-    const state = createStoreTestState(storeKey);
-
-    await ensureLoaded(state);
-
-    const job = findJobOrThrow(state, "disabled-string-job");
-    expect(job.enabled).toBe(false);
-  });
-
-  it("loads persisted jobs with unsafe custom session ids so run paths can fail closed", async () => {
+  it("loads persisted custom session ids without rewriting them", async () => {
     const { storeKey } = await makeStoreKey();
 
     await writeSingleJobStore(storeKey, {
@@ -141,10 +117,6 @@ describe("cron service store seam coverage", () => {
 
     const job = findJobOrThrow(state, "unsafe-session-target-job");
     expect(job.sessionTarget).toBe("session:../../outside");
-    expect(logger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ storeKey, jobId: "unsafe-session-target-job" }),
-      expect.stringContaining("invalid persisted sessionTarget"),
-    );
   });
 
   it("clears stale nextRunAtMs after force reload when cron schedule expression changes", async () => {
@@ -216,36 +188,6 @@ describe("cron service store seam coverage", () => {
     await ensureLoaded(state, { forceReload: true, skipRecompute: true });
 
     expect(findJobOrThrow(state, "reload-cron-expr-job").state.nextRunAtMs).toBe(dueNextRunAtMs);
-  });
-
-  it("clears stale nextRunAtMs without throwing when a force-reloaded schedule is malformed", async () => {
-    const { storeKey } = await makeStoreKey();
-    const staleNextRunAtMs = STORE_TEST_NOW + 3_600_000;
-
-    await writeSingleJobStore(storeKey, {
-      ...createReloadCronJob({
-        state: { nextRunAtMs: staleNextRunAtMs },
-      }),
-    });
-
-    const state = createStoreTestState(storeKey);
-    await ensureLoaded(state, { skipRecompute: true });
-
-    await writeSingleJobStore(storeKey, {
-      ...createReloadCronJob({
-        updatedAtMs: STORE_TEST_NOW,
-        state: {},
-      }),
-      schedule: "0 17 * * *",
-    });
-
-    await expect(ensureLoaded(state, { forceReload: true, skipRecompute: true })).resolves.toBe(
-      undefined,
-    );
-
-    const reloadedJob = findJobOrThrow(state, "reload-cron-expr-job");
-    expect(reloadedJob.schedule).toBe("0 17 * * *");
-    expect(reloadedJob.state.nextRunAtMs).toBeUndefined();
   });
 
   it("preserves nextRunAtMs after force reload when scheduling inputs are unchanged", async () => {

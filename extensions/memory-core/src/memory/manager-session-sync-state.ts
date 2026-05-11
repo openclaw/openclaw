@@ -11,21 +11,23 @@ export function resolveMemorySessionSyncPlan(params: {
   targetSessionTranscriptKeys: Set<string> | null;
   dirtySessionTranscripts: Set<string>;
   existingRows?: MemorySourceFileStateRow[] | null;
-  sessionTranscriptKeyForScope: (scope: MemorySessionSyncScope) => string;
+  sessionTranscriptSourceKeyForScope: (scope: MemorySessionSyncScope) => string;
 }): {
-  activePaths: Set<string> | null;
+  activeSourceKeys: Set<string> | null;
   existingRows: MemorySourceFileStateRow[] | null;
   existingHashes: Map<string, string> | null;
   indexAll: boolean;
 } {
-  const activePaths = params.targetSessionTranscriptKeys
+  const activeSourceKeys = params.targetSessionTranscriptKeys
     ? null
-    : new Set(params.transcripts.map((scope) => params.sessionTranscriptKeyForScope(scope)));
-  const existingRows = activePaths === null ? null : (params.existingRows ?? []);
+    : new Set(params.transcripts.map((scope) => params.sessionTranscriptSourceKeyForScope(scope)));
+  const existingRows = activeSourceKeys === null ? null : (params.existingRows ?? []);
   return {
-    activePaths,
+    activeSourceKeys,
     existingRows,
-    existingHashes: existingRows ? new Map(existingRows.map((row) => [row.path, row.hash])) : null,
+    existingHashes: existingRows
+      ? new Map(existingRows.map((row) => [row.sourceKey, row.hash]))
+      : null,
     indexAll:
       params.needsFullReindex ||
       Boolean(params.targetSessionTranscriptKeys) ||

@@ -25,16 +25,9 @@ export interface CacheEntries {
   value_json: string | null;
 }
 
-export interface Kv {
-  key: string;
-  scope: string;
-  updated_at: number;
-  value_json: string;
-}
-
 export interface MemoryEmbeddingCache {
   dims: number | null;
-  embedding: string;
+  embedding: Uint8Array;
   hash: string;
   model: string;
   provider: string;
@@ -43,29 +36,45 @@ export interface MemoryEmbeddingCache {
 }
 
 export interface MemoryIndexChunks {
-  embedding: string;
+  embedding: Uint8Array;
+  embedding_dims: number | null;
   end_line: number;
   hash: string;
   id: string | null;
   model: string;
   path: string;
-  source: Generated<string>;
+  session_id: string | null;
+  source_key: string;
+  source_kind: Generated<string>;
   start_line: number;
   text: string;
   updated_at: number;
 }
 
-export interface MemoryIndexFiles {
+export interface MemoryIndexMeta {
+  chunk_overlap: number;
+  chunk_tokens: number;
+  config_hash: string | null;
+  fts_tokenizer: string;
+  meta_key: string;
+  model: string;
+  provider: string;
+  provider_key: string | null;
+  schema_version: number;
+  scope_hash: string;
+  sources_json: string;
+  updated_at: number;
+  vector_dims: number | null;
+}
+
+export interface MemoryIndexSources {
   hash: string;
   mtime: number;
   path: string | null;
+  session_id: string | null;
   size: number;
-  source: Generated<string>;
-}
-
-export interface MemoryIndexMeta {
-  key: string | null;
-  value: string;
+  source_key: string;
+  source_kind: Generated<string>;
 }
 
 export interface RunArtifacts {
@@ -77,9 +86,38 @@ export interface RunArtifacts {
   run_id: string;
 }
 
+export interface SchemaMeta {
+  agent_id: string | null;
+  app_version: string | null;
+  created_at: number;
+  meta_key: string;
+  role: string;
+  schema_version: number;
+  updated_at: number;
+}
+
 export interface SessionEntries {
   entry_json: string;
+  session_id: string;
   session_key: string;
+  updated_at: number;
+}
+
+export interface Sessions {
+  agent_harness_id: string | null;
+  channel: string | null;
+  chat_type: string | null;
+  created_at: number;
+  display_name: string | null;
+  ended_at: number | null;
+  model: string | null;
+  model_provider: string | null;
+  parent_session_key: string | null;
+  session_id: string;
+  session_key: string;
+  spawned_by: string | null;
+  started_at: number | null;
+  status: string | null;
   updated_at: number;
 }
 
@@ -140,13 +178,14 @@ export interface VfsEntries {
 export interface DB {
   acp_parent_stream_events: AcpParentStreamEvents;
   cache_entries: CacheEntries;
-  kv: Kv;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_index_chunks: MemoryIndexChunks;
-  memory_index_files: MemoryIndexFiles;
   memory_index_meta: MemoryIndexMeta;
+  memory_index_sources: MemoryIndexSources;
   run_artifacts: RunArtifacts;
+  schema_meta: SchemaMeta;
   session_entries: SessionEntries;
+  sessions: Sessions;
   tool_artifacts: ToolArtifacts;
   trajectory_runtime_events: TrajectoryRuntimeEvents;
   transcript_event_identities: TranscriptEventIdentities;

@@ -7,13 +7,14 @@ import {
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { SessionTranscriptEntry } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import type { SessionTranscriptEntry } from "openclaw/plugin-sdk/memory-core-host-engine-session-transcripts";
 import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   hashText,
   MEMORY_INDEX_TABLE_NAMES,
   remapChunkLines,
+  serializeEmbedding,
   type MemoryChunk,
   type MemoryFileEntry,
   type MemorySource,
@@ -41,7 +42,7 @@ import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 import { logMemoryVectorDegradedWrite } from "./manager-vector-warning.js";
 import { replaceMemoryVectorRow } from "./manager-vector-write.js";
 
-const FILES_TABLE = MEMORY_INDEX_TABLE_NAMES.files;
+const SOURCES_TABLE = MEMORY_INDEX_TABLE_NAMES.sources;
 const CHUNKS_TABLE = MEMORY_INDEX_TABLE_NAMES.chunks;
 const VECTOR_TABLE = MEMORY_INDEX_TABLE_NAMES.vector;
 const FTS_TABLE = MEMORY_INDEX_TABLE_NAMES.fts;
@@ -59,6 +60,17 @@ const EMBEDDING_BATCH_TIMEOUT_LOCAL_MS = 10 * 60_000;
 const log = createSubsystemLogger("memory");
 
 type MemoryIndexEntry = MemoryFileEntry | SessionTranscriptEntry;
+
+function memoryEntrySourceKey(entry: MemoryIndexEntry, source: MemorySource): string {
+  if (source === "sessions" && "scope" in entry) {
+    return `session:${entry.scope.sessionId}`;
+  }
+  return entry.path;
+}
+
+function memoryEntrySessionId(entry: MemoryIndexEntry, source: MemorySource): string | null {
+  return source === "sessions" && "scope" in entry ? entry.scope.sessionId : null;
+}
 
 export function resolveEmbeddingTimeoutMs(params: {
   kind: "query" | "batch";
@@ -525,14 +537,15 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     });
   }
 
-  private clearIndexedFileData(pathname: string, source: MemorySource): void {
+  private clearIndexedFileData(entry: MemoryIndexEntry, source: MemorySource): void {
+    const sourceKey = memoryEntrySourceKey(entry, source);
     if (this.vector.enabled) {
       try {
         this.db
           .prepare(
-            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?)`,
+            `DELETE FROM ${VECTOR_TABLE} WHERE id IN (SELECT id FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?)`,
           )
-          .run(pathname, source);
+          .run(sourceKey, source);
       } catch {}
     }
     if (this.fts.enabled && this.fts.available) {
@@ -540,34 +553,39 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
         deleteMemoryFtsRows({
           db: this.db,
           tableName: FTS_TABLE,
-          path: pathname,
+          sourceKey,
           source,
           currentModel: this.provider?.model,
         });
       } catch {}
     }
     this.db
-      .prepare(`DELETE FROM ${CHUNKS_TABLE} WHERE path = ? AND source = ?`)
-      .run(pathname, source);
+      .prepare(`DELETE FROM ${CHUNKS_TABLE} WHERE source_key = ? AND source_kind = ?`)
+      .run(sourceKey, source);
   }
 
   private upsertFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
+    const sourceKey = memoryEntrySourceKey(entry, source);
+    const sessionId = memoryEntrySessionId(entry, source);
     this.db
       .prepare(
-        `INSERT INTO ${FILES_TABLE} (path, source, hash, mtime, size) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(path) DO UPDATE SET
-           source=excluded.source,
+        `INSERT INTO ${SOURCES_TABLE} (source_kind, source_key, path, session_id, hash, mtime, size)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(source_kind, source_key) DO UPDATE SET
+           path=excluded.path,
+           session_id=excluded.session_id,
            hash=excluded.hash,
            mtime=excluded.mtime,
            size=excluded.size`,
       )
-      .run(entry.path, source, entry.hash, entry.mtimeMs, entry.size);
+      .run(source, sourceKey, entry.path, sessionId, entry.hash, entry.mtimeMs, entry.size);
   }
 
-  private deleteFileRecord(pathname: string, source: MemorySource): void {
+  private deleteFileRecord(entry: MemoryIndexEntry, source: MemorySource): void {
+    const sourceKey = memoryEntrySourceKey(entry, source);
     this.db
-      .prepare(`DELETE FROM ${FILES_TABLE} WHERE path = ? AND source = ?`)
-      .run(pathname, source);
+      .prepare(`DELETE FROM ${SOURCES_TABLE} WHERE source_key = ? AND source_kind = ?`)
+      .run(sourceKey, source);
   }
 
   private async readIndexEntryContent(
@@ -599,34 +617,45 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
     vectorReady: boolean,
   ): void {
     const now = Date.now();
-    this.clearIndexedFileData(entry.path, source);
+    const sourceKey = memoryEntrySourceKey(entry, source);
+    const sessionId = memoryEntrySessionId(entry, source);
+    this.clearIndexedFileData(entry, source);
+    this.upsertFileRecord(entry, source);
     for (let i = 0; i < chunks.length; i++) {
       const chunk = chunks[i];
       const embedding = embeddings[i] ?? [];
       const id = hashText(
-        `${source}:${entry.path}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
+        `${source}:${sourceKey}:${chunk.startLine}:${chunk.endLine}:${chunk.hash}:${model}`,
       );
       this.db
         .prepare(
-          `INSERT INTO ${CHUNKS_TABLE} (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO ${CHUNKS_TABLE} (id, source_kind, source_key, path, session_id, start_line, end_line, hash, model, text, embedding, embedding_dims, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON CONFLICT(id) DO UPDATE SET
+             source_kind=excluded.source_kind,
+             source_key=excluded.source_key,
+             path=excluded.path,
+             session_id=excluded.session_id,
              hash=excluded.hash,
              model=excluded.model,
              text=excluded.text,
              embedding=excluded.embedding,
+             embedding_dims=excluded.embedding_dims,
              updated_at=excluded.updated_at`,
         )
         .run(
           id,
-          entry.path,
           source,
+          sourceKey,
+          entry.path,
+          sessionId,
           chunk.startLine,
           chunk.endLine,
           chunk.hash,
           model,
           chunk.text,
-          JSON.stringify(embedding),
+          serializeEmbedding(embedding),
+          embedding.length || null,
           now,
         );
       if (vectorReady && embedding.length > 0) {
@@ -640,10 +669,19 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       if (this.fts.enabled && this.fts.available) {
         this.db
           .prepare(
-            `INSERT INTO ${FTS_TABLE} (text, id, path, source, model, start_line, end_line)\n` +
-              ` VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO ${FTS_TABLE} (text, id, source_key, path, source, model, start_line, end_line)\n` +
+              ` VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
-          .run(chunk.text, id, entry.path, source, model, chunk.startLine, chunk.endLine);
+          .run(
+            chunk.text,
+            id,
+            sourceKey,
+            entry.path,
+            source,
+            model,
+            chunk.startLine,
+            chunk.endLine,
+          );
       }
     }
     this.vectorDegradedWriteWarningShown = logMemoryVectorDegradedWrite({
@@ -654,7 +692,6 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
       loadError: this.vector.loadError,
       warn: (message) => log.warn(message),
     });
-    this.upsertFileRecord(entry, source);
   }
 
   protected async indexFile(
@@ -684,14 +721,14 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           path: entry.path,
           source: options.source,
         });
-        this.clearIndexedFileData(entry.path, options.source);
+        this.clearIndexedFileData(entry, options.source);
         this.upsertFileRecord(entry, options.source);
         return;
       }
       const multimodalChunk = await buildMultimodalChunkForIndexing(entry);
       if (!multimodalChunk) {
-        this.clearIndexedFileData(entry.path, options.source);
-        this.deleteFileRecord(entry.path, options.source);
+        this.clearIndexedFileData(entry, options.source);
+        this.deleteFileRecord(entry, options.source);
         return;
       }
       structuredInputBytes = multimodalChunk.structuredInputBytes;
@@ -732,7 +769,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerSyncOps {
           model: this.provider.model,
           error: message,
         });
-        this.clearIndexedFileData(entry.path, options.source);
+        this.clearIndexedFileData(entry, options.source);
         this.upsertFileRecord(entry, options.source);
         return;
       }

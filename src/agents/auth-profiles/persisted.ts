@@ -1,15 +1,8 @@
 import { coerceSecretRef } from "../../config/types.secrets.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import type { OpenClawStateDatabaseOptions } from "../../state/openclaw-state-db.js";
-import {
-  readOpenClawStateKvJsonResult,
-  readOpenClawStateKvJsonResultFromDatabase,
-  writeOpenClawStateKvJson,
-  writeOpenClawStateKvJsonInTransaction,
-  type OpenClawStateJsonValue,
-} from "../../state/openclaw-state-kv.js";
 import { normalizeProviderId } from "../provider-id.js";
-import { AUTH_PROFILE_STORE_KV_SCOPE, AUTH_STORE_VERSION, log } from "./constants.js";
+import { AUTH_STORE_VERSION, log } from "./constants.js";
 import {
   hasOAuthIdentity,
   hasUsableOAuthCredential,
@@ -18,6 +11,13 @@ import {
   normalizeAuthIdentityToken,
 } from "./oauth-shared.js";
 import { resolveAuthProfileStoreKey } from "./paths.js";
+import {
+  readAuthProfileStorePayloadResult,
+  readAuthProfileStorePayloadResultFromDatabase,
+  writeAuthProfileStorePayload,
+  writeAuthProfileStorePayloadInTransaction,
+  type AuthProfilePayloadValue,
+} from "./sqlite-storage.js";
 import {
   coerceAuthProfileState,
   loadPersistedAuthProfileState,
@@ -32,8 +32,6 @@ import type {
   OAuthCredential,
   ProfileUsageStats,
 } from "./types.js";
-
-export { AUTH_PROFILE_STORE_KV_SCOPE } from "./constants.js";
 
 export function authProfileStoreKey(agentDir?: string): string {
   return resolveAuthProfileStoreKey(agentDir);
@@ -989,11 +987,7 @@ export function loadPersistedAuthProfileStoreEntry(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): PersistedAuthProfileStoreEntry | null {
-  const result = readOpenClawStateKvJsonResult(
-    AUTH_PROFILE_STORE_KV_SCOPE,
-    authProfileStoreKey(agentDir),
-    options,
-  );
+  const result = readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir), options);
   if (!result.exists || result.value === undefined) {
     return null;
   }
@@ -1034,9 +1028,8 @@ export function loadPersistedAuthProfileStoreEntryFromDatabase(
   database: OpenClawStateDatabase,
   agentDir?: string,
 ): PersistedAuthProfileStoreEntry | null {
-  const result = readOpenClawStateKvJsonResultFromDatabase(
+  const result = readAuthProfileStorePayloadResultFromDatabase(
     database,
-    AUTH_PROFILE_STORE_KV_SCOPE,
     authProfileStoreKey(agentDir),
   );
   if (!result.exists || result.value === undefined) {
@@ -1071,10 +1064,9 @@ export function savePersistedAuthProfileSecretsStore(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    AUTH_PROFILE_STORE_KV_SCOPE,
+  writeAuthProfileStorePayload(
     authProfileStoreKey(agentDir),
-    store as unknown as OpenClawStateJsonValue,
+    store as unknown as AuthProfilePayloadValue,
     options,
   );
 }
@@ -1085,11 +1077,10 @@ export function savePersistedAuthProfileSecretsStoreInTransaction(
   agentDir?: string,
   updatedAt: number = Date.now(),
 ): void {
-  writeOpenClawStateKvJsonInTransaction<OpenClawStateJsonValue>(
+  writeAuthProfileStorePayloadInTransaction(
     database,
-    AUTH_PROFILE_STORE_KV_SCOPE,
     authProfileStoreKey(agentDir),
-    store as unknown as OpenClawStateJsonValue,
+    store as unknown as AuthProfilePayloadValue,
     updatedAt,
   );
 }
@@ -1098,9 +1089,5 @@ export function hasPersistedAuthProfileSecretsStore(
   agentDir?: string,
   options: OpenClawStateDatabaseOptions = {},
 ): boolean {
-  return readOpenClawStateKvJsonResult(
-    AUTH_PROFILE_STORE_KV_SCOPE,
-    authProfileStoreKey(agentDir),
-    options,
-  ).exists;
+  return readAuthProfileStorePayloadResult(authProfileStoreKey(agentDir), options).exists;
 }

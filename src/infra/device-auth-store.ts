@@ -1,47 +1,149 @@
+import type { DatabaseSync } from "node:sqlite";
+import type { Insertable, Selectable } from "kysely";
 import { z } from "zod";
 import {
-  clearDeviceAuthTokenFromStore,
   type DeviceAuthEntry,
-  loadDeviceAuthTokenFromStore,
-  storeDeviceAuthTokenInStore,
-} from "../shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
+  type DeviceAuthStore,
+  normalizeDeviceAuthRole,
+  normalizeDeviceAuthScopes,
+} from "../shared/device-auth.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  readOpenClawStateKvJson,
-  writeOpenClawStateKvJson,
-  type OpenClawStateJsonValue,
-} from "../state/openclaw-state-kv.js";
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabaseOptions,
+} from "../state/openclaw-state-db.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 
-const DEVICE_AUTH_SCOPE = "identity.device-auth";
-const DEVICE_AUTH_KEY = "default";
 const DeviceAuthStoreSchema = z.object({
   version: z.literal(1),
   deviceId: z.string(),
   tokens: z.record(z.string(), z.unknown()),
 }) as z.ZodType<DeviceAuthStore>;
 
+type DeviceAuthDatabase = Pick<OpenClawStateKyselyDatabase, "device_auth_tokens">;
+type DeviceAuthTokenRow = Selectable<DeviceAuthDatabase["device_auth_tokens"]>;
+type DeviceAuthTokenInsert = Insertable<DeviceAuthDatabase["device_auth_tokens"]>;
+
 function sqliteOptions(env: NodeJS.ProcessEnv | undefined): OpenClawStateDatabaseOptions {
   return env ? { env } : {};
 }
 
+function parseScopesJson(value: string): string[] {
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((scope) => typeof scope === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function rowToDeviceAuthEntry(row: DeviceAuthTokenRow): DeviceAuthEntry {
+  return {
+    token: row.token,
+    role: row.role,
+    scopes: parseScopesJson(row.scopes_json),
+    updatedAtMs: row.updated_at_ms,
+  };
+}
+
+function deviceAuthEntryToRow(deviceId: string, entry: DeviceAuthEntry): DeviceAuthTokenInsert {
+  return {
+    device_id: deviceId,
+    role: entry.role,
+    token: entry.token,
+    scopes_json: JSON.stringify(entry.scopes),
+    updated_at_ms: entry.updatedAtMs,
+  };
+}
+
+function upsertDeviceAuthTokenRow(
+  db: ReturnType<typeof getNodeSqliteKysely<DeviceAuthDatabase>>,
+  sqliteDb: DatabaseSync,
+  row: DeviceAuthTokenInsert,
+): void {
+  executeSqliteQuerySync(
+    sqliteDb,
+    db
+      .insertInto("device_auth_tokens")
+      .values(row)
+      .onConflict((conflict) =>
+        conflict.columns(["device_id", "role"]).doUpdateSet({
+          token: (eb) => eb.ref("excluded.token"),
+          scopes_json: (eb) => eb.ref("excluded.scopes_json"),
+          updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
+        }),
+      ),
+  );
+}
+
 function readDeviceAuthState(env?: NodeJS.ProcessEnv): DeviceAuthStore | null {
   try {
-    const parsed = readOpenClawStateKvJson(DEVICE_AUTH_SCOPE, DEVICE_AUTH_KEY, sqliteOptions(env));
-    const store = DeviceAuthStoreSchema.safeParse(parsed);
-    return store.success ? store.data : null;
+    const database = openOpenClawStateDatabase(sqliteOptions(env));
+    const db = getNodeSqliteKysely<DeviceAuthDatabase>(database.db);
+    const latest = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("device_auth_tokens")
+        .select(["device_id"])
+        .orderBy("updated_at_ms", "desc")
+        .orderBy("device_id", "asc")
+        .limit(1),
+    );
+    if (!latest) {
+      return null;
+    }
+    const rows = executeSqliteQuerySync(
+      database.db,
+      db
+        .selectFrom("device_auth_tokens")
+        .selectAll()
+        .where("device_id", "=", latest.device_id)
+        .orderBy("role", "asc"),
+    ).rows;
+    if (rows.length === 0) {
+      return null;
+    }
+    return {
+      version: 1,
+      deviceId: latest.device_id,
+      tokens: Object.fromEntries(rows.map((row) => [row.role, rowToDeviceAuthEntry(row)])),
+    };
   } catch {
     return null;
   }
 }
 
 function writeDeviceAuthState(env: NodeJS.ProcessEnv | undefined, store: DeviceAuthStore): void {
-  writeOpenClawStateKvJson<OpenClawStateJsonValue>(
-    DEVICE_AUTH_SCOPE,
-    DEVICE_AUTH_KEY,
-    store as unknown as OpenClawStateJsonValue,
-    sqliteOptions(env),
+  const rows = Object.values(store.tokens).map((entry) =>
+    deviceAuthEntryToRow(store.deviceId, entry),
   );
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<DeviceAuthDatabase>(database.db);
+    if (rows.length === 0) {
+      executeSqliteQuerySync(database.db, db.deleteFrom("device_auth_tokens"));
+      return;
+    }
+    const roles = rows.map((row) => row.role);
+    executeSqliteQuerySync(
+      database.db,
+      db.deleteFrom("device_auth_tokens").where("device_id", "!=", store.deviceId),
+    );
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("device_auth_tokens")
+        .where("device_id", "=", store.deviceId)
+        .where("role", "not in", roles),
+    );
+    for (const row of rows) {
+      upsertDeviceAuthTokenRow(db, database.db, row);
+    }
+  }, sqliteOptions(env));
 }
 
 export function loadDeviceAuthStore(
@@ -75,11 +177,22 @@ export function loadDeviceAuthToken(params: {
   role: string;
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry | null {
-  return loadDeviceAuthTokenFromStore({
-    adapter: { readStore: () => readDeviceAuthState(params.env), writeStore: (_store) => {} },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const role = normalizeDeviceAuthRole(params.role);
+  try {
+    const database = openOpenClawStateDatabase(sqliteOptions(params.env));
+    const db = getNodeSqliteKysely<DeviceAuthDatabase>(database.db);
+    const row = executeSqliteQueryTakeFirstSync(
+      database.db,
+      db
+        .selectFrom("device_auth_tokens")
+        .selectAll()
+        .where("device_id", "=", params.deviceId)
+        .where("role", "=", role),
+    );
+    return row ? rowToDeviceAuthEntry(row) : null;
+  } catch {
+    return null;
+  }
 }
 
 export function storeDeviceAuthToken(params: {
@@ -89,16 +202,18 @@ export function storeDeviceAuthToken(params: {
   scopes?: string[];
   env?: NodeJS.ProcessEnv;
 }): DeviceAuthEntry {
-  return storeDeviceAuthTokenInStore({
-    adapter: {
-      readStore: () => readDeviceAuthState(params.env),
-      writeStore: (store) => writeDeviceAuthState(params.env, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
+  const entry: DeviceAuthEntry = {
     token: params.token,
-    scopes: params.scopes,
-  });
+    role: normalizeDeviceAuthRole(params.role),
+    scopes: normalizeDeviceAuthScopes(params.scopes),
+    updatedAtMs: Date.now(),
+  };
+  const row = deviceAuthEntryToRow(params.deviceId, entry);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<DeviceAuthDatabase>(database.db);
+    upsertDeviceAuthTokenRow(db, database.db, row);
+  }, sqliteOptions(params.env));
+  return entry;
 }
 
 export function clearDeviceAuthToken(params: {
@@ -106,12 +221,15 @@ export function clearDeviceAuthToken(params: {
   role: string;
   env?: NodeJS.ProcessEnv;
 }): void {
-  clearDeviceAuthTokenFromStore({
-    adapter: {
-      readStore: () => readDeviceAuthState(params.env),
-      writeStore: (store) => writeDeviceAuthState(params.env, store),
-    },
-    deviceId: params.deviceId,
-    role: params.role,
-  });
+  const role = normalizeDeviceAuthRole(params.role);
+  runOpenClawStateWriteTransaction((database) => {
+    const db = getNodeSqliteKysely<DeviceAuthDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .deleteFrom("device_auth_tokens")
+        .where("device_id", "=", params.deviceId)
+        .where("role", "=", role),
+    );
+  }, sqliteOptions(params.env));
 }
