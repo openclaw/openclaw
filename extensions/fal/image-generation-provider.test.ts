@@ -228,7 +228,7 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("allows GPT Image 2 edits up to 16 reference images", async () => {
+  it("allows GPT Image 2 edits up to 10 reference images", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -256,7 +256,7 @@ describe("fal image-generation provider", () => {
         release: vi.fn(async () => {}),
       });
 
-    const inputImages = Array.from({ length: 16 }, (_, index) => ({
+    const inputImages = Array.from({ length: 10 }, (_, index) => ({
       buffer: Buffer.from(`ref-${index + 1}`),
       mimeType: "image/png",
     }));
@@ -284,7 +284,7 @@ describe("fal image-generation provider", () => {
     });
   });
 
-  it("rejects GPT Image 2 edits above 16 reference images", async () => {
+  it("rejects GPT Image 2 edits above 10 reference images", async () => {
     vi.spyOn(providerAuth, "resolveApiKeyForProvider").mockResolvedValue({
       apiKey: "fal-test-key",
       source: "env",
@@ -299,12 +299,12 @@ describe("fal image-generation provider", () => {
         model: "openai/gpt-image-2",
         prompt: "too many references",
         cfg: {},
-        inputImages: Array.from({ length: 17 }, () => ({
+        inputImages: Array.from({ length: 11 }, () => ({
           buffer: Buffer.from("ref"),
           mimeType: "image/png",
         })),
       }),
-    ).rejects.toThrow("fal GPT Image edit supports at most 16 reference images");
+    ).rejects.toThrow("fal GPT Image edit supports at most 10 reference images");
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 

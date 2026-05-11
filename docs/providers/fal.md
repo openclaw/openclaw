@@ -46,7 +46,7 @@ The bundled `fal` image-generation provider defaults to
 | Capability     | Value                                                       |
 | -------------- | ----------------------------------------------------------- |
 | Max images     | 4 per request                                               |
-| Edit mode      | Flux: 1 reference image; GPT Image 2: 16; Nano Banana 2: 14 |
+| Edit mode      | Flux: 1 reference image; GPT Image 2: 10; Nano Banana 2: 14 |
 | Size overrides | Supported                                                   |
 | Aspect ratio   | Supported for generate and GPT Image 2/Nano Banana 2 edit   |
 | Resolution     | Supported                                                   |
