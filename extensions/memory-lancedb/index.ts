@@ -227,23 +227,47 @@ class MemoryDB {
       ? { storageOptions: this.storageOptions }
       : {};
     this.db = await lancedb.connect(this.dbPath, connectionOptions);
-    const tables = await this.db.tableNames();
 
-    if (tables.includes(TABLE_NAME)) {
-      this.table = await this.db.openTable(TABLE_NAME);
-    } else {
-      this.table = await this.db.createTable(TABLE_NAME, [
-        {
-          id: "__schema__",
-          text: "",
-          vector: Array.from({ length: this.vectorDim }).fill(0),
-          importance: 0,
-          category: "other",
-          createdAt: 0,
-        },
-      ]);
-      await this.table.delete('id = "__schema__"');
+    // Retry mechanism for Windows Docker bind mount sync delays
+    const maxRetries = 3;
+    const retryDelayMs = 100;
+    let lastError: unknown;
+
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const tables = await this.db.tableNames();
+
+        if (tables.includes(TABLE_NAME)) {
+          this.table = await this.db.openTable(TABLE_NAME);
+        } else {
+          this.table = await this.db.createTable(TABLE_NAME, [
+            {
+              id: "__schema__",
+              text: "",
+              vector: Array.from({ length: this.vectorDim }).fill(0),
+              importance: 0,
+              category: "other",
+              createdAt: 0,
+            },
+          ]);
+          await this.table.delete('id = "__schema__"');
+        }
+        return;
+      } catch (error) {
+        lastError = error;
+        if (attempt < maxRetries - 1) {
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs * (attempt + 1)));
+        }
+      }
     }
+
+    // All retries exhausted - throw with helpful Windows message if applicable
+    const error = lastError instanceof Error ? lastError : new Error(String(lastError));
+    if (process.platform === "win32") {
+      error.message +=
+        "\n\nWindows users: If using Docker, try using volumes instead of bind mounts for the LanceDB data directory.";
+    }
+    throw error;
   }
 
   async store(entry: Omit<MemoryEntry, "id" | "createdAt">): Promise<MemoryEntry> {
