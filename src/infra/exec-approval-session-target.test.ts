@@ -2,10 +2,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { upsertSessionEntry } from "../config/sessions/store.js";
-import {
-  parseRawSessionConversationRef,
-  parseThreadSessionSuffix,
-} from "../sessions/session-key-utils.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { withTempDirSync } from "../test-helpers/temp-dir.js";
@@ -21,30 +17,6 @@ import {
 } from "./exec-approval-session-target.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
-
-vi.mock("../channels/plugins/session-conversation.js", () => ({
-  resolveSessionConversationRef(sessionKey: string | undefined | null) {
-    const raw = parseRawSessionConversationRef(sessionKey);
-    if (!raw) {
-      return null;
-    }
-    const parsed = parseThreadSessionSuffix(raw.rawId);
-    const id = (parsed.baseSessionKey ?? raw.rawId).trim();
-    if (!id) {
-      return null;
-    }
-    return {
-      channel: raw.channel,
-      kind: raw.kind,
-      rawId: raw.rawId,
-      id,
-      threadId: parsed.threadId,
-      baseSessionKey: `${raw.prefix}:${id}`,
-      baseConversationId: id,
-      parentConversationCandidates: parsed.threadId ? [id] : [],
-    };
-  },
-}));
 
 vi.mock("./outbound/targets.js", async () => {
   return await vi.importActual<typeof import("./outbound/targets-session.js")>(
@@ -286,39 +258,83 @@ describe("exec approval session target", () => {
     });
   });
 
-  it("parses channel-scoped session conversation fallbacks for approval requests", () => {
-    const request = buildPluginRequest({
-      sessionKey: "agent:main:matrix:channel:!Ops:Example.org:thread:$root",
-    });
+  it("reads typed channel conversation metadata for approval requests", () => {
+    withTempDirSync({ prefix: "openclaw-approval-conversation-" }, (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const sessionKey = "agent:main:matrix:channel:!Ops:Example.org:thread:$root";
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        entry: {
+          sessionId: "matrix-session",
+          updatedAt: Date.now(),
+          chatType: "channel",
+          deliveryContext: {
+            channel: "matrix",
+            to: "!Ops:Example.org",
+            accountId: "default",
+            threadId: "$root",
+          },
+        },
+        conversationIdentities: [
+          {
+            conversationId: "conv_matrix_ops_thread",
+            channel: "matrix",
+            accountId: "default",
+            kind: "channel",
+            peerId: "!Ops:Example.org",
+            parentConversationId: "!Ops:Example.org",
+            threadId: "$root",
+          },
+        ],
+      });
+      const request = buildPluginRequest({ sessionKey });
 
-    expect(
-      resolveApprovalRequestSessionConversation({
-        request,
+      expect(
+        resolveApprovalRequestSessionConversation({
+          request,
+          channel: "matrix",
+        }),
+      ).toEqual({
         channel: "matrix",
-      }),
-    ).toEqual({
-      channel: "matrix",
-      kind: "channel",
-      id: "!Ops:Example.org",
-      rawId: "!Ops:Example.org:thread:$root",
-      threadId: "$root",
-      baseSessionKey: "agent:main:matrix:channel:!Ops:Example.org",
-      baseConversationId: "!Ops:Example.org",
-      parentConversationCandidates: ["!Ops:Example.org"],
+        kind: "channel",
+        id: "!Ops:Example.org",
+        rawId: "!Ops:Example.org",
+        threadId: "$root",
+        baseSessionKey: sessionKey,
+        baseConversationId: "!Ops:Example.org",
+        parentConversationCandidates: [],
+      });
     });
   });
 
-  it("ignores session conversation fallbacks for other channels", () => {
-    const request = buildPluginRequest({
-      sessionKey: "agent:main:matrix:channel:!ops:example.org",
-    });
+  it("ignores typed session conversation metadata for other channels", () => {
+    withTempDirSync({ prefix: "openclaw-approval-conversation-" }, (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const sessionKey = "agent:main:matrix:channel:!ops:example.org";
+      upsertSessionEntry({
+        agentId: "main",
+        sessionKey,
+        entry: {
+          sessionId: "matrix-session",
+          updatedAt: Date.now(),
+          chatType: "channel",
+          deliveryContext: {
+            channel: "matrix",
+            to: "!ops:example.org",
+            accountId: "default",
+          },
+        },
+      });
+      const request = buildPluginRequest({ sessionKey });
 
-    expect(
-      resolveApprovalRequestSessionConversation({
-        request,
-        channel: "slack",
-      }),
-    ).toBeNull();
+      expect(
+        resolveApprovalRequestSessionConversation({
+          request,
+          channel: "slack",
+        }),
+      ).toBeNull();
+    });
   });
 
   it("prefers explicit turn-source account bindings when the session row is missing", () => {

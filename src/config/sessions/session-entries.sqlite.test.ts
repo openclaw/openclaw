@@ -466,7 +466,7 @@ describe("SQLite session row backend", () => {
       {
         session_id: "main-session",
         conversation_id: session?.primary_conversation_id,
-        role: "primary",
+        role: "participant",
       },
     ]);
   });
@@ -579,8 +579,8 @@ describe("SQLite session row backend", () => {
         .orderBy("conversations.peer_id", "asc"),
     ).rows;
     expect(links).toEqual([
-      { peer_id: "U1", role: "related" },
-      { peer_id: "U2", role: "primary" },
+      { peer_id: "U1", role: "participant" },
+      { peer_id: "U2", role: "participant" },
     ]);
     expect(
       readSqliteSessionDeliveryContext({

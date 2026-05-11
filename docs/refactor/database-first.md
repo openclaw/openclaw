@@ -250,11 +250,12 @@ The branch already has a real shared SQLite base:
   intentionally map to one session without lying in `session_key`. SQLite also
   enforces uniqueness for the natural provider identity so the same
   channel/account/kind/peer/thread tuple cannot fork across conversation ids.
-  Each session has at most one `primary` conversation link; when a shared-main
-  route sees a new direct peer, the prior primary becomes a related
-  conversation and `sessions.primary_conversation_id` points at the current
-  typed delivery target. Closed routing/status columns are enforced with SQLite
-  `CHECK` constraints instead of relying only on TypeScript unions.
+  Shared-main direct peers are linked with a `participant` role, so one
+  OpenClaw session can represent multiple external DM peers without demoting
+  older peers into vague related rows. `sessions.primary_conversation_id` still
+  points at the current typed delivery target. Closed routing/status columns
+  are enforced with SQLite `CHECK` constraints instead of relying only on
+  TypeScript unions.
   Runtime session projection clears compatibility routing shadows from
   `session_entries.entry_json` before applying typed session/conversation
   columns, so stale JSON payloads cannot resurrect delivery targets.
@@ -517,6 +518,9 @@ Completed consolidation/deletion highlights:
   filtering, and usage summaries no longer mine `SessionEntry.origin` for
   provider/account/thread/display routing. The only remaining runtime
   `origin` reads are non-session concepts or current-turn delivery objects.
+- Approval-request native conversation lookup now reads typed per-agent session
+  routing rows. It no longer parses channel/group/thread conversation identity
+  from `sessionKey`; missing typed metadata is a migration/repair issue.
 - Gateway session changed/chat/session event payloads no longer echo
   `SessionEntry.origin`; clients receive typed `channel`, `chatType`,
   `deliveryContext`, and `last*` compatibility fields instead.
@@ -536,8 +540,9 @@ Completed consolidation/deletion highlights:
 - Restart/update delivery extraction now lets the typed SQLite delivery
   `threadId` win over topic/thread fragments parsed from `sessionKey`; parsing
   is only a fallback for legacy thread-shaped keys.
-- Hook agent context channel ids now prefer typed SQLite conversation identity
-  over parsing provider/group/channel fragments from `sessionKey`.
+- Hook agent context channel ids now prefer typed SQLite conversation identity,
+  then explicit message metadata. They no longer parse provider/group/channel
+  fragments from `sessionKey`.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

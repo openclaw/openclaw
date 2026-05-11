@@ -78,7 +78,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
 CREATE TABLE IF NOT EXISTS session_conversations (
   session_id TEXT NOT NULL,
   conversation_id TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'related')),
+  role TEXT NOT NULL DEFAULT 'primary' CHECK (role IN ('primary', 'participant', 'related')),
   first_seen_at INTEGER NOT NULL,
   last_seen_at INTEGER NOT NULL,
   PRIMARY KEY (session_id, conversation_id, role),
@@ -88,10 +88,6 @@ CREATE TABLE IF NOT EXISTS session_conversations (
 
 CREATE INDEX IF NOT EXISTS idx_agent_session_conversations_conversation
   ON session_conversations(conversation_id, last_seen_at DESC, session_id);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_session_conversations_primary
-  ON session_conversations(session_id)
-  WHERE role = 'primary';
 
 CREATE TABLE IF NOT EXISTS session_routes (
   session_key TEXT NOT NULL PRIMARY KEY,

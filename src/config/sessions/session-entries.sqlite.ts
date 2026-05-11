@@ -50,6 +50,7 @@ export type SqliteSessionRoutingInfo = {
   primaryConversationId?: string;
   conversationKind?: string;
   conversationPeerId?: string;
+  parentConversationId?: string;
   conversationThreadId?: string;
 };
 
@@ -424,7 +425,7 @@ function conversationToRow(
 function sessionConversationToRow(params: {
   sessionId: string;
   conversationId: string;
-  role: "primary" | "related";
+  role: "primary" | "participant" | "related";
   now: number;
 }): Insertable<SessionConversationsTable> {
   return {
@@ -487,6 +488,17 @@ function demoteStalePrimarySessionConversations(
         .where("conversation_id", "!=", primaryConversationId),
     );
   }
+}
+
+function sessionConversationRole(params: {
+  sessionScope: string;
+  conversation: ConversationIdentity;
+  index: number;
+}): "primary" | "participant" | "related" {
+  if (params.sessionScope === "shared-main" && params.conversation.kind === "direct") {
+    return "participant";
+  }
+  return params.index === 0 ? "primary" : "related";
 }
 
 function serializeExpectedSessionEntry(sessionKey: string, entry: SessionEntry): string {
@@ -567,7 +579,11 @@ function upsertSessionEntries(
       sessionConversationToRow({
         sessionId: row.session.session_id,
         conversationId: conversation.conversationId,
-        role: index === 0 ? "primary" : "related",
+        role: sessionConversationRole({
+          sessionScope: row.session.session_scope ?? "conversation",
+          conversation,
+          index,
+        }),
         now,
       }),
     ),
@@ -775,6 +791,7 @@ export function readSqliteSessionRoutingInfo(
         "s.primary_conversation_id as primary_conversation_id",
         "c.kind as conversation_kind",
         "c.peer_id as conversation_peer_id",
+        "c.parent_conversation_id as parent_conversation_id",
         "c.thread_id as conversation_thread_id",
       ])
       .where("sr.session_key", "=", options.sessionKey),
@@ -788,6 +805,7 @@ export function readSqliteSessionRoutingInfo(
         primaryConversationId: optionalString(row.primary_conversation_id),
         conversationKind: optionalString(row.conversation_kind),
         conversationPeerId: optionalString(row.conversation_peer_id),
+        parentConversationId: optionalString(row.parent_conversation_id),
         conversationThreadId: optionalThreadId(row.conversation_thread_id),
       }
     : undefined;

@@ -57,7 +57,7 @@ describe("resolveAgentHookChannelId", () => {
     ).toBe("typed");
   });
 
-  it("derives the conversation id from channel session keys", () => {
+  it("uses target metadata instead of deriving conversation id from session keys", () => {
     expect(
       resolveAgentHookChannelId({
         sessionKey: "agent:main:discord:channel:1472750640760623226",
@@ -99,6 +99,23 @@ describe("resolveAgentHookChannelId", () => {
 
 describe("buildAgentHookContextChannelFields", () => {
   it("keeps provider and conversation id separate", () => {
+    const env = useTempStateDir();
+    upsertSessionEntry({
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:discord:channel:c1",
+      entry: {
+        sessionId: "session-2",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:c1",
+          accountId: "default",
+        },
+        chatType: "channel",
+      },
+    });
+
     expect(
       buildAgentHookContextChannelFields({
         sessionKey: "agent:main:discord:channel:c1",
