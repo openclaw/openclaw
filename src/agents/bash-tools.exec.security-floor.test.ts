@@ -57,7 +57,7 @@ describe("exec security floor", () => {
       ask: "off",
     });
 
-    expect(result.content[0]).toMatchObject({ type: "text" });
+    expect(result.content[0]?.type).toBe("text");
     const text = (result.content[0] as { text?: string }).text ?? "";
     expect(text).not.toMatch(/exec denied/i);
     expect(text).not.toMatch(/allowlist miss/i);

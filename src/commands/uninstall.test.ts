@@ -5,6 +5,11 @@ import {
   silenceCleanupCommandRuntime,
 } from "./cleanup-command.test-support.js";
 
+function loggedMessages(runtime: ReturnType<typeof createCleanupCommandRuntime>) {
+  const calls = (runtime.log as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls;
+  return calls.map(([message]) => String(message));
+}
+
 const { uninstallCommand } = await import("./uninstall.js");
 
 describe("uninstallCommand", () => {
@@ -23,7 +28,9 @@ describe("uninstallCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+    ).toBe(true);
   });
 
   it("does not recommend backup for service-only uninstall", async () => {
@@ -34,6 +41,8 @@ describe("uninstallCommand", () => {
       dryRun: true,
     });
 
-    expect(runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("openclaw backup create"));
+    expect(
+      loggedMessages(runtime).some((message) => message.includes("openclaw backup create")),
+    ).toBe(false);
   });
 });

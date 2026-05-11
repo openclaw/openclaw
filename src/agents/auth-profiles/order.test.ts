@@ -446,13 +446,12 @@ describe("resolveAuthProfileOrder", () => {
       expect(store.lastGood).toEqual({
         "fixture-provider": "fixture-provider:default",
       });
-      expect(store.usageStats?.["fixture-provider:default"]).toMatchObject({
-        errorCount: 0,
-        blockedUntil: undefined,
-        blockedReason: undefined,
-        cooldownUntil: undefined,
-        cooldownReason: undefined,
-      });
+      const usageStats = store.usageStats?.["fixture-provider:default"];
+      expect(usageStats?.errorCount).toBe(0);
+      expect(usageStats?.blockedUntil).toBeUndefined();
+      expect(usageStats?.blockedReason).toBeUndefined();
+      expect(usageStats?.cooldownUntil).toBeUndefined();
+      expect(usageStats?.cooldownReason).toBeUndefined();
       const lastUsed = store.usageStats?.["fixture-provider:default"]?.lastUsed;
       expect(typeof lastUsed).toBe("number");
       expect(Number.isFinite(lastUsed)).toBe(true);

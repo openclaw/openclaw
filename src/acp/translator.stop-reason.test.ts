@@ -104,13 +104,15 @@ describe("acp translator stop reason mapping", () => {
     await vi.waitFor(() => {
       expect(sentRunIds).toHaveLength(2);
     });
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:acp:session-1",
-      }),
-      { timeoutMs: null },
-    );
+    const requestCalls = (
+      request as unknown as {
+        mock: { calls: Array<[string, { sessionKey?: string }, { timeoutMs?: number | null }]> };
+      }
+    ).mock.calls;
+    const lastRequestCall = requestCalls.at(-1);
+    expect(lastRequestCall?.[0]).toBe("chat.send");
+    expect(lastRequestCall?.[1].sessionKey).toBe("agent:main:acp:session-1");
+    expect(lastRequestCall?.[2]).toEqual({ timeoutMs: null });
     await agent.handleGatewayEvent(
       createChatEvent({
         runId: sentRunIds[1],

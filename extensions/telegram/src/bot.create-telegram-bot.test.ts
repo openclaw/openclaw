@@ -246,7 +246,9 @@ describe("createTelegramBot", () => {
 
     expect(errorHandler).toBeTypeOf("function");
     errorHandler?.(new Error("handler boom"));
-    const errorMessage = stripAnsi(String(runtime.error.mock.calls[0]?.[0]));
+    const errorCalls = (runtime.error as unknown as { mock: { calls: Array<[unknown]> } }).mock
+      .calls;
+    const errorMessage = stripAnsi(String(errorCalls[0]?.[0]));
     expect(errorMessage.startsWith("telegram bot error: Error: handler boom")).toBe(true);
   });
 

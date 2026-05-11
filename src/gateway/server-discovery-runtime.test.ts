@@ -150,11 +150,9 @@ describe("startGatewayDiscovery", () => {
 
     expect(result.bonjourStop).toBeTypeOf("function");
     await result.bonjourStop?.();
-    expect(logs.warn).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery)",
-      ),
-    );
+    expect(logs.warn.mock.calls).toContainEqual([
+      "gateway discovery service timed out after 10ms (stuck-discovery, plugin=stuck-discovery); continuing startup",
+    ]);
 
     vi.useRealTimers();
   });
@@ -229,7 +227,9 @@ describe("startGatewayDiscovery", () => {
     expect(zoneParams.displayName).toBe("Lab Mac (OpenClaw)");
     expect(zoneParams.tailnetIPv4).toBe("100.64.0.10");
     expect(zoneParams.tailnetDns).toBe("gateway.tailnet.example.ts.net");
-    expect(logs.info).toHaveBeenCalledWith(expect.stringContaining("wide-area DNS-SD updated"));
+    expect(logs.info.mock.calls).toContainEqual([
+      "wide-area DNS-SD updated (openclaw.internal. → /tmp/openclaw.internal.db)",
+    ]);
     expect(result.bonjourStop).toBeNull();
   });
 });

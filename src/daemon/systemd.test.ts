@@ -1195,7 +1195,10 @@ describe("systemd service install and uninstall", () => {
       const { write, stdout } = createWritableStreamMock();
       await uninstallSystemdService({ env, stdout });
 
-      await expect(fs.access(unitPath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.access(unitPath)).rejects.toSatisfy((error) => {
+        expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+        return true;
+      });
       expect(requireFirstWrite(write)).toContain("Removed systemd service");
       expect(execFileMock).toHaveBeenCalledTimes(2);
     });

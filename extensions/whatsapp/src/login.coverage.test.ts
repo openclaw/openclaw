@@ -81,8 +81,9 @@ async function flushTasks() {
   await Promise.resolve();
 }
 
-function runtimeMessageCalls(fn: ReturnType<typeof vi.fn>) {
-  return fn.mock.calls.map((call) => stripAnsi(String(call[0])));
+function runtimeMessageCalls(fn: RuntimeEnv["log"]) {
+  const calls = (fn as unknown as { mock: { calls: Array<[unknown]> } }).mock.calls;
+  return calls.map((call) => stripAnsi(String(call[0])));
 }
 
 describe("loginWeb coverage", () => {

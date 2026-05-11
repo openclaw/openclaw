@@ -1419,7 +1419,9 @@ describe("resolveModel", () => {
       contextWindow: 262144,
       maxTokens: 65536,
     });
-    expect(resolvedModel.compat).toMatchObject({ supportsTools: false });
+    expect((resolvedModel.compat as { supportsTools?: boolean } | undefined)?.supportsTools).toBe(
+      false,
+    );
   });
 
   it("falls back to text-only when OpenRouter API cache is empty", () => {
