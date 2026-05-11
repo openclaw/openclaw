@@ -466,7 +466,7 @@ describe("codex command", () => {
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
     expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
-    expectResultTextContains(accountResult, "Rate limits: Codex: primary 42%");
+    expectResultTextContains(accountResult, "Rate limits:\n- Codex\n  - Primary: 42%");
   });
 
   it("rejects extra operands for read-only Codex commands", async () => {
@@ -547,7 +547,7 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Account: codex@example.com");
-    expect(result.text).toContain("Rate limits: Codex: primary 50%, resets in");
+    expect(result.text).toContain("Rate limits:\n- Codex\n  - Primary: 50%, resets in");
     const cachedLimits = requireRecord(
       readRecentCodexRateLimits(),
       "expected cached Codex rate limits",
@@ -577,6 +577,56 @@ describe("codex command", () => {
     expect(result.text).not.toContain("<@U123>");
     expect(result.text).not.toContain("[trusted](https://evil)");
     expect(result.text).not.toContain("@here");
+  });
+
+  it("formats account rate limits as a readable multiline block", async () => {
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "chatgpt", email: "codex@example.com", planType: "pro" },
+          requiresOpenaiAuth: false,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          rateLimitsByLimitId: {
+            codex: {
+              limitId: "codex",
+              limitName: "Codex",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 100, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: "rate_limit_reached",
+            },
+            "gpt-5.3-codex-spark": {
+              limitId: "gpt-5.3-codex-spark",
+              limitName: "GPT 5.3 Codex Spark",
+              primary: { usedPercent: 0, windowDurationMins: 300, resetsAt },
+              secondary: { usedPercent: 0, windowDurationMins: 10080, resetsAt: resetsAt + 3600 },
+              credits: null,
+              planType: "plus",
+              rateLimitReachedType: null,
+            },
+          },
+        },
+      });
+
+    const result = await handleCodexCommand(createContext("account"), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Rate limits:\n- Codex");
+    expect(result.text).toContain("  - Primary: 0%, resets in");
+    expect(result.text).toContain("  - Secondary: 100%, resets in");
+    expect(result.text).toContain(" - rate limit reached");
+    expect(result.text).toContain("- GPT 5.3 Codex Spark\n  - Primary: 0%, resets in");
+    expect(result.text).not.toContain("; GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("\uff08rate limit reached\uff09");
   });
 
   it("escapes successful Codex account fallback summaries before chat display", async () => {
@@ -612,7 +662,7 @@ describe("codex command", () => {
         deps: createDeps({ safeCodexControlRequest }),
       }),
     ).resolves.toEqual({
-      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n"),
+      text: ["Account: Amazon Bedrock", "Rate limits: none returned"].join("\n\n"),
     });
   });
 
