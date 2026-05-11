@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const indexHtmlPath = path.resolve(process.cwd(), "ui/index.html");
+type TestWindow = Window & typeof globalThis;
 
 async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
   const html = await readFile(indexHtmlPath, "utf8");
@@ -12,19 +13,29 @@ async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
   );
 }
 
-function waitForWindowTimeout(window: Window, delayMs: number): Promise<void> {
+function waitForWindowTimeout(window: TestWindow, delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     window.setTimeout(resolve, delayMs);
   });
 }
 
-function installFallbackShell(html: string): void {
-  const parsed = new DOMParser().parseFromString(html, "text/html");
-  document.head.innerHTML = parsed.head.innerHTML;
-  document.body.innerHTML = parsed.body.innerHTML;
+function createIsolatedWindow(): TestWindow {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const frameWindow = frame.contentWindow as TestWindow | null;
+  if (!frameWindow) {
+    throw new Error("failed to create isolated frame window");
+  }
+  return frameWindow;
+}
 
-  const sentinel = Array.from(parsed.querySelectorAll("script:not([src])")).find((script) =>
-    script.textContent?.includes("openclaw-mount-fallback"),
+function installFallbackShell(window: TestWindow, html: string): void {
+  const parsed = new window.DOMParser().parseFromString(html, "text/html");
+  window.document.head.innerHTML = parsed.head.innerHTML;
+  window.document.body.innerHTML = parsed.body.innerHTML;
+
+  const sentinel = Array.from(parsed.querySelectorAll<HTMLScriptElement>("script:not([src])")).find(
+    (script) => script.textContent?.includes("openclaw-mount-fallback"),
   );
   expect(sentinel).toBeTruthy();
   window.eval(sentinel?.textContent ?? "");
@@ -32,31 +43,37 @@ function installFallbackShell(html: string): void {
 
 describe("Control UI mount fallback", () => {
   afterEach(() => {
-    document.head.innerHTML = "";
     document.body.innerHTML = "";
   });
 
   it("shows the static troubleshooting panel when the app element is never registered", async () => {
-    installFallbackShell(await readIndexHtmlWithDelay(1));
-    await waitForWindowTimeout(window, 10);
+    const frameWindow = createIsolatedWindow();
+    expect(frameWindow.customElements.get("openclaw-app")).toBeUndefined();
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+    await waitForWindowTimeout(frameWindow, 10);
 
-    const fallback = document.getElementById("openclaw-mount-fallback");
+    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
     expect(fallback?.hidden).toBe(false);
-    expect(document.body.classList.contains("openclaw-mount-fallback-active")).toBe(true);
+    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
+      true,
+    );
     expect(fallback?.textContent).toContain("Control UI did not start");
     expect(fallback?.textContent).toContain("Control UI troubleshooting");
   });
 
   it("keeps the fallback hidden when the app element registers before the timeout", async () => {
-    installFallbackShell(await readIndexHtmlWithDelay(25));
-    if (!window.customElements.get("openclaw-app")) {
-      window.customElements.define("openclaw-app", class extends HTMLElement {});
+    const frameWindow = createIsolatedWindow();
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(25));
+    if (!frameWindow.customElements.get("openclaw-app")) {
+      frameWindow.customElements.define("openclaw-app", class extends frameWindow.HTMLElement {});
     }
-    await window.customElements.whenDefined("openclaw-app");
-    await waitForWindowTimeout(window, 35);
+    await frameWindow.customElements.whenDefined("openclaw-app");
+    await waitForWindowTimeout(frameWindow, 35);
 
-    const fallback = document.getElementById("openclaw-mount-fallback");
+    const fallback = frameWindow.document.getElementById("openclaw-mount-fallback");
     expect(fallback?.hidden).toBe(true);
-    expect(document.body.classList.contains("openclaw-mount-fallback-active")).toBe(false);
+    expect(frameWindow.document.body.classList.contains("openclaw-mount-fallback-active")).toBe(
+      false,
+    );
   });
 });
