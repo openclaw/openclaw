@@ -273,8 +273,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class ListCommand extends Command {
-    name = "list";
-    description = "List active voice sessions with details";
+    override name = "list";
+    override description = "List active voice sessions with details";
     defer = true;
     ephemeral = params.ephemeralDefault;
 
@@ -300,8 +300,8 @@ export function createDiscordVoiceCommand(params: VoiceCommandContext): CommandW
   }
 
   class ChatCommand extends Command {
-    name = "chat";
-    description = "Show or set voice chat mode";
+    override name = "chat";
+    override description = "Show or set voice chat mode";
     defer = true;
     ephemeral = params.ephemeralDefault;
     options: CommandOptions = [
