@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
+import { canonicalizeBase64, estimateBase64DecodedBytes } from "../media/base64.js";
 import { MAX_IMAGE_BYTES } from "../media/constants.js";
 import { extensionForMime, mimeTypeFromFilePath } from "../media/mime.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -114,11 +114,12 @@ function shouldIgnoreProvidedImageMime(params: {
   return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
 }
 
-function isValidBase64(value: string): boolean {
-  if (value.length === 0 || value.length % 4 !== 0) {
-    return false;
+function roundTripBase64(value: string): string | undefined {
+  const canonical = canonicalizeBase64(value);
+  if (!canonical) {
+    return undefined;
   }
-  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+  return Buffer.from(canonical, "base64").toString("base64") === canonical ? canonical : undefined;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -193,17 +194,24 @@ function normalizeAttachment(
 function validateAttachmentBase64OrThrow(
   normalized: NormalizedAttachment,
   opts: { maxBytes: number },
-): number {
-  if (!isValidBase64(normalized.base64)) {
+): { base64: string; sizeBytes: number } {
+  if (normalized.base64.length === 0) {
     throw new Error(`attachment ${normalized.label}: invalid base64 content`);
   }
   const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
-  if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
+  if (sizeBytes <= 0) {
+    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
+  }
+  if (sizeBytes > opts.maxBytes) {
     throw new Error(
       `attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`,
     );
   }
-  return sizeBytes;
+  const base64 = roundTripBase64(normalized.base64);
+  if (!base64) {
+    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
+  }
+  return { base64, sizeBytes };
 }
 
 export async function parseMessageWithAttachments(
@@ -245,21 +253,14 @@ export async function parseMessageWithAttachments(
         requireImageMime: false,
       });
 
-      const { base64: b64, label, mime } = normalized;
+      const { label, mime } = normalized;
 
-      if (b64.length === 0) {
+      if (normalized.base64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
-      if (!isValidBase64(b64)) {
-        throw new Error(`attachment ${label}: invalid base64 content`);
-      }
-
-      const sizeBytes = estimateBase64DecodedBytes(b64);
-      if (sizeBytes > maxBytes) {
-        throw new Error(
-          `attachment ${label}: exceeds size limit (${sizeBytes} > ${maxBytes} bytes)`,
-        );
-      }
+      const { base64: b64, sizeBytes } = validateAttachmentBase64OrThrow(normalized, {
+        maxBytes,
+      });
 
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
@@ -437,9 +438,9 @@ export function buildMessageWithAttachments(
       stripDataUrlPrefix: false,
       requireImageMime: true,
     });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
+    const { base64 } = validateAttachmentBase64OrThrow(normalized, { maxBytes });
 
-    const { base64, label, mime } = normalized;
+    const { label, mime } = normalized;
     const safeLabel = label.replace(/\s+/g, "_");
     blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
   }

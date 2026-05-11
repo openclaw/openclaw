@@ -528,6 +528,48 @@ describe("shared attachment validation", () => {
     ).rejects.toThrow(/base64/i);
   });
 
+  it("rejects base64 strings that do not survive a Buffer round-trip", async () => {
+    const bad: ChatAttachment = {
+      type: "image",
+      mimeType: "image/png",
+      fileName: "twisted.png",
+      content: "AB==",
+    };
+
+    expect(() => buildMessageWithAttachments("x", [bad])).toThrow(/base64/i);
+    await expect(
+      parseMessageWithAttachments("x", [bad], { log: { warn: () => {} } }),
+    ).rejects.toThrow(/base64/i);
+  });
+
+  it("handles a large valid image payload without stack overflow", async () => {
+    const large = Buffer.alloc(4_500_000, 1);
+    large.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0);
+    const content = large.toString("base64");
+
+    const parsed = await parseMessageWithAttachments(
+      "x",
+      [
+        {
+          type: "image",
+          mimeType: "image/png",
+          fileName: "large.png",
+          content,
+        },
+      ],
+      { log: { warn: () => {} } },
+    );
+
+    try {
+      expect(parsed.images).toHaveLength(0);
+      expect(parsed.offloadedRefs).toHaveLength(1);
+      expect(parsed.offloadedRefs[0]?.mimeType).toBe("image/png");
+      expect(parsed.message).toContain("[media attached: media://inbound/");
+    } finally {
+      await cleanupOffloadedRefs(parsed.offloadedRefs);
+    }
+  });
+
   it("rejects images over limit for both builder and parser without decoding base64", async () => {
     const big = "A".repeat(10_000);
     const att: ChatAttachment = {
