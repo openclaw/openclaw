@@ -9,7 +9,7 @@ read_when:
 
 ## Status
 
-Accepted and implemented.
+Accepted, implemented, and coverage-audited.
 
 ## Goal
 
@@ -48,6 +48,9 @@ catalog.
   path for the common observable failure: "the model cannot see or call a tool."
 - The page has no explicit scope statement saying that exhaustive config,
   defaults, enum values, and policy behavior belong in linked reference pages.
+- The first implementation compressed the category table too far and dropped
+  reader-recognition cues from the previous page, including `code_execution`,
+  `x_search`, file `edit`, `image`, and common plugin-provided tool examples.
 
 ## Proposed structure
 
@@ -96,8 +99,9 @@ Keep a compact category table, but remove fragile details that belong to the
 reference:
 
 - Keep category names, reader outcome, and canonical links.
-- Avoid exhaustive tool ids and policy-group semantics.
-- Include only representative tool ids when they help search or recognition.
+- Avoid exhaustive policy-group semantics.
+- Include representative tool ids when they help search or recognition,
+  especially ids that were already surfaced on the old overview.
 - Link `tools/tool-search` from the Web or discovery category only if the page
   clearly distinguishes PI Tool Search from Codex-native tool search.
 
@@ -129,8 +133,12 @@ Split extension paths by job:
 - Package reusable workflows: [Skill workshop](/plugins/skill-workshop) when
   appropriate
 
-Do not explain plugin descriptor caching or manifest internals on the overview
-page. Link to SDK and manifest reference pages instead.
+Keep a short list of common plugin-provided tools that already had first-class
+docs links, such as Diffs, LLM Task, Lobster, Tokenjuice, Tool Search, and
+Canvas. It can name `api.registerTool(...)` and `contracts.tools` as the
+authoring entry points, but should not explain plugin descriptor caching or
+manifest internals on the overview page. Link to SDK and manifest reference
+pages instead.
 
 ### Troubleshoot missing tools
 
@@ -208,6 +216,8 @@ use the direct Node scripts and report the blocker.
 - The page links to automation and agent coordination without owning their
   detailed workflows.
 - The page avoids duplicating exhaustive tool group or SDK reference tables.
+- A coverage audit against the old page preserves previously mentioned
+  first-class entities through either the overview itself or a canonical link.
 - Docs validation passes, or any blocked local validation has a precise reason.
 
 ## Review questions

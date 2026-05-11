@@ -884,6 +884,10 @@
     "target": "文档能力导航重构"
   },
   {
+    "source": "Tools page best-practices refactor",
+    "target": "工具页面最佳实践重构"
+  },
+  {
     "source": "Tools, skills, and plugins overview",
     "target": "工具、技能和插件概览"
   },
