@@ -12,7 +12,10 @@ function isPluginEntryIssue(issue: ConfigValidationIssue): boolean {
 }
 
 function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
-  return PLUGIN_POLICY_PATHS.has(issue.path.trim());
+  return (
+    PLUGIN_POLICY_PATHS.has(issue.path.trim()) &&
+    issue.message.trim().startsWith("plugin not found:")
+  );
 }
 
 /**

@@ -64,6 +64,17 @@ describe("config recovery policy", () => {
     expect(shouldAttemptLastKnownGoodRecovery(current)).toBe(true);
   });
 
+  it("keeps recovery enabled for malformed plugin policy values", () => {
+    for (const path of ["plugins.allow", "plugins.deny"]) {
+      const current = snapshot({
+        issues: [{ path, message: "Invalid input: expected array, received string" }],
+      });
+
+      expect(isPluginLocalInvalidConfigSnapshot(current)).toBe(false);
+      expect(shouldAttemptLastKnownGoodRecovery(current)).toBe(true);
+    }
+  });
+
   it("keeps recovery enabled when legacy config issues are present", () => {
     const current = snapshot({
       issues: [{ path: "plugins.entries.feishu", message: "plugin requires newer host" }],
