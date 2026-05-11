@@ -551,7 +551,7 @@ Minimal migrated config:
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: false,
+            allow_destructive_actions: true,
             plugins: {
               "google-calendar": {
                 enabled: true,

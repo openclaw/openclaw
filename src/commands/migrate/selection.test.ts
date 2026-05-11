@@ -75,7 +75,7 @@ function codexPluginConfigItem(pluginNames: string[]): MigrationItem {
         config: {
           codexPlugins: {
             enabled: true,
-            allow_destructive_actions: false,
+            allow_destructive_actions: true,
             plugins: Object.fromEntries(
               pluginNames.map((name) => [
                 name,
