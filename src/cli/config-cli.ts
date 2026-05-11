@@ -87,6 +87,10 @@ type ConfigPatchOptions = {
   json?: boolean | undefined;
   replacePath?: string[] | undefined;
 };
+type ConfigUnsetOptions = {
+  dryRun?: boolean | undefined;
+  json?: boolean | undefined;
+};
 type ConfigMutationOptions = {
   dryRun?: boolean | undefined;
   allowExec?: boolean | undefined;
@@ -1763,8 +1767,13 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
   }
 }
 
-export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv }) {
+export async function runConfigUnset(opts: {
+  path: string;
+  cliOptions?: ConfigUnsetOptions;
+  runtime?: RuntimeEnv;
+}) {
   const runtime = opts.runtime ?? defaultRuntime;
+  const cliOptions = opts.cliOptions ?? {};
   try {
     const parsedPath = parseRequiredPath(opts.path);
     const snapshot = await loadValidConfig(runtime);
@@ -1774,12 +1783,24 @@ export async function runConfigUnset(opts: { path: string; runtime?: RuntimeEnv 
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
-      runtime.error(
-        danger(
-          `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
-        ),
-      );
+      if (cliOptions.dryRun && cliOptions.json) {
+        writeRuntimeJson(runtime, { valid: false, path: opts.path, error: "Config path not found" });
+      } else {
+        runtime.error(
+          danger(
+            `Config path not found: ${opts.path}. Nothing was changed. Run ${formatCliCommand("openclaw config get <path>")} first if you are unsure of the path.`,
+          ),
+        );
+      }
       runtime.exit(1);
+      return;
+    }
+    if (cliOptions.dryRun) {
+      if (cliOptions.json) {
+        writeRuntimeJson(runtime, { valid: true, path: opts.path, removed: true });
+      } else {
+        runtime.log(success(`Would remove ${opts.path} (dry-run).`));
+      }
       return;
     }
     await replaceConfigFile({
@@ -2031,8 +2052,14 @@ export function registerConfigCli(program: Command) {
     .command("unset")
     .description("Remove a config value by dot path")
     .argument("<path>", "Config path (dot or bracket notation)")
-    .action(async (path: string) => {
-      await runConfigUnset({ path });
+    .option(
+      "--dry-run",
+      "Validate removal without writing openclaw.json",
+      false,
+    )
+    .option("--json", "Output dry-run result as JSON", false)
+    .action(async (path: string, opts: ConfigUnsetOptions) => {
+      await runConfigUnset({ path, cliOptions: opts });
     });
 
   cmd
