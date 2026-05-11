@@ -307,7 +307,7 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it("enables Kimi Anthropic thinking with a bounded high budget", () => {
+  it("enables Kimi Anthropic thinking with a high budget and enough output room", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
     const wrapped = wrapKimiProviderStream({
@@ -328,8 +328,64 @@ describe("kimi tool-call markup wrapper", () => {
     );
 
     expect(getCapturedPayload()).toEqual({
-      max_tokens: 9216,
+      max_tokens: 16000,
       thinking: { type: "enabled", budget_tokens: 8192 },
+    });
+  });
+
+  it("adds the default Kimi Anthropic thinking budget for explicit enabled params", () => {
+    const cases = ["enabled", true, { type: "enabled" }] as const;
+
+    for (const configuredThinking of cases) {
+      const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+      const wrapped = wrapKimiProviderStream({
+        provider: "kimi",
+        modelId: "kimi-code",
+        extraParams: { thinking: configuredThinking },
+        streamFn: baseStreamFn,
+      } as never);
+
+      void wrapped(
+        {
+          api: "anthropic-messages",
+          provider: "kimi",
+          id: "kimi-code",
+        } as Model<"anthropic-messages">,
+        { messages: [] } as Context,
+        {},
+      );
+
+      expect(getCapturedPayload()).toEqual({
+        max_tokens: 16000,
+        thinking: { type: "enabled", budget_tokens: 1024 },
+      });
+    }
+  });
+
+  it("uses the session Kimi Anthropic budget for explicit enabled params when available", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      extraParams: { thinking: "enabled" },
+      thinkingLevel: "medium",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      max_tokens: 16000,
+      thinking: { type: "enabled", budget_tokens: 4096 },
     });
   });
 
@@ -355,8 +411,36 @@ describe("kimi tool-call markup wrapper", () => {
     );
 
     expect(getCapturedPayload()).toEqual({
-      max_tokens: 5120,
+      max_tokens: 16000,
       thinking: { type: "enabled", budget_tokens: 4096 },
+    });
+  });
+
+  it("preserves larger Kimi Anthropic max_tokens values", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream({
+      max_tokens: 32768,
+    });
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      thinkingLevel: "high",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      max_tokens: 32768,
+      thinking: { type: "enabled", budget_tokens: 8192 },
     });
   });
 
@@ -391,7 +475,7 @@ describe("kimi tool-call markup wrapper", () => {
       );
 
       expect(getCapturedPayload()).toEqual({
-        max_tokens: budgetTokens + 1024,
+        max_tokens: 16000,
         thinking: { type: "enabled", budget_tokens: budgetTokens },
       });
     }

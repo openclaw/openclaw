@@ -42,6 +42,7 @@ const KIMI_ANTHROPIC_THINKING_BUDGETS: Record<Exclude<KimiThinkingLevel, "off">,
   max: 8192,
 };
 const KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS = 1024;
+const KIMI_ANTHROPIC_MIN_OUTPUT_TOKENS = 16000;
 
 function normalizeKimiThinkingBudgetTokens(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value)) {
@@ -51,19 +52,27 @@ function normalizeKimiThinkingBudgetTokens(value: unknown): number | undefined {
   return normalized >= 1024 ? normalized : undefined;
 }
 
-function clampKimiAnthropicMaxTokens(
+function normalizeKimiAnthropicMaxTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  return normalized > 0 ? normalized : undefined;
+}
+
+function ensureKimiAnthropicMaxTokens(
   payloadObj: Record<string, unknown>,
   thinkingConfig: KimiThinkingConfig,
 ): void {
   if (thinkingConfig.type !== "enabled" || thinkingConfig.budget_tokens === undefined) {
     return;
   }
-  const limit = thinkingConfig.budget_tokens + KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS;
-  const current =
-    typeof payloadObj.max_tokens === "number" && Number.isFinite(payloadObj.max_tokens)
-      ? Math.floor(payloadObj.max_tokens)
-      : undefined;
-  payloadObj.max_tokens = current === undefined ? limit : Math.min(current, limit);
+  const required = Math.max(
+    KIMI_ANTHROPIC_MIN_OUTPUT_TOKENS,
+    thinkingConfig.budget_tokens + KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS,
+  );
+  const current = normalizeKimiAnthropicMaxTokens(payloadObj.max_tokens);
+  payloadObj.max_tokens = current === undefined ? required : Math.max(current, required);
 }
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
@@ -123,16 +132,18 @@ export function resolveKimiThinkingConfig(params: {
   thinkingLevel?: KimiThinkingLevel;
 }): KimiThinkingConfig {
   const configured = normalizeKimiThinkingConfig(params.configuredThinking);
+  const levelBudgetTokens = resolveKimiAnthropicThinkingBudgetTokens(params.thinkingLevel);
   if (configured) {
-    return configured;
+    return configured.type === "enabled" && configured.budget_tokens === undefined
+      ? { type: "enabled", budget_tokens: levelBudgetTokens ?? 1024 }
+      : configured;
   }
   if (!params.thinkingLevel || params.thinkingLevel === "off") {
     return { type: "disabled" };
   }
-  const budgetTokens = resolveKimiAnthropicThinkingBudgetTokens(params.thinkingLevel);
-  return budgetTokens === undefined
+  return levelBudgetTokens === undefined
     ? { type: "enabled" }
-    : { type: "enabled", budget_tokens: budgetTokens };
+    : { type: "enabled", budget_tokens: levelBudgetTokens };
 }
 
 export function resolveKimiThinkingType(params: {
@@ -319,7 +330,7 @@ export function createKimiThinkingWrapper(
       payloadObj.thinking =
         model.api === "anthropic-messages" ? { ...normalized } : { type: normalized.type };
       if (model.api === "anthropic-messages") {
-        clampKimiAnthropicMaxTokens(payloadObj, normalized);
+        ensureKimiAnthropicMaxTokens(payloadObj, normalized);
       }
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
