@@ -126,6 +126,12 @@ describe("SQLite session row backend", () => {
         status: "running",
         chatType: "direct",
         channel: "discord",
+        deliveryContext: {
+          channel: "discord",
+          to: "user:U1",
+          accountId: "work",
+          threadId: "thread-1",
+        },
         modelProvider: "openai",
         model: "gpt-5.5",
         agentHarnessId: "codex",
@@ -152,6 +158,143 @@ describe("SQLite session row backend", () => {
       model: "gpt-5.5",
       agent_harness_id: "codex",
       display_name: "Ops",
+    });
+  });
+
+  it("projects hot session fields from typed rows instead of entry_json", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:ops",
+      entry: {
+        sessionId: "ops-session",
+        updatedAt: 200,
+        status: "running",
+        chatType: "direct",
+        channel: "discord",
+        deliveryContext: {
+          channel: "discord",
+          to: "user:U1",
+          accountId: "work",
+          threadId: "thread-1",
+        },
+        modelProvider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        displayName: "Ops",
+      },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_entries")
+        .set({
+          entry_json: JSON.stringify({
+            sessionId: "stale-session",
+            updatedAt: 1,
+            status: "stale",
+            chatType: "group",
+            channel: "slack",
+            deliveryContext: {
+              channel: "slack",
+              to: "wrong",
+              accountId: "stale",
+              threadId: "wrong-thread",
+            },
+            modelProvider: "anthropic",
+            model: "claude",
+            agentHarnessId: "legacy",
+            displayName: "Stale",
+          }),
+        })
+        .where("session_key", "=", "discord:ops"),
+    );
+
+    expect(getSessionEntry({ agentId: "ops", env, sessionKey: "discord:ops" })).toMatchObject({
+      sessionId: "ops-session",
+      updatedAt: 200,
+      status: "running",
+      chatType: "direct",
+      channel: "discord",
+      lastChannel: "discord",
+      lastTo: "user:U1",
+      lastAccountId: "work",
+      lastThreadId: "thread-1",
+      deliveryContext: {
+        channel: "discord",
+        to: "user:U1",
+        accountId: "work",
+        threadId: "thread-1",
+      },
+      modelProvider: "openai",
+      model: "gpt-5.5",
+      agentHarnessId: "codex",
+      displayName: "Ops",
+    });
+    expect(loadSqliteSessionEntries({ agentId: "ops", env })["discord:ops"]).toMatchObject({
+      sessionId: "ops-session",
+      updatedAt: 200,
+      chatType: "direct",
+      channel: "discord",
+      lastTo: "user:U1",
+    });
+    expect(listSessionEntries({ agentId: "ops", env })[0]?.entry).toMatchObject({
+      sessionId: "ops-session",
+      updatedAt: 200,
+      chatType: "direct",
+      channel: "discord",
+      lastTo: "user:U1",
+    });
+  });
+
+  it("can read a session row when entry_json is no longer parseable", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+
+    upsertSessionEntry({
+      agentId: "ops",
+      env,
+      sessionKey: "discord:ops",
+      entry: {
+        sessionId: "ops-session",
+        updatedAt: 200,
+        chatType: "direct",
+        channel: "discord",
+        deliveryContext: {
+          channel: "discord",
+          to: "user:U1",
+          accountId: "work",
+        },
+      },
+    });
+
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_entries")
+        .set({ entry_json: "{not-json" })
+        .where("session_key", "=", "discord:ops"),
+    );
+
+    expect(getSessionEntry({ agentId: "ops", env, sessionKey: "discord:ops" })).toMatchObject({
+      sessionId: "ops-session",
+      updatedAt: 200,
+      chatType: "direct",
+      channel: "discord",
+      lastTo: "user:U1",
+      deliveryContext: {
+        channel: "discord",
+        to: "user:U1",
+        accountId: "work",
+      },
     });
   });
 
@@ -223,6 +366,53 @@ describe("SQLite session row backend", () => {
         role: "primary",
       },
     ]);
+  });
+
+  it("rejects duplicate natural conversation identities", () => {
+    const stateDir = createTempDir();
+    const env = { OPENCLAW_STATE_DIR: stateDir };
+    const database = openOpenClawAgentDatabase({ agentId: "ops", env });
+    const db = getNodeSqliteKysely<SessionEntriesTestDatabase>(database.db);
+
+    executeSqliteQuerySync(
+      database.db,
+      db.insertInto("conversations").values({
+        conversation_id: "conv_a",
+        channel: "discord",
+        account_id: "work",
+        kind: "direct",
+        peer_id: "U1",
+        parent_conversation_id: null,
+        thread_id: null,
+        native_channel_id: null,
+        native_direct_user_id: "U1",
+        label: null,
+        metadata_json: null,
+        created_at: 100,
+        updated_at: 100,
+      }),
+    );
+
+    expect(() =>
+      executeSqliteQuerySync(
+        database.db,
+        db.insertInto("conversations").values({
+          conversation_id: "conv_b",
+          channel: "discord",
+          account_id: "work",
+          kind: "direct",
+          peer_id: "U1",
+          parent_conversation_id: null,
+          thread_id: null,
+          native_channel_id: "D1",
+          native_direct_user_id: "U1",
+          label: "Duplicate",
+          metadata_json: null,
+          created_at: 101,
+          updated_at: 101,
+        }),
+      ),
+    ).toThrow(/UNIQUE/);
   });
 
   it("links multiple direct peers to a shared main DM session", async () => {

@@ -155,7 +155,7 @@ describe("generic current-conversation bindings", () => {
     });
 
     expectBindingFields(bound, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
 
@@ -167,7 +167,7 @@ describe("generic current-conversation bindings", () => {
       conversationId: "user:U123",
     });
     expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
     expectBindingMetadata(resolved, { label: "workspace-dm" });
@@ -175,7 +175,7 @@ describe("generic current-conversation bindings", () => {
 
   it("normalizes persisted target session keys on reload", async () => {
     __testing.persistBindingForTests({
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: " agent:codex:acp:workspace-dm ",
       targetKind: "session",
       conversation: {
@@ -197,7 +197,7 @@ describe("generic current-conversation bindings", () => {
     });
 
     expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
     expectBindingMetadata(resolved, { label: "workspace-dm" });
@@ -206,7 +206,7 @@ describe("generic current-conversation bindings", () => {
     );
     expect(bindings).toHaveLength(1);
     expectBindingFields(bindings[0], {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
     });
   });
@@ -265,7 +265,7 @@ describe("generic current-conversation bindings", () => {
             boundAt: 1,
           }),
         })
-        .where("binding_key", "=", "workspace\u241fdefault\u241f\u241fuser:U123"),
+        .where("binding_key", "=", "workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123"),
     );
 
     __testing.resetCurrentConversationBindingsForTests();
@@ -276,11 +276,59 @@ describe("generic current-conversation bindings", () => {
       conversationId: "user:U123",
     });
     expectBindingFields(resolved, {
-      bindingId: "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       targetSessionKey: "agent:codex:acp:workspace-dm",
       status: "active",
     });
     expectBindingMetadata(resolved, { label: "workspace-dm" });
+  });
+
+  it("keeps conversation kinds as part of the binding identity", async () => {
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:direct-session",
+      targetKind: "session",
+      conversation: {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "room-1",
+        conversationKind: "direct",
+      },
+    });
+    await bindGenericCurrentConversation({
+      targetSessionKey: "agent:codex:group-session",
+      targetKind: "session",
+      conversation: {
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "room-1",
+        conversationKind: "group",
+      },
+    });
+
+    expectBindingFields(
+      resolveGenericCurrentConversationBinding({
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "room-1",
+        conversationKind: "direct",
+      }),
+      {
+        bindingId: "generic:workspace\u241fdefault\u241fdirect\u241f\u241froom-1",
+        targetSessionKey: "agent:codex:direct-session",
+      },
+    );
+    expectBindingFields(
+      resolveGenericCurrentConversationBinding({
+        channel: "workspace",
+        accountId: "default",
+        conversationId: "room-1",
+        conversationKind: "group",
+      }),
+      {
+        bindingId: "generic:workspace\u241fdefault\u241fgroup\u241f\u241froom-1",
+        targetSessionKey: "agent:codex:group-session",
+      },
+    );
   });
 
   it("drops self-parent conversation refs when storing generic current bindings", async () => {
@@ -296,7 +344,7 @@ describe("generic current-conversation bindings", () => {
     });
 
     const boundRecord = expectBindingFields(bound, {
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
     });
     expect(boundRecord.conversation).toEqual({
       channel: "forum",
@@ -311,7 +359,7 @@ describe("generic current-conversation bindings", () => {
         conversationId: "6098642967",
       }),
       {
-        bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+        bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
         targetSessionKey: "agent:codex:acp:forum-dm",
       },
     );
@@ -342,7 +390,7 @@ describe("generic current-conversation bindings", () => {
     });
 
     const resolvedRecord = expectBindingFields(resolved, {
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
       targetSessionKey: "agent:codex:acp:forum-dm",
     });
     expect(resolvedRecord.conversation).toEqual({
@@ -358,7 +406,7 @@ describe("generic current-conversation bindings", () => {
     });
     expect(unbound).toHaveLength(1);
     expectBindingFields(unbound[0], {
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
     });
 
     __testing.resetCurrentConversationBindingsForTests();
@@ -415,7 +463,7 @@ describe("generic current-conversation bindings", () => {
     expectSessionBinding(bound);
 
     touchGenericCurrentConversationBinding(
-      "generic:workspace\u241fdefault\u241f\u241fuser:U123",
+      "generic:workspace\u241fdefault\u241fdirect\u241f\u241fuser:U123",
       1_234_567_890,
     );
 

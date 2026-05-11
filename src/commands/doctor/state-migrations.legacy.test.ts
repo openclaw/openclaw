@@ -698,12 +698,12 @@ describe("state migrations", () => {
     ).rows[0];
 
     expect(row).toMatchObject({
-      binding_key: "forum\u241fdefault\u241f\u241f6098642967",
-      binding_id: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      binding_key: "forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
+      binding_id: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
       target_session_key: "agent:worker-1:acp:forum-dm",
     });
     expect(JSON.parse(row?.record_json ?? "{}")).toMatchObject({
-      bindingId: "generic:forum\u241fdefault\u241f\u241f6098642967",
+      bindingId: "generic:forum\u241fdefault\u241fdirect\u241f\u241f6098642967",
       targetSessionKey: "agent:worker-1:acp:forum-dm",
       conversation: {
         channel: "forum",

@@ -227,7 +227,6 @@ describe("delivery-queue storage", () => {
       const replayJson = readQueuedEntry(tmpDir(), id);
       writeQueuedEntryJsonForTest(tmpDir(), id, {
         ...replayJson,
-        accountId: "acct-json",
         channel: "directchat",
         lastAttemptAt: 1,
         lastError: "json error",

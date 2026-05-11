@@ -1,4 +1,5 @@
 import type { Insertable, Selectable } from "kysely";
+import { normalizeChatType } from "../../channels/chat-type.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -74,6 +75,11 @@ type SessionEntryRow = Pick<Selectable<SessionEntriesTable>, "entry_json" | "ses
     typed_parent_session_key?: string | null;
     typed_spawned_by?: string | null;
     typed_display_name?: string | null;
+    typed_conversation_channel?: string | null;
+    typed_conversation_account_id?: string | null;
+    typed_conversation_kind?: string | null;
+    typed_conversation_peer_id?: string | null;
+    typed_conversation_thread_id?: string | null;
   };
 type BoundSessionEntryRow = {
   entry: Insertable<SessionEntriesTable>;
@@ -127,22 +133,48 @@ function projectTypedSessionColumns(row: SessionEntryRow): SessionEntry | null {
   if (typeof row.typed_ended_at === "number" && Number.isFinite(row.typed_ended_at)) {
     next.endedAt = row.typed_ended_at;
   }
-  const status = optionalString(row.typed_status);
+  const status = parseSessionStatus(row.typed_status);
   if (status) {
     next.status = status;
   }
-  const chatType = optionalString(row.typed_chat_type);
+  const chatType =
+    normalizeChatType(optionalString(row.typed_chat_type)) ??
+    normalizeChatType(optionalString(row.typed_conversation_kind));
   if (chatType) {
     next.chatType = chatType;
   }
   const channel = optionalString(row.typed_channel);
   if (channel) {
     next.channel = channel;
-    next.lastChannel ??= channel;
+    next.lastChannel = channel;
   }
   const accountId = optionalString(row.typed_account_id);
   if (accountId) {
-    next.lastAccountId ??= accountId;
+    next.lastAccountId = accountId;
+  }
+  const conversationChannel = optionalString(row.typed_conversation_channel);
+  const conversationTo = optionalString(row.typed_conversation_peer_id);
+  const conversationAccountId = optionalString(row.typed_conversation_account_id) ?? accountId;
+  const conversationThreadId = optionalThreadId(row.typed_conversation_thread_id);
+  if (conversationChannel) {
+    next.channel = channel ?? conversationChannel;
+    next.lastChannel = conversationChannel;
+  }
+  if (conversationTo) {
+    next.lastTo = conversationTo;
+    next.deliveryContext = {
+      ...(next.deliveryContext ?? {}),
+      to: conversationTo,
+      ...((conversationChannel ?? channel) ? { channel: conversationChannel ?? channel } : {}),
+      ...(conversationAccountId ? { accountId: conversationAccountId } : {}),
+      ...(conversationThreadId ? { threadId: conversationThreadId } : {}),
+    };
+  }
+  if (conversationAccountId) {
+    next.lastAccountId = conversationAccountId;
+  }
+  if (conversationThreadId) {
+    next.lastThreadId = conversationThreadId;
   }
   const modelProvider = optionalString(row.typed_model_provider);
   if (modelProvider) {
@@ -177,6 +209,7 @@ function selectSessionEntryRows(
   return db
     .selectFrom("session_entries as se")
     .innerJoin("sessions as s", "s.session_id", "se.session_id")
+    .leftJoin("conversations as c", "c.conversation_id", "s.primary_conversation_id")
     .select([
       "se.session_key as session_key",
       "se.entry_json as entry_json",
@@ -195,6 +228,11 @@ function selectSessionEntryRows(
       "s.parent_session_key as typed_parent_session_key",
       "s.spawned_by as typed_spawned_by",
       "s.display_name as typed_display_name",
+      "c.channel as typed_conversation_channel",
+      "c.account_id as typed_conversation_account_id",
+      "c.kind as typed_conversation_kind",
+      "c.peer_id as typed_conversation_peer_id",
+      "c.thread_id as typed_conversation_thread_id",
     ]);
 }
 
@@ -210,6 +248,19 @@ function nullableString(value: unknown): string | null {
 
 function optionalString(value: unknown): string | undefined {
   return nullableString(value) ?? undefined;
+}
+
+function parseSessionStatus(value: unknown): SessionEntry["status"] | undefined {
+  if (
+    value === "running" ||
+    value === "done" ||
+    value === "failed" ||
+    value === "killed" ||
+    value === "timeout"
+  ) {
+    return value;
+  }
+  return undefined;
 }
 
 function optionalThreadId(value: unknown): string | undefined {
@@ -561,12 +612,9 @@ export function readSqliteSessionEntry(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const row = executeSqliteQueryTakeFirstSync(
     database.db,
-    db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json"])
-      .where("session_key", "=", options.sessionKey),
+    selectSessionEntryRows(db).where("se.session_key", "=", options.sessionKey),
   );
-  return row ? (parseSessionEntry(row) ?? undefined) : undefined;
+  return row ? (projectTypedSessionColumns(row) ?? undefined) : undefined;
 }
 
 function deliveryContextFromTypedRow(row: {
@@ -692,14 +740,10 @@ export function listSqliteSessionEntries(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json"])
-      .orderBy("updated_at", "desc")
-      .orderBy("session_key", "asc"),
+    selectSessionEntryRows(db).orderBy("s.updated_at", "desc").orderBy("se.session_key", "asc"),
   ).rows;
   return rows.flatMap((row) => {
-    const entry = parseSessionEntry(row);
+    const entry = projectTypedSessionColumns(row);
     return entry ? [{ sessionKey: row.session_key, entry }] : [];
   });
 }
@@ -711,14 +755,11 @@ export function loadSqliteSessionEntries(
   const db = getNodeSqliteKysely<SessionEntriesDatabase>(database.db);
   const rows = executeSqliteQuerySync(
     database.db,
-    db
-      .selectFrom("session_entries")
-      .select(["session_key", "entry_json"])
-      .orderBy("session_key", "asc"),
+    selectSessionEntryRows(db).orderBy("se.session_key", "asc"),
   ).rows;
   const entries: Record<string, SessionEntry> = {};
   for (const row of rows) {
-    const entry = parseSessionEntry(row);
+    const entry = projectTypedSessionColumns(row);
     if (entry) {
       entries[row.session_key] = entry;
     }

@@ -244,7 +244,9 @@ The branch already has a real shared SQLite base:
   `conversations` stores normalized provider/account/conversation identity, and
   `session_conversations` links one OpenClaw session to one or more external
   conversations. This covers shared-main DM sessions where multiple peers can
-  intentionally map to one session without lying in `session_key`.
+  intentionally map to one session without lying in `session_key`. SQLite also
+  enforces uniqueness for the natural provider identity so the same
+  channel/account/kind/peer/thread tuple cannot fork across conversation ids.
 - Transcript events, transcript snapshots, and trajectory runtime events now
   reference the canonical per-agent `sessions` root and cascade on session
   deletion. Transcript identity/idempotency rows continue to cascade from the
@@ -266,8 +268,13 @@ The branch already has a real shared SQLite base:
 - Current conversation bindings now live in typed shared
   `current_conversation_bindings` rows keyed by normalized conversation id, with
   target agent/session columns and conversation kind stored outside
-  `record_json`. The old `bindings/current-conversations.json` file is doctor
-  migration input only.
+  `record_json`. The durable binding key includes the normalized conversation
+  kind so direct/group/channel refs cannot collide. The old
+  `bindings/current-conversations.json` file is doctor migration input only.
+- Delivery queue recovery now overlays typed queue columns for channel, target,
+  account, session, retry, error, platform-send, and recovery state onto the
+  replay JSON. `entry_json` keeps the replay payloads, hooks, and formatting
+  payload, but typed columns are authoritative for hot queue routing/state.
 - TUI last-session restore pointers now live in typed shared
   `tui_last_sessions` rows keyed by the hashed TUI connection/session scope.
   The old TUI JSON file is doctor migration input only.
@@ -445,7 +452,10 @@ Completed consolidation/deletion highlights:
   support. Runtime upsert/patch/delete no longer scans for case variants or
   prunes legacy alias keys; doctor owns canonicalization. The
   standalone JSON import helper is gone, and migration merges upsert newer rows
-  instead of replacing the whole session table.
+  instead of replacing the whole session table. Public read/list/load helpers
+  project hot session metadata from typed `sessions` and `conversations` rows;
+  `entry_json` is a compatibility/debug shadow and can be stale or invalid
+  without losing typed session identity or delivery context.
 - `src/config/sessions/delivery-info.ts` now resolves delivery context from the
   typed per-agent `sessions` + `conversations` + `session_conversations` rows
   first. `session_entries.entry_json` is only a compatibility fallback when a

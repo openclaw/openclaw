@@ -131,12 +131,11 @@ function parseQueueEntry(row: DeliveryQueueEntryStoredRow | undefined): QueuedDe
       ? (row.channel as Exclude<OutboundChannel, "none">)
       : entry.channel;
   const sessionKey = sqliteNullableText(row.session_key);
+  const accountId = sqliteNullableText(row.account_id) ?? entry.accountId;
   return {
     ...entry,
     id: row.id,
-    accountId: entry.accountId
-      ? (sqliteNullableText(row.account_id) ?? entry.accountId)
-      : undefined,
+    accountId,
     channel,
     enqueuedAt: row.enqueued_at,
     lastAttemptAt: sqliteNullableNumber(row.last_attempt_at) ?? undefined,

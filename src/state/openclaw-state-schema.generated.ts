@@ -1042,7 +1042,13 @@ CREATE TABLE IF NOT EXISTS current_conversation_bindings (
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_target
   ON current_conversation_bindings(target_agent_id, target_session_key, updated_at DESC, binding_key);
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_conversation
-  ON current_conversation_bindings(channel, account_id, conversation_kind, conversation_id);
+  ON current_conversation_bindings(
+    channel,
+    account_id,
+    conversation_kind,
+    parent_conversation_id,
+    conversation_id
+  );
 CREATE INDEX IF NOT EXISTS idx_current_conversation_bindings_expires
   ON current_conversation_bindings(expires_at, binding_key);
 

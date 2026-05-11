@@ -956,6 +956,7 @@ function buildCurrentConversationKey(record: SessionBindingRecord): string | nul
   return [
     conversation.channel,
     conversation.accountId,
+    normalizeCurrentConversationKind(conversation.conversationKind),
     conversation.parentConversationId ?? "",
     conversation.conversationId,
   ].join("\u241f");

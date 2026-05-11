@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS conversations (
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_lookup
   ON conversations(channel, account_id, kind, peer_id, thread_id);
 
+CREATE UNIQUE INDEX IF NOT EXISTS idx_agent_conversations_identity
+  ON conversations(
+    channel,
+    account_id,
+    kind,
+    peer_id,
+    IFNULL(parent_conversation_id, ''),
+    IFNULL(thread_id, '')
+  );
+
 CREATE INDEX IF NOT EXISTS idx_agent_conversations_updated
   ON conversations(updated_at DESC, conversation_id);
 

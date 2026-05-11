@@ -40,6 +40,7 @@ function buildConversationKey(ref: ConversationRef): string {
   return [
     normalized.channel,
     normalized.accountId,
+    normalizeConversationKind(normalized.conversationKind),
     normalized.parentConversationId ?? "",
     normalized.conversationId,
   ].join("\u241f");
