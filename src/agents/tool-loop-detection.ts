@@ -609,10 +609,27 @@ export function detectToolCallLoop(
     };
   }
 
-  // Generic detector: warn-only for repeated identical calls.
+  // Generic detector: warn on repeated identical calls, then block only after
+  // outcomes prove the calls are not making progress.
   const recentCount = history.filter(
     (h) => h.toolName === toolName && h.argsHash === currentHash,
   ).length;
+
+  if (
+    !knownPollTool &&
+    resolvedConfig.detectors.genericRepeat &&
+    noProgressStreak >= resolvedConfig.criticalThreshold
+  ) {
+    log.error(`Critical generic loop detected: ${toolName} repeated ${noProgressStreak} times`);
+    return {
+      stuck: true,
+      level: "critical",
+      detector: "generic_repeat",
+      count: noProgressStreak,
+      message: `CRITICAL: Called ${toolName} with identical arguments and identical outcomes ${noProgressStreak} times. Session execution blocked to prevent runaway loops.`,
+      warningKey: `generic:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+    };
+  }
 
   if (
     !knownPollTool &&
@@ -660,7 +677,7 @@ export function recordToolCall(
   });
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
-    state.toolCallHistory.shift();
+    state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
 }
 
@@ -678,13 +695,13 @@ export function recordToolCallOutcome(
     config?: ToolLoopDetectionConfig;
     runId?: string;
   },
-): void {
+): ToolCallRecord | undefined {
   const resolvedConfig = resolveLoopDetectionConfig(params.config);
   const runId = normalizeRunId(params.runId);
   const outcome = hashToolOutcome(params.toolName, params.toolParams, params.result, params.error);
   const resultHash = outcome.resultHash;
   if (!resultHash) {
-    return;
+    return undefined;
   }
 
   if (!state.toolCallHistory) {
@@ -693,6 +710,7 @@ export function recordToolCallOutcome(
 
   const argsHash = hashToolCall(params.toolName, params.toolParams);
   let matched = false;
+  let recordedOutcome: ToolCallRecord | undefined;
   for (let i = state.toolCallHistory.length - 1; i >= 0; i -= 1) {
     const call = state.toolCallHistory[i];
     if (!call) {
@@ -713,11 +731,12 @@ export function recordToolCallOutcome(
     call.resultHash = resultHash;
     call.unknownToolName = outcome.unknownToolName;
     matched = true;
+    recordedOutcome = call;
     break;
   }
 
   if (!matched) {
-    state.toolCallHistory.push({
+    const record: ToolCallRecord = {
       toolName: params.toolName,
       argsHash,
       toolCallId: params.toolCallId,
@@ -725,12 +744,15 @@ export function recordToolCallOutcome(
       resultHash,
       unknownToolName: outcome.unknownToolName,
       timestamp: Date.now(),
-    });
+    };
+    state.toolCallHistory.push(record);
+    recordedOutcome = record;
   }
 
   if (state.toolCallHistory.length > resolvedConfig.historySize) {
     state.toolCallHistory.splice(0, state.toolCallHistory.length - resolvedConfig.historySize);
   }
+  return recordedOutcome;
 }
 
 /**

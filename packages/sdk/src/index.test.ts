@@ -53,6 +53,14 @@ class FakeTransport implements OpenClawTransport {
   }
 }
 
+function requireTransportCall(calls: readonly RequestCall[], index: number): RequestCall {
+  const call = calls[index];
+  if (!call) {
+    throw new Error(`Expected transport call ${index}`);
+  }
+  return call;
+}
+
 describe("OpenClaw SDK", () => {
   it("runs an agent through the Gateway agent method", async () => {
     const transport = new FakeTransport({
@@ -72,11 +80,9 @@ describe("OpenClaw SDK", () => {
     const result = await run.wait({ timeoutMs: 500 });
 
     expect(run.id).toBe("run_123");
-    expect(result).toMatchObject({
-      runId: "run_123",
-      sessionKey: "main",
-      status: "completed",
-    });
+    expect(result.runId).toBe("run_123");
+    expect(result.sessionKey).toBe("main");
+    expect(result.status).toBe("completed");
     expect(transport.calls).toEqual([
       {
         method: "agent",
@@ -106,12 +112,10 @@ describe("OpenClaw SDK", () => {
 
     const result = await oc.runs.wait("run_numeric");
 
-    expect(result).toMatchObject({
-      runId: "run_numeric",
-      status: "completed",
-      startedAt: 123,
-      endedAt: 456,
-    });
+    expect(result.runId).toBe("run_numeric");
+    expect(result.status).toBe("completed");
+    expect(result.startedAt).toBe(123);
+    expect(result.endedAt).toBe(456);
     expect(transport.calls).toEqual([
       {
         method: "agent.wait",
@@ -134,11 +138,9 @@ describe("OpenClaw SDK", () => {
 
     const result = await oc.runs.wait("run_cancelled");
 
-    expect(result).toMatchObject({
-      runId: "run_cancelled",
-      status: "cancelled",
-      error: { message: "aborted by operator" },
-    });
+    expect(result.runId).toBe("run_cancelled");
+    expect(result.status).toBe("cancelled");
+    expect(result.error?.message).toBe("aborted by operator");
   });
 
   it("keeps wait-only deadlines non-terminal", async () => {
@@ -149,10 +151,8 @@ describe("OpenClaw SDK", () => {
 
     const result = await oc.runs.wait("run_still_active");
 
-    expect(result).toMatchObject({
-      runId: "run_still_active",
-      status: "accepted",
-    });
+    expect(result.runId).toBe("run_still_active");
+    expect(result.status).toBe("accepted");
     expect(result.error).toBeUndefined();
   });
 
@@ -169,11 +169,9 @@ describe("OpenClaw SDK", () => {
 
     const result = await oc.runs.wait("run_timed_out");
 
-    expect(result).toMatchObject({
-      runId: "run_timed_out",
-      status: "timed_out",
-      error: { message: "agent runtime timeout" },
-    });
+    expect(result.runId).toBe("run_timed_out");
+    expect(result.status).toBe("timed_out");
+    expect(result.error?.message).toBe("agent runtime timeout");
   });
 
   it("maps terminal timeout snapshots without stop reasons to timed_out", async () => {
@@ -189,12 +187,10 @@ describe("OpenClaw SDK", () => {
 
     const result = await oc.runs.wait("run_timed_out");
 
-    expect(result).toMatchObject({
-      runId: "run_timed_out",
-      status: "timed_out",
-      startedAt: 123,
-      endedAt: 456,
-    });
+    expect(result.runId).toBe("run_timed_out");
+    expect(result.status).toBe("timed_out");
+    expect(result.startedAt).toBe(123);
+    expect(result.endedAt).toBe(456);
     expect(result.error).toBeUndefined();
   });
 
@@ -210,8 +206,9 @@ describe("OpenClaw SDK", () => {
       idempotencyKey: "model-ref-test",
     });
 
-    expect(transport.calls[0]).toMatchObject({
+    expect(requireTransportCall(transport.calls, 0)).toEqual({
       method: "agent",
+      options: { expectFinal: false },
       params: {
         message: "use a routed model",
         provider: "openrouter",
@@ -245,7 +242,7 @@ describe("OpenClaw SDK", () => {
       idempotencyKey: "timeout-test",
     });
 
-    expect(transport.calls[0]).toMatchObject({
+    expect(requireTransportCall(transport.calls, 0)).toEqual({
       method: "agent",
       options: { expectFinal: false, timeoutMs: 1_500 },
       params: {
@@ -275,32 +272,37 @@ describe("OpenClaw SDK", () => {
     });
     const oc = new OpenClaw({ transport });
 
-    await expect(oc.artifacts.list({ sessionKey: "agent:main:main" })).resolves.toMatchObject({
-      artifacts: [{ id: "artifact_123" }],
+    const artifactList = await oc.artifacts.list({ sessionKey: "agent:main:main" });
+    expect(artifactList.artifacts).toEqual([
+      { id: "artifact_123", type: "image", title: "demo.png" },
+    ]);
+    const artifactGet = await oc.artifacts.get("artifact_123", { sessionKey: "agent:main:main" });
+    expect(artifactGet.artifact).toEqual({ id: "artifact_123", type: "image", title: "demo.png" });
+    const artifactDownload = await oc.artifacts.download("artifact_123", {
+      sessionKey: "agent:main:main",
     });
-    await expect(
-      oc.artifacts.get("artifact_123", { sessionKey: "agent:main:main" }),
-    ).resolves.toMatchObject({
-      artifact: { id: "artifact_123" },
+    expect(artifactDownload.artifact).toEqual({
+      id: "artifact_123",
+      type: "image",
+      title: "demo.png",
     });
-    await expect(
-      oc.artifacts.download("artifact_123", { sessionKey: "agent:main:main" }),
-    ).resolves.toMatchObject({
-      encoding: "base64",
-      data: "aGVsbG8=",
-    });
+    expect(artifactDownload.encoding).toBe("base64");
+    expect(artifactDownload.data).toBe("aGVsbG8=");
 
-    expect(transport.calls).toMatchObject([
+    expect(transport.calls).toEqual([
       {
         method: "artifacts.list",
+        options: undefined,
         params: { sessionKey: "agent:main:main" },
       },
       {
         method: "artifacts.get",
+        options: undefined,
         params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
       },
       {
         method: "artifacts.download",
+        options: undefined,
         params: { artifactId: "artifact_123", sessionKey: "agent:main:main" },
       },
     ]);
@@ -319,35 +321,20 @@ describe("OpenClaw SDK", () => {
     await expect(oc.artifacts.download("artifact_123", undefined as never)).rejects.toThrow(
       "oc.artifacts.download requires one of sessionKey, runId, or taskId",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("throws explicit unsupported errors for SDK namespaces without Gateway RPCs", async () => {
     const transport = new FakeTransport({});
     const oc = new OpenClaw({ transport });
 
-    await expect(oc.tasks.list()).rejects.toThrow(
-      "oc.tasks.list is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.get("task_123")).rejects.toThrow(
-      "oc.tasks.get is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.tasks.cancel("task_123")).rejects.toThrow(
-      "oc.tasks.cancel is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.list()).rejects.toThrow(
-      "oc.environments.list is not supported by the current OpenClaw Gateway yet",
-    );
     await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
       "oc.environments.create is not supported by the current OpenClaw Gateway yet",
-    );
-    await expect(oc.environments.status("environment_123")).rejects.toThrow(
-      "oc.environments.status is not supported by the current OpenClaw Gateway yet",
     );
     await expect(oc.environments.delete("environment_123")).rejects.toThrow(
       "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
     );
-    expect(transport.calls).toEqual([]);
+    expect(transport.calls).toStrictEqual([]);
   });
 
   it("invokes tools through the Gateway tools.invoke method", async () => {
@@ -356,14 +343,15 @@ describe("OpenClaw SDK", () => {
     });
     const oc = new OpenClaw({ transport });
 
-    await expect(
-      oc.tools.invoke("demo", {
-        args: { mode: "test" },
-        sessionKey: "agent:main:main",
-        confirm: false,
-        idempotencyKey: "tools-invoke-test",
-      }),
-    ).resolves.toMatchObject({ ok: true, toolName: "demo", output: { value: 1 } });
+    const result = await oc.tools.invoke("demo", {
+      args: { mode: "test" },
+      sessionKey: "agent:main:main",
+      confirm: false,
+      idempotencyKey: "tools-invoke-test",
+    });
+    expect(result.ok).toBe(true);
+    expect(result.toolName).toBe("demo");
+    expect(result.output).toEqual({ value: 1 });
     expect(transport.calls).toEqual([
       {
         method: "tools.invoke",
@@ -376,6 +364,111 @@ describe("OpenClaw SDK", () => {
         },
         options: undefined,
       },
+    ]);
+  });
+
+  it("calls task ledger Gateway methods", async () => {
+    const transport = new FakeTransport({
+      "tasks.list": {
+        tasks: [
+          {
+            id: "task_123",
+            status: "running",
+            title: "Investigate issue",
+            runId: "run_123",
+            sessionKey: "agent:main:main",
+          },
+        ],
+      },
+      "tasks.get": {
+        task: {
+          id: "task_123",
+          status: "running",
+          title: "Investigate issue",
+        },
+      },
+      "tasks.cancel": {
+        found: true,
+        cancelled: true,
+        task: {
+          id: "task_123",
+          status: "cancelled",
+        },
+      },
+    });
+    const oc = new OpenClaw({ transport });
+
+    const taskList = await oc.tasks.list({
+      status: "running",
+      agentId: "main",
+      sessionKey: "agent:main:main",
+    });
+    expect(taskList.tasks).toEqual([
+      {
+        id: "task_123",
+        status: "running",
+        title: "Investigate issue",
+        runId: "run_123",
+        sessionKey: "agent:main:main",
+      },
+    ]);
+    const taskGet = await oc.tasks.get("task_123");
+    expect(taskGet.task).toEqual({
+      id: "task_123",
+      status: "running",
+      title: "Investigate issue",
+    });
+    const taskCancel = await oc.tasks.cancel("task_123", { reason: "user stopped task" });
+    expect(taskCancel.found).toBe(true);
+    expect(taskCancel.cancelled).toBe(true);
+    expect(taskCancel.task).toEqual({ id: "task_123", status: "cancelled" });
+
+    expect(transport.calls).toEqual([
+      {
+        method: "tasks.list",
+        params: { status: "running", agentId: "main", sessionKey: "agent:main:main" },
+        options: undefined,
+      },
+      {
+        method: "tasks.get",
+        params: { taskId: "task_123" },
+        options: undefined,
+      },
+      {
+        method: "tasks.cancel",
+        params: { taskId: "task_123", reason: "user stopped task" },
+        options: undefined,
+      },
+    ]);
+  });
+
+  it("lists and reads environment status through current Gateway methods", async () => {
+    const gatewayEnvironment = {
+      id: "gateway",
+      type: "local",
+      label: "Gateway local",
+      status: "available",
+      capabilities: ["agent.run"],
+    };
+    const transport = new FakeTransport({
+      "environments.list": { environments: [gatewayEnvironment] },
+      "environments.status": gatewayEnvironment,
+    });
+    const oc = new OpenClaw({ transport });
+
+    await expect(oc.environments.list()).resolves.toEqual({
+      environments: [gatewayEnvironment],
+    });
+    await expect(oc.environments.status("gateway")).resolves.toEqual(gatewayEnvironment);
+    await expect(oc.environments.create({ provider: "testbox" })).rejects.toThrow(
+      "oc.environments.create is not supported by the current OpenClaw Gateway yet",
+    );
+    await expect(oc.environments.delete("gateway")).rejects.toThrow(
+      "oc.environments.delete is not supported by the current OpenClaw Gateway yet",
+    );
+    expect(transport.calls).toEqual([
+      { method: "environments.list", params: {}, options: undefined },
+      { method: "environments.status", params: { environmentId: "gateway" }, options: undefined },
     ]);
   });
 
@@ -399,8 +492,10 @@ describe("OpenClaw SDK", () => {
       "sessions.abort",
       "models.authStatus",
     ]);
-    expect(transport.calls[1]?.params).toEqual({ runId: "run_without_session" });
-    expect(transport.calls[2]?.params).toEqual({ probe: false });
+    expect(requireTransportCall(transport.calls, 1).params).toEqual({
+      runId: "run_without_session",
+    });
+    expect(requireTransportCall(transport.calls, 2).params).toEqual({ probe: false });
   });
 
   it("replays fast run events emitted before the caller starts iterating", async () => {
@@ -642,44 +737,40 @@ describe("OpenClaw SDK", () => {
 
     try {
       const first = await iterator.next();
-      expect(first).toMatchObject({
-        done: false,
-        value: {
-          type: "assistant.delta",
-          data: { text: "hello", delta: "hello" },
-          raw: { event: "chat" },
-        },
-      });
+      expect(first.done).toBe(false);
+      if (first.done !== false) {
+        throw new Error("expected first chat projection event");
+      }
+      expect(first.value.type).toBe("assistant.delta");
+      expect(first.value.data).toEqual({ text: "hello", delta: "hello" });
+      expect(first.value.raw?.event).toBe("chat");
 
       const second = await iterator.next();
-      expect(second).toMatchObject({
-        done: false,
-        value: {
-          type: "assistant.delta",
-          data: { text: "hello again", delta: " again" },
-          raw: { event: "chat" },
-        },
-      });
+      expect(second.done).toBe(false);
+      if (second.done !== false) {
+        throw new Error("expected second chat projection event");
+      }
+      expect(second.value.type).toBe("assistant.delta");
+      expect(second.value.data).toEqual({ text: "hello again", delta: " again" });
+      expect(second.value.raw?.event).toBe("chat");
 
       const third = await iterator.next();
-      expect(third).toMatchObject({
-        done: false,
-        value: {
-          type: "assistant.delta",
-          data: { text: "reset", delta: "reset", replace: true },
-          raw: { event: "chat" },
-        },
-      });
+      expect(third.done).toBe(false);
+      if (third.done !== false) {
+        throw new Error("expected replacement chat projection event");
+      }
+      expect(third.value.type).toBe("assistant.delta");
+      expect(third.value.data).toEqual({ text: "reset", delta: "reset", replace: true });
+      expect(third.value.raw?.event).toBe("chat");
 
       const fourth = await iterator.next();
-      expect(fourth).toMatchObject({
-        done: false,
-        value: {
-          type: "run.completed",
-          data: { phase: "end", outputText: "reset" },
-          raw: { event: "chat" },
-        },
-      });
+      expect(fourth.done).toBe(false);
+      if (fourth.done !== false) {
+        throw new Error("expected chat projection completion event");
+      }
+      expect(fourth.value.type).toBe("run.completed");
+      expect(fourth.value.data).toEqual({ phase: "end", outputText: "reset" });
+      expect(fourth.value.raw?.event).toBe("chat");
     } finally {
       await iterator.return?.();
     }
@@ -713,86 +804,73 @@ describe("OpenClaw SDK", () => {
   it("normalizes Gateway agent stream events into SDK events", () => {
     const ts = 1_777_000_000_000;
 
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 1,
-        payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "start" } },
-      }),
-    ).toMatchObject({
-      type: "run.started",
-      runId: "run_1",
-      data: { phase: "start" },
+    const started = normalizeGatewayEvent({
+      event: "agent",
+      seq: 1,
+      payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "start" } },
     });
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 2,
-        payload: { runId: "run_1", stream: "assistant", ts, data: { delta: "hello" } },
-      }),
-    ).toMatchObject({
-      type: "assistant.delta",
-      runId: "run_1",
-      data: { delta: "hello" },
+    expect(started.type).toBe("run.started");
+    expect(started.runId).toBe("run_1");
+    expect(started.data).toEqual({ phase: "start" });
+
+    const assistant = normalizeGatewayEvent({
+      event: "agent",
+      seq: 2,
+      payload: { runId: "run_1", stream: "assistant", ts, data: { delta: "hello" } },
     });
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 3,
-        payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "end" } },
-      }),
-    ).toMatchObject({
-      type: "run.completed",
-      runId: "run_1",
-      data: { phase: "end" },
+    expect(assistant.type).toBe("assistant.delta");
+    expect(assistant.runId).toBe("run_1");
+    expect(assistant.data).toEqual({ delta: "hello" });
+
+    const completed = normalizeGatewayEvent({
+      event: "agent",
+      seq: 3,
+      payload: { runId: "run_1", stream: "lifecycle", ts, data: { phase: "end" } },
     });
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 4,
-        payload: {
-          runId: "run_1",
-          stream: "lifecycle",
-          ts,
-          data: { phase: "end", aborted: true },
-        },
-      }),
-    ).toMatchObject({
-      type: "run.timed_out",
-      runId: "run_1",
-      data: { phase: "end", aborted: true },
+    expect(completed.type).toBe("run.completed");
+    expect(completed.runId).toBe("run_1");
+    expect(completed.data).toEqual({ phase: "end" });
+
+    const aborted = normalizeGatewayEvent({
+      event: "agent",
+      seq: 4,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: { phase: "end", aborted: true },
+      },
     });
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 5,
-        payload: {
-          runId: "run_1",
-          stream: "lifecycle",
-          ts,
-          data: { phase: "end", aborted: true, stopReason: "rpc" },
-        },
-      }),
-    ).toMatchObject({
-      type: "run.cancelled",
-      runId: "run_1",
-      data: { phase: "end", aborted: true, stopReason: "rpc" },
+    expect(aborted.type).toBe("run.timed_out");
+    expect(aborted.runId).toBe("run_1");
+    expect(aborted.data).toEqual({ phase: "end", aborted: true });
+
+    const cancelled = normalizeGatewayEvent({
+      event: "agent",
+      seq: 5,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: { phase: "end", aborted: true, stopReason: "rpc" },
+      },
     });
-    expect(
-      normalizeGatewayEvent({
-        event: "agent",
-        seq: 6,
-        payload: {
-          runId: "run_1",
-          stream: "lifecycle",
-          ts,
-          data: { phase: "end", stopReason: "timeout" },
-        },
-      }),
-    ).toMatchObject({
-      type: "run.timed_out",
-      runId: "run_1",
-      data: { phase: "end", stopReason: "timeout" },
+    expect(cancelled.type).toBe("run.cancelled");
+    expect(cancelled.runId).toBe("run_1");
+    expect(cancelled.data).toEqual({ phase: "end", aborted: true, stopReason: "rpc" });
+
+    const timedOut = normalizeGatewayEvent({
+      event: "agent",
+      seq: 6,
+      payload: {
+        runId: "run_1",
+        stream: "lifecycle",
+        ts,
+        data: { phase: "end", stopReason: "timeout" },
+      },
     });
+    expect(timedOut.type).toBe("run.timed_out");
+    expect(timedOut.runId).toBe("run_1");
+    expect(timedOut.data).toEqual({ phase: "end", stopReason: "timeout" });
   });
 });

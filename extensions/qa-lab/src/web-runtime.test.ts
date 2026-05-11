@@ -102,14 +102,17 @@ describe("qa web runtime", () => {
     const evaluated = await qaWebEvaluate({ pageId: opened.pageId, expression: "'ok'" });
     await closeAllQaWebSessions();
 
-    expect(launch).toHaveBeenCalledWith(
-      expect.objectContaining({ channel: "chrome", headless: true }),
-    );
-    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", expect.any(Object));
-    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", expect.any(Object));
+    const [launchOptions] = launch.mock.calls[0] ?? [];
+    expect(launchOptions?.channel).toBe("chrome");
+    expect(launchOptions?.headless).toBe(true);
+    expect(goto).toHaveBeenCalledWith("http://127.0.0.1:3000/chat", {
+      waitUntil: "domcontentloaded",
+      timeout: 20_000,
+    });
+    expect(pageWaitForSelector).toHaveBeenCalledWith("textarea", { timeout: 20_000 });
     expect(pageWaitForFunction).toHaveBeenCalled();
-    expect(locatorFill).toHaveBeenCalledWith("hello", expect.any(Object));
-    expect(locatorPress).toHaveBeenCalledWith("Enter", expect.any(Object));
+    expect(locatorFill).toHaveBeenCalledWith("hello", { timeout: 20_000 });
+    expect(locatorPress).toHaveBeenCalledWith("Enter", { timeout: 20_000 });
     expect(snapshot.text).toBe("hello");
     expect(evaluated).toBe("ok");
     expect(contextClose).toHaveBeenCalledTimes(1);
@@ -125,9 +128,8 @@ describe("qa web runtime", () => {
     await expect(qaWebSnapshot({ pageId: first.pageId })).rejects.toThrow(
       `unknown web session: ${first.pageId}`,
     );
-    await expect(qaWebSnapshot({ pageId: second.pageId })).resolves.toMatchObject({
-      text: "hello from body",
-    });
+    const snapshot = await qaWebSnapshot({ pageId: second.pageId });
+    expect(snapshot.text).toBe("hello from body");
     await closeAllQaWebSessions();
   });
 });

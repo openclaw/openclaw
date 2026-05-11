@@ -147,9 +147,7 @@ describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", (
 
     expect(fetchSlackScopesMock).toHaveBeenCalledTimes(1);
     expect(fetchSlackScopesMock).toHaveBeenCalledWith("xoxb-bot", 1234);
-    expect(result?.details).toMatchObject({
-      botScopes: { ok: true, scopes: ["chat:write"] },
-    });
+    expect(result?.details).toEqual({ botScopes: { ok: true, scopes: ["chat:write"] } });
     expect(result?.lines?.length ?? 0).toBeGreaterThan(0);
   });
 
@@ -170,7 +168,7 @@ describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", (
     expect(fetchSlackScopesMock).toHaveBeenCalledTimes(2);
     expect(fetchSlackScopesMock.mock.calls[0]).toEqual(["xoxb-bot", 5000]);
     expect(fetchSlackScopesMock.mock.calls[1]).toEqual(["xoxp-user", 5000]);
-    expect(result?.details).toMatchObject({
+    expect(result?.details).toEqual({
       botScopes: { ok: true, scopes: ["chat:write"] },
       userScopes: { ok: true, scopes: ["users:read"] },
     });
@@ -187,7 +185,7 @@ describe("slackPlugin.status.buildCapabilitiesDiagnostics lazy scopes loader", (
     const result = await buildDiagnostics({ account, timeoutMs: 1000, cfg } as never);
 
     expect(fetchSlackScopesMock).not.toHaveBeenCalled();
-    expect(result?.details).toMatchObject({
+    expect(result?.details).toEqual({
       botScopes: { ok: false, error: "Slack bot token missing." },
     });
   });
@@ -237,7 +235,7 @@ describe("slackPlugin.security.collectAuditFindings lazy module forwarding", () 
     const account = slackPlugin.config.resolveAccount(cfg, "default");
     const result = await collectAuditFindings({ cfg, account } as never);
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 });
 
@@ -263,13 +261,30 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
 
     expect(resolveTargetsWithOptionalTokenMock).toHaveBeenCalledTimes(1);
     const [params] = resolveTargetsWithOptionalTokenMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({
-      token: "xoxb-bot",
-      inputs: ["U123"],
-      missingTokenNote: "missing Slack token",
+    expect(params.token).toBe("xoxb-bot");
+    expect(params.inputs).toEqual(["U123"]);
+    expect(params.missingTokenNote).toBe("missing Slack token");
+    if (typeof params.resolveWithToken !== "function") {
+      throw new Error("expected Slack target resolver callback");
+    }
+    if (typeof params.mapResolved !== "function") {
+      throw new Error("expected Slack target mapper callback");
+    }
+    expect(
+      params.mapResolved({
+        input: "U123",
+        resolved: true,
+        id: "U123",
+        name: "Ada",
+        note: "workspace match",
+      }),
+    ).toEqual({
+      input: "U123",
+      resolved: true,
+      id: "U123",
+      name: "Ada",
+      note: "workspace match",
     });
-    expect(typeof params.resolveWithToken).toBe("function");
-    expect(typeof params.mapResolved).toBe("function");
     expect(result).toBe(sentinelOutput);
   });
 
@@ -289,7 +304,7 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
     } as never);
 
     const [params] = resolveTargetsWithOptionalTokenMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({ token: "xoxp-user" });
+    expect(params.token).toBe("xoxp-user");
   });
 
   it("uses the same lazy SDK helper for kind='group'", async () => {
@@ -309,7 +324,8 @@ describe("slackPlugin.resolver.resolveTargets lazy SDK forwarding", () => {
 
     expect(resolveTargetsWithOptionalTokenMock).toHaveBeenCalledTimes(1);
     const [params] = resolveTargetsWithOptionalTokenMock.mock.calls[0] ?? [];
-    expect(params).toMatchObject({ token: "xoxb-bot", inputs: ["C1"] });
+    expect(params.token).toBe("xoxb-bot");
+    expect(params.inputs).toEqual(["C1"]);
   });
 });
 

@@ -3,6 +3,10 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  _resetWindowsInstallRootsForTests,
+  getWindowsInstallRoots,
+} from "../infra/windows-install-roots.js";
 
 const { spawnMock, spawnSyncMock, execFileMock, execFilePromisifyMock } = vi.hoisted(() => {
   const execFilePromisifyMock = vi.fn();
@@ -43,6 +47,14 @@ type MockChild = EventEmitter & {
   pid?: number;
   killed?: boolean;
 };
+
+function spawnCallAt(callIndex: number): unknown[] {
+  const call = spawnMock.mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected spawn call ${callIndex}`);
+  }
+  return call;
+}
 
 function createMockChild(params?: {
   closeCode?: number | null;
@@ -101,6 +113,10 @@ function expectCmdWrappedInvocation(params: {
   expect(params.captured[2].windowsVerbatimArguments).toBe(true);
 }
 
+function expectedTrustedCmdExe(): string {
+  return path.win32.join(getWindowsInstallRoots().systemRoot, "System32", "cmd.exe");
+}
+
 async function expectShimmedWindowsCommandWithoutExitCodeSucceeds(params?: { killed?: boolean }) {
   const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   const child = createMockChild({
@@ -127,6 +143,10 @@ describe("windows command wrapper behavior", () => {
   });
 
   beforeEach(() => {
+    // Stub the registry probe so install-root resolution is fully driven by
+    // process.env in tests; on real Windows runners the registry returns the
+    // canonical SystemRoot and would shadow the test's env setup.
+    _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
     spawnMock.mockReset();
     spawnSyncMock.mockReset();
     spawnSyncMock.mockReturnValue({ stdout: "Active code page: 936", stderr: "" });
@@ -157,7 +177,7 @@ describe("windows command wrapper behavior", () => {
 
   it("wraps .cmd commands via cmd.exe in runCommandWithTimeout", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+    const expectedComSpec = expectedTrustedCmdExe();
 
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
@@ -173,9 +193,91 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("ignores ComSpec when selecting the Windows command wrapper", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousComSpec = process.env.ComSpec;
+    const previousSystemRoot = process.env.SystemRoot;
+    process.env.ComSpec = "C:\\workspace\\evil\\cmd.exe";
+    process.env.SystemRoot = "C:\\Windows";
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
+      expect(result.code).toBe(0);
+      const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+      expectCmdWrappedInvocation({
+        captured,
+        expectedComSpec: path.win32.join("C:\\Windows", "System32", "cmd.exe"),
+      });
+    } finally {
+      if (previousComSpec === undefined) {
+        delete process.env.ComSpec;
+      } else {
+        process.env.ComSpec = previousComSpec;
+      }
+      if (previousSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = previousSystemRoot;
+      }
+      platformSpy.mockRestore();
+    }
+  });
+
+  it("rejects unsafe Windows root values when selecting the command wrapper", async () => {
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const previousSystemRoot = process.env.SystemRoot;
+    const previousWindir = process.env.WINDIR;
+
+    spawnMock.mockImplementation(
+      (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
+    );
+
+    try {
+      for (const unsafeRoot of [
+        "\\\\evil\\share",
+        "C:\\Windows;C:\\evil",
+        "\\Windows",
+        "relative\\path",
+      ]) {
+        _resetWindowsInstallRootsForTests({ queryRegistryValue: () => null });
+        // Set every install-root env source to the unsafe value so the
+        // resolver rejects each one and falls through to the safe default.
+        // Deleting WINDIR here is unreliable on real Windows runners, so
+        // overwrite it with the same rejected payload.
+        process.env.SystemRoot = unsafeRoot;
+        process.env.WINDIR = unsafeRoot;
+        spawnMock.mockClear();
+
+        const result = await runCommandWithTimeout(["pnpm", "--version"], { timeoutMs: 1000 });
+        expect(result.code).toBe(0);
+        const captured = spawnMock.mock.calls[0] as SpawnCall | undefined;
+        expectCmdWrappedInvocation({
+          captured,
+          expectedComSpec: path.win32.join("C:\\Windows", "System32", "cmd.exe"),
+        });
+      }
+    } finally {
+      if (previousSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = previousSystemRoot;
+      }
+      if (previousWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = previousWindir;
+      }
+      platformSpy.mockRestore();
+    }
+  });
+
   it("wraps corepack.cmd via cmd.exe in runCommandWithTimeout", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+    const expectedComSpec = expectedTrustedCmdExe();
 
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
@@ -243,7 +345,7 @@ describe("windows command wrapper behavior", () => {
   it("falls back to npm.cmd when npm-cli.js is unavailable", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const existsSpy = vi.spyOn(fs, "existsSync").mockReturnValue(false);
-    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+    const expectedComSpec = expectedTrustedCmdExe();
 
     spawnMock.mockImplementation(
       (_command: string, _args: string[], _options: Record<string, unknown>) => createMockChild(),
@@ -297,7 +399,7 @@ describe("windows command wrapper behavior", () => {
 
   it("uses cmd.exe wrapper with windowsVerbatimArguments in runExec for .cmd shims", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const expectedComSpec = process.env.ComSpec ?? "cmd.exe";
+    const expectedComSpec = expectedTrustedCmdExe();
 
     execFileMock.mockImplementation(
       (
@@ -370,6 +472,38 @@ describe("windows command wrapper behavior", () => {
     }
   });
 
+  it("kills the Windows process tree when the overall timeout elapses", async () => {
+    vi.useFakeTimers();
+    const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+    const child = createMockChild({ autoClose: false });
+    const taskkillChild = createMockChild();
+
+    spawnMock.mockImplementationOnce(() => child).mockImplementationOnce(() => taskkillChild);
+
+    try {
+      const resultPromise = runCommandWithTimeout(["node", "idle.js"], { timeoutMs: 80 });
+
+      await vi.advanceTimersByTimeAsync(81);
+      expect(child.kill).not.toHaveBeenCalled();
+      expect(spawnMock).toHaveBeenCalledTimes(2);
+      const taskkillCall = spawnCallAt(1);
+      expect(taskkillCall[0]).toBe("taskkill");
+      expect(taskkillCall[1]).toEqual(["/PID", "1234", "/T", "/F"]);
+      expect(taskkillCall[2]).toEqual({
+        stdio: "ignore",
+        windowsHide: true,
+      });
+
+      child.emit("close", null, "SIGKILL");
+      const result = await resultPromise;
+      expect(result.termination).toBe("timeout");
+      expect(result.code).not.toBe(0);
+    } finally {
+      platformSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("decodes GBK stdout and stderr from runExec on Windows", async () => {
     const platformSpy = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const stdout = Buffer.from([0xb2, 0xe2, 0xca, 0xd4]);
@@ -412,8 +546,9 @@ describe("windows command wrapper behavior", () => {
     );
 
     try {
-      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toMatchObject({
+      await expect(runExec("node", ["utf8-output.js"], 1000)).resolves.toEqual({
         stdout: "测试",
+        stderr: "",
       });
     } finally {
       platformSpy.mockRestore();
@@ -436,8 +571,15 @@ describe("windows command wrapper behavior", () => {
     try {
       await expect(
         runCommandWithTimeout(["node", "gbk-output.js"], { timeoutMs: 1000 }),
-      ).resolves.toMatchObject({
+      ).resolves.toEqual({
+        pid: 1234,
         stdout: "测试",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+        termination: "exit",
+        noOutputTimedOut: false,
       });
     } finally {
       platformSpy.mockRestore();

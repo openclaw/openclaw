@@ -4,7 +4,10 @@ import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import {
+  noteImplicitFallbackClobberWarnings,
+  noteOpencodeProviderOverrides,
+} from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -87,6 +90,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = legacyStep.state);
+  const legacyMigrationPartiallyValid = legacyStep.partiallyValid === true;
   const pluginLegacyIssues = await (async () => {
     if (snapshot.parsed === snapshot.sourceConfig) {
       return [];
@@ -160,12 +164,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     }));
   }
 
-  const { collectPluginToolAllowlistWarnings } =
+  const { collectBundledProviderAllowlistPolicyWarnings, collectPluginToolAllowlistWarnings } =
     await import("./doctor/shared/plugin-tool-allowlist-warnings.js");
-  const pluginToolAllowlistWarnings = collectPluginToolAllowlistWarnings({
-    cfg: candidate,
-    env: process.env,
-  });
+  const pluginToolAllowlistWarnings = [
+    ...collectPluginToolAllowlistWarnings({
+      cfg: candidate,
+      env: process.env,
+    }),
+    ...collectBundledProviderAllowlistPolicyWarnings({ cfg: candidate }),
+  ];
   if (pluginToolAllowlistWarnings.length > 0) {
     note(sanitizeDoctorNote(pluginToolAllowlistWarnings.join("\n")), "Doctor warnings");
   }
@@ -256,9 +263,15 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     doctorFixCommand,
   });
   ({ cfg, candidate, pendingChanges, fixHints } = unknownStep.state);
-  if (unknownStep.removed.length > 0) {
-    const lines = unknownStep.removed.map((path) => `- ${path}`).join("\n");
+  if (unknownStep.removed.length > 0 || unknownStep.repairs.length > 0) {
+    const lines = [
+      ...unknownStep.removed.map((path) => `- ${path}`),
+      ...unknownStep.repairs.map((change) => `- ${change}`),
+    ].join("\n");
     note(lines, shouldRepair ? "Doctor changes" : "Unknown config keys");
+  }
+  if (unknownStep.warnings.length > 0) {
+    note(unknownStep.warnings.join("\n"), "Doctor warnings");
   }
 
   const finalized = await finalizeDoctorConfigFlow({
@@ -273,6 +286,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
+  noteImplicitFallbackClobberWarnings(cfg);
 
   return {
     cfg,
@@ -280,5 +294,6 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
     shouldWriteConfig: finalized.shouldWriteConfig,
     sourceConfigValid: snapshot.valid,
     ...(sourceLastTouchedVersion ? { sourceLastTouchedVersion } : {}),
+    ...(legacyMigrationPartiallyValid ? { skipPluginValidationOnWrite: true } : {}),
   };
 }

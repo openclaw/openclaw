@@ -41,6 +41,23 @@ function createResponder() {
   };
 }
 
+function requireNonEmptyString(value: unknown, message: string): string {
+  if (typeof value !== "string" || value.length === 0) {
+    throw new Error(message);
+  }
+  return value;
+}
+
+function expectFields(value: unknown, expected: Record<string, unknown>): void {
+  if (!value || typeof value !== "object") {
+    throw new Error("expected fields object");
+  }
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("artifacts RPC handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -91,7 +108,8 @@ describe("artifacts RPC handlers", () => {
     expect(calls[0]?.ok).toBe(true);
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expect(payload.artifacts).toHaveLength(1);
-    expect(payload.artifacts?.[0]).toMatchObject({
+    const artifact = payload.artifacts?.[0];
+    expectFields(artifact, {
       type: "image",
       title: "result.png",
       mimeType: "image/png",
@@ -99,10 +117,10 @@ describe("artifacts RPC handlers", () => {
       sessionKey: "agent:main:main",
       messageSeq: 2,
       source: "session-transcript",
-      download: { mode: "bytes" },
     });
-    expect(payload.artifacts?.[0]?.id).toMatch(/^artifact_/);
-    expect(payload.artifacts?.[0]).not.toHaveProperty("data");
+    expectFields(artifact?.download, { mode: "bytes" });
+    expect(artifact?.id).toMatch(/^artifact_/);
+    expect(artifact).not.toHaveProperty("data");
   });
 
   it("gets and downloads an inline artifact", async () => {
@@ -125,21 +143,21 @@ describe("artifacts RPC handlers", () => {
       ],
     });
     const artifactId = listed[0]?.id;
-    expect(artifactId).toBeTruthy();
+    const artifactIdString = requireNonEmptyString(artifactId, "expected listed artifact id");
 
     const get = createResponder();
     await artifactsHandlers["artifacts.get"]?.({
       req: { type: "req", id: "2", method: "artifacts.get", params: {} },
-      params: { sessionKey: "agent:main:main", artifactId },
+      params: { sessionKey: "agent:main:main", artifactId: artifactIdString },
       client: null,
       isWebchatConnect: () => false,
       respond: get.respond,
       context: {} as never,
     });
     expect(get.calls[0]?.ok).toBe(true);
-    expect(get.calls[0]?.payload).toMatchObject({
-      artifact: { id: artifactId, download: { mode: "bytes" } },
-    });
+    const getPayload = get.calls[0]?.payload as { artifact?: Record<string, unknown> };
+    expectFields(getPayload.artifact, { id: artifactId });
+    expectFields(getPayload.artifact?.download, { mode: "bytes" });
 
     const download = createResponder();
     await artifactsHandlers["artifacts.download"]?.({
@@ -151,11 +169,14 @@ describe("artifacts RPC handlers", () => {
       context: {} as never,
     });
     expect(download.calls[0]?.ok).toBe(true);
-    expect(download.calls[0]?.payload).toMatchObject({
+    const downloadPayload = download.calls[0]?.payload as {
+      artifact?: Record<string, unknown>;
+    };
+    expectFields(downloadPayload, {
       encoding: "base64",
       data: "aGVsbG8=",
-      artifact: { id: artifactId },
     });
+    expectFields(downloadPayload.artifact, { id: artifactId });
   });
 
   it("resolves runId queries through the gateway run-to-session lookup", async () => {
@@ -181,7 +202,7 @@ describe("artifacts RPC handlers", () => {
     expect(calls[0]?.ok).toBe(true);
     expect(hoisted.resolveSessionKeyForRun).toHaveBeenCalledWith("run-1");
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
-    expect(payload.artifacts?.[0]).toMatchObject({ runId: "run-1" });
+    expectFields(payload.artifacts?.[0], { runId: "run-1" });
   });
 
   it("resolves taskId queries through task status access and filters artifacts by messageTaskId", async () => {
@@ -223,26 +244,29 @@ describe("artifacts RPC handlers", () => {
     expect(hoisted.loadSessionEntry).toHaveBeenCalledWith("agent:main:main");
     const listPayload = list.calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expect(listPayload.artifacts).toHaveLength(1);
-    expect(listPayload.artifacts?.[0]).toMatchObject({
+    expectFields(listPayload.artifacts?.[0], {
       taskId: "task-1",
       title: "task-result.png",
     });
 
     const artifactId = listPayload.artifacts?.[0]?.id as string | undefined;
-    expect(artifactId).toBeTruthy();
+    const artifactIdString = requireNonEmptyString(artifactId, "expected task artifact id");
 
     const get = createResponder();
     await artifactsHandlers["artifacts.get"]?.({
       req: { type: "req", id: "task-get", method: "artifacts.get", params: {} },
-      params: { taskId: "task-1", artifactId },
+      params: { taskId: "task-1", artifactId: artifactIdString },
       client: null,
       isWebchatConnect: () => false,
       respond: get.respond,
       context: {} as never,
     });
     expect(get.calls[0]?.ok).toBe(true);
-    expect(get.calls[0]?.payload).toMatchObject({
-      artifact: { id: artifactId, taskId: "task-1", title: "task-result.png" },
+    const getPayload = get.calls[0]?.payload as { artifact?: Record<string, unknown> };
+    expectFields(getPayload.artifact, {
+      id: artifactId,
+      taskId: "task-1",
+      title: "task-result.png",
     });
 
     const download = createResponder();
@@ -255,10 +279,17 @@ describe("artifacts RPC handlers", () => {
       context: {} as never,
     });
     expect(download.calls[0]?.ok).toBe(true);
-    expect(download.calls[0]?.payload).toMatchObject({
+    const downloadPayload = download.calls[0]?.payload as {
+      artifact?: Record<string, unknown>;
+    };
+    expectFields(downloadPayload, {
       encoding: "base64",
       data: "dGFyZ2V0",
-      artifact: { id: artifactId, taskId: "task-1", title: "task-result.png" },
+    });
+    expectFields(downloadPayload.artifact, {
+      id: artifactId,
+      taskId: "task-1",
+      title: "task-result.png",
     });
   });
 
@@ -307,13 +338,14 @@ describe("artifacts RPC handlers", () => {
     expect(calls[0]?.ok).toBe(true);
     const payload = calls[0]?.payload as { artifacts?: Array<Record<string, unknown>> };
     expect(payload.artifacts).toHaveLength(1);
-    expect(payload.artifacts?.[0]).toMatchObject({
+    const artifact = payload.artifacts?.[0];
+    expectFields(artifact, {
       type: "image",
       title: "uploaded.png",
       mimeType: "image/png",
       sizeBytes: 5,
-      download: { mode: "bytes" },
     });
+    expectFields(artifact?.download, { mode: "bytes" });
   });
 
   it("treats transcript non-base64 data URLs as unsupported downloads", () => {
@@ -335,11 +367,11 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(artifacts).toHaveLength(1);
-    expect(artifacts[0]).toMatchObject({
+    expectFields(artifacts[0], {
       type: "image",
       title: "uploaded.txt",
-      download: { mode: "unsupported" },
     });
+    expectFields(artifacts[0]?.download, { mode: "unsupported" });
     expect(artifacts[0]?.download).not.toHaveProperty("encoding", "base64");
   });
 
@@ -362,14 +394,14 @@ describe("artifacts RPC handlers", () => {
     });
 
     expect(artifacts).toHaveLength(1);
-    expect(artifacts[0]).toMatchObject({
+    expectFields(artifacts[0], {
       title: "plain.txt",
-      download: { mode: "unsupported" },
     });
+    expectFields(artifacts[0]?.download, { mode: "unsupported" });
     expect(artifacts[0]).not.toHaveProperty("data");
   });
 
-  it("treats unsafe artifact URLs as unsupported downloads", async () => {
+  it("treats unsafe artifact URLs as unsupported downloads", () => {
     const artifacts = collectArtifactsFromMessages({
       sessionKey: "agent:main:main",
       messages: [
@@ -381,10 +413,10 @@ describe("artifacts RPC handlers", () => {
       ],
     });
 
-    expect(artifacts[0]).toMatchObject({
+    expectFields(artifacts[0], {
       title: "secret.txt",
-      download: { mode: "unsupported" },
     });
+    expectFields(artifacts[0]?.download, { mode: "unsupported" });
     expect(artifacts[0]).not.toHaveProperty("url");
   });
 
@@ -399,9 +431,10 @@ describe("artifacts RPC handlers", () => {
       context: {} as never,
     });
     expect(missingScope.calls[0]?.ok).toBe(false);
-    expect(missingScope.calls[0]?.error).toMatchObject({
-      details: { type: "artifact_query_unsupported" },
-    });
+    const missingScopeError = missingScope.calls[0]?.error as {
+      details?: Record<string, unknown>;
+    };
+    expectFields(missingScopeError.details, { type: "artifact_query_unsupported" });
 
     const notFound = createResponder();
     await artifactsHandlers["artifacts.get"]?.({
@@ -413,8 +446,10 @@ describe("artifacts RPC handlers", () => {
       context: {} as never,
     });
     expect(notFound.calls[0]?.ok).toBe(false);
-    expect(notFound.calls[0]?.error).toMatchObject({
-      details: { type: "artifact_not_found", artifactId: "artifact_missing" },
+    const notFoundError = notFound.calls[0]?.error as { details?: Record<string, unknown> };
+    expectFields(notFoundError.details, {
+      type: "artifact_not_found",
+      artifactId: "artifact_missing",
     });
   });
 });

@@ -11,6 +11,7 @@ import {
   QueueSchema,
   TypingModeSchema,
   TtsConfigSchema,
+  VisibleRepliesSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
@@ -63,7 +64,7 @@ export const SessionSchema = z
       .optional(),
     agentToAgent: z
       .object({
-        maxPingPongTurns: z.number().int().min(0).max(5).optional(),
+        maxPingPongTurns: z.number().int().min(0).max(20).optional(),
       })
       .strict()
       .optional(),
@@ -152,7 +153,7 @@ export const SessionSchema = z
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
-    visibleReplies: z.enum(["automatic", "message_tool"]).optional(),
+    visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,

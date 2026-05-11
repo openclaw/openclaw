@@ -86,11 +86,12 @@ export type MatrixExecApprovalConfig = {
   target?: MatrixExecApprovalTarget;
 };
 
-export type MatrixStreamingMode = "partial" | "quiet" | "off";
+export type MatrixStreamingMode = "partial" | "quiet" | "progress" | "off";
 
 export type MatrixStreamingConfig = {
   /** Preview streaming mode for Matrix replies. Default: "off". */
   mode?: MatrixStreamingMode;
+  progress?: import("openclaw/plugin-sdk/channel-streaming").ChannelStreamingProgressConfig;
   preview?: {
     /** Show tool/progress activity in the live draft preview. Default: true. */
     toolProgress?: boolean;
@@ -138,6 +139,8 @@ export type MatrixConfig = {
   encryption?: boolean;
   /** If true, enforce allowlists for groups + DMs regardless of policy. */
   allowlistOnly?: boolean;
+  /** Break-glass compatibility mode for resolving mutable Matrix display names and room names in allowlists. */
+  dangerouslyAllowNameMatching?: boolean;
   /**
    * Allow messages from other configured Matrix bot accounts.
    * true accepts all configured bot senders; "mentions" requires they mention this bot.
@@ -207,13 +210,16 @@ export type MatrixConfig = {
    *   messages. This preserves legacy preview-first notification behavior.
    * - `"quiet"`: edit a single quiet draft notice in place for the current
    *   assistant block as the model generates text.
+   * - `"progress"`: edit a single draft status message with shared progress
+   *   labels and optional tool/task lines until the final answer is ready.
    * - `"off"`: deliver the full reply once the model finishes.
    * - Use `blockStreaming: true` when you want completed assistant blocks to
    *   stay visible as separate progress messages. When combined with
    *   preview streaming, Matrix keeps a live draft for the current block and
    *   preserves completed blocks as separate messages.
-   * - `streaming.preview.toolProgress: false` keeps answer preview edits but
-   *   hides interim tool/progress lines.
+   * - `streaming.progress.toolProgress: false` hides interim tool/progress
+   *   lines in progress mode. `streaming.preview.toolProgress: false` keeps
+   *   legacy answer preview edits but hides interim tool/progress lines.
    * - `true` maps to `"partial"`, `false` maps to `"off"` for backward
    *   compatibility. Object form uses `streaming.mode`.
    * Default: `"off"`.

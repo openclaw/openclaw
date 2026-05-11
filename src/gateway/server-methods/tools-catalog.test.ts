@@ -53,6 +53,14 @@ function createInvokeParams(params: Record<string, unknown>) {
   };
 }
 
+function firstMockArg(mock: { mock: { calls: unknown[][] } }, label: string): unknown {
+  const arg = mock.mock.calls[0]?.[0];
+  if (arg === undefined) {
+    throw new Error(`Expected ${label}`);
+  }
+  return arg;
+}
+
 describe("tools.catalog handler", () => {
   beforeEach(() => {
     pluginToolMetaState.clear();
@@ -94,9 +102,10 @@ describe("tools.catalog handler", () => {
         }
       | undefined;
     expect(payload?.agentId).toBe("main");
-    expect(payload?.groups.some((group) => group.source === "plugin")).toBe(false);
-    const media = payload?.groups.find((group) => group.id === "media");
-    expect(media?.tools.some((tool) => tool.id === "tts" && tool.source === "core")).toBe(true);
+    const groups = payload?.groups ?? [];
+    expect(groups.some((group) => group.source === "plugin")).toBe(false);
+    const media = groups.find((group) => group.id === "media");
+    expect(media?.tools.map((tool) => `${tool.source}:${tool.id}`) ?? []).toContain("core:tts");
   });
 
   it("includes plugin groups with plugin metadata", async () => {
@@ -123,10 +132,16 @@ describe("tools.catalog handler", () => {
     const voiceCall = pluginGroups
       .flatMap((group) => group.tools)
       .find((tool) => tool.id === "voice_call");
-    expect(voiceCall).toMatchObject({
+    expect(voiceCall).toEqual({
+      id: "voice_call",
+      label: "voice_call",
+      description: "Plugin calling tool",
       source: "plugin",
       pluginId: "voice-call",
       optional: true,
+      risk: undefined,
+      tags: undefined,
+      defaultProfiles: [],
     });
   });
 
@@ -158,15 +173,45 @@ describe("tools.catalog handler", () => {
 
     await invoke();
 
-    expect(vi.mocked(resolvePluginTools)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
-    expect(vi.mocked(ensureStandalonePluginToolRegistryLoaded)).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
+    const resolveArgs = firstMockArg(vi.mocked(resolvePluginTools), "resolvePluginTools args") as {
+      allowGatewaySubagentBinding?: boolean;
+      suppressNameConflicts?: boolean;
+      toolAllowlist?: string[];
+      context?: {
+        agentId?: string;
+        workspaceDir?: string;
+        agentDir?: string;
+      };
+      existingToolNames?: Set<string>;
+    };
+    expect(resolveArgs.allowGatewaySubagentBinding).toBe(true);
+    expect(resolveArgs.suppressNameConflicts).toBe(true);
+    expect(resolveArgs.toolAllowlist).toEqual(["group:plugins"]);
+    expect(resolveArgs.context?.agentId).toBe("main");
+    expect(resolveArgs.context?.workspaceDir).toBe("/tmp/workspace-main");
+    expect(resolveArgs.context?.agentDir).toBe("/tmp/agents/main/agent");
+    expect(resolveArgs.existingToolNames).toBeInstanceOf(Set);
+    expect(resolveArgs.existingToolNames?.has("tts")).toBe(true);
+
+    const registryArgs = firstMockArg(
+      vi.mocked(ensureStandalonePluginToolRegistryLoaded),
+      "registry load args",
+    ) as {
+      allowGatewaySubagentBinding?: boolean;
+      toolAllowlist?: string[];
+      context?: {
+        agentId?: string;
+        workspaceDir?: string;
+        agentDir?: string;
+      };
+    };
+    expect(registryArgs.allowGatewaySubagentBinding).toBe(true);
+    expect(registryArgs.toolAllowlist).toEqual(["group:plugins"]);
+    expect(registryArgs.context).toEqual({
+      config: {},
+      workspaceDir: "/tmp/workspace-main",
+      agentDir: "/tmp/agents/main/agent",
+      agentId: "main",
+    });
   });
 });

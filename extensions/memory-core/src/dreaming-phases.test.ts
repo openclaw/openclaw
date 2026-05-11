@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { RequestScopedSubagentRuntimeError } from "openclaw/plugin-sdk/error-runtime";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -27,6 +27,8 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 const DREAMING_TEST_BASE_TIME = new Date("2026-04-05T10:00:00.000Z");
 const DREAMING_TEST_DAY = "2026-04-05";
+const EMPTY_SESSION_CONTENT_HASH =
+  "75a11da44c802486bc6f65640aa48a730f0f684c5c07a42ba3cd1735eb3fb070";
 const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
   plugins: {
     entries: {
@@ -53,6 +55,64 @@ const LIGHT_DREAMING_TEST_CONFIG: OpenClawConfig = {
     },
   },
 };
+
+function requireCandidateByKey<T extends { key: string }>(candidates: T[], key: string): T {
+  const candidate = candidates.find((entry) => entry.key === key);
+  if (!candidate) {
+    throw new Error(`expected promotion candidate ${key}`);
+  }
+  return candidate;
+}
+
+function requireCandidateKeyByPath(
+  candidates: Array<{ key: string; path: string }>,
+  predicate: (path: string) => boolean,
+  label: string,
+): string {
+  const key = candidates.find((candidate) => predicate(candidate.path))?.key;
+  if (!key) {
+    throw new Error(`expected promotion candidate key for ${label}`);
+  }
+  return key;
+}
+
+function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
+  return mock.mock.calls.map((call) => {
+    const message = call[0];
+    return typeof message === "string" ? message : "";
+  });
+}
+
+function expectIncludesSubstring(values: readonly string[], expected: string): void {
+  expect(values.some((value) => value.includes(expected))).toBe(true);
+}
+
+function expectNotIncludesSubstring(values: readonly string[], expected: string): void {
+  expect(values.every((value) => !value.includes(expected))).toBe(true);
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  try {
+    await fs.access(targetPath);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error) {
+      expect(error.code).toBe("ENOENT");
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`expected path to be missing: ${targetPath}`);
+}
+
+function requireFirstIngestionEntry(sessionIngestion: {
+  files: Record<string, { lineCount: number; lastContentLine: number; contentHash: string }>;
+}) {
+  const firstEntry = Object.values(sessionIngestion.files)[0];
+  if (!firstEntry) {
+    throw new Error("expected session ingestion entry");
+  }
+  return firstEntry;
+}
 
 function createHarness(
   config: OpenClawConfig,
@@ -325,11 +385,9 @@ describe("memory-core dreaming phases", () => {
     const dreams = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(dreams).toContain("Move backups to S3 Glacier.");
     expect(logger.error).not.toHaveBeenCalled();
-    expect(logger.info).toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
-    expect(logger.warn).not.toHaveBeenCalledWith(expect.stringContaining("request-scoped"));
-    expect(logger.warn).not.toHaveBeenCalledWith(
-      expect.stringContaining("narrative session cleanup failed"),
-    );
+    expectIncludesSubstring(mockStringMessages(logger.info), "request-scoped");
+    expectNotIncludesSubstring(mockStringMessages(logger.warn), "request-scoped");
+    expectNotIncludesSubstring(mockStringMessages(logger.warn), "narrative session cleanup failed");
     expect(subagent.deleteSession).not.toHaveBeenCalled();
   });
 
@@ -683,12 +741,9 @@ describe("memory-core dreaming phases", () => {
     expect(ranked.map((candidate) => candidate.path)).toContain(
       "memory/.dreams/session-corpus/2026-04-05.txt",
     );
-    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Move backups to S3 Glacier."),
-        expect.stringContaining("Set retention to 365 days."),
-      ]),
-    );
+    const snippets = ranked.map((candidate) => candidate.snippet);
+    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectIncludesSubstring(snippets, "Set retention to 365 days.");
   });
 
   it("keeps primary session transcripts out of configured subagent workspaces", async () => {
@@ -937,9 +992,9 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+    );
 
     const sessionIngestion = JSON.parse(
       await fs.readFile(
@@ -957,13 +1012,10 @@ describe("memory-core dreaming phases", () => {
       >;
     };
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
-    expect(Object.values(sessionIngestion.files)).toEqual([
-      expect.objectContaining({
-        lineCount: 0,
-        lastContentLine: 0,
-        contentHash: expect.any(String),
-      }),
-    ]);
+    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
+    expect(ingestionEntry.lineCount).toBe(0);
+    expect(ingestionEntry.lastContentLine).toBe(0);
+    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
   });
 
   it("skips dreaming transcripts when the session store identifies them before bootstrap lands", async () => {
@@ -1050,9 +1102,9 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+    );
 
     const sessionIngestion = JSON.parse(
       await fs.readFile(
@@ -1070,13 +1122,10 @@ describe("memory-core dreaming phases", () => {
       >;
     };
     expect(Object.keys(sessionIngestion.files)).toHaveLength(1);
-    expect(Object.values(sessionIngestion.files)).toEqual([
-      expect.objectContaining({
-        lineCount: 0,
-        lastContentLine: 0,
-        contentHash: expect.any(String),
-      }),
-    ]);
+    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
+    expect(ingestionEntry.lineCount).toBe(0);
+    expect(ingestionEntry.lastContentLine).toBe(0);
+    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
   });
 
   it("skips isolated cron run transcripts during session ingestion", async () => {
@@ -1160,9 +1209,9 @@ describe("memory-core dreaming phases", () => {
       vi.unstubAllEnvs();
     }
 
-    await expect(
-      fs.access(path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt")),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    await expectPathMissing(
+      path.join(workspaceDir, "memory", ".dreams", "session-corpus", "2026-04-05.txt"),
+    );
 
     const sessionIngestion = JSON.parse(
       await fs.readFile(
@@ -1179,13 +1228,10 @@ describe("memory-core dreaming phases", () => {
         }
       >;
     };
-    expect(Object.values(sessionIngestion.files)).toEqual([
-      expect.objectContaining({
-        lineCount: 0,
-        lastContentLine: 0,
-        contentHash: expect.any(String),
-      }),
-    ]);
+    const ingestionEntry = requireFirstIngestionEntry(sessionIngestion);
+    expect(ingestionEntry.lineCount).toBe(0);
+    expect(ingestionEntry.lastContentLine).toBe(0);
+    expect(ingestionEntry.contentHash).toBe(EMPTY_SESSION_CONTENT_HASH);
   });
 
   it("drops generated system wrapper text without suppressing paired assistant replies", async () => {
@@ -1936,12 +1982,9 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-06T02:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Move backups to S3 Glacier."),
-        expect.stringContaining("Retention policy stays at 365 days."),
-      ]),
-    );
+    const snippets = ranked.map((candidate) => candidate.snippet);
+    expectIncludesSubstring(snippets, "Move backups to S3 Glacier.");
+    expectIncludesSubstring(snippets, "Retention policy stays at 365 days.");
   });
 
   it("ingests sessions when dreaming is enabled even if memorySearch is disabled", async () => {
@@ -2015,10 +2058,9 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs: Date.parse("2026-04-05T19:00:00.000Z"),
     });
-    expect(ranked.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining("Glacier archive migration is now complete."),
-      ]),
+    expectIncludesSubstring(
+      ranked.map((candidate) => candidate.snippet),
+      "Glacier archive migration is now complete.",
     );
   });
 
@@ -2133,12 +2175,9 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(after).toHaveLength(2);
-    expect(after.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        "Reviewed travel timing and calendar placement.",
-        expect.stringContaining("Emma Rees:"),
-      ]),
-    );
+    const snippets = after.map((candidate) => candidate.snippet);
+    expect(snippets).toContain("Reviewed travel timing and calendar placement.");
+    expectIncludesSubstring(snippets, "Emma Rees:");
     for (const candidate of after) {
       expect(candidate.snippet).not.toContain("Friday, April 5, 2026:");
       expect(candidate.snippet).not.toContain("Morning:");
@@ -2204,17 +2243,16 @@ describe("memory-core dreaming phases", () => {
       nowMs: Date.parse("2026-04-05T10:05:00.000Z"),
     });
     expect(after).toHaveLength(3);
-    expect(after.map((candidate) => candidate.snippet)).toEqual(
-      expect.arrayContaining([
-        expect.stringContaining(
-          "Operations: Restarted the gateway after auth drift.; Tokens now line up again.",
-        ),
-        expect.stringContaining(
-          "Bex: She prefers direct plans over open-ended maybes.; Better to offer one concrete time window.",
-        ),
-        expect.stringContaining("Travel: Flight lands at 08:10."),
-      ]),
+    const snippets = after.map((candidate) => candidate.snippet);
+    expectIncludesSubstring(
+      snippets,
+      "Operations: Restarted the gateway after auth drift.; Tokens now line up again.",
     );
+    expectIncludesSubstring(
+      snippets,
+      "Bex: She prefers direct plans over open-ended maybes.; Better to offer one concrete time window.",
+    );
+    expectIncludesSubstring(snippets, "Travel: Flight lands at 08:10.");
   });
 
   it("records light/rem signals that reinforce deep promotion ranking", async () => {
@@ -2314,18 +2352,16 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const reinforcedCandidate = reinforced.find((candidate) => candidate.key === baseline[0].key);
-    expect(reinforcedCandidate).toBeDefined();
-    expect(reinforcedCandidate!.score).toBeGreaterThan(baselineScore);
+    const reinforcedCandidate = requireCandidateByKey(reinforced, baseline[0].key);
+    expect(reinforcedCandidate.score).toBeGreaterThan(baselineScore);
 
     const phaseSignalPath = resolveShortTermPhaseSignalStorePath(workspaceDir);
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { lightHits: number; remHits: number }>;
     };
-    expect(phaseSignalStore.entries[baseline[0].key]).toMatchObject({
-      lightHits: 1,
-      remHits: 1,
-    });
+    const baselineSignals = phaseSignalStore.entries[baseline[0].key];
+    expect(baselineSignals?.lightHits).toBe(1);
+    expect(baselineSignals?.remHits).toBe(1);
   });
 
   it("skips REM short-term candidates whose source file disappeared", async () => {
@@ -2373,12 +2409,16 @@ describe("memory-core dreaming phases", () => {
       minUniqueQueries: 0,
       nowMs,
     });
-    const liveKey = baseline.find((candidate) => candidate.path === "memory/2026-04-03.md")?.key;
-    const staleKey = baseline.find((candidate) =>
-      candidate.path.includes("session-corpus/2026-04-16.txt"),
-    )?.key;
-    expect(liveKey).toBeDefined();
-    expect(staleKey).toBeDefined();
+    const liveKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath === "memory/2026-04-03.md",
+      "live memory note",
+    );
+    const staleKey = requireCandidateKeyByPath(
+      baseline,
+      (candidatePath) => candidatePath.includes("session-corpus/2026-04-16.txt"),
+      "stale session corpus",
+    );
 
     await withDreamingTestClock(async () => {
       setDreamingTestTime();
@@ -2404,8 +2444,8 @@ describe("memory-core dreaming phases", () => {
     const phaseSignalStore = JSON.parse(await fs.readFile(phaseSignalPath, "utf-8")) as {
       entries: Record<string, { remHits: number }>;
     };
-    expect(phaseSignalStore.entries[liveKey!]).toMatchObject({ remHits: 1 });
-    expect(phaseSignalStore.entries[staleKey!]).toBeUndefined();
+    expect(phaseSignalStore.entries[liveKey]?.remHits).toBe(1);
+    expect(phaseSignalStore.entries[staleKey]).toBeUndefined();
 
     const remOutput = await fs.readFile(
       path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
@@ -2586,17 +2626,6 @@ describe("memory-core dreaming phases", () => {
     expect(after1).toHaveLength(1);
     expect(after1[0]?.dailyCount).toBe(1);
 
-    // Clear the daily ingestion checkpoint so the file is re-read on the second
-    // sweep (simulating a new day where the same lookback window still covers
-    // this file).
-    const dailyStatePath = path.join(workspaceDir, "memory", ".dreams", "daily-ingestion.json");
-    try {
-      await fs.unlink(dailyStatePath);
-    } catch {
-      // ignore if not created
-    }
-
-    // Second ingestion on 2026-04-06 (next day).
     const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
     const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
     await withDreamingTestClock(async () => {
@@ -2615,8 +2644,6 @@ describe("memory-core dreaming phases", () => {
       nowMs: day2Ms,
     });
     expect(after2).toHaveLength(1);
-    // With the fix, dailyCount should be 2 because the ingestion date changed.
-    // Before the fix, it stayed at 1 because dayBucket was the file date.
     expect(after2[0]?.dailyCount).toBe(2);
   });
 });
@@ -2754,7 +2781,7 @@ describe("previewRemHarness", () => {
       },
     });
 
-    expect(preview.groundedInputPaths).toEqual([]);
+    expect(preview.groundedInputPaths).toStrictEqual([]);
     expect(preview.grounded).toBeNull();
   });
 
@@ -2791,8 +2818,8 @@ describe("previewRemHarness", () => {
     });
 
     expect(preview.remSkipped).toBe(true);
-    expect(preview.rem.candidateTruths).toEqual([]);
-    expect(preview.rem.bodyLines).toEqual([]);
+    expect(preview.rem.candidateTruths).toStrictEqual([]);
+    expect(preview.rem.bodyLines).toStrictEqual([]);
     expect(preview.deep.candidates[0]?.snippet).toContain("Always check weather");
   });
 });

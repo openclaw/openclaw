@@ -137,10 +137,19 @@ describe("resolveMSTeamsInboundMedia graph fallback trigger", () => {
     // The monitor handler's logger is forwarded so graph.ts can report
     // message fetch failures instead of swallowing them (#51749).
     expect(call?.logger).toBe(log);
-    expect(log.debug).toHaveBeenCalledWith(
-      "graph media fetch empty",
-      expect.objectContaining({ attachmentIdCount: 1 }),
-    );
+    expect(log.debug).toHaveBeenCalledWith("graph media fetch empty", {
+      attempts: [
+        {
+          url: "https://graph.microsoft.com/v1.0/chats/c/messages/m",
+          hostedStatus: undefined,
+          attachmentStatus: undefined,
+          hostedCount: undefined,
+          attachmentCount: undefined,
+          tokenError: undefined,
+        },
+      ],
+      attachmentIdCount: 1,
+    });
   });
 });
 
@@ -280,10 +289,10 @@ describe("resolveMSTeamsInboundMedia bot framework DM routing", () => {
     expect(downloadMSTeamsGraphMedia).not.toHaveBeenCalled();
     expect(log.debug).toHaveBeenCalledWith(
       "bot framework attachment skipped (missing serviceUrl)",
-      expect.objectContaining({
+      {
         conversationType: "personal",
         conversationId: "a:bf-dm-id",
-      }),
+      },
     );
   });
 });

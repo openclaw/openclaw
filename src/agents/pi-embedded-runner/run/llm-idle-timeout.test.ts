@@ -34,6 +34,10 @@ describe("resolveLlmIdleTimeoutMs", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 30_000 })).toBe(30_000);
   });
 
+  it("honors explicit cron run timeouts as the idle watchdog ceiling", () => {
+    expect(resolveLlmIdleTimeoutMs({ trigger: "cron", runTimeoutMs: 600_000 })).toBe(600_000);
+  });
+
   it("disables the idle watchdog when an explicit run timeout disables timeouts", () => {
     expect(resolveLlmIdleTimeoutMs({ runTimeoutMs: 2_147_000_000 })).toBe(0);
   });
@@ -113,6 +117,27 @@ describe("resolveLlmIdleTimeoutMs", () => {
     "http://[febf::1]:11434",
   ])("disables the default idle watchdog for local provider baseUrl %s", (baseUrl) => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(0);
+  });
+
+  it("keeps the default idle watchdog for Ollama cloud models routed through local Ollama", () => {
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama",
+          id: "glm-5.1:cloud",
+          baseUrl: "http://127.0.0.1:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
+    expect(
+      resolveLlmIdleTimeoutMs({
+        model: {
+          provider: "ollama2",
+          id: "ollama2/kimi-k2.5:cloud",
+          baseUrl: "http://localhost:11434",
+        },
+      }),
+    ).toBe(DEFAULT_LLM_IDLE_TIMEOUT_MS);
   });
 
   it.each([
@@ -239,14 +264,7 @@ describe("streamWithIdleTimeout", () => {
     };
   }
 
-  it("wraps stream function", () => {
-    const mockStream = createMockAsyncIterable([]);
-    const baseFn = vi.fn().mockReturnValue(mockStream);
-    const wrapped = streamWithIdleTimeout(baseFn, 1000);
-    expect(typeof wrapped).toBe("function");
-  });
-
-  it("passes through model, context, and options", async () => {
+  it("passes through model, context, and options", () => {
     const mockStream = createMockAsyncIterable([]);
     const baseFn = vi.fn().mockReturnValue(mockStream);
     const wrapped = streamWithIdleTimeout(baseFn, 1000);

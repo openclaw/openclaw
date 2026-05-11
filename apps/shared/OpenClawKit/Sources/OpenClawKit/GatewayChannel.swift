@@ -79,6 +79,7 @@ public struct WebSocketSessionBox: @unchecked Sendable {
 public struct GatewayConnectOptions: Sendable {
     public var role: String
     public var scopes: [String]
+    public var scopesAreExplicit: Bool
     public var caps: [String]
     public var commands: [String]
     public var permissions: [String: Bool]
@@ -93,6 +94,7 @@ public struct GatewayConnectOptions: Sendable {
     public init(
         role: String,
         scopes: [String],
+        scopesAreExplicit: Bool = false,
         caps: [String],
         commands: [String],
         permissions: [String: Bool],
@@ -103,6 +105,7 @@ public struct GatewayConnectOptions: Sendable {
     {
         self.role = role
         self.scopes = scopes
+        self.scopesAreExplicit = scopesAreExplicit
         self.caps = caps
         self.commands = commands
         self.permissions = permissions
@@ -123,6 +126,28 @@ public enum GatewayAuthSource: String, Sendable {
 
 /// Avoid ambiguity with the app's own AnyCodable type.
 private typealias ProtoAnyCodable = OpenClawProtocol.AnyCodable
+
+private func gatewayErrorDetails(_ error: ErrorShape?) -> [String: ProtoAnyCodable] {
+    var details: [String: ProtoAnyCodable] = [:]
+    if let nested = error?.details?.value as? [String: ProtoAnyCodable] {
+        details.merge(nested) { _, nestedValue in nestedValue }
+    }
+    if let error {
+        if details["code"] == nil {
+            details["code"] = ProtoAnyCodable(error.code)
+        } else {
+            details["errorCode"] = ProtoAnyCodable(error.code)
+        }
+        details["message"] = ProtoAnyCodable(error.message)
+        if let retryable = error.retryable {
+            details["retryable"] = ProtoAnyCodable(retryable)
+        }
+        if let retryAfterMs = error.retryafterms {
+            details["retryAfterMs"] = ProtoAnyCodable(retryAfterMs)
+        }
+    }
+    return details
+}
 
 private enum ConnectChallengeError: Error {
     case timeout
@@ -149,6 +174,7 @@ private struct SelectedConnectAuth {
     let authPassword: String?
     let signatureToken: String?
     let storedToken: String?
+    let storedScopes: [String]?
     let authSource: GatewayAuthSource
 }
 
@@ -388,7 +414,19 @@ public actor GatewayChannelActor {
         let clientId = options.clientId
         let clientMode = options.clientMode
         let role = options.role
-        let scopes = options.scopes
+        let requestedScopes = options.scopes
+        let scopesAreExplicit = options.scopesAreExplicit
+        let includeDeviceIdentity = options.includeDeviceIdentity
+        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
+        let selectedAuth = self.selectConnectAuth(
+            role: role,
+            includeDeviceIdentity: includeDeviceIdentity,
+            deviceId: identity?.deviceId)
+        let scopes = self.resolveConnectScopes(
+            role: role,
+            requestedScopes: requestedScopes,
+            scopesAreExplicit: scopesAreExplicit,
+            selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
         var client: [String: ProtoAnyCodable] = [
@@ -405,7 +443,7 @@ public actor GatewayChannelActor {
             client["modelIdentifier"] = ProtoAnyCodable(model)
         }
         var params: [String: ProtoAnyCodable] = [
-            "minProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
+            "minProtocol": ProtoAnyCodable(GATEWAY_MIN_PROTOCOL_VERSION),
             "maxProtocol": ProtoAnyCodable(GATEWAY_PROTOCOL_VERSION),
             "client": ProtoAnyCodable(client),
             "caps": ProtoAnyCodable(options.caps),
@@ -420,12 +458,6 @@ public actor GatewayChannelActor {
         if !options.permissions.isEmpty {
             params["permissions"] = ProtoAnyCodable(options.permissions)
         }
-        let includeDeviceIdentity = options.includeDeviceIdentity
-        let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
-        let selectedAuth = self.selectConnectAuth(
-            role: role,
-            includeDeviceIdentity: includeDeviceIdentity,
-            deviceId: identity?.deviceId)
         if selectedAuth.authDeviceToken != nil, self.pendingDeviceTokenRetry {
             self.pendingDeviceTokenRetry = false
         }
@@ -508,10 +540,11 @@ public actor GatewayChannelActor {
         let explicitBootstrapToken =
             self.bootstrapToken?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         let explicitPassword = self.password?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
-        let storedToken =
+        let storedEntry =
             (includeDeviceIdentity && deviceId != nil)
-            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)?.token
+            ? DeviceAuthStore.loadToken(deviceId: deviceId!, role: role)
             : nil
+        let storedToken = storedEntry?.token
         let shouldUseDeviceRetryToken =
             includeDeviceIdentity && self.pendingDeviceTokenRetry &&
             storedToken != nil && explicitToken != nil && self.isTrustedDeviceRetryEndpoint()
@@ -522,7 +555,8 @@ public actor GatewayChannelActor {
             (includeDeviceIdentity && explicitPassword == nil && explicitBootstrapToken == nil
                 ? storedToken
                 : nil)
-        let authBootstrapToken = authToken == nil ? explicitBootstrapToken : nil
+        let authBootstrapToken =
+            authToken == nil && explicitPassword == nil ? explicitBootstrapToken : nil
         let authDeviceToken = shouldUseDeviceRetryToken ? storedToken : nil
         let authSource: GatewayAuthSource = if authDeviceToken != nil || (explicitToken == nil && authToken != nil) {
             .deviceToken
@@ -542,6 +576,7 @@ public actor GatewayChannelActor {
             authPassword: explicitPassword,
             signatureToken: authToken ?? authBootstrapToken,
             storedToken: storedToken,
+            storedScopes: storedEntry?.scopes,
             authSource: authSource)
     }
 
@@ -573,6 +608,27 @@ public actor GatewayChannelActor {
         default:
             return nil
         }
+    }
+
+    private func resolveConnectScopes(
+        role: String,
+        requestedScopes: [String],
+        scopesAreExplicit: Bool,
+        selectedAuth: SelectedConnectAuth) -> [String]
+    {
+        if selectedAuth.authSource == .bootstrapToken,
+           let filteredScopes = self.filteredBootstrapHandoffScopes(role: role, scopes: requestedScopes)
+        {
+            return filteredScopes
+        }
+        if selectedAuth.authSource == .deviceToken,
+           !scopesAreExplicit,
+           let storedScopes = selectedAuth.storedScopes,
+           !storedScopes.isEmpty
+        {
+            return storedScopes
+        }
+        return requestedScopes
     }
 
     private func persistBootstrapHandoffToken(
@@ -622,21 +678,22 @@ public actor GatewayChannelActor {
         role: String) async throws
     {
         if res.ok == false {
-            let msg = (res.error?["message"]?.value as? String) ?? "gateway connect failed"
-            let details = res.error?["details"]?.value as? [String: ProtoAnyCodable]
-            let detailCode = details?["code"]?.value as? String
-            let canRetryWithDeviceToken = details?["canRetryWithDeviceToken"]?.value as? Bool ?? false
-            let recommendedNextStep = details?["recommendedNextStep"]?.value as? String
-            let requestId = details?["requestId"]?.value as? String
-            let reason = details?["reason"]?.value as? String
-            let owner = details?["owner"]?.value as? String
-            let title = details?["title"]?.value as? String
-            let userMessage = details?["userMessage"]?.value as? String
-            let actionLabel = details?["actionLabel"]?.value as? String
-            let actionCommand = details?["actionCommand"]?.value as? String
-            let docsURLString = details?["docsUrl"]?.value as? String
-            let retryableOverride = details?["retryable"]?.value as? Bool
-            let pauseReconnectOverride = details?["pauseReconnect"]?.value as? Bool
+            let error = res.error
+            let msg = error?.message ?? "gateway connect failed"
+            let details = gatewayErrorDetails(error)
+            let detailCode = details["code"]?.value as? String
+            let canRetryWithDeviceToken = details["canRetryWithDeviceToken"]?.value as? Bool ?? false
+            let recommendedNextStep = details["recommendedNextStep"]?.value as? String
+            let requestId = details["requestId"]?.value as? String
+            let reason = details["reason"]?.value as? String
+            let owner = details["owner"]?.value as? String
+            let title = details["title"]?.value as? String
+            let userMessage = details["userMessage"]?.value as? String
+            let actionLabel = details["actionLabel"]?.value as? String
+            let actionCommand = details["actionCommand"]?.value as? String
+            let docsURLString = details["docsUrl"]?.value as? String
+            let retryableOverride = details["retryable"]?.value as? Bool
+            let pauseReconnectOverride = details["pauseReconnect"]?.value as? Bool
             throw GatewayConnectAuthError(
                 message: msg,
                 detailCodeRaw: detailCode,
@@ -973,11 +1030,9 @@ public actor GatewayChannelActor {
             throw NSError(domain: "Gateway", code: 2, userInfo: [NSLocalizedDescriptionKey: "unexpected frame"])
         }
         if res.ok == false {
-            let code = res.error?["code"]?.value as? String
-            let msg = res.error?["message"]?.value as? String
-            let details: [String: AnyCodable] = (res.error ?? [:]).reduce(into: [:]) { acc, pair in
-                acc[pair.key] = AnyCodable(pair.value.value)
-            }
+            let code = res.error?.code
+            let msg = res.error?.message
+            let details = gatewayErrorDetails(res.error)
             throw GatewayResponseError(method: method, code: code, message: msg, details: details)
         }
         if let payload = res.payload {
@@ -1012,7 +1067,11 @@ public actor GatewayChannelActor {
 
     /// Wrap low-level URLSession/WebSocket errors with context so UI can surface them.
     private func wrap(_ error: Error, context: String) -> Error {
-        if error is GatewayConnectAuthError || error is GatewayResponseError || error is GatewayDecodingError || error is GatewayTLSValidationError {
+        if error is GatewayConnectAuthError ||
+            error is GatewayResponseError ||
+            error is GatewayDecodingError ||
+            error is GatewayTLSValidationError
+        {
             return error
         }
         if let urlError = error as? URLError {

@@ -4,7 +4,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({})),
-  resolveOpenClawAgentDir: vi.fn(() => "/tmp/agent"),
+  resolveDefaultAgentDir: vi.fn(() => "/tmp/agent"),
   ensureAuthProfileStore: vi.fn((agentDir?: string, options?: unknown) => {
     void agentDir;
     void options;
@@ -20,8 +20,8 @@ vi.mock("../../config/config.js", () => ({
   getRuntimeConfig: mocks.getRuntimeConfig,
 }));
 
-vi.mock("../../agents/agent-paths.js", () => ({
-  resolveOpenClawAgentDir: mocks.resolveOpenClawAgentDir,
+vi.mock("../../agents/agent-scope.js", () => ({
+  resolveDefaultAgentDir: mocks.resolveDefaultAgentDir,
 }));
 
 vi.mock("../../agents/auth-profiles.js", async () => {
@@ -70,6 +70,13 @@ function createOptions(
 }
 
 const handler = modelsAuthStatusHandlers["models.authStatus"];
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
 
 function createOpenAiCodexOauthHealthSummary(): AuthHealthSummary {
   const profile = {
@@ -143,7 +150,7 @@ describe("models.authStatus", () => {
     expect(mocks.buildAuthHealthSummary).toHaveBeenCalledTimes(1);
 
     const lastCall = opts2.respond.mock.calls.at(-1);
-    expect(lastCall?.[3]).toEqual(expect.objectContaining({ cached: true }));
+    expect(requireRecord(lastCall?.[3]).cached).toBe(true);
   });
 
   it("bypasses cache when params.refresh is set", async () => {
@@ -222,36 +229,28 @@ describe("models.authStatus", () => {
 
     await handler(createOptions());
 
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
-      "/tmp/agent",
-      expect.objectContaining({
-        externalCli: expect.objectContaining({
-          mode: "scoped",
-          allowKeychainPrompt: false,
-          config: expect.any(Object),
-          providerIds: expect.arrayContaining(["opencode-go"]),
-          profileIds: ["opencode-go:default"],
-        }),
-      }),
-    );
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
     const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
-    const externalCli = (options as { externalCli?: { providerIds?: string[] } }).externalCli;
-    expect(externalCli?.providerIds).not.toContain("claude-cli");
+    const externalCli = requireRecord(requireRecord(options).externalCli);
+    expect(externalCli.mode).toBe("scoped");
+    expect(externalCli.allowKeychainPrompt).toBe(false);
+    requireRecord(externalCli.config);
+    expect(externalCli.providerIds).toContain("opencode-go");
+    expect(externalCli.providerIds).not.toContain("claude-cli");
+    expect(externalCli.profileIds).toEqual(["opencode-go:default"]);
   });
 
   it("disables external CLI auth overlays when config has no provider signal", async () => {
     await handler(createOptions());
 
-    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledWith(
-      "/tmp/agent",
-      expect.objectContaining({
-        externalCli: expect.objectContaining({
-          mode: "none",
-          allowKeychainPrompt: false,
-          config: expect.any(Object),
-        }),
-      }),
-    );
+    expect(mocks.ensureAuthProfileStore).toHaveBeenCalledTimes(1);
+    expect(mocks.ensureAuthProfileStore.mock.calls[0]?.[0]).toBe("/tmp/agent");
+    const [, options] = mocks.ensureAuthProfileStore.mock.calls[0] ?? [];
+    const externalCli = requireRecord(requireRecord(options).externalCli);
+    expect(externalCli.mode).toBe("none");
+    expect(externalCli.allowKeychainPrompt).toBe(false);
+    requireRecord(externalCli.config);
   });
 
   it("still returns providers when usage fetch fails", async () => {
@@ -498,7 +497,7 @@ describe("models.authStatus", () => {
     const [ok, payload, error] = opts.respond.mock.calls[0] ?? [];
     expect(ok).toBe(false);
     expect(payload).toBeUndefined();
-    expect(error).toEqual(expect.objectContaining({ code: expect.stringMatching(/unavailable/i) }));
+    expect(String(requireRecord(error).code)).toMatch(/unavailable/i);
   });
 });
 
@@ -546,6 +545,22 @@ describe("aggregateOAuthStatus", () => {
       NOW,
     );
     expect(result.status).toBe("ok");
+  });
+
+  it("uses effective OAuth profiles while keeping stale inventory visible", () => {
+    const healthy = oauth("ok", expiring + 10_000_000);
+    const stale = oauth("expired", NOW - 1);
+    const result = aggregateOAuthStatus(
+      {
+        provider: "openai-codex",
+        status: "ok",
+        effectiveProfiles: [healthy],
+        profiles: [stale, healthy],
+      },
+      NOW,
+    );
+    expect(result.status).toBe("ok");
+    expect(result.expiresAt).toBe(healthy.expiresAt);
   });
 
   it("falls back to prov.status when no OAuth profiles exist", () => {

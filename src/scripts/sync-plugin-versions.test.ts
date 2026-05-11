@@ -23,8 +23,8 @@ describe("syncPluginVersions", () => {
       name: "openclaw",
       version: "2026.4.1",
     });
-    writeJson(path.join(rootDir, "extensions/bluebubbles/package.json"), {
-      name: "@openclaw/bluebubbles",
+    writeJson(path.join(rootDir, "extensions/imessage/package.json"), {
+      name: "@openclaw/imessage",
       version: "2026.3.30",
       devDependencies: {
         openclaw: "workspace:*",
@@ -47,7 +47,7 @@ describe("syncPluginVersions", () => {
 
     const summary = syncPluginVersions(rootDir);
     const updatedPackage = JSON.parse(
-      fs.readFileSync(path.join(rootDir, "extensions/bluebubbles/package.json"), "utf8"),
+      fs.readFileSync(path.join(rootDir, "extensions/imessage/package.json"), "utf8"),
     ) as {
       version?: string;
       devDependencies?: Record<string, string>;
@@ -65,7 +65,7 @@ describe("syncPluginVersions", () => {
       };
     };
 
-    expect(summary.updated).toContain("@openclaw/bluebubbles");
+    expect(summary.updated).toContain("@openclaw/imessage");
     expect(updatedPackage.version).toBe("2026.4.1");
     expect(updatedPackage.devDependencies?.openclaw).toBe("workspace:*");
     expect(updatedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
@@ -111,5 +111,35 @@ describe("syncPluginVersions", () => {
     expect(unchangedPackage.version).toBe("2026.4.1");
     expect(unchangedPackage.peerDependencies?.openclaw).toBe(">=2026.4.1");
     expect(unchangedPackage.openclaw?.compat?.pluginApi).toBe(">=2026.4.1");
+  });
+
+  it("uses the base release version for beta changelog entries", () => {
+    const rootDir = makeTempDir(tempDirs, "openclaw-sync-plugin-versions-beta-changelog-");
+
+    writeJson(path.join(rootDir, "package.json"), {
+      name: "openclaw",
+      version: "2026.5.3-beta.1",
+    });
+    writeJson(path.join(rootDir, "extensions/matrix/package.json"), {
+      name: "@openclaw/matrix",
+      version: "2026.5.3-beta.1",
+    });
+    fs.mkdirSync(path.join(rootDir, "extensions/matrix"), { recursive: true });
+    fs.writeFileSync(
+      path.join(rootDir, "extensions/matrix/CHANGELOG.md"),
+      "# Changelog\n\n## 2026.5.2\n\n### Changes\n\n- Previous release.\n",
+      "utf8",
+    );
+
+    const summary = syncPluginVersions(rootDir);
+    const changelog = fs.readFileSync(path.join(rootDir, "extensions/matrix/CHANGELOG.md"), "utf8");
+
+    expect(summary.changelogged).toEqual(["@openclaw/matrix"]);
+    expect(changelog).toContain("## 2026.5.3\n\n### Changes\n- Version alignment");
+    expect(changelog).not.toContain("## 2026.5.3-beta.1");
+
+    const checkSummary = syncPluginVersions(rootDir, { write: false });
+
+    expect(checkSummary.changelogged).toStrictEqual([]);
   });
 });

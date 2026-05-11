@@ -4,7 +4,9 @@ import type {
   ChannelResolveResult,
 } from "../../channels/plugins/types.adapters.js";
 import { resolveCommandConfigWithSecrets } from "../../cli/command-config-resolution.js";
+import { formatCliCommand } from "../../cli/command-format.js";
 import { getChannelsCommandSecretTargetIds } from "../../cli/command-secret-targets.js";
+import { formatUnsupportedChannelActionMessage } from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import {
@@ -130,7 +132,9 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
   });
   const entries = (opts.entries ?? []).map((entry) => entry.trim()).filter(Boolean);
   if (entries.length === 0) {
-    throw new Error("At least one entry is required.");
+    throw new Error(
+      `At least one entry is required. Example: ${formatCliCommand("openclaw channels resolve --channel discord <name-or-id>")}.`,
+    );
   }
 
   const explicitChannel = opts.channel?.trim();
@@ -145,7 +149,7 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     : null;
   if (explicitChannel && resolvedExplicit?.catalogEntry && !resolvedExplicit.plugin) {
     throw new Error(
-      `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run "openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}" first.`,
+      `Channel plugin "${resolvedExplicit.catalogEntry.id}" is not installed. Run ${formatCliCommand(`openclaw channels add --channel ${resolvedExplicit.catalogEntry.id}`)} first.`,
     );
   }
   if (resolvedExplicit?.configChanged) {
@@ -193,7 +197,12 @@ export async function channelsResolveCommand(opts: ChannelsResolveOptions, runti
     (selection.channel ? getChannelPlugin(selection.channel) : undefined);
   if (!plugin?.resolver?.resolveTargets) {
     const channelText = selection.channel ?? explicitChannel ?? "";
-    throw new Error(`Channel ${channelText} does not support resolve.`);
+    throw new Error(
+      formatUnsupportedChannelActionMessage({
+        channel: channelText,
+        action: "resolve",
+      }),
+    );
   }
   const preferredKind = resolvePreferredKind(opts.kind);
 

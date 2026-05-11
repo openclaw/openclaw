@@ -1,6 +1,6 @@
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/text-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDiscordClientAccountContext } from "./client.js";
 import {
   DiscordError,
@@ -10,6 +10,7 @@ import {
   readRetryAfter,
 } from "./internal/rest-errors.js";
 import { rewriteDiscordKnownMentions } from "./mentions.js";
+import { createDiscordSendResult } from "./send.receipt.js";
 import type { DiscordSendResult } from "./send.types.js";
 
 type DiscordWebhookSendOpts = {
@@ -126,8 +127,11 @@ export async function sendWebhookMessageDiscord(
   } catch {
     // Best-effort telemetry only.
   }
-  return {
-    messageId: payload.id || "unknown",
-    channelId: payload.channel_id ? payload.channel_id : opts.threadId ? String(opts.threadId) : "",
-  };
+  return createDiscordSendResult({
+    result: payload,
+    fallbackChannelId: opts.threadId ? String(opts.threadId) : "",
+    kind: "text",
+    ...(opts.threadId != null ? { threadId: opts.threadId } : {}),
+    ...(replyTo ? { replyToId: replyTo } : {}),
+  });
 }

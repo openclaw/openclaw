@@ -9,6 +9,13 @@ import type { ReplyDispatchKind } from "../../auto-reply/reply/reply-dispatcher.
 import type { FinalizedMsgContext, MsgContext } from "../../auto-reply/templating.js";
 import type { GroupKeyResolution } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type {
+  DeliverOutboundPayloadsParams,
+  DurableFinalDeliveryRequirements,
+  OutboundDeliveryQueuePolicy,
+} from "../../infra/outbound/deliver.js";
+import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
+import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 
 export type ChannelTurnAdmission =
@@ -33,7 +40,7 @@ export type NormalizedTurnInput = {
 };
 
 export type SenderFacts = {
-  id: string;
+  id?: string;
   name?: string;
   username?: string;
   tag?: string;
@@ -77,34 +84,91 @@ export type ReplyPlanFacts = {
   deliveryTarget?: string;
   replyToId?: string;
   replyToIdFull?: string;
-  messageThreadId?: string;
+  messageThreadId?: string | number;
   threadParentId?: string;
   sourceReplyDeliveryMode?: "thread" | "reply" | "channel" | "direct" | "none";
+};
+
+export type ProjectedAllowlistAccessFacts = {
+  configured: boolean;
+  matched: boolean;
+  reasonCode?: string;
+  matchedEntryIds: string[];
+  invalidEntryCount: number;
+  disabledEntryCount: number;
+  accessGroups: {
+    referenced: string[];
+    matched: string[];
+    missing: string[];
+    unsupported: string[];
+    failed: string[];
+  };
+};
+
+export type ProjectedEventAccessFacts = {
+  kind:
+    | "message"
+    | "reaction"
+    | "button"
+    | "postback"
+    | "native-command"
+    | "slash-command"
+    | "system";
+  authMode: "inbound" | "command" | "origin-subject" | "route-only" | "none";
+  mayPair: boolean;
+  authorized: boolean;
+  reasonCode?: string;
+  hasOriginSubject: boolean;
+  originSubjectMatched: boolean;
 };
 
 export type AccessFacts = {
   dm?: {
     decision: "allow" | "pairing" | "deny";
     reason?: string;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   group?: {
     policy: "open" | "allowlist" | "disabled";
     routeAllowed: boolean;
     senderAllowed: boolean;
+    /**
+     * @deprecated Shared ingress projections redact allowlist entries and return an empty compat list.
+     * Use allowlist diagnostics instead.
+     */
     allowFrom: string[];
     requireMention: boolean;
+    allowlist?: ProjectedAllowlistAccessFacts;
   };
   commands?: {
+    authorized?: boolean;
+    shouldBlockControlCommand?: boolean;
+    reasonCode?: string;
     useAccessGroups: boolean;
     allowTextCommands: boolean;
+    modeWhenAccessGroupsOff?: "allow" | "deny" | "configured";
+    /**
+     * @deprecated Shared ingress projections do not expose raw authorizer lists.
+     * Use authorized and reasonCode instead.
+     */
     authorizers: Array<{ configured: boolean; allowed: boolean }>;
   };
+  event?: ProjectedEventAccessFacts;
   mentions?: {
     canDetectMention: boolean;
     wasMentioned: boolean;
     hasAnyMention?: boolean;
-    implicitMentionKinds?: Array<"reply_to_bot" | "bot_thread_participant" | "native">;
+    implicitMentionKinds?: Array<
+      "reply_to_bot" | "quoted_bot" | "bot_thread_participant" | "native"
+    >;
+    requireMention?: boolean;
+    effectiveWasMentioned?: boolean;
+    shouldSkip?: boolean;
   };
 };
 
@@ -145,7 +209,7 @@ export type SupplementalContextFacts = {
     modelParentSessionKey?: string;
     senderAllowed?: boolean;
   };
-  untrustedContext?: unknown[];
+  untrustedContext?: Array<{ label: string; source?: string; type?: string; payload: unknown }>;
   groupSystemPrompt?: string;
 };
 
@@ -168,18 +232,54 @@ export type ChannelDeliveryInfo = {
   kind: ReplyDispatchKind;
 };
 
+export type ChannelDeliveryIntent = {
+  id: string;
+  kind: "outbound_queue";
+  queuePolicy: OutboundDeliveryQueuePolicy;
+};
+
 export type ChannelDeliveryResult = {
   messageIds?: string[];
+  receipt?: MessageReceipt;
   threadId?: string;
   replyToId?: string;
   visibleReplySent?: boolean;
+  deliveryIntent?: ChannelDeliveryIntent;
+};
+
+export type ChannelTurnDurableDeliveryOptions = Pick<
+  DeliverOutboundPayloadsParams,
+  "deps" | "formatting" | "identity" | "mediaAccess" | "replyToMode" | "silent" | "threadId"
+> & {
+  to?: string | null;
+  replyToId?: string | null;
+  requiredCapabilities?: DurableFinalDeliveryRequirements;
 };
 
 export type ChannelTurnDeliveryAdapter = {
+  preparePayload?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+  ) => Promise<ReplyPayload> | ReplyPayload;
   deliver: (
     payload: ReplyPayload,
     info: ChannelDeliveryInfo,
   ) => Promise<ChannelDeliveryResult | void>;
+  durable?:
+    | false
+    | ChannelTurnDurableDeliveryOptions
+    | ((
+        payload: ReplyPayload,
+        info: ChannelDeliveryInfo,
+      ) =>
+        | false
+        | ChannelTurnDurableDeliveryOptions
+        | Promise<false | ChannelTurnDurableDeliveryOptions>);
+  onDelivered?: (
+    payload: ReplyPayload,
+    info: ChannelDeliveryInfo,
+    result: ChannelDeliveryResult | void,
+  ) => Promise<void> | void;
   onError?: (err: unknown, info: { kind: string }) => void;
 };
 
@@ -203,6 +303,11 @@ export type ChannelTurnDispatcherOptions = Omit<
   "deliver" | "onError"
 >;
 
+export type ChannelTurnReplyPipelineOptions = Omit<
+  CreateChannelReplyPipelineParams,
+  "cfg" | "agentId" | "channel" | "accountId"
+>;
+
 export type AssembledChannelTurn = {
   cfg: OpenClawConfig;
   channel: string;
@@ -214,6 +319,7 @@ export type AssembledChannelTurn = {
   recordInboundSession: RecordInboundSession;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelTurnDeliveryAdapter;
+  replyPipeline?: ChannelTurnReplyPipelineOptions;
   dispatcherOptions?: ChannelTurnDispatcherOptions;
   replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
   replyResolver?: GetReplyFromConfig;

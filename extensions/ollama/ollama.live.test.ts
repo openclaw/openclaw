@@ -142,12 +142,10 @@ describe.skipIf(!LIVE)("ollama live", () => {
         model?: string;
         outputs?: Array<{ text?: string }>;
       };
-      expect(payload).toMatchObject({
-        ok: true,
-        transport: "local",
-        provider: "ollama",
-        model: CHAT_MODEL,
-      });
+      expect(payload.ok).toBe(true);
+      expect(payload.transport).toBe("local");
+      expect(payload.provider).toBe("ollama");
+      expect(payload.model).toBe(CHAT_MODEL);
       expect(payload.outputs?.[0]?.text?.trim().length ?? 0).toBeGreaterThan(0);
     });
   }, 120_000);
@@ -213,7 +211,7 @@ describe.skipIf(!LIVE)("ollama live", () => {
     const error = events.find((event) => (event as { type?: string }).type === "error");
 
     expect(error).toBeUndefined();
-    expect(events.some((event) => (event as { type?: string }).type === "done")).toBe(true);
+    expect(events.map((event) => (event as { type?: string }).type)).toContain("done");
     expect(payload?.model).toBe(CHAT_MODEL);
     expect(payload?.options?.num_ctx).toBe(4096);
     expect(payload?.options?.top_p).toBe(0.9);

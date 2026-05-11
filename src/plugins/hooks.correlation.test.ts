@@ -24,7 +24,7 @@ describe("hook correlation fields", () => {
     await runner.runBeforeAgentStart({ prompt: "hello" }, TEST_PLUGIN_AGENT_CTX);
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ prompt: "hello", runId: "test-run-id" }),
+      { prompt: "hello", runId: "test-run-id" },
       TEST_PLUGIN_AGENT_CTX,
     );
   });
@@ -48,7 +48,7 @@ describe("hook correlation fields", () => {
     );
 
     expect(handler).toHaveBeenCalledWith(
-      expect.objectContaining({ messages: [], success: true, runId: "test-run-id" }),
+      { messages: [], success: true, runId: "test-run-id" },
       TEST_PLUGIN_AGENT_CTX,
     );
   });
@@ -78,9 +78,7 @@ describe("hook correlation fields", () => {
 
       await expect(run).resolves.toBeUndefined();
       expect(logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
-        ),
+        "[hooks] agent_end handler from plugin-a failed: timed out after 5ms",
       );
     } finally {
       vi.useRealTimers();

@@ -1,4 +1,4 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   defaultQaModelForMode,
@@ -8,7 +8,7 @@ import {
 } from "./model-selection.js";
 import { getQaProvider } from "./providers/index.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
-import { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";
+import type { QaThinkingLevel } from "./qa-thinking.js";
 import type { QaTransportGatewayConfig } from "./qa-transport.js";
 
 export { normalizeQaThinkingLevel, type QaThinkingLevel } from "./qa-thinking.js";

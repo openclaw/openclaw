@@ -1,4 +1,6 @@
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { watch } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,6 +36,86 @@ async function addCompileCacheProbe(fixtureRoot: string): Promise<void> {
     ].join("\n"),
     "utf8",
   );
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<string> {
+  try {
+    return await fs.readFile(filePath, "utf8");
+  } catch {
+    // Wait below.
+  }
+
+  const signal = AbortSignal.timeout(timeoutMs);
+  return await new Promise<string>((resolve, reject) => {
+    let settled = false;
+    let watcher: ReturnType<typeof watch> | undefined;
+    const fileName = path.basename(filePath);
+
+    const cleanup = () => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      watcher?.close();
+    };
+    const tryRead = async () => {
+      try {
+        const content = await fs.readFile(filePath, "utf8");
+        cleanup();
+        resolve(content);
+      } catch {
+        // Keep watching until the deadline aborts.
+      }
+    };
+
+    signal.addEventListener(
+      "abort",
+      () => {
+        cleanup();
+        reject(new Error(`timed out waiting for ${filePath}`));
+      },
+      { once: true },
+    );
+    watcher = watch(path.dirname(filePath), { signal }, (_event, changedFileName) => {
+      if (!changedFileName || changedFileName.toString() === fileName) {
+        void tryRead();
+      }
+    });
+    void tryRead();
+  });
+}
+
+async function waitForProcessExit(
+  child: ReturnType<typeof spawn>,
+  label: string,
+  timeoutMs: number,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return { code: child.exitCode, signal: child.signalCode };
+  }
+
+  const signal = AbortSignal.timeout(timeoutMs);
+  try {
+    const [code, exitSignal] = (await once(child, "exit", { signal })) as [
+      number | null,
+      NodeJS.Signals | null,
+    ];
+    return { code, signal: exitSignal };
+  } catch (error) {
+    throw new Error(`timed out waiting for ${label} to exit`, { cause: error });
+  }
+}
+
+function isProcessAlive(pid: number | undefined): boolean {
+  if (!pid) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function launcherEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
@@ -139,6 +221,109 @@ describe("openclaw launcher", () => {
   });
 
   it.runIf(process.platform !== "win32")(
+    "forwards SIGTERM to source-checkout compile-cache respawn children",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      const signalPath = path.join(fixtureRoot, "sigterm-received.txt");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          'process.title = "openclaw-launcher-sigterm-test-child";',
+          `process.on("SIGTERM", () => { writeFileSync(${JSON.stringify(signalPath)}, "SIGTERM\\n"); process.exit(0); });`,
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        respawnChildPid = childInfo.pid;
+
+        launcher.kill("SIGTERM");
+
+        await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+          code: 0,
+          signal: null,
+        });
+        await expect(fs.readFile(signalPath, "utf8")).resolves.toBe("SIGTERM\n");
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "exits after SIGTERM when the respawn child ignores the forwarded signal",
+    async () => {
+      const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+      await addGitMarker(fixtureRoot);
+      const childInfoPath = path.join(fixtureRoot, "child-info.json");
+      await fs.writeFile(
+        path.join(fixtureRoot, "dist", "entry.js"),
+        [
+          'import { writeFileSync } from "node:fs";',
+          `writeFileSync(${JSON.stringify(childInfoPath)}, JSON.stringify({ pid: process.pid }) + "\\n");`,
+          'process.title = "openclaw-launcher-sigterm-ignore-test-child";',
+          'process.on("SIGTERM", () => {});',
+          "setInterval(() => {}, 1000);",
+          "",
+        ].join("\n"),
+        "utf8",
+      );
+
+      const launcher = spawn(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
+        cwd: fixtureRoot,
+        env: launcherEnv({
+          NODE_COMPILE_CACHE: path.join(fixtureRoot, ".node-compile-cache"),
+        }),
+        stdio: "ignore",
+      });
+      let respawnChildPid: number | undefined;
+
+      try {
+        const childInfo = JSON.parse(await waitForFile(childInfoPath, 5000)) as { pid: number };
+        respawnChildPid = childInfo.pid;
+
+        launcher.kill("SIGTERM");
+
+        await expect(waitForProcessExit(launcher, "launcher", 5000)).resolves.toEqual({
+          code: 1,
+          signal: null,
+        });
+        expect(isProcessAlive(launcher.pid)).toBe(false);
+        expect(isProcessAlive(respawnChildPid)).toBe(false);
+      } finally {
+        if (isProcessAlive(respawnChildPid)) {
+          process.kill(respawnChildPid!, "SIGKILL");
+        }
+        if (isProcessAlive(launcher.pid)) {
+          process.kill(launcher.pid!, "SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "respawns symlinked source-checkout launchers without inherited NODE_COMPILE_CACHE",
     async () => {
       const fixtureRoot = await makeLauncherFixture(fixtureRoots);
@@ -204,6 +389,7 @@ describe("openclaw launcher", () => {
   it("falls back to the default packaged launcher compile cache when NODE_COMPILE_CACHE is empty", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
     const runCwd = makeTempDir(fixtureRoots, "openclaw-launcher-cwd-");
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
     await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.4.29"}\n');
     await fs.writeFile(
       path.join(fixtureRoot, "dist", "entry.js"),
@@ -218,6 +404,9 @@ describe("openclaw launcher", () => {
       cwd: runCwd,
       env: launcherEnv({
         NODE_COMPILE_CACHE: "",
+        TMP: tmpRoot,
+        TEMP: tmpRoot,
+        TMPDIR: tmpRoot,
       }),
       encoding: "utf8",
     });
@@ -229,11 +418,16 @@ describe("openclaw launcher", () => {
 
   it("enables compile cache for packaged launchers", async () => {
     const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-tmp-");
     await addCompileCacheProbe(fixtureRoot);
 
     const result = spawnSync(process.execPath, [path.join(fixtureRoot, "openclaw.mjs")], {
       cwd: fixtureRoot,
-      env: launcherEnv(),
+      env: launcherEnv({
+        TMP: tmpRoot,
+        TEMP: tmpRoot,
+        TMPDIR: tmpRoot,
+      }),
       encoding: "utf8",
     });
 

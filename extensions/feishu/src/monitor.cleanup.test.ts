@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { botNames, botOpenIds, stopFeishuMonitorState, wsClients } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -41,6 +41,11 @@ afterEach(() => {
   vi.useRealTimers();
   stopFeishuMonitorState();
   vi.clearAllMocks();
+});
+
+afterAll(() => {
+  vi.doUnmock("./client.js");
+  vi.resetModules();
 });
 
 describe("feishu websocket cleanup", () => {
@@ -125,10 +130,9 @@ describe("feishu websocket cleanup", () => {
 
     expect(createFeishuWSClientMock).toHaveBeenCalledTimes(2);
     expect(recoveredClient.close).toHaveBeenCalledTimes(1);
-    expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("WebSocket start failed, retrying in 1000ms"),
-    );
+    expect(runtime.error).toHaveBeenCalledTimes(1);
     const errorMessage = String(runtime.error.mock.calls[0]?.[0] ?? "");
+    expect(errorMessage).toContain("WebSocket start failed, retrying in 1000ms");
     expect(errorMessage).not.toContain("\n");
     expect(errorMessage).not.toContain("token_abc");
     expect(errorMessage).not.toContain("secret_abc");

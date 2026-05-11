@@ -266,6 +266,10 @@ export async function forceFreePortAndWait(
   let killed: PortProcess[] = [];
   let useFuserFallback = false;
 
+  if (!(await isPortBusy(port))) {
+    return { killed, waitedMs: 0, escalatedToSigkill: false };
+  }
+
   try {
     killed = forceFreePort(port);
   } catch (err) {

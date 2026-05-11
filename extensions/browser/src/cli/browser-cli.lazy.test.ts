@@ -72,8 +72,10 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(browser?.commands.map((command) => command.name())).toContain("status");
     expect(browser?.commands.map((command) => command.name())).toContain("snapshot");
     const doctor = browser?.commands.find((command) => command.name() === "doctor");
-    expect(doctor).toBeDefined();
-    expect(doctor?.options.map((option) => option.long)).toContain("--deep");
+    if (!doctor) {
+      throw new Error("expected browser doctor command placeholder");
+    }
+    expect(doctor.options.map((option) => option.long)).toContain("--deep");
     expect(manageMocks.registerBrowserManageCommands).not.toHaveBeenCalled();
     expect(inspectMocks.registerBrowserInspectCommands).not.toHaveBeenCalled();
     expect(actionInputMocks.registerBrowserActionInputCommands).not.toHaveBeenCalled();
@@ -106,7 +108,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
     expect(debugMocks.registerBrowserDebugCommands).not.toHaveBeenCalled();
     expect(manageMocks.doctorAction).toHaveBeenCalledTimes(1);
-    expect(manageMocks.doctorAction.mock.calls[0]?.[0]).toMatchObject({ deep: true });
+    expect(manageMocks.doctorAction.mock.calls[0]?.[0]?.deep).toBe(true);
   });
 
   it("preserves parent --json while reparsing lazy manage commands", async () => {
@@ -119,7 +121,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     expect(manageMocks.openAction).toHaveBeenCalledTimes(1);
     const openCommand = manageMocks.openAction.mock.calls[0]?.at(-1) as Command | undefined;
-    expect(openCommand?.parent?.opts()).toMatchObject({ json: true });
+    expect(openCommand?.parent?.opts().json).toBe(true);
 
     const tabsProgram = new Command();
     tabsProgram.name("openclaw");
@@ -129,7 +131,7 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     expect(manageMocks.tabsAction).toHaveBeenCalledTimes(1);
     const tabsCommand = manageMocks.tabsAction.mock.calls[0]?.at(-1) as Command | undefined;
-    expect(tabsCommand?.parent?.opts()).toMatchObject({ json: true });
+    expect(tabsCommand?.parent?.opts().json).toBe(true);
   });
 
   it("can eagerly register all browser groups for compatibility", async () => {

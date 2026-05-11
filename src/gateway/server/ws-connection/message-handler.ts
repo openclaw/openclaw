@@ -57,11 +57,6 @@ import { resolveRuntimeServiceVersion } from "../../../version.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
 import { hasForwardedRequestHeaders, isLocalDirectRequest } from "../../auth.js";
-import {
-  buildCanvasScopedHostUrl,
-  CANVAS_CAPABILITY_TTL_MS,
-  mintCanvasCapabilityToken,
-} from "../../canvas-capability.js";
 import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import {
@@ -76,6 +71,14 @@ import {
   shouldAutoApproveNodePairingFromTrustedCidrs,
 } from "../../node-pairing-auto-approve.js";
 import { checkBrowserOrigin } from "../../origin-check.js";
+import {
+  buildPluginNodeCapabilityScopedHostUrl,
+  indexPluginNodeCapabilitySurfaces,
+  mintPluginNodeCapabilityToken,
+  type PluginNodeCapabilitySurface,
+  resolvePluginNodeCapabilityTtlMs,
+  setClientPluginNodeCapability,
+} from "../../plugin-node-capability.js";
 import { GATEWAY_CLIENT_IDS, GATEWAY_CLIENT_MODES } from "../../protocol/client-info.js";
 import {
   buildPairingConnectCloseReason,
@@ -92,6 +95,7 @@ import {
   type ErrorShape,
   errorShape,
   formatValidationErrors,
+  MIN_PROBE_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   validateConnectParams,
   validateRequestFrame,
@@ -146,6 +150,30 @@ export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function resolveTrustedProxyControlUiScopes(params: {
+  requestedScopes: string[];
+  upgradeReq: IncomingMessage;
+}): string[] {
+  const rawHeader = firstHeaderValue(params.upgradeReq.headers["x-openclaw-scopes"]);
+  if (rawHeader === undefined) {
+    return params.requestedScopes;
+  }
+  const declaredScopes = new Set(
+    rawHeader
+      .split(",")
+      .map((scope) => scope.trim())
+      .filter((scope) => scope.length > 0),
+  );
+  if (declaredScopes.size === 0) {
+    return [];
+  }
+  return params.requestedScopes.filter((scope) => declaredScopes.has(scope));
+}
+
 function resolvePinnedClientMetadata(params: {
   claimedPlatform?: string;
   claimedDeviceFamily?: string;
@@ -173,7 +201,7 @@ function resolvePinnedClientMetadata(params: {
   };
 }
 
-export function attachGatewayWsMessageHandler(params: {
+export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
   connId: string;
@@ -187,7 +215,8 @@ export function attachGatewayWsMessageHandler(params: {
   requestHost?: string;
   requestOrigin?: string;
   requestUserAgent?: string;
-  canvasHostUrl?: string;
+  pluginSurfaceBaseUrl?: string;
+  pluginNodeCapabilities?: PluginNodeCapabilitySurface[];
   connectNonce: string;
   getResolvedAuth: () => ResolvedGatewayAuth;
   getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
@@ -214,7 +243,9 @@ export function attachGatewayWsMessageHandler(params: {
   logGateway: SubsystemLogger;
   logHealth: SubsystemLogger;
   logWsControl: SubsystemLogger;
-}) {
+};
+
+export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerParams) {
   const {
     socket,
     upgradeReq,
@@ -229,7 +260,8 @@ export function attachGatewayWsMessageHandler(params: {
     requestHost,
     requestOrigin,
     requestUserAgent,
-    canvasHostUrl,
+    pluginSurfaceBaseUrl,
+    pluginNodeCapabilities = [],
     connectNonce,
     getResolvedAuth,
     getRequiredSharedGatewaySessionGeneration,
@@ -471,17 +503,27 @@ export function attachGatewayWsMessageHandler(params: {
 
         // protocol negotiation
         const { minProtocol, maxProtocol } = connectParams;
-        if (maxProtocol < PROTOCOL_VERSION || minProtocol > PROTOCOL_VERSION) {
+        const supportsCurrentProtocol =
+          maxProtocol >= PROTOCOL_VERSION && minProtocol <= PROTOCOL_VERSION;
+        const supportsProbeRestartProtocol =
+          connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
+          maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
+          minProtocol <= PROTOCOL_VERSION;
+        if (!supportsCurrentProtocol && !supportsProbeRestartProtocol) {
           markHandshakeFailure("protocol-mismatch", {
             minProtocol,
             maxProtocol,
             expectedProtocol: PROTOCOL_VERSION,
+            minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
           });
           logWsControl.warn(
             `protocol mismatch conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
           );
           sendHandshakeErrorResponse(ErrorCodes.INVALID_REQUEST, "protocol mismatch", {
-            details: { expectedProtocol: PROTOCOL_VERSION },
+            details: {
+              expectedProtocol: PROTOCOL_VERSION,
+              minimumProbeProtocol: MIN_PROBE_PROTOCOL_VERSION,
+            },
           });
           close(1002, "protocol mismatch");
           return;
@@ -666,6 +708,7 @@ export function attachGatewayWsMessageHandler(params: {
             isControlUi,
             controlUiAuthPolicy,
             trustedProxyAuthOk,
+            localBackendSelfPairingOk: skipLocalBackendSelfPairing,
             sharedAuthOk,
             authOk,
             hasSharedAuth,
@@ -835,9 +878,11 @@ export function attachGatewayWsMessageHandler(params: {
           rejectUnauthorized(authResult);
           return;
         }
-        if (authMethod === "token" || authMethod === "password") {
-          const sharedGatewaySessionGeneration =
-            resolveSharedGatewaySessionGeneration(resolvedAuth);
+        if (authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy") {
+          const sharedGatewaySessionGeneration = resolveSharedGatewaySessionGeneration(
+            resolvedAuth,
+            trustedProxies,
+          );
           const requiredSharedGatewaySessionGeneration =
             getRequiredSharedGatewaySessionGeneration?.();
           if (
@@ -865,6 +910,13 @@ export function attachGatewayWsMessageHandler(params: {
           authOk,
           authMethod,
         });
+        if (trustedProxyAuthOk) {
+          scopes = resolveTrustedProxyControlUiScopes({
+            requestedScopes: scopes,
+            upgradeReq,
+          });
+          connectParams.scopes = scopes;
+        }
         const skipControlUiPairingForDevice = shouldSkipControlUiPairing(
           controlUiAuthPolicy,
           role,
@@ -872,6 +924,7 @@ export function attachGatewayWsMessageHandler(params: {
           resolvedAuth.mode,
           authMethod,
         );
+        let hasServerApprovedDeviceTokenBaseline = false;
         if (device && devicePublicKey) {
           const formatAuditList = (items: string[] | undefined): string => {
             if (!items || items.length === 0) {
@@ -1131,8 +1184,15 @@ export function attachGatewayWsMessageHandler(params: {
               if (!ok) {
                 return;
               }
+              hasServerApprovedDeviceTokenBaseline = true;
+            } else if (
+              skipControlUiPairingForDevice ||
+              (skipLocalBackendSelfPairing && authMethod !== "device-token")
+            ) {
+              hasServerApprovedDeviceTokenBaseline = true;
             }
           } else {
+            hasServerApprovedDeviceTokenBaseline = true;
             const claimedPlatform = connectParams.client.platform;
             const pairedPlatform = paired.platform;
             const claimedDeviceFamily = connectParams.client.deviceFamily;
@@ -1220,9 +1280,10 @@ export function attachGatewayWsMessageHandler(params: {
           }
         }
 
-        const deviceToken = device
-          ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
-          : null;
+        const deviceToken =
+          device && hasServerApprovedDeviceTokenBaseline
+            ? await ensureDeviceToken({ deviceId: device.id, role, scopes })
+            : null;
         const bootstrapDeviceTokens: Array<{
           deviceToken: string;
           role: string;
@@ -1297,18 +1358,35 @@ export function attachGatewayWsMessageHandler(params: {
           return;
         }
 
-        const canvasCapability = canvasHostUrl ? mintCanvasCapabilityToken() : undefined;
-        const canvasCapabilityExpiresAtMs = canvasCapability
-          ? Date.now() + CANVAS_CAPABILITY_TTL_MS
-          : undefined;
-        const usesSharedGatewayAuth = authMethod === "token" || authMethod === "password";
+        const pluginSurfaceUrls: Record<string, string> = {};
+        const pluginNodeCapabilitySurfaces =
+          indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
+        const pendingPluginNodeCapabilities: Array<{
+          surface: PluginNodeCapabilitySurface;
+          capability: string;
+          expiresAtMs: number;
+        }> = [];
+        if (pluginSurfaceBaseUrl) {
+          for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+            const capability = mintPluginNodeCapabilityToken();
+            const expiresAtMs =
+              Date.now() + resolvePluginNodeCapabilityTtlMs(pluginCapabilitySurface);
+            const scopedUrl =
+              buildPluginNodeCapabilityScopedHostUrl(pluginSurfaceBaseUrl, capability) ??
+              pluginSurfaceBaseUrl;
+            pluginSurfaceUrls[pluginCapabilitySurface.surface] = scopedUrl;
+            pendingPluginNodeCapabilities.push({
+              surface: pluginCapabilitySurface,
+              capability,
+              expiresAtMs,
+            });
+          }
+        }
+        const usesSharedGatewayAuth =
+          authMethod === "token" || authMethod === "password" || authMethod === "trusted-proxy";
         const sharedGatewaySessionGeneration = usesSharedGatewayAuth
-          ? resolveSharedGatewaySessionGeneration(resolvedAuth)
+          ? resolveSharedGatewaySessionGeneration(resolvedAuth, trustedProxies)
           : undefined;
-        const scopedCanvasHostUrl =
-          canvasHostUrl && canvasCapability
-            ? (buildCanvasScopedHostUrl(canvasHostUrl, canvasCapability) ?? canvasHostUrl)
-            : canvasHostUrl;
         clearHandshakeTimer();
         const nextClient: GatewayWsClient = {
           socket,
@@ -1319,10 +1397,19 @@ export function attachGatewayWsMessageHandler(params: {
           sharedGatewaySessionGeneration,
           presenceKey,
           clientIp: reportedClientIp,
-          canvasHostUrl,
-          canvasCapability,
-          canvasCapabilityExpiresAtMs,
+          ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
+          ...(Object.keys(pluginNodeCapabilitySurfaces).length > 0
+            ? { pluginNodeCapabilitySurfaces }
+            : {}),
         };
+        for (const entry of pendingPluginNodeCapabilities) {
+          setClientPluginNodeCapability({
+            client: nextClient,
+            surface: entry.surface,
+            capability: entry.capability,
+            expiresAtMs: entry.expiresAtMs,
+          });
+        }
         setSocketMaxPayload(socket, MAX_PAYLOAD_BYTES);
         if (!setClient(nextClient)) {
           setCloseCause("connect-aborted-before-register", {
@@ -1445,7 +1532,7 @@ export function attachGatewayWsMessageHandler(params: {
           },
           features: { methods: gatewayMethods, events },
           snapshot,
-          canvasHostUrl: scopedCanvasHostUrl,
+          ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
           auth: {
             role,
             scopes: helloOkAuthScopes,

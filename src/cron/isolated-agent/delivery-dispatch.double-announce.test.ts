@@ -15,12 +15,17 @@ import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
 // --- Module mocks (must be hoisted before imports) ---
 
-const { countActiveDescendantRunsMock, maybeApplyTtsToPayloadMock, retireSessionMcpRuntimeMock } =
-  vi.hoisted(() => ({
-    countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
-    maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
-    retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
-  }));
+const {
+  countActiveDescendantRunsMock,
+  deliverOutboundPayloadsMock,
+  maybeApplyTtsToPayloadMock,
+  retireSessionMcpRuntimeMock,
+} = vi.hoisted(() => ({
+  countActiveDescendantRunsMock: vi.fn().mockReturnValue(0),
+  deliverOutboundPayloadsMock: vi.fn().mockResolvedValue([{ ok: true }]),
+  maybeApplyTtsToPayloadMock: vi.fn(async (params: { payload: unknown }) => params.payload),
+  retireSessionMcpRuntimeMock: vi.fn().mockResolvedValue(true),
+}));
 
 vi.mock("../../config/sessions/main-session.js", () => ({
   resolveAgentMainSessionKey: vi.fn(({ agentId }: { agentId: string }) => `agent:${agentId}:main`),
@@ -40,7 +45,8 @@ vi.mock("./delivery-subagent-registry.runtime.js", () => ({
 }));
 
 vi.mock("../../infra/outbound/deliver.js", () => ({
-  deliverOutboundPayloads: vi.fn().mockResolvedValue([{ ok: true }]),
+  deliverOutboundPayloads: deliverOutboundPayloadsMock,
+  deliverOutboundPayloadsInternal: deliverOutboundPayloadsMock,
 }));
 
 vi.mock("../../infra/outbound/identity.js", () => ({
@@ -177,6 +183,35 @@ function makeBaseParams(overrides: {
   };
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object") {
+    throw new Error(`expected ${label}`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function outboundDeliveryCall(callIndex = 0) {
+  const call = vi.mocked(deliverOutboundPayloads).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected outbound delivery call ${callIndex}`);
+  }
+  return requireRecord(call[0], `outbound delivery call ${callIndex}`);
+}
+
+function expectFields(actual: Record<string, unknown>, expected: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key], key).toEqual(value);
+  }
+}
+
+function expectDeliveryCall(callIndex: number, expected: Record<string, unknown>) {
+  expectFields(outboundDeliveryCall(callIndex), expected);
+}
+
+function expectResultFields(result: unknown, expected: Record<string, unknown>) {
+  expectFields(requireRecord(result, "cron delivery result"), expected);
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -272,16 +307,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [{ text: "Detailed child result, everything finished successfully." }],
-      }),
-    );
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ skipQueue: true }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Detailed child result, everything finished successfully." }],
+      skipQueue: true,
+    });
   });
 
   it("uses the run-scoped session key for isolated cron descendant fallback delivery", async () => {
@@ -313,11 +344,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text: "Run-scoped child result, everything finished successfully." }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Run-scoped child result, everything finished successfully." }],
+    });
   });
 
   it("normal text delivery sends exactly once and sets deliveryAttempted=true", async () => {
@@ -378,29 +407,29 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
-    expect(maybeApplyTtsToPayloadMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        cfg: params.cfgWithAgentDefaults,
-        channel: "telegram",
-        kind: "final",
-        agentId: "main",
-        accountId: undefined,
-      }),
-    );
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [
-          {
-            text: "Morning briefing complete.",
-            mediaUrl: "file:///tmp/cron-tts.mp3",
-            audioAsVoice: true,
-            spokenText: "Morning briefing complete.",
-          },
-        ],
-      }),
-    );
+    const ttsCall = maybeApplyTtsToPayloadMock.mock.calls[0];
+    if (!ttsCall) {
+      throw new Error("expected TTS payload call");
+    }
+    expectFields(requireRecord(ttsCall[0], "TTS payload params"), {
+      cfg: params.cfgWithAgentDefaults,
+      channel: "telegram",
+      kind: "final",
+      agentId: "main",
+      accountId: undefined,
+    });
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [
+        {
+          text: "Morning briefing complete.",
+          mediaUrl: "file:///tmp/cron-tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Morning briefing complete.",
+        },
+      ],
+    });
   });
 
   it("preserves all successful text payloads for direct delivery", async () => {
@@ -417,13 +446,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Working on it..." }, { text: "Final weather summary" }],
+    });
   });
 
   it("queues main-session awareness for isolated cron jobs with explicit delivery targets", async () => {
@@ -482,11 +509,9 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ mediaUrl: "https://example.com/image.png", text: undefined }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      payloads: [{ mediaUrl: "https://example.com/image.png", text: undefined }],
+    });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
   });
 
@@ -553,13 +578,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(
       shouldEnqueueCronMainSummary({
@@ -622,12 +645,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+    });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
@@ -673,12 +694,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+    });
     expect(retireSessionMcpRuntime).toHaveBeenCalledWith({
       sessionId: "test-session-id",
       reason: "cron-delete-after-run-fallback",
@@ -753,18 +772,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(secondState.delivered).toBe(true);
     expect(secondState.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
-    expect(deliverOutboundPayloads).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        payloads: [{ text: "8:00 AM cron update." }],
-      }),
-    );
-    expect(deliverOutboundPayloads).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        payloads: [{ text: "9:00 AM cron update." }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      payloads: [{ text: "8:00 AM cron update." }],
+    });
+    expectDeliveryCall(1, {
+      payloads: [{ text: "9:00 AM cron update." }],
+    });
   });
 
   it("does not cache partial bestEffort delivery replays as delivered", async () => {
@@ -817,13 +830,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "error",
-        error: "Error: chat not found",
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "error",
+      error: "Error: chat not found",
+      deliveryAttempted: true,
+    });
   });
 
   it("surfaces structured direct delivery failures without retry when best-effort is disabled", async () => {
@@ -836,13 +847,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "error",
-        error: "Error: boom",
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "error",
+      error: "Error: boom",
+      deliveryAttempted: true,
+    });
   });
 
   it("ignores structured direct delivery failures when best-effort is enabled", async () => {
@@ -887,14 +896,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
 
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [{ text: "Daily digest ready." }],
-        skipQueue: true,
-      }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "Daily digest ready." }],
+      skipQueue: true,
+    });
   });
 
   it("structured/thread delivery also bypasses the write-ahead queue", async () => {
@@ -908,9 +915,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({ skipQueue: true }),
-    );
+    expectDeliveryCall(0, { skipQueue: true });
   });
 
   it("transient retry delivers exactly once with skipQueue on both attempts", async () => {
@@ -932,9 +937,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       // Two calls total: first failed transiently, second succeeded.
       expect(deliverOutboundPayloads).toHaveBeenCalledTimes(2);
 
-      const calls = vi.mocked(deliverOutboundPayloads).mock.calls;
-      expect(calls[0][0]).toEqual(expect.objectContaining({ skipQueue: true }));
-      expect(calls[1][0]).toEqual(expect.objectContaining({ skipQueue: true }));
+      expectDeliveryCall(0, { skipQueue: true });
+      expectDeliveryCall(1, { skipQueue: true });
     } finally {
       vi.unstubAllEnvs();
     }
@@ -952,13 +956,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     // NO_REPLY must be filtered out before reaching the outbound adapter.
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
     // deliveryAttempted must be true so the heartbeat timer does not fire
     // a fallback enqueueSystemEvent with the NO_REPLY sentinel text.
     expect(state.deliveryAttempted).toBe(true);
@@ -987,17 +989,15 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.delivered).toBe(true);
     expect(state.deliveryAttempted).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        accountId: undefined,
-        threadId: undefined,
-        bestEffort: false,
-        skipQueue: true,
-        payloads: [{ text: "hello from cron" }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      accountId: undefined,
+      threadId: undefined,
+      bestEffort: false,
+      skipQueue: true,
+      payloads: [{ text: "hello from cron" }],
+    });
   });
 
   it("keeps unresolved message-tool delivery out of delivered status", async () => {
@@ -1018,13 +1018,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.delivered).toBe(false);
     expect(state.deliveryAttempted).toBe(false);
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "error",
-        errorKind: "delivery-target",
-        deliveryAttempted: false,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "error",
+      errorKind: "delivery-target",
+      deliveryAttempted: false,
+    });
     expect(state.result?.error).toContain(
       "sessionKey is required to resolve delivery.channel=last",
     );
@@ -1069,14 +1067,12 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        threadId: 42,
-        payloads: [{ text: "Final weather summary" }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      threadId: 42,
+      payloads: [{ text: "Final weather summary" }],
+    });
   });
 
   it("cleans up the direct cron session after threaded direct delivery when deleteAfterRun is enabled", async () => {
@@ -1129,13 +1125,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.result).toBeUndefined();
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "telegram",
-        to: "123456",
-        payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      channel: "telegram",
+      to: "123456",
+      payloads: [{ text: "HEARTBEAT_OK", mediaUrl: "https://example.com/img.png" }],
+    });
   });
 
   it("cleans up the direct cron session after structured direct delivery when deleteAfterRun is enabled", async () => {
@@ -1174,13 +1168,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
     expect(state.deliveryAttempted).toBe(true);
 
     expect(
@@ -1203,12 +1195,10 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+    });
     expect(
       shouldEnqueueCronMainSummary({
         summaryText: "No_Reply",
@@ -1231,13 +1221,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
 
     const state = await dispatchCronDelivery(params);
 
-    expect(state.result).toEqual(
-      expect.objectContaining({
-        status: "ok",
-        delivered: false,
-        deliveryAttempted: true,
-      }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
     expect(callGateway).toHaveBeenCalledWith({
       method: "sessions.delete",
       params: {
@@ -1261,9 +1249,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
   });
 
   it("suppresses trailing NO_REPLY after summary text in text delivery (#64976)", async () => {
@@ -1276,9 +1266,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
   });
 
   it("suppresses mixed-case trailing No_Reply after summary text (#64976)", async () => {
@@ -1291,9 +1283,11 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const state = await dispatchCronDelivery(params);
 
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(state.result).toEqual(
-      expect.objectContaining({ status: "ok", delivered: false, deliveryAttempted: true }),
-    );
+    expectResultFields(state.result, {
+      status: "ok",
+      delivered: false,
+      deliveryAttempted: true,
+    });
   });
 
   it("delivers substantive text that mentions NO_REPLY in non-trailing content (text delivery)", async () => {
@@ -1358,10 +1352,8 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).toHaveBeenCalledWith(
-      expect.objectContaining({
-        payloads: [{ text: "Working on it..." }],
-      }),
-    );
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Working on it..." }],
+    });
   });
 });

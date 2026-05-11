@@ -13,6 +13,8 @@ import {
   type ChatState,
 } from "./chat.ts";
 
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+
 function createState(overrides: Partial<ChatState> = {}): ChatState {
   return {
     chatAttachments: [],
@@ -37,13 +39,37 @@ afterEach(() => {
 });
 
 function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
+  let resolve: ((value: T) => void) | undefined;
+  let reject: ((reason?: unknown) => void) | undefined;
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
   });
+  if (!resolve || !reject) {
+    throw new Error("Expected deferred callbacks to be initialized");
+  }
   return { promise, resolve, reject };
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("Expected a non-array record");
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireFirstRequestCall(request: ReturnType<typeof vi.fn>): unknown[] {
+  const [call] = request.mock.calls;
+  if (!call) {
+    throw new Error("Expected client request call");
+  }
+  return call;
+}
+
+function expectTextChatMessage(message: unknown, role: string, text: string): void {
+  const record = requireRecord(message);
+  expect(record.role).toBe(role);
+  expect(record.content).toEqual([{ type: "text", text }]);
 }
 
 function createActiveStreamingState() {
@@ -151,7 +177,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe(null);
     expect(state.chatRunId).toBe("run-1");
     expect(state.chatStream).toBe("Working...");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("returns null for delta from another run", () => {
@@ -220,7 +246,18 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
+  });
+
+  it("drops HEARTBEAT_OK final payload from another run without clearing active stream", () => {
+    const state = createActiveStreamingState();
+    const payload = createOtherRunSilentFinalPayload("HEARTBEAT_OK");
+
+    expect(handleChatEvent(state, payload)).toBe("final");
+    expect(state.chatRunId).toBe("run-user");
+    expect(state.chatStream).toBe("Working...");
+    expect(state.chatStreamStartedAt).toBe(123);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it.each(["no_reply", "ANNOUNCE_SKIP", "REPLY_SKIP"])(
@@ -236,6 +273,23 @@ describe("handleChatEvent", () => {
       expect(state.chatMessages).toEqual([payload.message]);
     },
   );
+
+  it("ignores HEARTBEAT_OK delta updates", () => {
+    const state = createState({
+      sessionKey: "main",
+      chatRunId: "run-1",
+      chatStream: "Previous visible text",
+    });
+    const payload: ChatEventPayload = {
+      runId: "run-1",
+      sessionKey: "main",
+      state: "delta",
+      message: { role: "assistant", content: [{ type: "text", text: "HEARTBEAT_OK" }] },
+    };
+
+    expect(handleChatEvent(state, payload)).toBe("delta");
+    expect(state.chatStream).toBe("Previous visible text");
+  });
 
   it("replaces the stream when a delta snapshot gets shorter", () => {
     const state = createState({
@@ -265,7 +319,7 @@ describe("handleChatEvent", () => {
     };
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe("run-user");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps active stream for unowned final payloads", () => {
@@ -279,7 +333,7 @@ describe("handleChatEvent", () => {
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
     expect(state.chatStreamStartedAt).toBe(123);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps active stream while appending unowned assistant finals", () => {
@@ -313,7 +367,7 @@ describe("handleChatEvent", () => {
       expect(state.chatRunId).toBe("run-user");
       expect(state.chatStream).toBe("Working...");
       expect(state.chatStreamStartedAt).toBe(123);
-      expect(state.chatMessages).toEqual([]);
+      expect(state.chatMessages).toStrictEqual([]);
     },
   );
 
@@ -341,10 +395,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Here is my reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Here is my reply");
   });
 
   it("does not persist empty or whitespace-only stream on final", () => {
@@ -362,7 +413,7 @@ describe("handleChatEvent", () => {
     expect(handleChatEvent(state, payload)).toBe("final");
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("does not persist null stream on final with no message", () => {
@@ -378,7 +429,7 @@ describe("handleChatEvent", () => {
       state: "final",
     };
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("prefers final payload message over streamed text", () => {
@@ -486,10 +537,7 @@ describe("handleChatEvent", () => {
     expect(state.chatStreamStartedAt).toBe(null);
     expect(state.chatMessages).toHaveLength(2);
     expect(state.chatMessages[0]).toEqual(existingMessage);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("falls back to streamed partial when aborted payload has non-assistant role", () => {
@@ -517,10 +565,7 @@ describe("handleChatEvent", () => {
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
     expect(state.chatMessages).toHaveLength(2);
-    expect(state.chatMessages[1]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "Partial reply" }],
-    });
+    expectTextChatMessage(state.chatMessages[1], "assistant", "Partial reply");
   });
 
   it("processes aborted from own run without message and empty stream", () => {
@@ -554,7 +599,7 @@ describe("handleChatEvent", () => {
     const payload = createOtherRunNoReplyFinalPayload();
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatRunId).toBe("run-user");
     expect(state.chatStream).toBe("Working...");
   });
@@ -577,7 +622,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatRunId).toBe(null);
     expect(state.chatStream).toBe(null);
   });
@@ -622,7 +667,7 @@ describe("handleChatEvent", () => {
     };
 
     expect(handleChatEvent(state, payload)).toBe("final");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("does not persist NO_REPLY stream text on abort", () => {
@@ -640,7 +685,7 @@ describe("handleChatEvent", () => {
     } as unknown as ChatEventPayload;
 
     expect(handleChatEvent(state, payload)).toBe("aborted");
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
   });
 
   it("keeps user messages containing NO_REPLY text", () => {
@@ -689,7 +734,7 @@ describe("handleChatEvent", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory filtering", () => {
   it("filters legacy silent assistant messages from history", async () => {
     const messages = [
       { role: "user", content: [{ type: "text", text: "Hello" }] },
@@ -836,16 +881,14 @@ describe("sendChatMessage", () => {
     await loadChatHistory(state);
     const result = await sendChatMessage(state, "continue");
 
-    expect(result).toEqual(expect.any(String));
+    expect(result).toMatch(UUID_V4_RE);
     expect(state.currentSessionId).toBe("session-before-reconnect");
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "main",
-        sessionId: "session-before-reconnect",
-        message: "continue",
-      }),
-    );
+    const sendRequest = request.mock.calls.at(-1);
+    expect(sendRequest?.[0]).toBe("chat.send");
+    const sendParams = requireRecord(sendRequest?.[1]);
+    expect(sendParams.sessionKey).toBe("main");
+    expect(sendParams.sessionId).toBe("session-before-reconnect");
+    expect(sendParams.message).toBe("continue");
   });
 
   it("serializes non-image chat attachments as files", async () => {
@@ -864,35 +907,33 @@ describe("sendChatMessage", () => {
       },
     ]);
 
-    expect(result).toEqual(expect.any(String));
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        message: "summarize",
-        attachments: [
-          {
-            type: "file",
-            mimeType: "application/pdf",
-            fileName: "brief.pdf",
-            content: Buffer.from("%PDF-1.4\n").toString("base64"),
-          },
-        ],
-      }),
-    );
-    expect(state.chatMessages[0]).toMatchObject({
-      role: "user",
-      content: [
-        { type: "text", text: "summarize" },
-        {
-          type: "attachment",
-          attachment: {
-            kind: "document",
-            label: "brief.pdf",
-            mimeType: "application/pdf",
-          },
-        },
-      ],
-    });
+    expect(result).toMatch(UUID_V4_RE);
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    expect(sendParams.message).toBe("summarize");
+    expect(sendParams.attachments).toEqual([
+      {
+        type: "file",
+        mimeType: "application/pdf",
+        fileName: "brief.pdf",
+        content: Buffer.from("%PDF-1.4\n").toString("base64"),
+      },
+    ]);
+    const userMessage = requireRecord(state.chatMessages[0]);
+    expect(userMessage.role).toBe("user");
+    const content = userMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const contentParts = content as unknown[];
+    expect(contentParts).toHaveLength(2);
+    expect(contentParts[0]).toEqual({ type: "text", text: "summarize" });
+    const attachmentPart = requireRecord(contentParts[1]);
+    expect(attachmentPart.type).toBe("attachment");
+    const attachmentPreview = requireRecord(attachmentPart.attachment);
+    expect(attachmentPreview.kind).toBe("document");
+    expect(attachmentPreview.label).toBe("brief.pdf");
+    expect(attachmentPreview.mimeType).toBe("application/pdf");
   });
 
   it("serializes attachments from the side payload store without copying data URLs into chat state", async () => {
@@ -916,18 +957,17 @@ describe("sendChatMessage", () => {
 
     const result = await sendChatMessage(state, "summarize", [attachment]);
 
-    expect(result).toEqual(expect.any(String));
-    expect(request).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        attachments: [
-          expect.objectContaining({
-            type: "file",
-            content: Buffer.from(pdfBytes).toString("base64"),
-          }),
-        ],
-      }),
-    );
+    expect(result).toMatch(UUID_V4_RE);
+    expect(request).toHaveBeenCalledTimes(1);
+    const [requestMethod, requestParams] = requireFirstRequestCall(request);
+    expect(requestMethod).toBe("chat.send");
+    const sendParams = requireRecord(requestParams);
+    const attachments = sendParams.attachments;
+    expect(Array.isArray(attachments)).toBe(true);
+    const [attachmentParam] = attachments as unknown[];
+    const attachmentRecord = requireRecord(attachmentParam);
+    expect(attachmentRecord.type).toBe("file");
+    expect(attachmentRecord.content).toBe(Buffer.from(pdfBytes).toString("base64"));
     expect(JSON.stringify(state.chatMessages)).not.toContain(
       Buffer.from(pdfBytes).toString("base64"),
     );
@@ -950,15 +990,14 @@ describe("sendChatMessage", () => {
 
     expect(result).toBeNull();
     expect(state.lastError).toContain("origin not allowed");
-    expect(state.chatMessages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [
-        {
-          type: "text",
-          text: expect.stringContaining("origin not allowed"),
-        },
-      ],
-    });
+    const assistantMessage = requireRecord(state.chatMessages.at(-1));
+    expect(assistantMessage.role).toBe("assistant");
+    const content = assistantMessage.content;
+    expect(Array.isArray(content)).toBe(true);
+    const [textPart] = content as unknown[];
+    const textRecord = requireRecord(textPart);
+    expect(textRecord.type).toBe("text");
+    expect(String(textRecord.text)).toContain("origin not allowed");
   });
 });
 
@@ -989,7 +1028,7 @@ describe("abortChatRun", () => {
   });
 });
 
-describe("loadChatHistory", () => {
+describe("loadChatHistory retry handling", () => {
   it("retries retryable startup unavailability before showing history", async () => {
     vi.useFakeTimers();
     try {
@@ -1051,7 +1090,8 @@ describe("loadChatHistory", () => {
 
     expect(request).toHaveBeenCalledWith("chat.history", {
       sessionKey: "main",
-      limit: 200,
+      limit: 100,
+      maxChars: 4000,
     });
     expect(state.chatMessages).toEqual([
       { role: "assistant", content: [{ type: "text", text: "visible answer" }] },
@@ -1201,7 +1241,7 @@ describe("loadChatHistory", () => {
 
     await loadChatHistory(state);
 
-    expect(state.chatMessages).toEqual([]);
+    expect(state.chatMessages).toStrictEqual([]);
     expect(state.chatThinkingLevel).toBeNull();
     expect(state.lastError).toContain("operator.read");
     expect(state.chatLoading).toBe(false);

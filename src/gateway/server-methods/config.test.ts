@@ -18,8 +18,10 @@ vi.mock("node:child_process", async () => {
 
 function invokeExecFileCallback(args: unknown[], error: Error | null) {
   const callback = args.at(-1);
-  expect(callback).toEqual(expect.any(Function));
-  (callback as (error: Error | null) => void)(error);
+  if (typeof callback !== "function") {
+    throw new Error("expected execFile callback");
+  }
+  callback(error);
 }
 
 describe("resolveConfigOpenCommand", () => {
@@ -102,6 +104,8 @@ describe("config.openFile", () => {
       },
       undefined,
     );
-    expect(logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("spawn xdg-open ENOENT"));
+    expect(logGateway.warn).toHaveBeenCalledWith(
+      "config.openFile failed path=/tmp/config.json: spawn xdg-open ENOENT",
+    );
   });
 });

@@ -1,12 +1,14 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { OPENROUTER_THINKING_STREAM_HOOKS } from "openclaw/plugin-sdk/provider-stream-family";
 import {
   createDeepSeekV4OpenAICompatibleThinkingWrapper,
+  type DeepSeekV4ReasoningEffort,
+  type DeepSeekV4ThinkingLevel,
   createPayloadPatchStreamWrapper,
-  stripTrailingAssistantPrefillMessages,
 } from "openclaw/plugin-sdk/provider-stream-shared";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
+import { isOpenRouterDeepSeekV4ModelId } from "./models.js";
 import {
   isOpenRouterProxyReasoningUnsupportedModel,
   normalizeOpenRouterBaseUrl,
@@ -25,22 +27,6 @@ function isOpenRouterAnthropicModelId(modelId: unknown): boolean {
     normalized?.startsWith("anthropic/") === true ||
     normalized?.startsWith("openrouter/anthropic/") === true
   );
-}
-
-function normalizeOpenRouterModelId(modelId: unknown): string | undefined {
-  const normalized = readString(modelId)?.toLowerCase();
-  return normalized?.startsWith("openrouter/")
-    ? normalized.slice("openrouter/".length)
-    : normalized;
-}
-
-function isOpenRouterDeepSeekV4ModelId(modelId: unknown): boolean {
-  const normalized = normalizeOpenRouterModelId(modelId);
-  if (!normalized?.startsWith("deepseek/")) {
-    return false;
-  }
-  const deepSeekModelId = normalized.slice("deepseek/".length).split(":", 1)[0];
-  return deepSeekModelId === "deepseek-v4-flash" || deepSeekModelId === "deepseek-v4-pro";
 }
 
 function isVerifiedOpenRouterRoute(model: Parameters<StreamFn>[0]): boolean {
@@ -70,6 +56,27 @@ function shouldPatchDeepSeekV4OpenRouterPayload(model: Parameters<StreamFn>[0]):
   );
 }
 
+function resolveOpenRouterDeepSeekV4ReasoningEffort(
+  thinkingLevel: DeepSeekV4ThinkingLevel,
+): DeepSeekV4ReasoningEffort {
+  switch (thinkingLevel) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return thinkingLevel;
+    case "max":
+      return "xhigh";
+    case "adaptive":
+      return "medium";
+    case "off":
+    case undefined:
+      return "high";
+  }
+  return "high";
+}
+
 function isEnabledReasoningValue(value: unknown): boolean {
   if (value === undefined || value === null || value === false) {
     return false;
@@ -85,6 +92,46 @@ function isOpenRouterReasoningPayloadEnabled(payload: Record<string, unknown>): 
   return (
     isEnabledReasoningValue(payload.reasoning) || isEnabledReasoningValue(payload.reasoning_effort)
   );
+}
+
+function assistantMessageHasAnthropicToolUse(message: Record<string, unknown>): boolean {
+  if (Array.isArray(message.tool_calls) && message.tool_calls.length > 0) {
+    return true;
+  }
+  const content = message.content;
+  if (!Array.isArray(content)) {
+    return false;
+  }
+  return content.some(
+    (block) =>
+      block &&
+      typeof block === "object" &&
+      ((block as { type?: unknown }).type === "tool_use" ||
+        (block as { type?: unknown }).type === "toolCall"),
+  );
+}
+
+function stripTrailingAssistantPrefillMessages(payload: Record<string, unknown>): number {
+  if (!Array.isArray(payload.messages)) {
+    return 0;
+  }
+
+  let stripped = 0;
+  while (payload.messages.length > 0) {
+    const finalMessage = payload.messages[payload.messages.length - 1];
+    if (!finalMessage || typeof finalMessage !== "object") {
+      break;
+    }
+
+    const message = finalMessage as Record<string, unknown>;
+    if (message.role !== "assistant" || assistantMessageHasAnthropicToolUse(message)) {
+      break;
+    }
+
+    payload.messages.pop();
+    stripped += 1;
+  }
+  return stripped;
 }
 
 function injectOpenRouterRouting(
@@ -140,6 +187,7 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
+    resolveReasoningEffort: resolveOpenRouterDeepSeekV4ReasoningEffort,
   });
 }
 
@@ -171,12 +219,3 @@ export function wrapOpenRouterProviderStream(
     createOpenRouterDeepSeekV4ThinkingWrapper(wrappedStreamFn, ctx.thinkingLevel),
   );
 }
-
-export const __testing = {
-  isOpenRouterDeepSeekV4ModelId,
-  isOpenRouterAnthropicModelId,
-  isOpenRouterReasoningPayloadEnabled,
-  isVerifiedOpenRouterRoute,
-  shouldPatchDeepSeekV4OpenRouterPayload,
-  shouldPatchAnthropicOpenRouterPayload,
-};

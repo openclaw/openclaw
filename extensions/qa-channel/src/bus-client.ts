@@ -2,8 +2,6 @@ import http from "node:http";
 import https from "node:https";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type {
-  QaBusConversation,
-  QaBusEvent,
   QaBusInboundMessageInput,
   QaBusMessage,
   QaBusPollResult,
@@ -95,7 +93,9 @@ async function postJson<T>(
     );
 
     const onAbort = () => {
-      request.destroy(abortError());
+      const error = abortError();
+      request.destroy(error);
+      reject(error);
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     request.on("error", (error) => {

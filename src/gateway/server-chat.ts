@@ -1,3 +1,4 @@
+import { resolveToolSearchCodeDisplayTarget } from "../agents/tool-display-common.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../auto-reply/heartbeat.js";
 import { normalizeVerboseLevel } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -38,6 +39,41 @@ export type {
   SessionMessageSubscriberRegistry,
   ToolEventRecipientRegistry,
 } from "./server-chat-state.js";
+
+function projectToolSearchCodeEventForChannelPayload<T extends { data?: unknown }>(payload: T): T {
+  const data = payload.data;
+  if (!data || typeof data !== "object") {
+    return payload;
+  }
+  const record = data as Record<string, unknown>;
+  if (record.name !== "tool_search_code") {
+    return payload;
+  }
+  const target = resolveToolSearchCodeDisplayTarget(record.args);
+  if (!target) {
+    return payload;
+  }
+  const projectedName = target.displayToolName ?? target.toolName;
+  if (!projectedName || projectedName === "tool_search_code") {
+    return payload;
+  }
+
+  // Channel/node subscribers render from event data, not the richer display
+  // helper used by Control UI. Project obvious bridge calls so verbose
+  // surfaces name the concrete tool while keeping the bridge identity available.
+  const projectedData: Record<string, unknown> = { ...record, name: projectedName };
+  if (target.displayArgs) {
+    projectedData.args = target.displayArgs;
+  } else if (target.detail) {
+    projectedData.args = { detail: target.detail };
+  }
+  if (target.bridgeVerb) {
+    projectedData.bridgeToolName = "tool_search_code";
+    projectedData.bridgeTargetToolName = target.toolName;
+    projectedData.bridgeVerb = target.bridgeVerb;
+  }
+  return { ...payload, data: projectedData };
+}
 
 function resolveHeartbeatAckMaxChars(): number {
   try {
@@ -562,22 +598,27 @@ export function createAgentEventHandler({
   const resolveToolVerboseLevel = (runId: string, sessionKey?: string) => {
     const runContext = getAgentRunContext(runId);
     const runVerbose = normalizeVerboseLevel(runContext?.verboseLevel);
-    if (runVerbose) {
-      return runVerbose;
-    }
     if (!sessionKey) {
-      return "off";
+      return runVerbose ?? "off";
     }
     try {
       const { cfg, entry } = loadSessionEntry(sessionKey);
       const sessionVerbose = normalizeVerboseLevel(entry?.verboseLevel);
-      if (sessionVerbose) {
+      const sessionUpdatedAt = typeof entry?.updatedAt === "number" ? entry.updatedAt : undefined;
+      const sessionChangedAfterRunStarted =
+        sessionUpdatedAt !== undefined &&
+        runContext?.registeredAt !== undefined &&
+        sessionUpdatedAt >= runContext.registeredAt;
+      if (sessionVerbose && (!runVerbose || sessionChangedAfterRunStarted)) {
         return sessionVerbose;
+      }
+      if (runVerbose) {
+        return runVerbose;
       }
       const defaultVerbose = normalizeVerboseLevel(cfg.agents?.defaults?.verboseDefault);
       return defaultVerbose ?? "off";
     } catch {
-      return "off";
+      return runVerbose ?? "off";
     }
   };
 
@@ -608,8 +649,9 @@ export function createAgentEventHandler({
     const isToolEvent = evt.stream === "tool";
     const isItemEvent = evt.stream === "item";
     const toolVerbose = isToolEvent ? resolveToolVerboseLevel(evt.runId, sessionKey) : "off";
-    // Build tool payload: strip result/partialResult unless verbose=full
-    const toolPayload =
+    // Channel/node subscribers respect verbose; authenticated Control UI
+    // recipients need tool result payloads to render live tool cards.
+    const channelToolPayload =
       isToolEvent && toolVerbose !== "full"
         ? (() => {
             const data = evt.data ? { ...evt.data } : {};
@@ -650,7 +692,7 @@ export function createAgentEventHandler({
       if (isControlUiVisible && recipients && recipients.size > 0) {
         broadcastToConnIds(
           "agent",
-          sessionKey ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : toolPayload,
+          sessionKey ? { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
           recipients,
         );
       }
@@ -664,7 +706,7 @@ export function createAgentEventHandler({
         if (sessionSubscribers.size > 0) {
           broadcastToConnIds(
             "session.tool",
-            { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) },
+            { ...agentPayload, ...buildSessionEventSnapshot(sessionKey) },
             sessionSubscribers,
             { dropIfSlow: true },
           );
@@ -687,7 +729,12 @@ export function createAgentEventHandler({
         nodeSendToSession(
           sessionKey,
           "agent",
-          isToolEvent ? { ...toolPayload, ...buildSessionEventSnapshot(sessionKey) } : agentPayload,
+          isToolEvent
+            ? projectToolSearchCodeEventForChannelPayload({
+                ...channelToolPayload,
+                ...buildSessionEventSnapshot(sessionKey),
+              })
+            : agentPayload,
         );
       }
       if (

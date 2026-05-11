@@ -1,4 +1,4 @@
-import { z } from "openclaw/plugin-sdk/zod";
+import { z } from "zod";
 import type { CallMode } from "./config.js";
 
 // -----------------------------------------------------------------------------
@@ -288,4 +288,6 @@ export type OutboundCallOptions = {
   mode?: CallMode;
   /** DTMF digits to send after the call is connected */
   dtmfSequence?: string;
+  /** Session that initiated the call, used for agent context/delegated message routing */
+  requesterSessionKey?: string;
 };

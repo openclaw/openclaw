@@ -104,8 +104,9 @@ describe("command secret target ids", () => {
     });
 
     expect(scoped.targetIds.size).toBeGreaterThan(0);
-    expect([...scoped.targetIds].every((id) => id.startsWith("channels.discord."))).toBe(true);
-    expect([...scoped.targetIds].some((id) => id.startsWith("channels.telegram."))).toBe(false);
+    const targetIds = [...scoped.targetIds];
+    expect(targetIds.every((id) => id.startsWith("channels.discord."))).toBe(true);
+    expect(targetIds.some((id) => id.startsWith("channels.telegram."))).toBe(false);
   });
 
   it("does not coerce missing accountId to default when channel is scoped", () => {
@@ -151,10 +152,9 @@ describe("command secret target ids", () => {
       accountId: "ops",
     });
 
-    expect(scoped.allowedPaths).toBeDefined();
-    expect(scoped.allowedPaths?.has("channels.discord.token")).toBe(true);
-    expect(scoped.allowedPaths?.has("channels.discord.accounts.ops.token")).toBe(true);
-    expect(scoped.allowedPaths?.has("channels.discord.accounts.chat.token")).toBe(false);
+    expect(scoped.allowedPaths).toEqual(
+      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
+    );
   });
 
   it("keeps account-scoped allowedPaths as an empty set when scoped target paths are absent", () => {
@@ -172,7 +172,6 @@ describe("command secret target ids", () => {
       accountId: "ops",
     });
 
-    expect(scoped.allowedPaths).toBeDefined();
-    expect(scoped.allowedPaths?.size).toBe(0);
+    expect(scoped.allowedPaths).toEqual(new Set());
   });
 });
