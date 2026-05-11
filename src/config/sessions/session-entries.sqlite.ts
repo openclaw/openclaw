@@ -17,7 +17,7 @@ import {
   type ConversationIdentity,
 } from "./conversation-identity.js";
 import { normalizeSessionEntries } from "./session-entry-normalize.js";
-import type { SessionEntry, SessionOrigin } from "./types.js";
+import type { SessionEntry } from "./types.js";
 
 export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
@@ -108,7 +108,7 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
   }
 }
 
-function clearCompatibilityRoutingShadow(entry: SessionEntry & { origin?: SessionOrigin }): void {
+function clearCompatibilityRoutingShadow(entry: SessionEntry & { origin?: unknown }): void {
   delete entry.origin;
   delete entry.deliveryContext;
   delete entry.lastChannel;

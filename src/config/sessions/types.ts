@@ -12,19 +12,6 @@ export type SessionChannelId = ChannelId;
 
 export type SessionChatType = ChatType;
 
-export type SessionOrigin = {
-  label?: string;
-  provider?: string;
-  surface?: string;
-  chatType?: SessionChatType;
-  from?: string;
-  to?: string;
-  nativeChannelId?: string;
-  nativeDirectUserId?: string;
-  accountId?: string;
-  threadId?: string | number;
-};
-
 export type SessionAcpIdentitySource = "ensure" | "status" | "event";
 
 export type SessionAcpIdentityState = "pending" | "resolved";

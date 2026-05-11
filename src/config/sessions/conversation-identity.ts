@@ -10,7 +10,7 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import { resolveGroupSessionKey } from "./group.js";
-import { deriveSessionOrigin } from "./metadata.js";
+import { deriveSessionRouteMetadata } from "./metadata.js";
 import type { GroupKeyResolution, SessionEntry } from "./types.js";
 
 export type ConversationKind = "channel" | "direct" | "group";
@@ -152,14 +152,14 @@ export function conversationIdentityFromMsgContext(params: {
   deliveryContext?: DeliveryContext;
   groupResolution?: GroupKeyResolution | null;
 }): ConversationIdentity | null {
-  const origin = deriveSessionOrigin(params.ctx);
+  const route = deriveSessionRouteMetadata(params.ctx);
   const deliveryContext = mergeDeliveryContext(
     normalizeDeliveryContext(params.deliveryContext),
     normalizeDeliveryContext({
-      channel: origin?.provider,
-      to: origin?.to,
-      accountId: origin?.accountId,
-      threadId: origin?.threadId,
+      channel: route?.provider,
+      to: route?.to,
+      accountId: route?.accountId,
+      threadId: route?.threadId,
     }),
   );
   const groupResolution = params.groupResolution ?? resolveGroupSessionKey(params.ctx);
@@ -167,7 +167,7 @@ export function conversationIdentityFromMsgContext(params: {
   const channel =
     deliveryContext?.channel ??
     groupResolution?.channel ??
-    normalizeText(origin?.provider) ??
+    normalizeText(route?.provider) ??
     normalizeText(params.ctx.OriginatingChannel) ??
     normalizeText(params.ctx.Provider);
   const peerId =
@@ -184,13 +184,13 @@ export function conversationIdentityFromMsgContext(params: {
         normalizeText(params.ctx.From));
   return finalizeConversationIdentity({
     channel,
-    accountId: deliveryContext?.accountId ?? origin?.accountId ?? params.ctx.AccountId,
+    accountId: deliveryContext?.accountId ?? route?.accountId ?? params.ctx.AccountId,
     kind,
     peerId,
     parentConversationId: normalizeText(params.ctx.ThreadParentId),
     threadId: normalizeThreadId(deliveryContext?.threadId ?? params.ctx.MessageThreadId),
-    nativeChannelId: params.ctx.NativeChannelId ?? origin?.nativeChannelId,
-    nativeDirectUserId: params.ctx.NativeDirectUserId ?? origin?.nativeDirectUserId,
-    label: normalizeText(resolveConversationLabel(params.ctx)) ?? origin?.label,
+    nativeChannelId: params.ctx.NativeChannelId ?? route?.nativeChannelId,
+    nativeDirectUserId: params.ctx.NativeDirectUserId ?? route?.nativeDirectUserId,
+    label: normalizeText(resolveConversationLabel(params.ctx)) ?? route?.label,
   });
 }

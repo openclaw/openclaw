@@ -1,11 +1,7 @@
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
-import {
-  normalizeSessionRuntimeModelFields,
-  type SessionEntry,
-  type SessionOrigin,
-} from "./types.js";
+import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
 
-type LegacySessionOriginShadow = { origin?: SessionOrigin };
+type LegacySessionOriginShadow = { origin?: unknown };
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const normalized = normalizeSessionDeliveryFields({
