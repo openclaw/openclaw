@@ -1,5 +1,6 @@
 import type { ChannelAccountSnapshot } from "../../channels/plugins/types.public.js";
 import type { ChannelHealthSummary, HealthSummary } from "../../commands/health.types.js";
+import { getStatusSummary } from "../../commands/status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getGatewayModelPricingBootstrapHealth } from "../model-pricing-bootstrap-health.js";
 import { isGatewayModelPricingEnabled } from "../model-pricing-config.js";

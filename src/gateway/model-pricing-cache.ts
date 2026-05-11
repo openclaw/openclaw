@@ -1232,12 +1232,14 @@ export async function refreshGatewayModelPricingCache(
     const [catalogById, litellmCatalog] = await Promise.all([
       fetchOpenRouterPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("OpenRouter", error));
+        recordGatewayModelPricingBootstrapFailure(String(error));
         openRouterFailed = true;
         return new Map<string, OpenRouterPricingEntry>();
       }),
       fetchLiteLLMPricingCatalog(fetchImpl, params.signal).catch((error: unknown) => {
         log.warn(formatPricingFetchFailure("LiteLLM", error));
         litellmFailed = true;
+        recordGatewayModelPricingBootstrapFailure(String(error));
         return new Map<string, CachedModelPricing>() as LiteLLMPricingCatalog;
       }),
     ]);
