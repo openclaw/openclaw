@@ -280,7 +280,6 @@ export function createAgentEventHandler({
       groupChannel: row?.groupChannel,
       space: row?.space,
       chatType: row?.chatType,
-      origin: row?.origin,
       spawnedBy: row?.spawnedBy,
       spawnedWorkspaceDir: row?.spawnedWorkspaceDir,
       forkedFromParent: row?.forkedFromParent,

@@ -263,6 +263,13 @@ The branch already has a real shared SQLite base:
   SQLite delivery/routing rows, not stale `last*` session-entry shadows.
   System-event prompt context rebuilds channel/to/account/thread fields from
   typed delivery fields instead of `origin` shadows.
+  The shared `deliveryContextFromSession` helper and session-to-conversation
+  mapper now ignore `SessionEntry.origin` entirely; only typed delivery fields
+  and relational conversation rows can create hot route identity.
+  Runtime session entry normalization strips `origin` before persisting or
+  projecting `entry_json`, and inbound metadata writes typed channel/chat
+  fields plus relational conversation rows instead of creating new origin
+  shadows.
 - Transcript events, transcript snapshots, and trajectory runtime events now
   reference the canonical per-agent `sessions` root and cascade on session
   deletion. Transcript identity/idempotency rows continue to cascade from the
@@ -494,6 +501,13 @@ Completed consolidation/deletion highlights:
 - Agent-to-agent announce target hydration now uses typed `sessions.list`
   `deliveryContext` only. It no longer recovers account/thread routing from
   legacy `origin` or mirrored `last*` fields in list rows.
+- Session list/status, diagnostics, approval account binding, TUI heartbeat
+  filtering, and usage summaries no longer mine `SessionEntry.origin` for
+  provider/account/thread/display routing. The only remaining runtime
+  `origin` reads are non-session concepts or current-turn delivery objects.
+- Gateway session changed/chat/session event payloads no longer echo
+  `SessionEntry.origin`; clients receive typed `channel`, `chatType`,
+  `deliveryContext`, and `last*` compatibility fields instead.
 - Heartbeat delivery resolution can now receive the typed SQLite
   `deliveryContext` directly, and heartbeat runtime passes the per-agent
   session delivery row instead of relying on compatibility `session_entries`

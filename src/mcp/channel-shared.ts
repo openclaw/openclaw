@@ -163,10 +163,7 @@ export function summarizeStructuredResult(
 
 function resolveConversationChannel(row: SessionRow): string | undefined {
   return normalizeOptionalLowercaseString(
-    toText(row.deliveryContext?.channel) ??
-      toText(row.lastChannel) ??
-      toText(row.channel) ??
-      toText(row.origin?.provider),
+    toText(row.deliveryContext?.channel) ?? toText(row.lastChannel) ?? toText(row.channel),
   );
 }
 
@@ -180,11 +177,8 @@ export function toConversation(row: SessionRow): ConversationDescriptor | null {
     sessionKey: row.key,
     channel,
     to,
-    accountId:
-      toText(row.deliveryContext?.accountId) ??
-      toText(row.lastAccountId) ??
-      toText(row.origin?.accountId),
-    threadId: row.deliveryContext?.threadId ?? row.lastThreadId ?? row.origin?.threadId,
+    accountId: toText(row.deliveryContext?.accountId) ?? toText(row.lastAccountId),
+    threadId: row.deliveryContext?.threadId ?? row.lastThreadId,
     label: toText(row.label),
     displayName: toText(row.displayName),
     derivedTitle: toText(row.derivedTitle),

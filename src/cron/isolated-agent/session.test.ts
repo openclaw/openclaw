@@ -390,7 +390,6 @@ describe("resolveCronSession", () => {
           sendPolicy: "deny",
           queueMode: "collect",
           channel: "discord" as never,
-          origin: { provider: "discord", to: "old-channel" },
         },
         fresh: false,
       });
@@ -400,7 +399,6 @@ describe("resolveCronSession", () => {
       expect(result.sessionEntry.sendPolicy).toBe("deny");
       expect(result.sessionEntry.queueMode).toBe("collect");
       expect(result.sessionEntry.channel).toBe("discord");
-      expect(result.sessionEntry.origin).toEqual({ provider: "discord", to: "old-channel" });
     });
 
     it("clears delivery routing metadata when session is stale", () => {

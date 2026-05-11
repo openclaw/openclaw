@@ -104,7 +104,11 @@ describe("SQLite session row key normalization", () => {
 
     const store = readMainSessionRows();
     expect(Object.keys(store)).toEqual([CANONICAL_KEY]);
-    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+    expect(store[CANONICAL_KEY]).toMatchObject({
+      channel: "webchat",
+      chatType: "direct",
+    });
+    expect(store[CANONICAL_KEY]?.origin).toBeUndefined();
   });
 
   it("does not create a duplicate mixed-case key when last route is updated", async () => {
@@ -175,6 +179,10 @@ describe("SQLite session row key normalization", () => {
     const store = readMainSessionRows();
     expect(store[CANONICAL_KEY]?.sessionId).toBe("existing-session");
     expect(store[CANONICAL_KEY]?.updatedAt).toBe(existingUpdatedAt);
-    expect(store[CANONICAL_KEY]?.origin?.provider).toBe("webchat");
+    expect(store[CANONICAL_KEY]).toMatchObject({
+      channel: "webchat",
+      chatType: "direct",
+    });
+    expect(store[CANONICAL_KEY]?.origin).toBeUndefined();
   });
 });

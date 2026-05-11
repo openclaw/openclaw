@@ -110,14 +110,7 @@ export function isHeartbeatLikeTuiSession(session: TuiSessionList["sessions"][nu
   if (isHeartbeatSessionKey(session.key)) {
     return true;
   }
-  const markers = [
-    session.provider,
-    session.lastChannel,
-    session.lastTo,
-    session.origin?.provider,
-    session.origin?.surface,
-    session.origin?.label,
-  ];
+  const markers = [session.provider, session.lastChannel, session.lastTo];
   return markers.some((marker) => normalizeMarker(marker) === "heartbeat");
 }
 

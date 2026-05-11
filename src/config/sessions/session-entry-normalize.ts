@@ -1,5 +1,11 @@
 import { normalizeSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
-import { normalizeSessionRuntimeModelFields, type SessionEntry } from "./types.js";
+import {
+  normalizeSessionRuntimeModelFields,
+  type SessionEntry,
+  type SessionOrigin,
+} from "./types.js";
+
+type LegacySessionOriginShadow = { origin?: SessionOrigin };
 
 function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
   const normalized = normalizeSessionDeliveryFields({
@@ -7,7 +13,7 @@ function normalizeSessionEntryDelivery(entry: SessionEntry): SessionEntry {
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
     lastAccountId: entry.lastAccountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId,
     deliveryContext: entry.deliveryContext,
   });
   const nextDelivery = normalized.deliveryContext;
@@ -47,14 +53,24 @@ function stripPersistedSkillsCache(entry: SessionEntry): SessionEntry {
   return { ...entry, skillsSnapshot: rest };
 }
 
+function stripPersistedOriginShadow(entry: SessionEntry & LegacySessionOriginShadow): SessionEntry {
+  if (entry.origin === undefined) {
+    return entry;
+  }
+  const { origin: _drop, ...rest } = entry;
+  return rest;
+}
+
 export function normalizeSessionEntries(entries: Record<string, SessionEntry>): boolean {
   let changed = false;
   for (const [key, entry] of Object.entries(entries)) {
     if (!entry) {
       continue;
     }
-    const normalized = stripPersistedSkillsCache(
-      normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+    const normalized = stripPersistedOriginShadow(
+      stripPersistedSkillsCache(
+        normalizeSessionEntryDelivery(normalizeSessionRuntimeModelFields(entry)),
+      ),
     );
     if (normalized !== entry) {
       entries[key] = normalized;

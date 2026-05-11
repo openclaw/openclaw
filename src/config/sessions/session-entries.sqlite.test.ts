@@ -418,13 +418,6 @@ describe("SQLite session row backend", () => {
           to: "user:U1",
           accountId: "work",
         },
-        origin: {
-          provider: "discord",
-          chatType: "direct",
-          nativeDirectUserId: "U1",
-          nativeChannelId: "D1",
-          accountId: "work",
-        },
       },
     });
 
@@ -450,9 +443,9 @@ describe("SQLite session row backend", () => {
       channel: "discord",
       account_id: "work",
       kind: "direct",
-      peer_id: "U1",
-      native_channel_id: "D1",
-      native_direct_user_id: "U1",
+      peer_id: "user:U1",
+      native_channel_id: null,
+      native_direct_user_id: null,
     });
     expect(
       executeSqliteQuerySync(

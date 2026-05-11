@@ -218,7 +218,7 @@ describe("delivery context helpers", () => {
       deliveryContextFromSession({
         channel: "demo-channel",
         lastTo: " -1001 ",
-        origin: { threadId: 42 },
+        lastThreadId: 42,
       }),
     ).toEqual({
       channel: "demo-channel",

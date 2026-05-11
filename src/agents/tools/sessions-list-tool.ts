@@ -187,12 +187,6 @@ export function createSessionsListTool(opts?: {
         });
 
         const entryChannel = typeof entry.channel === "string" ? entry.channel : undefined;
-        const entryOrigin =
-          entry.origin && typeof entry.origin === "object"
-            ? (entry.origin as Record<string, unknown>)
-            : undefined;
-        const originChannel =
-          typeof entryOrigin?.provider === "string" ? entryOrigin.provider : undefined;
         const deliveryContext =
           entry.deliveryContext && typeof entry.deliveryContext === "object"
             ? (entry.deliveryContext as Record<string, unknown>)
@@ -211,7 +205,7 @@ export function createSessionsListTool(opts?: {
         const derivedChannel = deriveChannel({
           key,
           kind,
-          channel: entryChannel ?? originChannel,
+          channel: entryChannel,
           lastChannel,
         });
 
@@ -223,14 +217,6 @@ export function createSessionsListTool(opts?: {
           agentId: resolvedAgentId,
           kind,
           channel: derivedChannel,
-          origin:
-            originChannel ||
-            (typeof entryOrigin?.accountId === "string" ? entryOrigin.accountId : undefined)
-              ? {
-                  provider: originChannel,
-                  accountId: readStringValue(entryOrigin?.accountId),
-                }
-              : undefined,
           spawnedBy:
             typeof entry.spawnedBy === "string"
               ? resolveDisplaySessionKey({

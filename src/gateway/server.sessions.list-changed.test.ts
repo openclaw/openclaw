@@ -361,6 +361,17 @@ test("sessions.list does not block on slow model catalog discovery", async () =>
 
 test("sessions.changed mutation events include live usage metadata", async () => {
   await createSessionFixtureDir();
+  await seedGatewaySessionEntries({
+    entries: {
+      main: sessionStoreEntry("sess-main", {
+        modelProvider: "openai-codex",
+        model: "gpt-5.3-codex-spark",
+        contextTokens: 123_456,
+        totalTokens: 0,
+        totalTokensFresh: false,
+      }),
+    },
+  });
   replaceSqliteSessionTranscriptEvents({
     agentId: "main",
     sessionId: "sess-main",
@@ -383,17 +394,6 @@ test("sessions.changed mutation events include live usage metadata", async () =>
         },
       },
     ],
-  });
-  await seedGatewaySessionEntries({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        modelProvider: "openai-codex",
-        model: "gpt-5.3-codex-spark",
-        contextTokens: 123_456,
-        totalTokens: 0,
-        totalTokensFresh: false,
-      }),
-    },
   });
 
   const broadcastToConnIds = vi.fn();
@@ -479,7 +479,7 @@ test("sessions.changed mutation events include live session setting metadata", a
     lastChannel: "telegram",
     lastTo: "-100123",
     lastAccountId: "acct-1",
-    lastThreadId: 42,
+    lastThreadId: "42",
   });
 });
 

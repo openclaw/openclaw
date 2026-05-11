@@ -1410,22 +1410,22 @@ describe("session_status tool", () => {
     }
   });
 
-  it("falls back to origin.provider when resolving queue settings", async () => {
+  it("uses typed lastChannel when resolving queue settings", async () => {
     resetSessionStore({
       main: {
-        sessionId: "status-origin-provider",
+        sessionId: "status-last-channel",
         updatedAt: 10,
-        origin: { provider: "quietchat" },
+        lastChannel: "quietchat",
       },
     });
 
     const tool = getSessionStatusTool();
 
-    await tool.execute("call-origin-provider", {});
+    await tool.execute("call-last-channel", {});
 
     const queueArg = mockCallArg(resolveQueueSettingsMock) as Record<string, unknown>;
     expect(queueArg.channel).toBe("quietchat");
-    expectRecordFields(queueArg.sessionEntry, { origin: { provider: "quietchat" } });
+    expectRecordFields(queueArg.sessionEntry, { lastChannel: "quietchat" });
   });
 
   it("resolves sessionId inputs", async () => {

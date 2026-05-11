@@ -130,34 +130,20 @@ export function conversationIdentityFromSessionEntry(
   entry: SessionEntry,
 ): ConversationIdentity | null {
   const deliveryContext = deliveryContextFromSession(entry);
-  const kind = normalizeKind(entry.chatType ?? entry.origin?.chatType);
+  const kind = normalizeKind(entry.chatType);
   const channel =
-    deliveryContext?.channel ??
-    normalizeText(entry.channel) ??
-    normalizeText(entry.lastChannel) ??
-    normalizeText(entry.origin?.provider);
+    deliveryContext?.channel ?? normalizeText(entry.channel) ?? normalizeText(entry.lastChannel);
   const peerId =
     kind === "direct"
-      ? (normalizeText(entry.origin?.nativeDirectUserId) ??
-        deliveryContextPeerId(deliveryContext) ??
-        normalizeText(entry.lastTo) ??
-        normalizeText(entry.origin?.to) ??
-        normalizeText(entry.origin?.from))
-      : (normalizeText(entry.groupId) ??
-        deliveryContextPeerId(deliveryContext) ??
-        normalizeText(entry.origin?.to) ??
-        normalizeText(entry.origin?.from));
+      ? (deliveryContextPeerId(deliveryContext) ?? normalizeText(entry.lastTo))
+      : (normalizeText(entry.groupId) ?? deliveryContextPeerId(deliveryContext));
   return finalizeConversationIdentity({
     channel,
-    accountId: deliveryContext?.accountId ?? entry.lastAccountId ?? entry.origin?.accountId,
+    accountId: deliveryContext?.accountId ?? entry.lastAccountId,
     kind,
     peerId,
-    threadId: normalizeThreadId(
-      deliveryContext?.threadId ?? entry.lastThreadId ?? entry.origin?.threadId,
-    ),
-    nativeChannelId: entry.origin?.nativeChannelId,
-    nativeDirectUserId: entry.origin?.nativeDirectUserId,
-    label: entry.displayName ?? entry.label ?? entry.origin?.label,
+    threadId: normalizeThreadId(deliveryContext?.threadId ?? entry.lastThreadId),
+    label: entry.displayName ?? entry.label,
   });
 }
 

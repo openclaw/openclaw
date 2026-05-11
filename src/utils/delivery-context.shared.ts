@@ -90,12 +90,11 @@ export function deliveryContextFromSession(
     return undefined;
   }
   const source: DeliveryContextSessionSource = {
-    channel: entry.channel ?? entry.origin?.provider,
+    channel: entry.channel,
     lastChannel: entry.lastChannel,
     lastTo: entry.lastTo,
-    lastAccountId: entry.lastAccountId ?? entry.origin?.accountId,
-    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId ?? entry.origin?.threadId,
-    origin: entry.origin,
+    lastAccountId: entry.lastAccountId,
+    lastThreadId: entry.lastThreadId ?? entry.deliveryContext?.threadId,
     deliveryContext: entry.deliveryContext,
   };
   return normalizeSessionDeliveryFields(source).deliveryContext;

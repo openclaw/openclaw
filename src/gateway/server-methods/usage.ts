@@ -1082,8 +1082,8 @@ export const usageHandlers: GatewayRequestHandlers = {
         aggregateTotals.missingCostEntries += usage.missingCostEntries;
       }
 
-      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.origin?.provider;
-      const chatType = merged.storeEntry?.chatType ?? merged.storeEntry?.origin?.chatType;
+      const channel = merged.storeEntry?.channel ?? merged.storeEntry?.lastChannel;
+      const chatType = merged.storeEntry?.chatType;
 
       if (usage) {
         if (usage.messageCounts) {
@@ -1213,7 +1213,6 @@ export const usageHandlers: GatewayRequestHandlers = {
         agentId,
         channel,
         chatType,
-        origin: merged.storeEntry?.origin,
         modelOverride: merged.storeEntry?.modelOverride,
         providerOverride: merged.storeEntry?.providerOverride,
         modelProvider: merged.storeEntry?.modelProvider,

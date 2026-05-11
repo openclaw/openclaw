@@ -680,7 +680,6 @@ async function sendSubagentAnnounceDirectly(params: {
       channel:
         requesterEntry?.channel ??
         requesterEntry?.lastChannel ??
-        requesterEntry?.origin?.provider ??
         requesterSessionOrigin?.channel ??
         directOrigin?.channel,
       sessionEntry: requesterEntry,

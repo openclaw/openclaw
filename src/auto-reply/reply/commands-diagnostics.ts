@@ -540,10 +540,8 @@ function resolveDiagnosticsSessionChannelId(
   params: HandleCommandsParams,
   sessionKey: string,
 ) {
-  return (
-    normalizeOptionalString(entry.origin?.nativeChannelId) ??
-    (sessionKey === params.sessionKey ? params.command.channelId : undefined)
-  );
+  void entry;
+  return sessionKey === params.sessionKey ? params.command.channelId : undefined;
 }
 
 function formatExecToolResultForDiagnostics(result: {

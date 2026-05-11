@@ -121,9 +121,7 @@ function resolvePersistedPromptProvider(entry?: SessionEntry): string | undefine
 }
 
 function resolvePersistedPromptSurface(entry?: SessionEntry): string | undefined {
-  return (
-    normalizePromptRouteChannel(entry?.origin?.surface) ?? resolvePersistedPromptProvider(entry)
-  );
+  return resolvePersistedPromptProvider(entry);
 }
 
 export function resolvePromptSessionContextForSystemEvent(params: {
@@ -141,8 +139,7 @@ export function resolvePromptSessionContextForSystemEvent(params: {
     return sessionCtx;
   }
 
-  const persistedChatType =
-    normalizeChatType(sessionEntry.chatType) ?? normalizeChatType(sessionEntry.origin?.chatType);
+  const persistedChatType = normalizeChatType(sessionEntry.chatType);
   const liveChatType = normalizeChatType(sessionCtx.ChatType);
   const effectiveChatType = liveChatType ?? persistedChatType;
   const persistedProvider = resolvePersistedPromptProvider(sessionEntry);

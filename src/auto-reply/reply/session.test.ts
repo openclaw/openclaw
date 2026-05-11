@@ -3176,11 +3176,7 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "channel:CHAN1",
       accountId: "default",
     });
-    expect(result.sessionEntry.origin).toEqual({
-      provider: "mattermost",
-      to: "channel:CHAN1",
-      accountId: "default",
-    });
+    expect(result.sessionEntry.origin).toBeUndefined();
 
     const persisted = readSessionRowsForFixtureTarget(sessionRowsTarget);
     expect(persisted[sessionKey]?.lastThreadId).toBeUndefined();
@@ -3189,11 +3185,7 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "channel:CHAN1",
       accountId: "default",
     });
-    expect(persisted[sessionKey]?.origin).toEqual({
-      provider: "mattermost",
-      to: "channel:CHAN1",
-      accountId: "default",
-    });
+    expect(persisted[sessionKey]?.origin).toBeUndefined();
   });
 
   it("does not synthesize heartbeat routing on a session with no external route", async () => {
@@ -3271,12 +3263,7 @@ describe("initSessionState internal channel routing preservation", () => {
       to: "user:ou_sender_1",
       accountId: "default",
     });
-    expect(result.sessionEntry.origin).toEqual({
-      provider: "feishu",
-      from: "user:ou_sender_1",
-      to: "user:ou_sender_1",
-      accountId: "default",
-    });
+    expect(result.sessionEntry.origin).toBeUndefined();
   });
 
   it("keeps persisted external lastChannel when OriginatingChannel is internal webchat", async () => {

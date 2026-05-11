@@ -8,7 +8,6 @@ export type CompletionChatType = ChatType | "unknown";
 
 export type CompletionDeliverySessionEntry = {
   chatType?: string | null;
-  origin?: { chatType?: string | null } | null;
 };
 
 export function resolveCompletionChatType(params: {
@@ -18,9 +17,7 @@ export function resolveCompletionChatType(params: {
   directOrigin?: DeliveryContext;
   requesterSessionOrigin?: DeliveryContext;
 }): CompletionChatType {
-  const explicit = normalizeChatType(
-    params.requesterEntry?.chatType ?? params.requesterEntry?.origin?.chatType ?? undefined,
-  );
+  const explicit = normalizeChatType(params.requesterEntry?.chatType ?? undefined);
   if (explicit) {
     return explicit;
   }

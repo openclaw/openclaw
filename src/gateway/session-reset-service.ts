@@ -17,7 +17,6 @@ import { getRuntimeConfig } from "../config/io.js";
 import {
   getSessionEntry,
   listSessionEntries,
-  snapshotSessionOrigin,
   type SessionEntry,
   upsertSessionEntry,
 } from "../config/sessions.js";
@@ -705,7 +704,6 @@ export async function performGatewaySessionReset(params: {
       subject: currentEntry?.subject,
       groupChannel: currentEntry?.groupChannel,
       space: currentEntry?.space,
-      origin: snapshotSessionOrigin(currentEntry),
       deliveryContext: currentEntry?.deliveryContext,
       cliSessionBindings: currentEntry?.cliSessionBindings,
       lastChannel: currentEntry?.lastChannel,

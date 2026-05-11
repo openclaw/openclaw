@@ -17,7 +17,7 @@ import {
   type ConversationIdentity,
 } from "./conversation-identity.js";
 import { normalizeSessionEntries } from "./session-entry-normalize.js";
-import type { SessionEntry } from "./types.js";
+import type { SessionEntry, SessionOrigin } from "./types.js";
 
 export type SqliteSessionEntriesOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
@@ -108,7 +108,8 @@ function parseSessionEntry(row: SessionEntryRow): SessionEntry | null {
   }
 }
 
-function clearCompatibilityRoutingShadow(entry: SessionEntry): void {
+function clearCompatibilityRoutingShadow(entry: SessionEntry & { origin?: SessionOrigin }): void {
+  delete entry.origin;
   delete entry.deliveryContext;
   delete entry.lastChannel;
   delete entry.lastTo;
@@ -287,8 +288,7 @@ function sessionDisplayName(entry: SessionEntry): string | null {
 }
 
 function resolveSessionScope(params: { entry: SessionEntry; sessionKey: string }): string {
-  const chatType =
-    nullableString(params.entry.chatType) ?? nullableString(params.entry.origin?.chatType);
+  const chatType = nullableString(params.entry.chatType);
   const key = params.sessionKey.trim().toLowerCase();
   if (chatType === "direct" && (key === "main" || key.endsWith(":main"))) {
     return "shared-main";
@@ -338,8 +338,7 @@ function bindSessionRoot(params: {
     channel: nullableString(params.entry.channel) ?? nullableString(params.entry.lastChannel),
     account_id:
       nullableString(params.primaryConversation?.accountId) ??
-      nullableString(params.entry.lastAccountId) ??
-      nullableString(params.entry.origin?.accountId),
+      nullableString(params.entry.lastAccountId),
     primary_conversation_id: nullableString(params.primaryConversation?.conversationId),
     model_provider: nullableString(params.entry.modelProvider),
     model: nullableString(params.entry.model),

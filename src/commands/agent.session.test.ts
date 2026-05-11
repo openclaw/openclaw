@@ -118,13 +118,13 @@ describe("agent session resolution", () => {
     });
   });
 
-  it("uses origin.provider for channel-specific session reset overrides", async () => {
+  it("uses typed lastChannel for channel-specific session reset overrides", async () => {
     await withTempHome(async (home) => {
       await writeSessionRows("main", {
         main: {
-          sessionId: "origin-provider-reset",
+          sessionId: "typed-channel-reset",
           updatedAt: Date.now() - 30 * 60_000,
-          origin: { provider: "quietchat" },
+          lastChannel: "quietchat",
         },
       });
       const cfg = mockConfig(home);
@@ -138,7 +138,7 @@ describe("agent session resolution", () => {
 
       const resolution = resolveSession({ cfg, sessionKey: "main" });
 
-      expect(resolution.sessionId).toBe("origin-provider-reset");
+      expect(resolution.sessionId).toBe("typed-channel-reset");
       expect(resolution.isNewSession).toBe(false);
     });
   });

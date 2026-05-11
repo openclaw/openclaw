@@ -96,13 +96,18 @@ vi.mock("./subagent-announce-delivery.js", () => ({
   }) => {
     const store = sessionRowsMock() as Record<string, unknown>;
     const requesterEntry = (store?.[params.targetRequesterSessionKey] ?? {}) as
-      | { sessionId?: string; origin?: { provider?: string; channel?: string } }
+      | {
+          sessionId?: string;
+          channel?: string;
+          lastChannel?: string;
+          deliveryContext?: { channel?: string };
+        }
       | undefined;
     const sessionId = requesterEntry?.sessionId?.trim();
     const queueChannel =
-      requesterEntry?.origin?.provider ??
-      requesterEntry?.origin?.channel ??
-      params.requesterSessionOrigin?.provider ??
+      requesterEntry?.deliveryContext?.channel ??
+      requesterEntry?.channel ??
+      requesterEntry?.lastChannel ??
       params.requesterSessionOrigin?.channel;
 
     if (sessionId && queueChannel === "discord" && isEmbeddedPiRunActiveMock(sessionId)) {
@@ -334,7 +339,7 @@ describe("subagent announce seam flow", () => {
     });
   });
 
-  it("uses origin.provider for channel-specific queue settings in active announce delivery", async () => {
+  it("uses typed requester channel for channel-specific queue settings in active announce delivery", async () => {
     mockConfig = {
       session: {
         mainKey: "main",
@@ -350,9 +355,10 @@ describe("subagent announce seam flow", () => {
     };
     sessionRowsMock.mockImplementation(() => ({
       "agent:main:main": {
-        sessionId: "session-origin-provider-steer",
+        sessionId: "session-typed-channel-steer",
         updatedAt: Date.now(),
-        origin: { provider: "discord" },
+        deliveryContext: { channel: "discord", to: "channel:C1" },
+        lastChannel: "discord",
       },
     }));
     isEmbeddedPiRunActiveMock.mockReturnValue(true);
@@ -365,7 +371,7 @@ describe("subagent announce seam flow", () => {
 
     const didAnnounce = await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:test",
-      childRunId: "run-origin-provider-steer",
+      childRunId: "run-typed-channel-steer",
       requesterSessionKey: "agent:main:main",
       requesterDisplayKey: "main",
       task: "do thing",
@@ -378,11 +384,11 @@ describe("subagent announce seam flow", () => {
     });
 
     expect(didAnnounce).toBe(true);
-    const queuedCall = requireQueuedMessageCall();
-    expect(queuedCall?.[0]).toBe("session-origin-provider-steer");
-    expect(queuedCall?.[1]).toContain("[Internal task completion event]");
-    expect(queuedCall?.[1]).toContain("task: do thing");
-    expect(queuedCall?.[2]).toEqual({ steeringMode: "all" });
+    expect(queueEmbeddedPiMessageWithOutcomeMock).toHaveBeenCalledWith(
+      "session-typed-channel-steer",
+      expect.stringContaining("[Internal task completion event]"),
+      { steeringMode: "all" },
+    );
     expect(agentSpy).not.toHaveBeenCalled();
   });
 

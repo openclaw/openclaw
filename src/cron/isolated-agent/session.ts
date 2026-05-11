@@ -37,7 +37,6 @@ const AMBIENT_SESSION_CONTEXT_FIELDS = [
   "subject",
   "groupChannel",
   "space",
-  "origin",
   "acp",
 ] as const satisfies readonly (keyof SessionEntry)[];
 

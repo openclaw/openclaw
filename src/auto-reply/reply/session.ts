@@ -76,15 +76,9 @@ function stripThreadIdFromDeliveryContext(
   return Object.keys(rest).length > 0 ? rest : undefined;
 }
 
-function stripThreadIdFromOrigin(origin: SessionEntry["origin"]): SessionEntry["origin"] {
-  if (!origin || origin.threadId == null || origin.threadId === "") {
-    return origin;
-  }
-  const { threadId: _threadId, ...rest } = origin;
-  return Object.keys(rest).length > 0 ? rest : undefined;
-}
-
-function resolveExplicitSessionEndReason(matchedResetTriggerLower?: string): ReplySessionEndReason {
+function resolveExplicitSessionEndReason(
+  matchedResetTriggerLower?: string,
+): PluginHookSessionEndReason {
   return matchedResetTriggerLower === "/reset" ? "reset" : "new";
 }
 
@@ -564,10 +558,7 @@ export async function initSessionState(params: {
         lastChannel: baseEntry?.lastChannel,
         lastTo: baseEntry?.lastTo,
         lastAccountId: baseEntry?.lastAccountId,
-        lastThreadId:
-          baseEntry?.lastThreadId ??
-          baseEntry?.deliveryContext?.threadId ??
-          baseEntry?.origin?.threadId,
+        lastThreadId: baseEntry?.lastThreadId ?? baseEntry?.deliveryContext?.threadId,
         deliveryContext: baseEntry?.deliveryContext,
       })
     : normalizeSessionDeliveryFields({
@@ -654,7 +645,6 @@ export async function initSessionState(params: {
       ...sessionEntry,
       lastThreadId: undefined,
       deliveryContext: stripThreadIdFromDeliveryContext(sessionEntry.deliveryContext),
-      origin: stripThreadIdFromOrigin(sessionEntry.origin),
     };
   }
   if (!sessionEntry.chatType) {

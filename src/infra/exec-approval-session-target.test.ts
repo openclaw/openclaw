@@ -253,8 +253,8 @@ describe("exec approval session target", () => {
       expected: {
         channel: "telegram",
         to: "-100123",
-        accountId: undefined,
-        threadId: 77,
+        accountId: "default",
+        threadId: "77",
       },
     },
   ] satisfies PlaceholderStoreCase[])("$name", ({ agentId, entries, request, expected }) => {
@@ -372,13 +372,9 @@ describe("exec approval session target", () => {
         "agent:main:matrix:channel:!ops:example.org": {
           sessionId: "main",
           updatedAt: 1,
-          origin: {
-            provider: "matrix",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C123",
-          lastAccountId: "work",
+          lastChannel: "matrix",
+          lastTo: "room:!ops:example.org",
+          lastAccountId: "ops",
         },
       });
       const request = buildRequest({

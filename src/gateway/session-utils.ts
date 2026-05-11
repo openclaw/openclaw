@@ -1204,8 +1204,6 @@ export function buildGatewaySessionRow(params: {
   const groupChannel = entry?.groupChannel;
   const space = entry?.space;
   const id = parsed?.id;
-  const origin = entry?.origin;
-  const originLabel = origin?.label;
   const displayName =
     entry?.displayName ??
     (channel
@@ -1218,8 +1216,7 @@ export function buildGatewaySessionRow(params: {
           key,
         })
       : undefined) ??
-    entry?.label ??
-    originLabel;
+    entry?.label;
   const deliveryFields = normalizeSessionDeliveryFields(entry);
   const parsedAgent = parseAgentSessionKey(key);
   const sessionAgentId = normalizeAgentId(parsedAgent?.agentId ?? resolveDefaultAgentId(cfg));
@@ -1435,7 +1432,6 @@ export function buildGatewaySessionRow(params: {
     groupChannel,
     space,
     chatType: entry?.chatType,
-    origin,
     updatedAt,
     sessionId: entry?.sessionId,
     systemSent: entry?.systemSent,

@@ -500,38 +500,6 @@ describe("sessions_list gating", () => {
   });
 });
 
-describe("sessions_list channel derivation", () => {
-  beforeEach(() => {
-    callGatewayMock.mockClear();
-    loadConfigMock.mockReturnValue({
-      session: { scope: "per-sender", mainKey: "main" },
-      tools: {
-        agentToAgent: { enabled: true },
-        sessions: { visibility: "all" },
-      },
-    });
-  });
-
-  it("falls back to origin.provider when the legacy top-level channel field is missing", async () => {
-    callGatewayMock.mockResolvedValueOnce({
-      databasePath: "/tmp/openclaw-agent.sqlite",
-      sessions: [
-        {
-          key: "agent:main:discord:group:ops",
-          kind: "group",
-          origin: { provider: "discord" },
-        },
-      ],
-    });
-    const result = await executeMainSessionsList();
-
-    const details = requireDetails(result);
-    const session = requireSessions(details)[0];
-    expect(session?.key).toBe("agent:main:discord:group:ops");
-    expect(session?.channel).toBe("discord");
-  });
-});
-
 describe("sessions_send gating", () => {
   beforeEach(() => {
     callGatewayMock.mockClear();

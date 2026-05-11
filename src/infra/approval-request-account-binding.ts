@@ -50,8 +50,8 @@ function resolvePersistedApprovalRequestSessionBinding(params: {
     return null;
   }
   const { entry } = persisted;
-  const channel = normalizeOptionalChannel(entry.origin?.provider ?? entry.lastChannel);
-  const accountId = normalizeOptionalAccountId(entry.origin?.accountId ?? entry.lastAccountId);
+  const channel = normalizeOptionalChannel(entry.lastChannel ?? entry.channel);
+  const accountId = normalizeOptionalAccountId(entry.lastAccountId);
   return channel || accountId ? { channel, accountId } : null;
 }
 

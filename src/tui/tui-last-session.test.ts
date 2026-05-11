@@ -152,11 +152,11 @@ describe("tui last session state", () => {
     ).toBeNull();
   });
 
-  it("does not restore heartbeat-origin sessions when resolving a remembered key", () => {
+  it("does not restore heartbeat sessions when resolving a remembered key", () => {
     const sessions = [
       {
         key: "agent:main:main",
-        origin: { provider: "heartbeat", surface: "heartbeat" },
+        lastChannel: "heartbeat",
       },
       { key: "agent:main:tui-123" },
     ];
