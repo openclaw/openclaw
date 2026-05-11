@@ -83,7 +83,7 @@ describe("nvidia provider catalog", () => {
     });
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledWith({
       url: NVIDIA_FEATURED_MODELS_URL,
-      timeoutMs: 2500,
+      timeoutMs: 10_000,
       requireHttps: true,
       policy: { allowedHostnames: ["assets.ngc.nvidia.com"] },
       auditContext: "nvidia-featured-model-catalog",

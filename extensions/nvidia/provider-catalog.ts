@@ -14,7 +14,7 @@ export const NVIDIA_FEATURED_MODELS_URL =
   "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const FEATURED_MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-const FEATURED_MODEL_FETCH_TIMEOUT_MS = 2500;
+const FEATURED_MODEL_FETCH_TIMEOUT_MS = 10_000;
 const FEATURED_MODEL_MAX_ROWS = 32;
 const FEATURED_MODEL_MAX_ID_LENGTH = 200;
 const FEATURED_MODEL_MAX_NAME_LENGTH = 200;
