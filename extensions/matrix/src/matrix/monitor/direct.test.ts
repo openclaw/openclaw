@@ -245,12 +245,9 @@ describe("createDirectRoomTracker", () => {
       }),
     ).resolves.toBe(true);
 
-    expect(client.setAccountData).toHaveBeenCalledWith(
-      EventType.Direct,
-      expect.objectContaining({
-        "@alice:example.org": ["!room:example.org"],
-      }),
-    );
+    expect(client.setAccountData).toHaveBeenCalledWith(EventType.Direct, {
+      "@alice:example.org": ["!room:example.org"],
+    });
   });
 
   it("keeps recent invite candidates across room invalidation", async () => {

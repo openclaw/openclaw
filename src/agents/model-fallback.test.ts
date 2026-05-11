@@ -1257,7 +1257,7 @@ describe("runWithModelFallback", () => {
 
       expect(result.result).toBe("ok");
       expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Model "openai/gpt-6" not found'),
+        '[model-fallback] Model "openai/gpt-6" not found. Fell back to "anthropic/claude-haiku-3-5".',
       );
     } finally {
       warnSpy.mockRestore();

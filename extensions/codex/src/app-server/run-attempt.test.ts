@@ -2211,6 +2211,36 @@ describe("runCodexAppServerAttempt", () => {
     expect((error as Error).message).toContain("Next reset in");
   });
 
+  it("refreshes Codex account rate limits when turn/start omits reset details", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "turn/start") {
+        throw Object.assign(new Error("You've reached your usage limit."), {
+          data: { codexErrorInfo: "usageLimitExceeded" },
+        });
+      }
+      if (method === "account/rateLimits/read") {
+        return rateLimitsUpdated(resetsAt).params;
+      }
+      return undefined;
+    });
+
+    const runError = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir)).catch(
+      (error: unknown) => error,
+    );
+    await harness.waitForMethod("account/rateLimits/read");
+
+    const error = await runError;
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(
+      "You've reached your Codex subscription usage limit.",
+    );
+    expect((error as Error).message).toContain("Next reset in");
+    expect((error as Error).message).not.toContain("Codex did not return a reset time");
+  });
+
   it("cleans up native hook relay state when the Codex turn aborts", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -2228,6 +2258,45 @@ describe("runCodexAppServerAttempt", () => {
 
     expect(result.aborted).toBe(true);
     expect(nativeHookRelayTesting.getNativeHookRelayRegistrationForTests(relayId)).toBeUndefined();
+  });
+
+  it("refreshes Codex account rate limits when a failed turn omits reset details", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const resetsAt = Math.ceil(Date.now() / 1000) + 120;
+    const harness = createStartedThreadHarness(async (method) => {
+      if (method === "account/rateLimits/read") {
+        return rateLimitsUpdated(resetsAt).params;
+      }
+      return undefined;
+    });
+
+    const run = runCodexAppServerAttempt(createParams(sessionFile, workspaceDir));
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "failed",
+          error: {
+            message: "You've reached your usage limit.",
+            codexErrorInfo: "usageLimitExceeded",
+          },
+        },
+      },
+    });
+
+    const result = await run;
+
+    expect(result.promptError).toContain("You've reached your Codex subscription usage limit.");
+    expect(result.promptError).toContain("Next reset in");
+    expect(result.promptError).not.toContain("Codex did not return a reset time");
+    expect(harness.requests.some((request) => request.method === "account/rateLimits/read")).toBe(
+      true,
+    );
   });
 
   it("fires agent_end with failure metadata when the codex turn fails", async () => {
@@ -3791,6 +3860,11 @@ describe("runCodexAppServerAttempt", () => {
       "features.codex_hooks": true,
       "hooks.PreToolUse": [],
     };
+    const expectedConfig = {
+      ...config,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    };
 
     await startOrResumeThread({
       client: { request } as never,
@@ -3811,8 +3885,8 @@ describe("runCodexAppServerAttempt", () => {
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
-    expect(requestCalls[0]?.[1].config).toEqual(config);
-    expect(requestCalls[1]?.[1].config).toEqual(config);
+    expect(requestCalls[0]?.[1].config).toEqual(expectedConfig);
+    expect(requestCalls[1]?.[1].config).toEqual(expectedConfig);
   });
 
   it("merges native hook relay config with plugin app config when starting a thread", async () => {
@@ -3856,6 +3930,8 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
       hooks: { PreToolUse: [] },
       ...createPluginAppConfigPatch(),
     });
@@ -3921,9 +3997,15 @@ describe("runCodexAppServerAttempt", () => {
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start", "thread/resume"]);
     expect(requestCalls[0]?.[1].config).toEqual({
       "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
       ...createPluginAppConfigPatch(),
     });
-    expect(requestCalls[1]?.[1].config).toEqual({ "features.codex_hooks": true });
+    expect(requestCalls[1]?.[1].config).toEqual({
+      "features.codex_hooks": true,
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
   });
 
   it("starts a new plugin app thread when full binding revalidation removes an app", async () => {
@@ -3979,6 +4061,8 @@ describe("runCodexAppServerAttempt", () => {
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
     expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
       apps: {
         _default: {
           enabled: false,
@@ -4030,7 +4114,10 @@ describe("runCodexAppServerAttempt", () => {
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
-    expect("config" in (requestCalls[0]?.[1] ?? {})).toBe(false);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-existing");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
@@ -4081,7 +4168,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual(createPluginAppConfigPatch());
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
@@ -4139,7 +4230,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/resume"]);
-    expect("config" in (requestCalls[0]?.[1] ?? {})).toBe(false);
+    expect(requestCalls[0]?.[1].config).toEqual({
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
   });
 
   it("rebuilds a partial plugin app binding after another plugin recovers", async () => {
@@ -4186,7 +4280,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual(createTwoPluginAppConfigPatch());
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createTwoPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-2");
@@ -4242,7 +4340,11 @@ describe("runCodexAppServerAttempt", () => {
     expect(buildPluginThreadConfig).toHaveBeenCalledTimes(1);
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual(createTwoCalendarAppConfigPatch());
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createTwoCalendarAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-recovered");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-calendar-2");
@@ -4285,7 +4387,11 @@ describe("runCodexAppServerAttempt", () => {
 
     const requestCalls = request.mock.calls as unknown as Array<[string, { config?: unknown }]>;
     expect(requestCalls.map(([method]) => method)).toEqual(["thread/start"]);
-    expect(requestCalls[0]?.[1].config).toEqual(createPluginAppConfigPatch());
+    expect(requestCalls[0]?.[1].config).toEqual({
+      ...createPluginAppConfigPatch(),
+      "features.code_mode": true,
+      "features.code_mode_only": true,
+    });
     const binding = await readCodexAppServerBinding(sessionFile);
     expect(binding?.threadId).toBe("thread-plugins");
     expect(binding?.pluginAppsFingerprint).toBe("plugin-apps-config-1");
@@ -4349,6 +4455,11 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: expect.objectContaining({
+        "features.codex_hooks": true,
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      }),
       sandbox: "danger-full-access",
       serviceTier: "priority",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),
@@ -4451,6 +4562,10 @@ describe("runCodexAppServerAttempt", () => {
       model: "gpt-5.4-codex",
       approvalPolicy: "on-request",
       approvalsReviewer: "guardian_subagent",
+      config: {
+        "features.code_mode": true,
+        "features.code_mode_only": true,
+      },
       sandbox: "danger-full-access",
       serviceTier: "flex",
       developerInstructions: expect.stringContaining(CODEX_GPT5_BEHAVIOR_CONTRACT),

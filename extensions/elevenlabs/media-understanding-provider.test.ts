@@ -29,11 +29,10 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     });
 
     expect(result).toEqual({ text: "hello", model: "scribe_v2" });
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://api.elevenlabs.io/v1/speech-to-text",
-      expect.objectContaining({ method: "POST" }),
-    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0]?.[0]).toBe("https://api.elevenlabs.io/v1/speech-to-text");
     const init = fetchMock.mock.calls[0]?.[1] as RequestInit;
+    expect(init.method).toBe("POST");
     const headers = new Headers(init.headers);
     expect(headers.get("xi-api-key")).toBe("eleven-key");
     const form = init.body as FormData;

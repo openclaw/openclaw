@@ -45,11 +45,15 @@ describe.each(storeFactories)("msteams conversation store ($name)", ({ createSto
       user: { id: "u1" },
     });
 
-    await expect(store.get("conv-norm")).resolves.toEqual(
-      expect.objectContaining({
-        conversation: { id: "conv-norm" },
-      }),
-    );
+    const normalized = await store.get("conv-norm");
+    expect(normalized).toEqual({
+      conversation: { id: "conv-norm" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com",
+      user: { id: "u1" },
+      lastSeenAt: normalized?.lastSeenAt,
+    });
+    expect(typeof normalized?.lastSeenAt).toBe("string");
     await expect(store.remove("conv-norm")).resolves.toBe(true);
     await expect(store.get("conv-norm;messageid=123")).resolves.toBeNull();
   });

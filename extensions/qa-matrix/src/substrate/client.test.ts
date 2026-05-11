@@ -312,13 +312,11 @@ describe("matrix driver client", () => {
         event_id: "$msg-1",
       },
     });
-    expect(requests[1]).toEqual({
-      url: expect.stringContaining(
-        "/_matrix/client/v3/rooms/!room%3Amatrix-qa.test/redact/%24reaction-1/",
-      ),
-      body: {
-        reason: "qa cleanup",
-      },
+    expect(requests[1]?.url).toMatch(
+      /^http:\/\/127\.0\.0\.1:28008\/_matrix\/client\/v3\/rooms\/!room%3Amatrix-qa\.test\/redact\/%24reaction-1\/[0-9a-f-]{36}$/,
+    );
+    expect(requests[1]?.body).toEqual({
+      reason: "qa cleanup",
     });
   });
 

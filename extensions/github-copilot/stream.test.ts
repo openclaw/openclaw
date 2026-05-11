@@ -86,19 +86,17 @@ describe("wrapCopilotAnthropicStream", () => {
   it("leaves non-Anthropic Copilot models untouched", () => {
     const baseStreamFn = vi.fn(() => ({ async *[Symbol.asyncIterator]() {} }) as never);
     const wrapped = requireStreamFn(wrapCopilotAnthropicStream(baseStreamFn));
+    const model = {
+      provider: "github-copilot",
+      api: "openai-responses",
+      id: "gpt-4.1",
+    } as never;
+    const context = { messages: [{ role: "user", content: "hi" }] } as never;
     const options = { headers: { Existing: "1" } };
 
-    void wrapped(
-      {
-        provider: "github-copilot",
-        api: "openai-responses",
-        id: "gpt-4.1",
-      } as never,
-      { messages: [{ role: "user", content: "hi" }] } as never,
-      options as never,
-    );
+    void wrapped(model, context, options as never);
 
-    expect(baseStreamFn).toHaveBeenCalledWith(expect.anything(), expect.anything(), options);
+    expect(baseStreamFn.mock.calls).toEqual([[model, context, options]]);
   });
 
   it("adds Copilot headers, preserves reasoning IDs, and rewrites message IDs before payload send", () => {
