@@ -716,7 +716,7 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("falls back to the configured default agent while preserving unknown agent-prefixed wake suffixes", () => {
+  it("falls back to the configured default agent main session for unknown agent-prefixed keys", () => {
     const cfg = {
       session: { mainKey: "main" },
       cron: {
@@ -766,11 +766,11 @@ describe("buildGatewayCronService", () => {
       const enqueueCall = enqueueSystemEventMock.mock.calls.at(-1);
       const wakeCall = requestHeartbeatMock.mock.calls.at(-1);
       expect((enqueueCall?.[1] as { sessionKey?: string } | undefined)?.sessionKey).toBe(
-        "agent:primary:discord:channel:ops",
+        "agent:primary:main",
       );
       expect(wakeCall?.[0]).toMatchObject({
         agentId: "primary",
-        sessionKey: "agent:primary:discord:channel:ops",
+        sessionKey: "agent:primary:main",
       });
     } finally {
       state.cron.stop();

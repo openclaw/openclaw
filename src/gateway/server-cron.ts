@@ -197,54 +197,38 @@ export function buildGatewayCronService(params: {
     return canonical;
   };
 
-  const resolveCronWakeTarget = (opts?: { agentId?: string; sessionKey?: string | null }) => {
+  const resolveCronTarget = (opts?: {
+    agentId?: string | null;
+    sessionKey?: string | null;
+    preserveUntargeted?: boolean;
+  }) => {
     const requestedAgentId =
       typeof opts?.agentId === "string" && opts.agentId.trim()
         ? normalizeAgentId(opts.agentId)
         : undefined;
     const requestedSessionKey =
       typeof opts?.sessionKey === "string" && opts.sessionKey.trim() ? opts.sessionKey : undefined;
-    // Derive agentId from sessionKey only when the key is agent-prefixed
-    // (`agent:<id>:...`). For relative session keys like `discord:channel:ops`,
-    // `resolveAgentIdFromSessionKey` returns the literal `DEFAULT_AGENT_ID`
-    // ("main") regardless of cfg, which would route relative keys to the
-    // hardcoded "main" agent even on non-main-default deployments. Passing
-    // `undefined` lets `resolveCronAgent` fall back to the configured default
-    // agent so wake and enqueue resolve to the same target.
-    const parsedSessionKeyAgentId =
-      requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
-        ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey))
-        : undefined;
-    const parsedSessionKey = requestedSessionKey
-      ? parseAgentSessionKey(requestedSessionKey)
-      : undefined;
-    const requestedOrDerived = requestedAgentId ?? parsedSessionKeyAgentId;
-    if (!requestedOrDerived && !requestedSessionKey) {
+    if (opts?.preserveUntargeted && !requestedAgentId && !requestedSessionKey) {
       return { runtimeConfig: getRuntimeConfig(), agentId: undefined, sessionKey: undefined };
     }
-    // For relative session keys (e.g. `discord:channel:ops`) we want the
-    // configured default agent's session, which `resolveCronAgent(undefined)`
-    // returns. For no-target wakes, the branch above preserves the existing
-    // heartbeat fanout/broadcast behavior by leaving agentId/sessionKey unset.
-    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(requestedOrDerived);
-    const agentId = resolvedAgentId || undefined;
-    // If an agent-prefixed session key names an unconfigured agent, fall back
-    // to the configured default agent but keep the requested session suffix.
-    const sessionKeyForResolution =
-      !requestedAgentId &&
-      parsedSessionKey &&
-      agentId &&
-      normalizeAgentId(parsedSessionKey.agentId) !== normalizeAgentId(agentId)
-        ? parsedSessionKey.rest
-        : requestedSessionKey;
-    const sessionKey =
-      sessionKeyForResolution && agentId
-        ? resolveCronSessionKey({
-            runtimeConfig,
-            agentId,
-            requestedSessionKey: sessionKeyForResolution,
-          })
+
+    // Derive from canonical agent-prefixed keys only. Relative keys intentionally
+    // fall through to the configured default instead of hardcoding "main".
+    const derivedAgentId =
+      requestedSessionKey && parseAgentSessionKey(requestedSessionKey)
+        ? resolveAgentIdFromSessionKey(requestedSessionKey)
         : undefined;
+    const { agentId: resolvedAgentId, cfg: runtimeConfig } = resolveCronAgent(
+      requestedAgentId ?? derivedAgentId,
+    );
+    const agentId = resolvedAgentId || undefined;
+    const sessionKey = agentId
+      ? resolveCronSessionKey({
+          runtimeConfig,
+          agentId,
+          requestedSessionKey,
+        })
+      : undefined;
     return { runtimeConfig, agentId, sessionKey };
   };
 
@@ -304,33 +288,7 @@ export function buildGatewayCronService(params: {
     resolveSessionStorePath,
     sessionStorePath,
     enqueueSystemEvent: (text, opts) => {
-      // When the caller passes only a sessionKey (e.g. `system event --session-key`),
-      // derive agentId from that key so a non-default agent's session is not silently
-      // rejected as foreign by resolveCronSessionKey and rerouted to the default agent.
-      // Only derive from agent-prefixed keys — for relative keys, let resolveCronAgent
-      // fall back to the configured default so we don't hardcode "main" on multi-agent
-      // deployments where main exists but isn't the default. (Mirrors the same fix in
-      // resolveCronWakeTarget above.)
-      const derivedAgentId =
-        opts?.agentId ??
-        (opts?.sessionKey && parseAgentSessionKey(opts.sessionKey)
-          ? resolveAgentIdFromSessionKey(opts.sessionKey)
-          : undefined);
-      const { agentId, cfg: runtimeConfig } = resolveCronAgent(derivedAgentId);
-      const parsedSessionKey = opts?.sessionKey ? parseAgentSessionKey(opts.sessionKey) : undefined;
-      // Mirror wake target resolution for unknown agent-prefixed keys:
-      // default agent, same requested session suffix.
-      const requestedSessionKey =
-        !opts?.agentId &&
-        parsedSessionKey &&
-        normalizeAgentId(parsedSessionKey.agentId) !== normalizeAgentId(agentId)
-          ? parsedSessionKey.rest
-          : opts?.sessionKey;
-      const sessionKey = resolveCronSessionKey({
-        runtimeConfig,
-        agentId,
-        requestedSessionKey,
-      });
+      const { sessionKey } = resolveCronTarget(opts);
       enqueueSystemEvent(text, {
         sessionKey,
         contextKey: opts?.contextKey,
@@ -338,7 +296,7 @@ export function buildGatewayCronService(params: {
       });
     },
     requestHeartbeat: (opts) => {
-      const { agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { agentId, sessionKey } = resolveCronTarget({ ...opts, preserveUntargeted: true });
       requestHeartbeat({
         source: opts?.source ?? "cron",
         intent: opts?.intent ?? "event",
@@ -349,7 +307,10 @@ export function buildGatewayCronService(params: {
       });
     },
     runHeartbeatOnce: async (opts) => {
-      const { runtimeConfig, agentId, sessionKey } = resolveCronWakeTarget(opts);
+      const { runtimeConfig, agentId, sessionKey } = resolveCronTarget({
+        ...opts,
+        preserveUntargeted: true,
+      });
       return await runHeartbeatOnce({
         cfg: runtimeConfig,
         source: opts?.source ?? "cron",
