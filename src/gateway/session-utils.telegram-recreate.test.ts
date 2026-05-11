@@ -106,8 +106,8 @@ describe("Telegram direct session recreation after delete", () => {
 
     expect(store[TELEGRAM_DIRECT_KEY]?.lastChannel).toBe("telegram");
     expect(store[TELEGRAM_DIRECT_KEY]?.lastTo).toBe("telegram:7463849194");
-    expect(store[TELEGRAM_DIRECT_KEY]?.origin?.chatType).toBe("direct");
-    expect(store[TELEGRAM_DIRECT_KEY]?.origin?.provider).toBe("telegram");
+    expect(store[TELEGRAM_DIRECT_KEY]?.chatType).toBe("direct");
+    expect(store[TELEGRAM_DIRECT_KEY]?.channel).toBe("telegram");
     expect(listed.sessions.map((session) => session.key)).toContain(TELEGRAM_DIRECT_KEY);
   });
 });
