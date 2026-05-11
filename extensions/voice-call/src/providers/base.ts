@@ -32,6 +32,14 @@ export interface VoiceCallProvider {
   readonly name: ProviderName;
 
   /**
+   * Update the public origin (`https://host[:port]`) the gateway is reachable
+   * at. Providers that build stream URLs at dial/answer time (e.g. Telnyx)
+   * use it; Twilio derives stream URLs from the request Host header inside
+   * TwiML rendering and may ignore.
+   */
+  setPublicUrl?(url: string): void;
+
+  /**
    * Verify webhook signature/HMAC before processing.
    * Must be called before parseWebhookEvent.
    */

@@ -457,11 +457,21 @@ export async function createVoiceCallRuntime(params: {
       );
     }
 
-    if (publicUrl && provider.name === "twilio") {
-      (provider as TwilioProvider).setPublicUrl(publicUrl);
+    if (publicUrl) {
+      provider.setPublicUrl?.(publicUrl);
     }
     if (publicUrl && realtimeProvider) {
       webhookServer.getRealtimeHandler()?.setPublicUrl(publicUrl);
+    }
+
+    // Once the realtime handler has its public URL, expose its session issuer
+    // to the manager so carriers that attach Media Streaming at dial / answer
+    // time (e.g. Telnyx) can embed the streaming params in their carrier API
+    // payloads. Twilio learns the stream URL from TwiML so this is a no-op
+    // for the Twilio path.
+    const realtimeHandler = webhookServer.getRealtimeHandler();
+    if (realtimeHandler) {
+      manager.streamSessionIssuer = (request) => realtimeHandler.issueStreamSession(request);
     }
 
     if (provider.name === "twilio" && config.streaming?.enabled) {

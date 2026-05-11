@@ -208,6 +208,23 @@ export class TelnyxProvider implements VoiceCallProvider {
           digits: data.payload?.digit || "",
         };
 
+      case "call.streaming.started":
+      case "call.streaming.stopped":
+        // Informational. The realtime bridge tracks its own lifecycle via the
+        // WebSocket; we acknowledge the webhook (200) but skip event emission
+        // to avoid duplicate signal at the manager.
+        return null;
+
+      case "call.streaming.failed": {
+        const reason = typeof data.payload?.reason === "string" ? data.payload.reason : undefined;
+        return {
+          ...baseEvent,
+          type: "call.error",
+          error: `Telnyx streaming failed${reason ? `: ${reason}` : ""}`,
+          retryable: false,
+        };
+      }
+
       default:
         return null;
     }
@@ -251,10 +268,12 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
-   * Initiate an outbound call via Telnyx API.
+   * Initiate an outbound call via Telnyx API. When `input.streamUrl` is set,
+   * the dial payload also opens a bidirectional Media Streaming session on
+   * answer (PCMU 8 kHz), per the Telnyx documented "AI agent" pattern.
    */
   async initiateCall(input: InitiateCallInput): Promise<InitiateCallResult> {
-    const result = await this.apiRequest<TelnyxCallResponse>("/calls", {
+    const body: Record<string, unknown> = {
       connection_id: this.connectionId,
       to: input.to,
       from: input.from,
@@ -262,7 +281,11 @@ export class TelnyxProvider implements VoiceCallProvider {
       webhook_url_method: "POST",
       client_state: Buffer.from(input.callId).toString("base64"),
       timeout_secs: 30,
-    });
+      ...(input.streamUrl
+        ? buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken)
+        : {}),
+    };
+    const result = await this.apiRequest<TelnyxCallResponse>("/calls", body);
 
     return {
       providerCallId: result.data.call_control_id,
@@ -282,12 +305,18 @@ export class TelnyxProvider implements VoiceCallProvider {
   }
 
   /**
-   * Answer an inbound Telnyx Call Control leg.
+   * Answer an inbound Telnyx Call Control leg. When `input.streamUrl` is set,
+   * the answer action also attaches a bidirectional Media Streaming session
+   * (PCMU 8 kHz), per the Telnyx canonical "answer-action inline" pattern.
    */
   async answerCall(input: AnswerCallInput): Promise<void> {
-    await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, {
+    const body: Record<string, unknown> = {
       command_id: `openclaw-answer-${input.callId}`,
-    });
+      ...(input.streamUrl
+        ? buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken)
+        : {}),
+    };
+    await this.apiRequest(`/calls/${input.providerCallId}/actions/answer`, body);
   }
 
   /**
@@ -353,6 +382,28 @@ export class TelnyxProvider implements VoiceCallProvider {
       return { status: "error", isTerminal: false, isUnknown: true };
     }
   }
+}
+
+/**
+ * Build the streaming-related fields for a Telnyx dial or answer-action
+ * payload. PCMU 8 kHz mono only; bidirectional via RTP; target legs `"self"`
+ * so the bot receives both inbound and outbound audio without the routing
+ * gotcha that drops the call leg when `"opposite"` is configured.
+ */
+function buildTelnyxStreamingFields(
+  streamUrl: string,
+  streamAuthToken: string | undefined,
+): Record<string, unknown> {
+  return {
+    stream_url: streamUrl,
+    stream_track: "inbound_track",
+    stream_codec: "PCMU",
+    stream_bidirectional_mode: "rtp",
+    stream_bidirectional_codec: "PCMU",
+    stream_bidirectional_sampling_rate: 8000,
+    stream_bidirectional_target_legs: "self",
+    ...(streamAuthToken ? { stream_auth_token: streamAuthToken } : {}),
+  };
 }
 
 // -----------------------------------------------------------------------------

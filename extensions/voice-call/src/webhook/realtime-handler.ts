@@ -22,10 +22,12 @@ import type { CallManager } from "../manager.js";
 import type { VoiceCallProvider } from "../providers/base.js";
 import type { CallRecord, NormalizedEvent } from "../types.js";
 import type { WebhookResponsePayload } from "../webhook.types.js";
+import { RealtimeAudioPacer, RealtimeMulawSpeechStartDetector } from "./realtime-audio-pacer.js";
 import {
-  RealtimeMulawSpeechStartDetector,
-  RealtimeTwilioAudioPacer,
-} from "./realtime-audio-pacer.js";
+  type StreamFrameAdapter,
+  TelnyxStreamFrameAdapter,
+  TwilioStreamFrameAdapter,
+} from "./stream-frame-adapter.js";
 
 export type ToolHandlerContext = {
   partialUserTranscript?: string;
@@ -222,6 +224,31 @@ type PendingStreamToken = {
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
+  /**
+   * Carrier identifier. Determines which {@link StreamFrameAdapter} the
+   * WebSocket upgrade picks. Defaults to `twilio` when unset for backward
+   * compatibility with the original (Twilio-only) flow.
+   */
+  providerName?: "twilio" | "telnyx";
+  /**
+   * OpenClaw-side call identifier (UUID generated before the carrier dial /
+   * answer). Lets the WebSocket upgrade resolve the carrier-side
+   * `providerCallId` via the manager once the dial response has landed.
+   */
+  callId?: string;
+};
+
+export type StreamSessionRequest = {
+  providerName?: "twilio" | "telnyx";
+  callId?: string;
+  from?: string;
+  to?: string;
+  direction?: "inbound" | "outbound";
+};
+
+export type StreamSession = {
+  token: string;
+  streamUrl: string;
 };
 
 type CallRegistration = {
@@ -332,25 +359,35 @@ export class RealtimeCallHandler {
   }
 
   buildTwiMLPayload(req: http.IncomingMessage, params?: URLSearchParams): WebhookResponsePayload {
-    const host = this.publicOrigin || req.headers.host || DEFAULT_HOST;
     const rawDirection = params?.get("Direction");
-    const token = this.issueStreamToken({
-      from: params?.get("From") ?? undefined,
-      to: params?.get("To") ?? undefined,
-      direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
-    });
-    const wsUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
-    const twiml = `<?xml version="1.0" encoding="UTF-8"?>
+    const previousOrigin = this.publicOrigin;
+    if (!previousOrigin) {
+      // Fall back to the request Host header when no public URL has been
+      // pushed. issueStreamSession reads publicOrigin internally, so we
+      // temporarily seat it here before delegating, then restore.
+      this.publicOrigin = req.headers.host ?? DEFAULT_HOST;
+    }
+    try {
+      const { streamUrl } = this.issueStreamSession({
+        providerName: "twilio",
+        from: params?.get("From") ?? undefined,
+        to: params?.get("To") ?? undefined,
+        direction: rawDirection?.startsWith("outbound") ? "outbound" : "inbound",
+      });
+      const twiml = `<?xml version="1.0" encoding="UTF-8"?>
 <Response>
   <Connect>
-    <Stream url="${wsUrl}" />
+    <Stream url="${streamUrl}" />
   </Connect>
 </Response>`;
-    return {
-      statusCode: 200,
-      headers: { "Content-Type": "text/xml" },
-      body: twiml,
-    };
+      return {
+        statusCode: 200,
+        headers: { "Content-Type": "text/xml" },
+        body: twiml,
+      };
+    } finally {
+      this.publicOrigin = previousOrigin;
+    }
   }
 
   handleWebSocketUpgrade(request: http.IncomingMessage, socket: Duplex, head: Buffer): void {
@@ -362,6 +399,17 @@ export class RealtimeCallHandler {
       socket.destroy();
       return;
     }
+
+    const providerName = callerMeta.providerName ?? "twilio";
+    let telnyxProviderCallId = "";
+    if (providerName === "telnyx" && callerMeta.callId) {
+      const call = this.manager.getCall(callerMeta.callId);
+      telnyxProviderCallId = call?.providerCallId ?? "";
+    }
+    const adapter: StreamFrameAdapter =
+      providerName === "telnyx"
+        ? new TelnyxStreamFrameAdapter(telnyxProviderCallId)
+        : new TwilioStreamFrameAdapter();
 
     const wss = new WebSocketServer({
       noServer: true,
@@ -378,18 +426,23 @@ export class RealtimeCallHandler {
 
       ws.on("message", (data: Buffer) => {
         try {
-          const msg = JSON.parse(data.toString()) as Record<string, unknown>;
-          if (!initialized && msg.event === "start") {
+          const frame = adapter.parseInbound(data.toString());
+          if (frame.kind === "ignored") {
+            return;
+          }
+          if (frame.kind === "start") {
+            if (initialized) {
+              return;
+            }
             initialized = true;
-            const startData =
-              typeof msg.start === "object" && msg.start !== null
-                ? (msg.start as Record<string, unknown>)
-                : undefined;
-            const streamSid =
-              typeof startData?.streamSid === "string" ? startData.streamSid : "unknown";
-            const callSid = typeof startData?.callSid === "string" ? startData.callSid : "unknown";
-            activeCallSid = callSid;
-            const nextBridge = this.handleCall(streamSid, callSid, ws, callerMeta);
+            activeCallSid = frame.providerCallId;
+            const nextBridge = this.handleCall(
+              frame.streamId,
+              frame.providerCallId,
+              ws,
+              callerMeta,
+              adapter,
+            );
             if (!nextBridge) {
               return;
             }
@@ -399,40 +452,30 @@ export class RealtimeCallHandler {
           if (!bridge) {
             return;
           }
-          const mediaData =
-            typeof msg.media === "object" && msg.media !== null
-              ? (msg.media as Record<string, unknown>)
-              : undefined;
-          if (msg.event === "media" && typeof mediaData?.payload === "string") {
-            const audio = Buffer.from(mediaData.payload, "base64");
+          if (frame.kind === "media") {
+            const audio = Buffer.from(frame.payloadBase64, "base64");
             bridge.sendAudio(audio);
-            const mediaTimestamp =
-              typeof mediaData.timestamp === "number"
-                ? mediaData.timestamp
-                : typeof mediaData.timestamp === "string"
-                  ? Number.parseInt(mediaData.timestamp, 10)
-                  : Number.NaN;
-            if (Number.isFinite(mediaTimestamp)) {
+            if (frame.timestampMs !== undefined) {
               if (lastMediaTimestamp !== undefined) {
-                const gapMs = mediaTimestamp - lastMediaTimestamp;
+                const gapMs = frame.timestampMs - lastMediaTimestamp;
                 const now = Date.now();
                 if ((gapMs > 120 || gapMs < 0) && now - lastMediaGapWarnAt > 5_000) {
                   lastMediaGapWarnAt = now;
                   console.warn(
-                    `[voice-call] realtime media timestamp gap providerCallId=${activeCallSid} gapMs=${gapMs} timestamp=${mediaTimestamp}`,
+                    `[voice-call] realtime media timestamp gap providerCallId=${activeCallSid} gapMs=${gapMs} timestamp=${frame.timestampMs}`,
                   );
                 }
               }
-              lastMediaTimestamp = mediaTimestamp;
-              bridge.setMediaTimestamp(mediaTimestamp);
+              lastMediaTimestamp = frame.timestampMs;
+              bridge.setMediaTimestamp(frame.timestampMs);
             }
             return;
           }
-          if (msg.event === "mark") {
+          if (frame.kind === "mark") {
             bridge.acknowledgeMark();
             return;
           }
-          if (msg.event === "stop") {
+          if (frame.kind === "stop") {
             stopReceived = true;
             this.closeTelephonyBridge(activeCallSid, bridge, "completed");
           }
@@ -469,6 +512,25 @@ export class RealtimeCallHandler {
     }
   }
 
+  /**
+   * Issue a stream session: returns the per-call auth token plus the wss URL
+   * the carrier should connect to. Provider-agnostic — callers wrap it in
+   * whatever delivery shape the carrier expects (TwiML for Twilio, dial- or
+   * answer-action params for Telnyx).
+   */
+  issueStreamSession(request: StreamSessionRequest = {}): StreamSession {
+    const token = this.issueStreamToken({
+      providerName: request.providerName ?? "twilio",
+      callId: request.callId,
+      from: request.from,
+      to: request.to,
+      direction: request.direction,
+    });
+    const host = this.publicOrigin || DEFAULT_HOST;
+    const streamUrl = `wss://${host}${this.getStreamPathPattern()}/${token}`;
+    return { token, streamUrl };
+  }
+
   private issueStreamToken(meta: Omit<PendingStreamToken, "expiry"> = {}): string {
     const token = randomUUID();
     this.pendingStreamTokens.set(token, { expiry: Date.now() + STREAM_TOKEN_TTL_MS, ...meta });
@@ -493,6 +555,8 @@ export class RealtimeCallHandler {
       from: entry.from,
       to: entry.to,
       direction: entry.direction,
+      providerName: entry.providerName,
+      callId: entry.callId,
     };
   }
 
@@ -501,6 +565,7 @@ export class RealtimeCallHandler {
     callSid: string,
     ws: WebSocket,
     callerMeta: Omit<PendingStreamToken, "expiry">,
+    adapter: StreamFrameAdapter,
   ): ActiveRealtimeVoiceBridge | null {
     const registration = this.registerCallInManager(callSid, callerMeta);
     if (!registration) {
@@ -567,7 +632,7 @@ export class RealtimeCallHandler {
       this.endCallInManager(callSid, callId, reason);
     };
 
-    const sendJson = (message: unknown): boolean => {
+    const sendString = (message: string): boolean => {
       if (ws.readyState !== WebSocket.OPEN) {
         return false;
       }
@@ -578,7 +643,7 @@ export class RealtimeCallHandler {
         ws.close(1013, "Backpressure: send buffer exceeded");
         return false;
       }
-      ws.send(JSON.stringify(message));
+      ws.send(message);
       if (ws.bufferedAmount > MAX_REALTIME_WS_BUFFERED_BYTES) {
         console.warn(
           `[voice-call] realtime outbound websocket backpressure after send callId=${callId} providerCallId=${callSid} bufferedBytes=${ws.bufferedAmount}`,
@@ -588,9 +653,13 @@ export class RealtimeCallHandler {
       }
       return true;
     };
-    const audioPacer = new RealtimeTwilioAudioPacer({
-      streamSid,
-      sendJson,
+    const audioPacer = new RealtimeAudioPacer({
+      send: sendString,
+      serializer: {
+        media: (payload) => adapter.serializeMedia(payload),
+        clear: () => adapter.serializeClear(),
+        mark: (name) => adapter.serializeMark(name),
+      },
       onBackpressure: () => {
         console.warn(
           `[voice-call] realtime paced audio backpressure callId=${callId} providerCallId=${callSid}`,
