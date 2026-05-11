@@ -687,6 +687,60 @@ describe("describeImageWithModel", () => {
     expect(completeMock).not.toHaveBeenCalled();
   });
 
+  it("returns deadline-exceeded (not 1ms-loop) when the runtime stage burns the budget", async () => {
+    // Regression for #80771: previously, once startedAtMs + timeoutMs left a
+    // negative remaining budget, the resolver collapsed via Math.max(1, …) to
+    // a 1ms timeout — every retry then fired setTimeout(1ms), aborted, and
+    // rejected with "image description timed out after 1ms" in a tight loop.
+    // The fix surfaces a clear deadline-exceeded synchronously on the second
+    // resolveImageRuntime stage instead of clamping to 1ms.
+    vi.useFakeTimers();
+    const baseline = Date.now();
+    let nowOverride = baseline;
+    const dateSpy = vi.spyOn(Date, "now").mockImplementation(() => nowOverride);
+    discoverModelsMock.mockReturnValue({
+      find: vi.fn(() => ({
+        api: "openai-responses",
+        provider: "openai",
+        id: "gpt-5.4-mini",
+        input: ["text", "image"],
+        baseUrl: "https://api.openai.com/v1",
+      })),
+    });
+    // Have ensureOpenClawModelsJson burn the entire timeout window before
+    // returning, so the next deadline computation (for completeImage) lands
+    // in the negative-budget branch — exactly the conditions that used to
+    // produce the 1ms loop.
+    ensureOpenClawModelsJsonMock.mockImplementationOnce(async () => {
+      nowOverride = baseline + 250;
+    });
+
+    const result = describeImageWithModel({
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+      provider: "openai",
+      model: "gpt-5.4-mini",
+      buffer: Buffer.from("png-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      prompt: "Describe the image.",
+      timeoutMs: 100,
+    });
+
+    await expect(result).rejects.toThrow(/image description deadline exceeded \(budget 100ms\)/);
+    // The completion task is constructed before the deadline check fires (so
+    // complete() may be observed once), but the controller is aborted before
+    // any retry can be issued — what we care about is the absence of the
+    // 1ms-loop error string, not the call count.
+    for (const call of completeMock.mock.calls) {
+      const [, , callOptions] = call;
+      if (callOptions?.signal) {
+        expect(callOptions.signal.aborted).toBe(true);
+      }
+    }
+    dateSpy.mockRestore();
+  });
+
   it("normalizes deprecated google flash ids before lookup and keeps profile auth selection", async () => {
     const findMock = vi.fn((provider: string, modelId: string) => {
       expect(provider).toBe("google");

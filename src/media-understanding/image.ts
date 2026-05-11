@@ -277,21 +277,37 @@ async function resolveMinimaxVlmFallbackRuntime(params: {
   };
 }
 
-function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, startedAtMs: number) {
+type ImageDescriptionDeadline =
+  | { readonly kind: "ms"; readonly remainingMs: number }
+  | { readonly kind: "exceeded"; readonly originalMs: number };
+
+function resolveImageDescriptionTimeoutMs(
+  timeoutMs: number | undefined,
+  startedAtMs: number,
+): ImageDescriptionDeadline | undefined {
   if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+  const remaining = Math.floor(timeoutMs - (Date.now() - startedAtMs));
+  if (remaining <= 0) {
+    return { kind: "exceeded", originalMs: timeoutMs };
+  }
+  return { kind: "ms", remainingMs: remaining };
 }
 
 async function withImageDescriptionTimeout<T>(params: {
   task: Promise<T>;
-  timeoutMs: number | undefined;
+  deadline: ImageDescriptionDeadline | undefined;
   controller: AbortController;
 }): Promise<T> {
-  if (params.timeoutMs === undefined) {
+  if (params.deadline === undefined) {
     return await params.task;
   }
+  if (params.deadline.kind === "exceeded") {
+    params.controller.abort();
+    throw new Error(`image description deadline exceeded (budget ${params.deadline.originalMs}ms)`);
+  }
+  const remainingMs = params.deadline.remainingMs;
   let timeout: NodeJS.Timeout | undefined;
   try {
     return await Promise.race([
@@ -299,8 +315,8 @@ async function withImageDescriptionTimeout<T>(params: {
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
-          reject(new Error(`image description timed out after ${params.timeoutMs}ms`));
-        }, params.timeoutMs);
+          reject(new Error(`image description timed out after ${remainingMs}ms`));
+        }, remainingMs);
       }),
     ]);
   } finally {
@@ -323,7 +339,7 @@ async function describeImagesWithModelInternal(
   try {
     const resolved = await withImageDescriptionTimeout({
       controller,
-      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      deadline: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
       task: resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
@@ -367,15 +383,16 @@ async function describeImagesWithModelInternal(
   const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const deadline = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const completeTimeoutMs = deadline?.kind === "ms" ? deadline.remainingMs : undefined;
     return await withImageDescriptionTimeout({
       controller,
-      timeoutMs,
+      deadline,
       task: complete(model, context, {
         apiKey,
         maxTokens,
         signal: controller.signal,
-        ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+        ...(completeTimeoutMs !== undefined ? { timeoutMs: completeTimeoutMs } : {}),
         ...(payloadHandler ? { onPayload: payloadHandler } : {}),
       }),
     });
