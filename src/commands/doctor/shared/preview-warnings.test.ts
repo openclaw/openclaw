@@ -743,6 +743,45 @@ describe("doctor preview warnings", () => {
     expect(warnings).toStrictEqual([]);
   });
 
+  it("does not treat channel aliases as route coverage when runtime would not match them", () => {
+    const warnings = collectChannelBoundMessageToolPolicyWarnings({
+      channels: {
+        imessage: {},
+      },
+      agents: {
+        list: [
+          {
+            id: "main",
+            default: true,
+            tools: {
+              allow: ["read"],
+            },
+          },
+          {
+            id: "ios-agent",
+            tools: {
+              profile: "messaging",
+            },
+          },
+        ],
+      },
+      bindings: [
+        {
+          agentId: "ios-agent",
+          match: {
+            channel: "imsg",
+          },
+        },
+      ],
+    });
+
+    expect(warnings).toEqual([
+      expect.stringContaining('Agent "main" is routed from channel "imessage"'),
+    ]);
+    expect(warnings.join("\n")).not.toContain("ios-agent");
+    expect(warnings.join("\n")).not.toContain("imsg");
+  });
+
   it("warns for the default agent when configured account routes are incomplete", () => {
     const warnings = collectChannelBoundMessageToolPolicyWarnings({
       channels: {
