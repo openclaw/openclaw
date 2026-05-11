@@ -197,7 +197,7 @@ describe("msteams feedback invoke authz", () => {
           "utf-8",
         );
         const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
-        expect(Object.keys(event).sort()).toEqual([
+        expect(Object.keys(event).toSorted()).toEqual([
           "agentId",
           "comment",
           "conversationId",
@@ -256,7 +256,7 @@ describe("msteams feedback invoke authz", () => {
           "utf-8",
         );
         const event = JSON.parse(transcript.trim()) as Record<string, unknown>;
-        expect(Object.keys(event).sort()).toEqual([
+        expect(Object.keys(event).toSorted()).toEqual([
           "agentId",
           "comment",
           "conversationId",
