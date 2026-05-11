@@ -308,6 +308,83 @@ describe("createPatchedAccountSetupAdapter", () => {
     expect(next.channels?.["external-chat"]).not.toHaveProperty("botSecret");
   });
 
+  it("uses setup-only registry promotion contracts before patching a new named account", () => {
+    const setupOnlyPlugin = {
+      ...createChannelTestPluginBase({
+        id: "setup-only-chat",
+        label: "Setup-only Chat",
+      }),
+      setup: {
+        singleAccountKeysToMove: externalSingleAccountKeysToMove,
+        namedAccountPromotionKeys: externalNamedAccountPromotionKeys,
+        resolveSingleAccountPromotionTarget: resolveExternalSingleAccountPromotionTarget,
+      },
+    };
+    setActivePluginRegistry({
+      ...createTestRegistry([]),
+      channelSetups: [
+        {
+          pluginId: "setup-only-chat",
+          source: "test",
+          enabled: true,
+          plugin: setupOnlyPlugin,
+        },
+      ],
+    });
+    const adapter = createPatchedAccountSetupAdapter({
+      channelKey: "setup-only-chat",
+      buildPatch: (input) => {
+        const record = input as ChannelSetupInput & Record<string, unknown>;
+        return {
+          botId: record.botId,
+          botSecret: record.botSecret,
+        };
+      },
+    });
+
+    const next = adapter.applyAccountConfig({
+      cfg: asConfig({
+        channels: {
+          "setup-only-chat": {
+            enabled: true,
+            botId: "main-bot",
+            botSecret: "main-secret",
+            keepRoot: true,
+            accounts: {
+              main: { name: "Main" },
+            },
+          },
+        },
+      }),
+      accountId: "alerts",
+      input: {
+        name: "Alerts",
+        botId: "alerts-bot",
+        botSecret: "alerts-secret",
+      } as ChannelSetupInput,
+    });
+
+    expect(next.channels?.["setup-only-chat"]).toMatchObject({
+      enabled: true,
+      keepRoot: true,
+      accounts: {
+        main: {
+          name: "Main",
+          botId: "main-bot",
+          botSecret: "main-secret",
+        },
+        alerts: {
+          enabled: true,
+          name: "Alerts",
+          botId: "alerts-bot",
+          botSecret: "alerts-secret",
+        },
+      },
+    });
+    expect(next.channels?.["setup-only-chat"]).not.toHaveProperty("botId");
+    expect(next.channels?.["setup-only-chat"]).not.toHaveProperty("botSecret");
+  });
+
   it("promotes credentials into the sole existing account before seeding the selected account", () => {
     const adapter = createPatchedAccountSetupAdapter({
       channelKey: "resolverless-chat",

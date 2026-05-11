@@ -2,10 +2,9 @@ import { z, type ZodType } from "zod";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
-import { getLoadedChannelPluginById } from "./registry-loaded.js";
+import { getChannelSetupPlugin } from "./setup-registry.js";
 import type { ChannelSetupAdapter } from "./types.adapters.js";
 import type { ChannelSetupInput } from "./types.core.js";
-import type { ChannelPlugin } from "./types.plugin.js";
 
 type ChannelSectionBase = {
   name?: string;
@@ -103,12 +102,8 @@ function asPromotionSurface(setup: unknown): ChannelSetupPromotionSurface | null
   return setup && typeof setup === "object" ? (setup as ChannelSetupPromotionSurface) : null;
 }
 
-function getLoadedChannelSetupPromotionSurface(
-  channelKey: string,
-): ChannelSetupPromotionSurface | null {
-  return asPromotionSurface(
-    (getLoadedChannelPluginById(channelKey) as ChannelPlugin | undefined)?.setup,
-  );
+function getChannelSetupPromotionSurface(channelKey: string): ChannelSetupPromotionSurface | null {
+  return asPromotionSurface(getChannelSetupPlugin(channelKey)?.setup);
 }
 
 function channelHasAccounts(cfg: OpenClawConfig, channelKey: string): boolean {
@@ -585,24 +580,24 @@ function resolveSingleAccountKeysToMove(params: {
     return [];
   }
 
-  let loadedSetupSurface: ChannelSetupPromotionSurface | null | undefined;
-  const resolveLoadedSetupSurface = () => {
-    loadedSetupSurface ??= getLoadedChannelSetupPromotionSurface(params.channelKey);
-    return loadedSetupSurface;
+  let setupSurface: ChannelSetupPromotionSurface | null | undefined;
+  const resolveSetupSurface = () => {
+    setupSurface ??= getChannelSetupPromotionSurface(params.channelKey);
+    return setupSurface;
   };
 
   const keysToMove = entries.filter((key) => {
     if (COMMON_SINGLE_ACCOUNT_KEYS_TO_MOVE.has(key)) {
       return true;
     }
-    return Boolean(resolveLoadedSetupSurface()?.singleAccountKeysToMove?.includes(key));
+    return Boolean(resolveSetupSurface()?.singleAccountKeysToMove?.includes(key));
   });
   if (!hasNamedAccounts || keysToMove.length === 0) {
     return keysToMove;
   }
 
   const namedAccountPromotionKeys =
-    resolveLoadedSetupSurface()?.namedAccountPromotionKeys ??
+    resolveSetupSurface()?.namedAccountPromotionKeys ??
     NAMED_ACCOUNT_PROMOTION_KEYS_BY_CHANNEL[params.channelKey];
   if (!namedAccountPromotionKeys) {
     return keysToMove;
@@ -623,7 +618,7 @@ function resolveSingleAccountPromotionTarget(params: {
     return matchedAccountId ?? normalizedTargetAccountId;
   };
 
-  const resolvePromotionTarget = getLoadedChannelSetupPromotionSurface(
+  const resolvePromotionTarget = getChannelSetupPromotionSurface(
     params.channelKey,
   )?.resolveSingleAccountPromotionTarget;
   const resolved = resolvePromotionTarget?.({
