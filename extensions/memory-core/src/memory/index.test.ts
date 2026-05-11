@@ -413,7 +413,12 @@ describe("memory index", () => {
     const reopened = openOpenClawAgentDatabase({ agentId: "main" });
     expect(
       reopened.db
-        .prepare("SELECT entry_json FROM session_entries WHERE session_key = ?")
+        .prepare(
+          `SELECT se.entry_json
+           FROM session_routes sr
+           JOIN session_entries se ON se.session_id = sr.session_id
+           WHERE sr.session_key = ?`,
+        )
         .get("agent:main:test"),
     ).toEqual({
       entry_json: JSON.stringify({ sessionId: "keep-me", updatedAt: 1 }),
