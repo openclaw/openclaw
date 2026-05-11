@@ -202,6 +202,27 @@ describe("deliverReplies", () => {
     messageHookRunner.runMessageSent.mockReset();
   });
 
+  it("sanitizes unrecognized HTML tags in text replies (#49104)", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 1,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "Check <tichita> tag" }],
+      runtime,
+      bot,
+    });
+
+    expect(sendMessage.mock.calls[0]?.[0]).toBe("123");
+    expect(sendMessage.mock.calls[0]?.[1]).toContain("&lt;tichita&gt;");
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      parse_mode: "HTML",
+    });
+  });
+
   it("skips audioAsVoice-only payloads without logging an error", async () => {
     const runtime = createRuntime(false);
 

@@ -17,7 +17,7 @@ import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
 import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
+import { renderTelegramHtmlText, sanitizeTelegramHtml, splitTelegramHtmlChunks } from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -687,7 +687,7 @@ export async function sendMessageTelegram(
         if (!chunk.htmlText) {
           return await requestPlain(label);
         }
-        const htmlText = chunk.htmlText;
+        const htmlText = chunk.htmlText ? sanitizeTelegramHtml(chunk.htmlText) : undefined;
         const htmlParams: TelegramSendMessageParams = {
           parse_mode: "HTML" as const,
           ...plainParams,
@@ -834,7 +834,7 @@ export async function sendMessageTelegram(
       caption = split.caption;
       followUpText = split.followUpText;
     }
-    const htmlCaption = caption ? renderHtmlText(caption) : undefined;
+    const htmlCaption = caption ? sanitizeTelegramHtml(renderHtmlText(caption)) : undefined;
     // If text exceeds Telegram's caption limit, send media without caption
     // then send text as a separate follow-up message.
     const needsSeparateText = Boolean(followUpText);
@@ -1377,7 +1377,7 @@ export async function editMessageTelegram(
     channel: "telegram",
     accountId: account.accountId,
   });
-  const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+  const htmlText = sanitizeTelegramHtml(renderTelegramHtmlText(text, { textMode, tableMode }));
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)

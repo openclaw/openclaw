@@ -19,13 +19,45 @@ export function escapeTelegramHtml(text: string): string {
   return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+function escapeHtmlAttr(value: string): string {
+  return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;");
+}
+
 function escapeHtml(text: string): string {
   return escapeTelegramHtml(text);
 }
 
-function escapeHtmlAttr(text: string): string {
-  return escapeHtml(text).replace(/"/g, "&quot;");
+const TELEGRAM_ALLOWED_HTML_TAGS = new Set([
+  "b", "strong", "i", "em", "u", "ins", "s", "strike", "del",
+  "spoiler", "tg-spoiler", "span", "code", "pre", "a", "blockquote",
+  "tg-emoji", "tg-time",
+]);
+
+/**
+ * Sanitize HTML for Telegram Bot API parse_mode=HTML.
+ * Telegram only supports a subset of HTML tags; unrecognized tags
+ * cause silent truncation. This function escapes angle brackets for
+ * any tag not in the allowed set.
+ *
+ * For <span>, only class="tg-spoiler" is allowed per Telegram docs.
+ */
+export function sanitizeTelegramHtml(html: string): string {
+  return html.replace(/<\/?([a-zA-Z][a-zA-Z0-9-]*)\b[^>]*?>/g, (match, tagName) => {
+    const tag = tagName.toLowerCase();
+    if (TELEGRAM_ALLOWED_HTML_TAGS.has(tag)) {
+      if (tag === "span") {
+        // Only allow span with class="tg-spoiler"
+        if (/\bclass\s*=\s*["']tg-spoiler["']/i.test(match)) {
+          return match;
+        }
+        return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+      }
+      return match;
+    }
+    return match.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  });
 }
+
 
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.

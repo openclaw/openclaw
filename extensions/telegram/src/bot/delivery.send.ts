@@ -3,7 +3,7 @@ import { createTelegramRetryRunner } from "openclaw/plugin-sdk/retry-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withTelegramApiErrorLogging } from "../api-logging.js";
-import { markdownToTelegramHtml } from "../format.js";
+import { markdownToTelegramHtml, sanitizeTelegramHtml } from "../format.js";
 import { isSafeToRetrySendError, isTelegramRateLimitError } from "../network-errors.js";
 import {
   buildTelegramSendParams,
@@ -111,7 +111,9 @@ export async function sendTelegramText(
   const linkPreviewEnabled = opts?.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
   const textMode = opts?.textMode ?? "markdown";
-  const htmlText = textMode === "html" ? text : markdownToTelegramHtml(text);
+  const htmlText = sanitizeTelegramHtml(
+    textMode === "html" ? text : markdownToTelegramHtml(text),
+  );
   const fallbackText = opts?.plainText ?? text;
   const hasFallbackText = fallbackText.trim().length > 0;
   const sendPlainFallback = async () => {

@@ -2,8 +2,34 @@ import { describe, expect, it } from "vitest";
 import {
   markdownToTelegramChunks,
   markdownToTelegramHtml,
+  sanitizeTelegramHtml,
   splitTelegramHtmlChunks,
 } from "./format.js";
+
+describe("sanitizeTelegramHtml", () => {
+  it("escapes unrecognized HTML tags and preserves Telegram-supported tags", () => {
+    const cases = [
+      ["escapes unknown tags", "<tichita>hello</tichita>", "&lt;tichita&gt;hello&lt;/tichita&gt;"],
+      ["preserves known tags", "<b>bold</b> <i>italic</i>", "<b>bold</b> <i>italic</i>"],
+      ["preserves anchors", '<a href="https://x.com">link</a>', '<a href="https://x.com">link</a>'],
+      ["preserves blockquote", "<blockquote>q</blockquote>", "<blockquote>q</blockquote>"],
+      ["preserves code/pre", "<code>c</code> <pre>p</pre>", "<code>c</code> <pre>p</pre>"],
+      ["preserves spoiler", "<tg-spoiler>s</tg-spoiler>", "<tg-spoiler>s</tg-spoiler>"],
+      ["preserves span with tg-spoiler class", '<span class="tg-spoiler">s</span>', '<span class="tg-spoiler">s</span>'],
+      ["escapes span without tg-spoiler class", '<span style="color:red">s</span>', '&lt;span style="color:red"&gt;s&lt;/span&gt;'],
+      ["preserves tg-emoji", '<tg-emoji emoji-id="123">😀</tg-emoji>', '<tg-emoji emoji-id="123">😀</tg-emoji>'],
+      ["preserves tg-time", '<tg-time datetime="2026-01-01">Jan 1</tg-time>', '<tg-time datetime="2026-01-01">Jan 1</tg-time>'],
+      ["escapes br tag", "line1<br/>line2", "line1&lt;br/&gt;line2"],
+      ["escapes mixed known and unknown", "<b>bold</b> <unknown>text</unknown>", "<b>bold</b> &lt;unknown&gt;text&lt;/unknown&gt;"],
+      ["escapes self-closing unknown", "<thinking />", "&lt;thinking /&gt;"],
+      ["leaves already-escaped entities untouched", "&lt;tichita&gt;hello", "&lt;tichita&gt;hello"],
+      ["handles angle brackets with no tag", "3 < 5", "3 < 5"],
+    ] as const;
+    for (const [name, input, expected] of cases) {
+      expect(sanitizeTelegramHtml(input), name).toBe(expected);
+    }
+  });
+});
 
 describe("markdownToTelegramHtml", () => {
   it("handles core markdown-to-telegram conversions", () => {
