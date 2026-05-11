@@ -79,6 +79,10 @@ export function resolveDiscordMentionState(params: {
   authorIsBot: boolean;
   botId?: string;
   hasAnyMention: boolean;
+  implicitReplyMentions?: {
+    fromUsers?: boolean;
+    fromBots?: boolean;
+  };
   isDirectMessage: boolean;
   isExplicitlyMentioned: boolean;
   mentionRegexes: RegExp[];
@@ -109,9 +113,15 @@ export function resolveDiscordMentionState(params: {
       },
       transcript: params.transcript,
     });
+  const implicitReplyMentions = params.implicitReplyMentions;
+  const replyAuthorIsBot = params.authorIsBot && !params.senderIsPluralKit;
+  const allowImplicitReplyMention = replyAuthorIsBot
+    ? implicitReplyMentions?.fromBots !== false
+    : implicitReplyMentions?.fromUsers !== false;
   const implicitMentionKinds = implicitMentionKindWhen(
     "reply_to_bot",
-    Boolean(params.botId) &&
+    allowImplicitReplyMention &&
+      Boolean(params.botId) &&
       Boolean(params.referencedAuthorId) &&
       params.referencedAuthorId === params.botId,
   );

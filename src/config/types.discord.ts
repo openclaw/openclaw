@@ -311,6 +311,13 @@ export type DiscordAccountConfig = {
   gatewayRuntimeReadyTimeoutMs?: number;
   /** Allow bot-authored messages to trigger replies (default: false). Set "mentions" to gate on mentions. */
   allowBots?: boolean | "mentions";
+  /** Controls whether native replies to this bot count as implicit mentions. Defaults preserve legacy behavior. */
+  implicitReplyMentions?: {
+    /** Human-authored native replies to this bot count as mentions. Default: true. */
+    fromUsers?: boolean;
+    /** Bot-authored native replies to this bot count as mentions. Default: true. */
+    fromBots?: boolean;
+  };
   /**
    * Break-glass override: allow mutable identity matching (names/tags/slugs) in allowlists.
    * Default behavior is ID-only matching.

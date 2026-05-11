@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Discord: add `channels.discord.implicitReplyMentions` so multi-bot servers can keep human reply activation while disabling bot-authored reply-only activation.
 - Providers/fal: route GPT Image 2 and Nano Banana 2 reference-image edit requests to `/edit` with `image_urls` array, enforce NB2 edit geometry using `aspect_ratio` and `resolution` params, lift Fal edit mode input-image caps to 10 for GPT Image 2 and 14 for Nano Banana 2, and allow aspect-ratio hints in edit mode. (#77295) Thanks @leoge007.
 
 - Build: enable additional low-churn oxlint rules for promise, TypeScript, and runtime footgun checks.

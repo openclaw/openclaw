@@ -591,6 +591,13 @@ const DiscordVoiceSchema = z
   .strict()
   .optional();
 
+const DiscordImplicitReplyMentionsSchema = z
+  .object({
+    fromUsers: z.boolean().optional(),
+    fromBots: z.boolean().optional(),
+  })
+  .strict();
+
 export const DiscordAccountSchema = z
   .object({
     name: z.string().optional(),
@@ -606,6 +613,7 @@ export const DiscordAccountSchema = z
     gatewayReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     gatewayRuntimeReadyTimeoutMs: z.number().int().positive().max(120_000).optional(),
     allowBots: z.union([z.boolean(), z.literal("mentions")]).optional(),
+    implicitReplyMentions: DiscordImplicitReplyMentionsSchema.optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),
     mentionAliases: z.record(z.string(), DiscordSnowflakeStringSchema).optional(),
     groupPolicy: GroupPolicySchema.optional().default("allowlist"),
