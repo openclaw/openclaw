@@ -271,7 +271,11 @@ describe("uploadToConsentUrl", () => {
     });
 
     expect(fetchFn).toHaveBeenCalledOnce();
-    const [url, opts] = fetchFn.mock.calls[0];
+    const call = fetchFn.mock.calls[0] as unknown as [string, RequestInit] | undefined;
+    if (!call) {
+      throw new Error("expected consent upload fetch call");
+    }
+    const [url, opts] = call;
     expect(url).toBe("https://contoso.sharepoint.com/upload");
     expect(opts?.method).toBe("PUT");
     expect(opts?.headers).toEqual({
