@@ -5,7 +5,7 @@ read_when:
   - You want to understand what tools OpenClaw provides
   - You are deciding between built-in tools, skills, and plugins
   - You need the right docs entry point for tool policy, automation, or agent coordination
-title: "Tools, skills, and plugins"
+title: "Overview"
 ---
 
 Use this page to choose the right Capabilities surface. **Tools** are callable

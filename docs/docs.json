@@ -1182,7 +1182,7 @@
             "tab": "Capabilities",
             "groups": [
               {
-                "group": "Tools, skills, and plugins",
+                "group": "Overview",
                 "pages": ["tools/index"]
               },
               {

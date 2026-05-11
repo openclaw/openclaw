@@ -880,6 +880,10 @@
     "target": "能力"
   },
   {
+    "source": "Overview",
+    "target": "概览"
+  },
+  {
     "source": "Tools, skills, and plugins overview",
     "target": "工具、技能和插件概览"
   },
