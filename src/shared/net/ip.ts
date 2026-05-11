@@ -36,6 +36,7 @@ const BLOCKED_IPV6_SPECIAL_USE_RANGES = new Set<BlockedIpv6Range>([
   "orchid2",
 ]);
 const RFC2544_BENCHMARK_PREFIX: [ipaddr.IPv4, number] = [ipaddr.IPv4.parse("198.18.0.0"), 15];
+const CLOUD_METADATA_IP_ADDRESSES = new Set(["100.100.100.200"]);
 export type Ipv4SpecialUseBlockOptions = {
   allowRfc2544BenchmarkRange?: boolean;
 };
@@ -257,6 +258,15 @@ export function isLinkLocalIpAddress(raw: string | undefined): boolean {
     return true;
   }
   return normalized.range() === "linkLocal";
+}
+
+export function isCloudMetadataIpAddress(raw: string | undefined): boolean {
+  const parsed = parseLooseIpAddress(raw);
+  if (!parsed) {
+    return false;
+  }
+  const normalized = normalizeIpv4MappedAddress(parsed);
+  return CLOUD_METADATA_IP_ADDRESSES.has(normalized.toString());
 }
 
 export function isPrivateOrLoopbackIpAddress(raw: string | undefined): boolean {

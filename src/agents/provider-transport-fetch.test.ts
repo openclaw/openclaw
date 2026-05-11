@@ -398,6 +398,12 @@ describe("buildGuardedModelFetch", () => {
       hostnameAllowlist: ["169.254.169.254"],
     },
     {
+      label: "non-link-local cloud metadata IP",
+      baseUrl: "http://100.100.100.200/v1",
+      requestUrl: "http://100.100.100.200/v1/chat/completions",
+      hostnameAllowlist: ["100.100.100.200"],
+    },
+    {
       label: "metadata hostname",
       baseUrl: "http://metadata.google.internal/v1",
       requestUrl: "http://metadata.google.internal/v1/chat/completions",
@@ -408,6 +414,12 @@ describe("buildGuardedModelFetch", () => {
       baseUrl: "http://metadata/v1",
       requestUrl: "http://metadata/v1/chat/completions",
       hostnameAllowlist: ["metadata"],
+    },
+    {
+      label: "metadata compound hostname",
+      baseUrl: "http://metadata-server.example/v1",
+      requestUrl: "http://metadata-server.example/v1/chat/completions",
+      hostnameAllowlist: ["metadata-server.example"],
     },
     {
       label: "cloud instance-data hostname",

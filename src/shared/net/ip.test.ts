@@ -6,6 +6,7 @@ import {
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
   isCarrierGradeNatIpv4Address,
+  isCloudMetadataIpAddress,
   isIpInCidr,
   isIpv4Address,
   isIpv6Address,
@@ -86,6 +87,14 @@ describe("shared ip helpers", () => {
     expect(isLinkLocalIpAddress("10.0.0.5")).toBe(false);
     expect(isLinkLocalIpAddress("127.0.0.1")).toBe(false);
     expect(isLinkLocalIpAddress("fd00::1")).toBe(false);
+  });
+
+  it("detects known non-link-local cloud metadata IPs", () => {
+    expect(isCloudMetadataIpAddress("100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("::ffff:100.100.100.200")).toBe(true);
+    expect(isCloudMetadataIpAddress("1684301000")).toBe(true);
+    expect(isCloudMetadataIpAddress("100.100.100.201")).toBe(false);
+    expect(isCloudMetadataIpAddress("169.254.169.254")).toBe(false);
   });
 
   it("parses loose legacy IPv4 literals that canonical parsing rejects", () => {

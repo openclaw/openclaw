@@ -3,6 +3,7 @@ import { lookup as dnsLookup } from "node:dns/promises";
 import type { Dispatcher } from "undici";
 import {
   extractEmbeddedIpv4FromIpv6,
+  isCloudMetadataIpAddress,
   isBlockedSpecialUseIpv4Address,
   isBlockedSpecialUseIpv6Address,
   isCanonicalDottedDecimalIPv4,
@@ -414,7 +415,7 @@ function assertAllowedTrustedHostnameResolvedAddressesOrThrow(
   results: readonly LookupAddress[],
 ): void {
   for (const entry of results) {
-    if (isLinkLocalIpAddress(entry.address)) {
+    if (isLinkLocalIpAddress(entry.address) || isCloudMetadataIpAddress(entry.address)) {
       throw new SsrFBlockedError(BLOCKED_RESOLVED_IP_MESSAGE);
     }
   }
