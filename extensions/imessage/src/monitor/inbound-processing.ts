@@ -56,6 +56,7 @@ type IMessageReactionContext = {
   action: "added" | "removed";
   emoji: string;
   targetGuid?: string;
+  targetGuids?: string[];
   targetText?: string;
 };
 
@@ -82,6 +83,26 @@ function normalizeReactionValue(value: unknown): string | undefined {
   return typeof value === "string"
     ? value.trim().replace(/^p:\d+\//iu, "") || undefined
     : undefined;
+}
+
+function resolveReactionTargetGuidCandidates(...values: unknown[]): string[] {
+  const candidates: string[] = [];
+  for (const value of values) {
+    if (typeof value !== "string") {
+      continue;
+    }
+    const raw = value.trim();
+    if (!raw) {
+      continue;
+    }
+    const normalized = raw.replace(/^p:\d+\//iu, "");
+    for (const candidate of [normalized, raw]) {
+      if (candidate && !candidates.includes(candidate)) {
+        candidates.push(candidate);
+      }
+    }
+  }
+  return candidates;
 }
 
 function resolveTapbackTextContext(bodyText: string): IMessageReactionContext | null {
@@ -118,15 +139,18 @@ export function resolveIMessageReactionContext(
       message.associated_message_type >= 2000 &&
       message.associated_message_type < 4000);
   if (explicit) {
+    const targetGuids = resolveReactionTargetGuidCandidates(
+      message.reacted_to_guid,
+      message.associated_message_guid,
+    );
     return {
       action: message.is_reaction_add === false ? "removed" : "added",
       emoji:
         normalizeReactionValue(message.reaction_emoji) ??
         normalizeReactionValue(message.reaction_type) ??
         "reaction",
-      targetGuid:
-        normalizeReactionValue(message.reacted_to_guid) ??
-        normalizeReactionValue(message.associated_message_guid),
+      targetGuid: targetGuids[0],
+      targetGuids,
     };
   }
   return resolveTapbackTextContext(bodyText);
@@ -560,6 +584,7 @@ export async function resolveIMessageInboundDecision(params: {
       return { kind: "drop", reason: "reaction notifications disabled" };
     }
     const targetGuid = reactionContext.targetGuid;
+    const targetGuids = reactionContext.targetGuids ?? (targetGuid ? [targetGuid] : []);
     const targetIsOwn = Boolean(
       targetGuid &&
       ((params.echoCache &&
@@ -573,15 +598,17 @@ export async function resolveIMessageInboundDecision(params: {
             chatIdentifier,
             sender,
           }),
-          messageIds: [targetGuid],
+          messageIds: targetGuids,
         })) ||
-        (params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId)({
-          messageId: targetGuid,
-          accountId: params.accountId,
-          chatId,
-          chatGuid,
-          chatIdentifier,
-        })),
+        targetGuids.some((messageId) =>
+          (params.isKnownFromMeMessageId ?? isKnownFromMeIMessageMessageId)({
+            messageId,
+            accountId: params.accountId,
+            chatId,
+            chatGuid,
+            chatIdentifier,
+          }),
+        )),
     );
     if (notificationMode === "own" && !targetIsOwn) {
       return { kind: "drop", reason: "reaction target not sent by agent" };

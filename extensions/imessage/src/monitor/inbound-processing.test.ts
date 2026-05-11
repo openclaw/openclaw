@@ -507,6 +507,73 @@ describe("resolveIMessageInboundDecision echo detection", () => {
     );
   });
 
+  it("matches prefixed tapback targets against prefixed bot-authored cache ids in own mode", async () => {
+    const checkedMessageIds: string[] = [];
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👎",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/imsg-1",
+        associated_message_type: 2000,
+        text: "Disliked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Disliked “tapback target”",
+      bodyText: "Disliked “tapback target”",
+      echoCache: { has: () => false },
+      isKnownFromMeMessageId: ({ messageId }) => {
+        checkedMessageIds.push(messageId ?? "");
+        return messageId === "p:0/imsg-1";
+      },
+    });
+
+    expect(checkedMessageIds).toEqual(["imsg-1", "p:0/imsg-1"]);
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👎 by +15555550123 on msg imsg-1");
+  });
+
+  it("matches prefixed tapback targets against prefixed echo-cache ids in own mode", async () => {
+    const checkedMessageIds: string[] = [];
+    const decision = await resolveDecision({
+      message: {
+        guid: "reaction-guid",
+        is_reaction: true,
+        reaction_emoji: "👍",
+        is_reaction_add: true,
+        associated_message_guid: "p:0/imsg-2",
+        associated_message_type: 2000,
+        text: "Liked “tapback target”",
+        chat_id: 3,
+        chat_guid: "any;-;+15555550123",
+        chat_identifier: "+15555550123",
+      },
+      messageText: "Liked “tapback target”",
+      bodyText: "Liked “tapback target”",
+      echoCache: {
+        has: (_scope, lookup) => {
+          if (lookup.messageId) {
+            checkedMessageIds.push(lookup.messageId);
+          }
+          return lookup.messageId === "p:0/imsg-2";
+        },
+      },
+    });
+
+    expect(checkedMessageIds).toEqual(["imsg-2", "p:0/imsg-2"]);
+    expect(decision.kind).toBe("reaction");
+    if (decision.kind !== "reaction") {
+      throw new Error("expected reaction decision");
+    }
+    expect(decision.text).toBe("iMessage reaction added: 👍 by +15555550123 on msg imsg-2");
+  });
+
   it("drops tapbacks on non-bot messages in own notification mode", async () => {
     const decision = await resolveDecision({
       message: {
