@@ -1,16 +1,26 @@
 /**
  * Circular gauge primitive (SVG arc).
  *
- * Public attributes:
- *   - value: number (current reading)
- *   - min:  number (default 0)
- *   - max:  number (required)
- *   - unit: string (e.g. "W", "%", "$")
- *   - name: string (caption shown beneath the numeral)
- *   - segments: ColorSegment[] (color bands; first matching `from` wins)
+ * Visual model mirrors the HACS `modern-circular-gauge` card by selvalt7:
+ * https://github.com/selvalt7/modern-circular-gauge
  *
- * Mirrors the visual fidelity of HACS modern-circular-gauge for v1's
- * Wagner Way overview but is a small Lit + SVG primitive, not a port.
+ * Implementation notes (locked to that card's geometry for fidelity):
+ *   - viewBox -50 -50 100 100, RADIUS = 47, stroke = 6.
+ *   - Single 270deg arc path computed once from angle 0 to 270 (math
+ *     convention; angle 0 = 3 o'clock).
+ *   - The whole arc group is rotated by 135deg so the open gap sits at
+ *     the bottom of the circle (classic gauge sweep from lower-left to
+ *     lower-right).
+ *   - Foreground "value" reveal is done with stroke-dasharray on the same
+ *     path -- no second arc computation, no joins, smooth at every value.
+ *   - Stroke-linecap is round so the value tip has the same pill cap as
+ *     the original card.
+ *
+ * Segments: a list of color bands with a `from` threshold. The active
+ * band (highest `from` <= value) colors the value arc. Smooth-gradient
+ * mode from the original (conic-gradient via foreignObject) is not
+ * implemented in v1 -- visually we get the same step-color reveal that
+ * the kiosk plan called for.
  */
 
 import { LitElement, html, svg, type TemplateResult } from "lit";
@@ -19,11 +29,20 @@ import { property } from "lit/decorators.js";
 export type GaugeColorSegment = {
   /** Inclusive lower bound; if the value >= this, the segment matches. */
   from: number;
-  /** Hex or rgb() color string. */
+  /** Hex or rgb() color string, or CSS variable reference. */
   color: string;
 };
 
 const DEFAULT_SEGMENTS: GaugeColorSegment[] = [{ from: 0, color: "var(--accent)" }];
+
+// -- Geometry constants (match selvalt7/modern-circular-gauge) -------------
+
+const RADIUS = 47;
+const MAX_ANGLE = 270;
+const STROKE_WIDTH = 6;
+// rotateAngle = 360 - MAX_ANGLE / 2 - 90 = 360 - 135 - 90 = 135
+const ROTATE_ANGLE = 360 - MAX_ANGLE / 2 - 90;
+const TRACK_CIRCUMFERENCE = (RADIUS * 2 * Math.PI * MAX_ANGLE) / 360;
 
 export class KioskGaugeCircular extends LitElement {
   override createRenderRoot() {
@@ -39,9 +58,7 @@ export class KioskGaugeCircular extends LitElement {
 
   override render(): TemplateResult {
     const value = Number.isFinite(this.value) ? this.value : Number.NaN;
-    const min = this.min;
-    const max = this.max;
-    const range = max - min;
+    const range = this.max - this.min;
 
     if (!Number.isFinite(value) || range <= 0) {
       return html`<div class="kiosk-gauge" data-empty="true">
@@ -51,8 +68,8 @@ export class KioskGaugeCircular extends LitElement {
       </div>`;
     }
 
-    const clamped = Math.max(min, Math.min(max, value));
-    const ratio = (clamped - min) / range;
+    const clamped = Math.max(this.min, Math.min(this.max, value));
+    const ratio = (clamped - this.min) / range;
     const color = pickSegmentColor(value, this.segments);
 
     return html`<div class="kiosk-gauge">
@@ -71,39 +88,35 @@ export class KioskGaugeCircular extends LitElement {
   }
 
   private renderArc(ratio: number, color: string): TemplateResult {
-    // 270deg arc starting from -135deg (lower-left) to +135deg (lower-right).
-    // Standard gauge sweep with a gap at the bottom.
-    const radius = 80;
-    const center = 100;
-    const stroke = 12;
-    const startAngle = -225;
-    const endAngle = 45;
-    const totalSweep = endAngle - startAngle;
-    const valueAngle = startAngle + totalSweep * ratio;
-
-    const bgPath = describeArc(center, center, radius, startAngle, endAngle);
-    const valuePath = describeArc(center, center, radius, startAngle, valueAngle);
+    const arcLength = Math.max(ratio * TRACK_CIRCUMFERENCE, 0);
+    const dasharray = `${arcLength} ${TRACK_CIRCUMFERENCE - arcLength}`;
+    const path = describeArc(0, 0, RADIUS, 0, MAX_ANGLE);
 
     return svg`
-      <svg viewBox="0 0 200 200" role="presentation" aria-hidden="true">
-        <path
-          d=${bgPath}
-          stroke="var(--border)"
-          stroke-width=${stroke}
-          stroke-linecap="round"
-          fill="none"
-        />
-        ${
-          ratio > 0
-            ? svg`<path
-              d=${valuePath}
-              stroke=${color}
-              stroke-width=${stroke}
-              stroke-linecap="round"
-              fill="none"
-            />`
-            : svg``
-        }
+      <svg viewBox="-50 -50 100 100" role="presentation" aria-hidden="true">
+        <g transform="rotate(${ROTATE_ANGLE})">
+          <path
+            class="kiosk-gauge__track"
+            d=${path}
+            stroke="var(--border)"
+            stroke-width=${STROKE_WIDTH}
+            stroke-linecap="round"
+            fill="none"
+          />
+          ${
+            ratio > 0
+              ? svg`<path
+                  class="kiosk-gauge__value"
+                  d=${path}
+                  stroke=${color}
+                  stroke-width=${STROKE_WIDTH}
+                  stroke-linecap="round"
+                  fill="none"
+                  stroke-dasharray=${dasharray}
+                />`
+              : svg``
+          }
+        </g>
       </svg>
     `;
   }
@@ -113,7 +126,6 @@ function pickSegmentColor(value: number, segments: GaugeColorSegment[]): string 
   if (!segments || segments.length === 0) {
     return "var(--accent)";
   }
-  // Sort by `from` ascending; pick the highest `from` that the value is >=.
   const sorted = [...segments].sort((a, b) => a.from - b.from);
   let chosen = sorted[0].color;
   for (const segment of sorted) {
@@ -138,26 +150,23 @@ function formatValue(value: number): string {
   return value.toFixed(1);
 }
 
-function polarToCartesian(cx: number, cy: number, radius: number, angleDeg: number) {
-  const angleRad = ((angleDeg - 90) * Math.PI) / 180;
-  return {
-    x: cx + radius * Math.cos(angleRad),
-    y: cy + radius * Math.sin(angleRad),
-  };
+// -- SVG arc geometry (matches selvalt7/modern-circular-gauge svgArc) ------
+
+function describeArc(cx: number, cy: number, r: number, startDeg: number, endDeg: number): string {
+  const start = toRadian(startDeg);
+  const end = toRadian(endDeg);
+  const delta = (end - start) % (2 * Math.PI);
+  const startX = cx + r * Math.cos(start);
+  const startY = cy + r * Math.sin(start);
+  const endX = cx + r * Math.cos(start + delta);
+  const endY = cy + r * Math.sin(start + delta);
+  const largeArc = delta > Math.PI ? 1 : 0;
+  const sweep = delta > 0 ? 1 : 0;
+  return `M ${startX} ${startY} A ${r} ${r} 0 ${largeArc} ${sweep} ${endX} ${endY}`;
 }
 
-function describeArc(
-  cx: number,
-  cy: number,
-  radius: number,
-  startAngle: number,
-  endAngle: number,
-): string {
-  const start = polarToCartesian(cx, cy, radius, endAngle);
-  const end = polarToCartesian(cx, cy, radius, startAngle);
-  const sweep = endAngle - startAngle;
-  const largeArc = Math.abs(sweep) > 180 ? 1 : 0;
-  return `M ${start.x} ${start.y} A ${radius} ${radius} 0 ${largeArc} 0 ${end.x} ${end.y}`;
+function toRadian(angleDeg: number): number {
+  return (angleDeg / 180) * Math.PI;
 }
 
 if (!customElements.get("kiosk-gauge-circular")) {
