@@ -80,6 +80,7 @@ function createCronContext(currentJob?: CronJob) {
     },
     logGateway: {
       info: vi.fn(),
+      warn: vi.fn(),
     },
     getRuntimeConfig: () => getRuntimeConfig(),
   };
@@ -268,6 +269,53 @@ describe("cron method validation", () => {
       to: "-1001234567890",
       threadId: "456",
     });
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("warns but accepts high-frequency every schedules on cron.add", async () => {
+    const { context, respond } = await invokeCronAdd({
+      name: "fast add",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 900_000 },
+      sessionTarget: "isolated",
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "hello" },
+    });
+
+    expect(context.cron.add).toHaveBeenCalled();
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("high-frequency cron schedules (<30m)"),
+      expect.objectContaining({
+        method: "cron.add",
+        name: "fast add",
+        schedule: { kind: "every", everyMs: 900_000 },
+      }),
+    );
+    expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
+  });
+
+  it("warns but accepts high-frequency every schedules on cron.update", async () => {
+    const { context, respond } = await invokeCronUpdate(
+      {
+        id: "cron-1",
+        patch: {
+          schedule: { kind: "every", everyMs: 900_000 },
+        },
+      },
+      createCronJob(),
+    );
+
+    expect(context.cron.update).toHaveBeenCalledWith("cron-1", {
+      schedule: { kind: "every", everyMs: 900_000 },
+    });
+    expect(context.logGateway.warn).toHaveBeenCalledWith(
+      expect.stringContaining("high-frequency cron schedules (<30m)"),
+      expect.objectContaining({
+        jobId: "cron-1",
+        method: "cron.update",
+        schedule: { kind: "every", everyMs: 900_000 },
+      }),
+    );
     expect(respond).toHaveBeenCalledWith(true, { id: "cron-1" }, undefined);
   });
 

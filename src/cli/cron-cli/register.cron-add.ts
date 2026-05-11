@@ -1,4 +1,8 @@
 import type { Command } from "commander";
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import type { CronJob } from "../../cron/types.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -132,6 +136,9 @@ export function registerCronAddCommand(cron: Command) {
             stagger: opts.stagger,
             tz: opts.tz,
           });
+          if (isHighFrequencyEverySchedule(schedule)) {
+            defaultRuntime.error(theme.warn(getHighFrequencyEveryWarningMessage()));
+          }
 
           const wakeMode = normalizeOptionalString(opts.wake) ?? "now";
           if (wakeMode !== "now" && wakeMode !== "next-heartbeat") {

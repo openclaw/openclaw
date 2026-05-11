@@ -54,7 +54,7 @@ vi.mock("../runtime.js", () => ({
 
 type CronUpdatePatch = {
   patch?: {
-    schedule?: { kind?: string; expr?: string; tz?: string; staggerMs?: number };
+    schedule?: { kind?: string; expr?: string; everyMs?: number; tz?: string; staggerMs?: number };
     payload?: {
       kind?: string;
       message?: string;
@@ -75,7 +75,7 @@ type CronUpdatePatch = {
 };
 
 type CronAddParams = {
-  schedule?: { kind?: string; staggerMs?: number };
+  schedule?: { kind?: string; everyMs?: number; staggerMs?: number };
   payload?: {
     model?: string;
     thinking?: string;
@@ -629,6 +629,38 @@ describe("cron cli", () => {
     expect(output.params?.name).toBe("No agent JSON");
     expect(output.params?.payload?.kind).toBe("agentTurn");
     expect(output.params?.payload?.message).toBe("hello");
+  });
+
+  it("warns for high-frequency cron add schedules on stderr without corrupting JSON stdout", async () => {
+    const params = await runCronAddAndGetParams([
+      "--name",
+      "Fast add",
+      "--every",
+      "15m",
+      "--session",
+      "main",
+      "--system-event",
+      "tick",
+      "--json",
+    ]);
+
+    expect(params?.schedule?.kind).toBe("every");
+    expect(params?.schedule?.everyMs).toBe(900_000);
+    expectRuntimeErrorContaining("high-frequency cron schedules (<30m)");
+    const stdout = stdoutText();
+    expect(stdout).not.toContain("high-frequency cron schedules");
+    expect(JSON.parse(stdout)).toMatchObject({ ok: true });
+  });
+
+  it("warns for high-frequency cron edit schedules on stderr without corrupting JSON stdout", async () => {
+    const patch = await runCronEditAndGetPatch(["--every", "15m"]);
+
+    expect(patch?.patch?.schedule?.kind).toBe("every");
+    expect(patch?.patch?.schedule?.everyMs).toBe(900_000);
+    expectRuntimeErrorContaining("high-frequency cron schedules (<30m)");
+    const stdout = stdoutText();
+    expect(stdout).not.toContain("high-frequency cron schedules");
+    expect(JSON.parse(stdout)).toMatchObject({ ok: true });
   });
 
   it("warns when --agent is blank on cron add with --message", async () => {

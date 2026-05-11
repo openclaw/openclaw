@@ -1,5 +1,9 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCronDeliveryPreviews } from "../../cron/delivery-preview.js";
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "../../cron/normalize.js";
 import {
   readCronRunLogEntriesPage,
@@ -307,6 +311,13 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    if (isHighFrequencyEverySchedule(jobCreate.schedule)) {
+      context.logGateway.warn(getHighFrequencyEveryWarningMessage(), {
+        method: "cron.add",
+        name: jobCreate.name,
+        schedule: jobCreate.schedule,
+      });
+    }
     context.logGateway.info("cron: job created", { jobId: job.id, schedule: jobCreate.schedule });
     respond(true, job, undefined);
   },
@@ -401,6 +412,13 @@ export const cronHandlers: GatewayRequestHandlers = {
         ),
       );
       return;
+    }
+    if (isHighFrequencyEverySchedule(patch.schedule)) {
+      context.logGateway.warn(getHighFrequencyEveryWarningMessage(), {
+        jobId,
+        method: "cron.update",
+        schedule: patch.schedule,
+      });
     }
     context.logGateway.info("cron: job updated", { jobId });
     respond(true, job, undefined);

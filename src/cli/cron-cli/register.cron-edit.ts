@@ -1,4 +1,8 @@
 import type { Command } from "commander";
+import {
+  getHighFrequencyEveryWarningMessage,
+  isHighFrequencyEverySchedule,
+} from "../../cron/high-frequency-warning.js";
 import type { CronJob } from "../../cron/types.js";
 import { danger } from "../../globals.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -214,6 +218,9 @@ export function registerCronEditCommand(cron: Command) {
           });
           if (scheduleRequest.kind === "direct") {
             patch.schedule = scheduleRequest.schedule;
+            if (isHighFrequencyEverySchedule(scheduleRequest.schedule)) {
+              defaultRuntime.error(getHighFrequencyEveryWarningMessage());
+            }
           } else if (scheduleRequest.kind === "patch-existing-cron") {
             const existing = await loadCronJobForEditSchedulePatch(opts, String(id));
             if (!existing) {
