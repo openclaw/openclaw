@@ -688,35 +688,6 @@ function deliveryContextFromTypedRow(row: {
   };
 }
 
-function deliveryContextFromEntry(
-  entry: SessionEntry | undefined,
-): SqliteSessionDeliveryContext | undefined {
-  const channel =
-    optionalString(entry?.deliveryContext?.channel) ??
-    optionalString(entry?.lastChannel) ??
-    optionalString(entry?.channel) ??
-    optionalString(entry?.origin?.provider);
-  const to =
-    optionalString(entry?.deliveryContext?.to) ??
-    optionalString(entry?.lastTo) ??
-    optionalString(entry?.origin?.to) ??
-    optionalString(entry?.origin?.from);
-  if (!channel || !to) {
-    return undefined;
-  }
-  return {
-    channel,
-    to,
-    accountId:
-      optionalString(entry?.deliveryContext?.accountId) ??
-      optionalString(entry?.lastAccountId) ??
-      optionalString(entry?.origin?.accountId),
-    threadId: optionalThreadId(
-      entry?.deliveryContext?.threadId ?? entry?.lastThreadId ?? entry?.origin?.threadId,
-    ),
-  };
-}
-
 export function readSqliteSessionDeliveryContext(
   options: SqliteSessionEntriesOptions & { sessionKey: string },
 ): SqliteSessionDeliveryContext | undefined {
@@ -757,7 +728,7 @@ export function readSqliteSessionDeliveryContext(
   if (linkedRow) {
     return deliveryContextFromTypedRow(linkedRow);
   }
-  return deliveryContextFromEntry(readSqliteSessionEntry(options));
+  return undefined;
 }
 
 export function readSqliteSessionRoutingInfo(

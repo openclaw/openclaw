@@ -461,9 +461,10 @@ Completed consolidation/deletion highlights:
   `entry_json` is a compatibility/debug shadow and can be stale or invalid
   without losing typed session identity or delivery context.
 - `src/config/sessions/delivery-info.ts` now resolves delivery context from the
-  typed per-agent `sessions` + `conversations` + `session_conversations` rows
-  first. `session_entries.entry_json` is only a compatibility fallback when a
-  typed conversation row is unavailable.
+  typed per-agent `sessions` + `conversations` + `session_conversations` rows.
+  It no longer reconstructs runtime delivery identity from
+  `session_entries.entry_json`; a missing typed conversation row is a doctor
+  migration/repair problem, not a runtime fallback.
 - Stored-session reset decisions now prefer typed `sessions.session_scope`,
   `sessions.chat_type`, and `sessions.channel` metadata before falling back to
   `sessionKey` shape. `sessionKey` parsing remains only for explicit thread
