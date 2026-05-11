@@ -68,6 +68,26 @@ export function ensureStandaloneRuntimePluginRegistryLoaded(params: {
     if (existing) {
       return existing;
     }
+    // Strict-cache-key miss path. The strict check above goes through
+    // `resolveCompatibleRuntimePluginRegistry`, which requires the load-options
+    // hash to match the active registry's cache key. Dispatch callers
+    // (`ensureRuntimePluginsLoaded`) build a 3-field load-options object while
+    // gateway-startup builds a 9+ field one, so the hashes never match even
+    // though both name the same workspace and require the same plugin ids.
+    // Re-check `getLoadedRuntimePluginRegistry` without `loadOptions` to take
+    // the workspace + plugin-id branch on the active surface registry. This
+    // preserves laziness (still loads when active registry is missing or
+    // workspace-incompatible) but avoids a full `loadOpenClawPlugins` reload
+    // on the first inbound dispatch.
+    const compatible = getLoadedRuntimePluginRegistry({
+      env: params.loadOptions.env,
+      workspaceDir: params.loadOptions.workspaceDir,
+      requiredPluginIds,
+      surface,
+    });
+    if (compatible) {
+      return compatible;
+    }
   }
 
   const effectiveLoadOptions = params.forceLoad
