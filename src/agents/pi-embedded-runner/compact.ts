@@ -66,11 +66,7 @@ import { supportsModelTools } from "../model-tool-support.js";
 import { ensureOpenClawModelCatalog } from "../models-config.js";
 import { createBundleLspToolRuntime } from "../pi-bundle-lsp-runtime.js";
 import { createBundleMcpToolRuntime } from "../pi-bundle-mcp-tools.js";
-import {
-  createAgentSession,
-  DefaultResourceLoader,
-  estimateTokens,
-} from "../pi-coding-agent-contract.js";
+import { createAgentSession, estimateTokens } from "../pi-coding-agent-contract.js";
 import { ensureSessionHeader } from "../pi-embedded-helpers.js";
 import { pickFallbackThinkingLevel } from "../pi-embedded-helpers.js";
 import {
