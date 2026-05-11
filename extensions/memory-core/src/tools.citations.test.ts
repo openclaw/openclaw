@@ -268,8 +268,11 @@ describe("memory tools", () => {
       });
       expect(events[0]).toMatchObject({
         type: "memory.recall.recorded",
-        query: "glacier backup",
       });
+      if (events[0]?.type !== "memory.recall.recorded") {
+        throw new Error("expected recall recorded event");
+      }
+      expect(events[0].query).toBe("glacier backup");
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
