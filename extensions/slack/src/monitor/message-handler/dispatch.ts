@@ -352,6 +352,11 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     message,
     replyToMode: prepared.replyToMode,
   });
+  const preparedMessageThreadId =
+    typeof prepared.ctxPayload.MessageThreadId === "string"
+      ? prepared.ctxPayload.MessageThreadId
+      : undefined;
+  const resolvedStatusThreadTs = statusThreadTs ?? preparedMessageThreadId;
   const sourceReplyDeliveryMode = resolveChannelMessageSourceReplyDeliveryMode({
     cfg,
     ctx: prepared.ctxPayload,
@@ -419,13 +424,15 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   const hasRepliedRef = { value: false };
   const replyPlan = createSlackReplyDeliveryPlan({
     replyToMode: prepared.replyToMode,
-    incomingThreadTs,
+    incomingThreadTs: preparedMessageThreadId ?? incomingThreadTs,
     messageTs,
     hasRepliedRef,
-    isThreadReply,
+    isThreadReply: isThreadReply || Boolean(preparedMessageThreadId),
   });
 
-  const typingTarget = statusThreadTs ? `${message.channel}/${statusThreadTs}` : message.channel;
+  const typingTarget = resolvedStatusThreadTs
+    ? `${message.channel}/${resolvedStatusThreadTs}`
+    : message.channel;
   const typingReaction = ctx.typingReaction;
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
     cfg,
@@ -441,7 +448,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         didSetStatus = true;
         await ctx.setSlackThreadStatus({
           channelId: message.channel,
-          threadTs: statusThreadTs,
+          threadTs: resolvedStatusThreadTs,
           status: "is typing...",
         });
         if (typingReaction && message.ts) {
@@ -458,7 +465,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
         didSetStatus = false;
         await ctx.setSlackThreadStatus({
           channelId: message.channel,
-          threadTs: statusThreadTs,
+          threadTs: resolvedStatusThreadTs,
           status: "",
         });
         if (typingReaction && message.ts) {
@@ -495,9 +502,9 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
   });
   const streamThreadHint = resolveSlackStreamingThreadHint({
     replyToMode: prepared.replyToMode,
-    incomingThreadTs,
+    incomingThreadTs: preparedMessageThreadId ?? incomingThreadTs,
     messageTs,
-    isThreadReply,
+    isThreadReply: isThreadReply || Boolean(preparedMessageThreadId),
   });
   const previewStreamingEnabled =
     !sourceRepliesAreToolOnly &&

@@ -3,6 +3,7 @@ import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { parseSlackBlocksInput } from "./blocks-input.js";
+import { detectSlackMissionId, resolveSlackMissionThread } from "./mission-threads.js";
 import {
   createActionGate,
   imageResultFromFile,
@@ -253,7 +254,7 @@ export async function handleSlackAction(
             "Slack replyBroadcast is only supported for text or block thread replies.",
           );
         }
-        const threadTs = resolveThreadTsFromContext(
+        let threadTs = resolveThreadTsFromContext(
           readStringParam(params, "threadTs"),
           to,
           context,
@@ -261,6 +262,21 @@ export async function handleSlackAction(
             suppressImplicitThread: params.topLevel === true || params.threadTs === null,
           },
         );
+        const missionId = detectSlackMissionId(content ?? "");
+        const targetChannelId = parseSlackTarget(to, { defaultKind: "channel" })?.id;
+        if (!threadTs && missionId) {
+          const missionThread = await resolveSlackMissionThread({
+            missionId,
+            accountId: account.accountId,
+            channelId: targetChannelId,
+          });
+          if (!missionThread?.threadTs) {
+            throw new Error(
+              "Refusing Slack top-level post: mission-bound message has no canonical thread",
+            );
+          }
+          threadTs = missionThread.threadTs;
+        }
         const sendOpts = {
           ...writeOpts,
           mediaLocalRoots: context?.mediaLocalRoots,

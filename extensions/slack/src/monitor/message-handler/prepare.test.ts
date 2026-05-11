@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import path from "node:path";
 import type { App } from "@slack/bolt";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "openclaw/plugin-sdk/channel-contract-testing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -1840,6 +1841,47 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
       team_id: "T1",
     });
     expect(prepared).toBeNull();
+  });
+
+  it("does not persist mission threads for room messages dropped before ingress accepts them", async () => {
+    const { dir } = storeFixture.makeTmpStorePath();
+    const missionStorePath = path.join(dir, "slack-mission-threads.json");
+    process.env.OPENCLAW_SLACK_MISSION_THREAD_STORE = missionStorePath;
+    try {
+      const slackCtx = createInboundSlackCtx({
+        cfg: {
+          channels: {
+            slack: {
+              enabled: true,
+              groupPolicy: "open",
+              channels: { C0AGENTS: { requireMention: true } },
+            },
+          },
+        } as OpenClawConfig,
+        defaultRequireMention: true,
+      });
+      slackCtx.resolveChannelName = async () => ({ name: "agents", type: "channel" });
+      slackCtx.resolveUserName = async () => ({ name: "Bek" });
+
+      const prepared = await prepareSlackMessage({
+        ctx: slackCtx,
+        account: createSlackAccount(),
+        message: {
+          type: "message",
+          channel: "C0AGENTS",
+          channel_type: "channel",
+          user: "U_BEK",
+          text: "Mission: dropped-before-ingress",
+          ts: "1777244692.409921",
+        } as SlackMessageEvent,
+        opts: { source: "message" },
+      });
+
+      expect(prepared).toBeNull();
+      expect(fs.existsSync(missionStorePath)).toBe(false);
+    } finally {
+      delete process.env.OPENCLAW_SLACK_MISSION_THREAD_STORE;
+    }
   });
 
   it("keeps a regex-mentioned Slack thread root and URL-only follow-up on one parent session", async () => {

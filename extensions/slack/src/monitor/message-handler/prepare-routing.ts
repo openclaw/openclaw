@@ -9,6 +9,7 @@ import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
 import { resolveSlackReplyToMode } from "../../account-reply-mode.js";
 import type { ResolvedSlackAccount } from "../../accounts.js";
+import { detectSlackMissionId } from "../../mission-threads.js";
 import { parseSlackTarget, type SlackTargetKind } from "../../targets.js";
 import { resolveSlackThreadContext } from "../../threading.js";
 import type { SlackMessageEvent } from "../../types.js";
@@ -203,6 +204,10 @@ export function resolveSlackRoutingContext(params: {
       ? seedCandidateThreadId
       : undefined;
   const roomThreadId = isThreadReply && threadTs ? threadTs : undefined;
+  const missionThreadId =
+    !isThreadReply && isRoomish && detectSlackMissionId(message.text) && threadContext.messageTs
+      ? threadContext.messageTs
+      : undefined;
   const canonicalThreadId = isDirectMessage
     ? isThreadReply
       ? threadTs
@@ -212,7 +217,8 @@ export function resolveSlackRoutingContext(params: {
       : isThreadReply
         ? threadTs
         : autoThreadId;
-  const routedThreadId = canonicalThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
+  const routedThreadId =
+    canonicalThreadId ?? missionThreadId ?? (isRoomish ? seededRoomThreadId : undefined);
   const baseConversationId = resolveSlackBaseConversationId({ message, isDirectMessage });
   const boundThreadRoute = routedThreadId
     ? resolveRuntimeConversationBindingRoute({
