@@ -19,7 +19,7 @@ See also:
 
 ### 2) Integrate upstream tag into the fork
 
-Preferred: merge or rebase the fork onto the upstream tag (choose one strategy and keep it consistent).
+Always integrate upstream via a **recursive merge** (no rebases).
 
 Output of this step: `openclaw-polytropos` `main` (or a release branch) contains upstream `<upstreamTag>` plus fork commits.
 
