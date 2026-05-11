@@ -7,114 +7,145 @@ read_when:
 title: "Tools, skills, and plugins"
 ---
 
-OpenClaw agents use **tools** to act, **skills** to learn how to act, and
-**plugins** to add new capabilities. Use this page as the map for choosing the
-right surface.
+Use this page to choose the right Capabilities surface. **Tools** are callable
+actions, **skills** teach agents how to work, and **plugins** add runtime
+capabilities such as tools, providers, channels, hooks, and packaged skills.
 
-## Choose the right surface
+This is an overview and routing page. For exhaustive tool policy, defaults,
+group membership, provider restrictions, and configuration fields, use
+[Tools and custom providers](/gateway/config-tools).
 
-| You want to                                        | Start here                                                                   |
-| -------------------------------------------------- | ---------------------------------------------------------------------------- |
-| See what agents can call                           | [Built-in tool categories](#built-in-tool-categories)                        |
-| Allow, deny, or profile tools                      | [Tools and custom providers](/gateway/config-tools)                          |
-| Configure command approvals or elevated access     | [Exec approvals](/tools/exec-approvals) and [Elevated exec](/tools/elevated) |
-| Install or manage plugins                          | [Plugins](/tools/plugin)                                                     |
-| Build a plugin capability                          | [Build plugins](/plugins/building-plugins)                                   |
-| Add or tune skills                                 | [Skills](/tools/skills) and [Creating skills](/tools/creating-skills)        |
-| Schedule or track background work                  | [Automation](/automation)                                                    |
-| Coordinate sub-agents or external harness sessions | [Sub-agents](/tools/subagents) and [ACP agents](/tools/acp-agents)           |
+## Start here
 
-## Tools, skills, and plugins
+For most agents, start with the built-in tool categories, then adjust policy
+only when the agent should see fewer tools or needs explicit host access.
 
-OpenClaw has three layers that work together:
+| If you need to...                           | Use this first                                 | Then read                                                               |
+| ------------------------------------------- | ---------------------------------------------- | ----------------------------------------------------------------------- |
+| Let an agent act with existing capabilities | [Built-in tools](#tool-categories)             | [Tool categories](#tool-categories)                                     |
+| Control what an agent can call              | [Tool policy](#configure-access-and-approvals) | [Tools and custom providers](/gateway/config-tools)                     |
+| Teach an agent a workflow                   | [Skills](#choose-tools-skills-or-plugins)      | [Skills](/tools/skills) and [Creating skills](/tools/creating-skills)   |
+| Add a new integration or runtime surface    | [Plugins](#extend-capabilities)                | [Plugins](/tools/plugin) and [Build plugins](/plugins/building-plugins) |
+| Run work later or in the background         | [Automation](/automation)                      | [Automation overview](/automation)                                      |
+| Coordinate multiple agents or harnesses     | [Sub-agents](/tools/subagents)                 | [ACP agents](/tools/acp-agents) and [Agent send](/tools/agent-send)     |
+| Search a large PI tool catalog              | [Tool Search](/tools/tool-search)              | [Tool Search](/tools/tool-search)                                       |
+
+## Choose tools, skills, or plugins
 
 <Steps>
-  <Step title="Tools are what the agent calls">
-    A tool is a typed function the agent can invoke, such as `exec`,
-    `browser`, `web_search`, `message`, or `image_generate`. OpenClaw ships
-    built-in tools, and plugins can register more.
+  <Step title="Use a tool when the agent needs to act">
+    A tool is a typed function the agent can call, such as `exec`, `browser`,
+    `web_search`, `message`, or `image_generate`. Use tools when the agent
+    needs to read data, change files, send messages, call a provider, or operate
+    another system.
 
-    The model receives tools as structured function definitions.
-
-  </Step>
-
-  <Step title="Skills teach the agent when and how">
-    A skill is a `SKILL.md` instruction pack loaded into the agent prompt.
-    Skills teach workflows, constraints, and good operating habits around tools.
-    They can live in a workspace, shared skill directory, managed OpenClaw skill
-    root, or plugin package.
-
-    [Skills reference](/tools/skills) | [Creating skills](/tools/creating-skills)
+    The model only sees tools that survive the active profile, allow/deny
+    policy, provider restrictions, sandbox state, channel permissions, and
+    plugin availability.
 
   </Step>
 
-  <Step title="Plugins package capabilities">
-    A plugin can provide tools, skills, channels, model providers, speech,
-    realtime voice, media generation, web search, web fetch, hooks, and other
-    runtime capabilities. Some plugins ship with OpenClaw, and external plugins
-    can be installed from ClawHub, npm, git, local directories, or archives.
+  <Step title="Use a skill when the agent needs instructions">
+    A skill is a `SKILL.md` instruction pack loaded into the agent prompt. Use a
+    skill when the agent already has the tools it needs, but needs a repeatable
+    workflow, review rubric, command sequence, or operating constraint.
 
-    [Install and configure plugins](/tools/plugin) | [Build your own](/plugins/building-plugins)
+    Skills can live in a workspace, shared skill directory, managed OpenClaw
+    skill root, or plugin package.
+
+    [Skills](/tools/skills) | [Creating skills](/tools/creating-skills) | [Skills config](/tools/skills-config)
+
+  </Step>
+
+  <Step title="Use a plugin when OpenClaw needs a new capability">
+    A plugin can add tools, skills, channels, model providers, speech, realtime
+    voice, media generation, web search, web fetch, hooks, and other runtime
+    capabilities. Use a plugin when the capability has code, credentials,
+    lifecycle hooks, manifest metadata, or installable packaging.
+
+    [Install and configure plugins](/tools/plugin) | [Build plugins](/plugins/building-plugins) | [Plugin SDK](/plugins/sdk-overview)
 
   </Step>
 </Steps>
 
-## Built-in tool categories
+## Tool categories
 
-These categories are available without installing external plugins. The exact
-tool list still depends on the active tool profile, allow/deny policy, provider
-restrictions, sandbox mode, and channel permissions.
+The table lists representative tools so you can recognize the surface. It is
+not the full policy reference. For exact groups, defaults, and allow/deny
+semantics, use [Tools and custom providers](/gateway/config-tools).
 
-| Category            | Common tools                                                         | What they do                                                              | More                                                                   |
-| ------------------- | -------------------------------------------------------------------- | ------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| Runtime             | `exec`, `process`, `code_execution`                                  | Run commands, manage processes, or use provider-backed Python analysis    | [Exec](/tools/exec), [Code execution](/tools/code-execution)           |
-| Files               | `read`, `write`, `edit`, `apply_patch`                               | Read and change workspace files                                           | [Apply patch](/tools/apply-patch)                                      |
-| Web                 | `web_search`, `x_search`, `web_fetch`                                | Search the web, search X posts, and fetch readable page content           | [Web tools](/tools/web), [Web fetch](/tools/web-fetch)                 |
-| Browser             | `browser`                                                            | Drive a Chromium browser for navigation, clicking, forms, and screenshots | [Browser](/tools/browser)                                              |
-| Messaging           | `message`                                                            | Send replies and channel actions across connected messaging surfaces      | [Agent send](/tools/agent-send)                                        |
-| Sessions and agents | `sessions_*`, `subagents`, `agents_list`, `session_status`           | Inspect sessions, delegate work, steer runs, and report status            | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
-| Automation          | `cron`, `heartbeat_respond`                                          | Schedule and respond to background work                                   | [Automation](/automation)                                              |
-| Gateway and nodes   | `gateway`, `nodes`                                                   | Inspect or update the Gateway and target paired devices                   | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
-| Media               | `image`, `image_generate`, `music_generate`, `video_generate`, `tts` | Analyze, generate, or speak media                                         | [Media overview](/tools/media-overview)                                |
+| Category               | Use when the agent needs to...                                                | Representative tools                                        | Read next                                                              |
+| ---------------------- | ----------------------------------------------------------------------------- | ----------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Runtime and files      | Run commands, manage processes, or read and edit workspaces                   | `exec`, `process`, `read`, `write`, `apply_patch`           | [Exec](/tools/exec), [Apply patch](/tools/apply-patch)                 |
+| Web and browser        | Search, fetch pages, or operate a browser session                             | `web_search`, `web_fetch`, `browser`                        | [Web tools](/tools/web), [Browser](/tools/browser)                     |
+| Messaging and channels | Send replies or channel actions                                               | `message`                                                   | [Agent send](/tools/agent-send)                                        |
+| Sessions and agents    | Inspect sessions, delegate work, or steer another run                         | `session_status`, `subagents`, `agents_list`                | [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool) |
+| Automation             | Schedule work or respond to background events                                 | `cron`, `heartbeat_respond`                                 | [Automation](/automation)                                              |
+| Gateway and nodes      | Inspect Gateway state or paired target devices                                | `gateway`, `nodes`                                          | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)       |
+| Media                  | Analyze, generate, or speak media                                             | `image_generate`, `music_generate`, `video_generate`, `tts` | [Media overview](/tools/media-overview)                                |
+| Large PI catalogs      | Search and call many eligible tools without sending every schema to the model | `tool_search_code`, `tool_search`, `tool_describe`          | [Tool Search](/tools/tool-search)                                      |
 
-For policy and configuration details, use [Tools and custom providers](/gateway/config-tools). That page is the canonical reference for tool profiles, tool groups, allow/deny lists, provider-specific restrictions, loop detection, and provider-backed tool settings.
+<Note>
+Tool Search is an experimental PI-agent surface. Codex harness runs use
+Codex-native code mode, native tool search, deferred dynamic tools, and nested
+tool calls instead of `tools.toolSearch`.
+</Note>
 
-## Plugin-provided tools
+## Configure access and approvals
 
-Plugins can register additional tools with `api.registerTool(...)` and declare
-them in the plugin manifest's `contracts.tools` list. OpenClaw captures the
-validated descriptor during discovery so tool planning can use cached metadata;
-tool execution still loads the owning plugin and calls the live implementation.
+Tool policy is enforced before the model call. If policy removes a tool, the
+model does not receive that tool's schema for the turn.
 
-Common plugin-provided tools include:
+- [Tools and custom providers](/gateway/config-tools) documents tool profiles,
+  allow/deny lists, provider-specific restrictions, loop detection, and
+  provider-backed tool settings.
+- [Exec approvals](/tools/exec-approvals) documents host command approval
+  policy.
+- [Elevated exec](/tools/elevated) documents controlled execution outside the
+  sandbox.
+- [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) explains which layer controls file and process access.
+- [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools)
+  documents agent-specific restrictions for delegated runs.
 
-- [Diffs](/tools/diffs) for rendering file and markdown diffs
-- [LLM Task](/tools/llm-task) for JSON-only workflow steps
-- [Lobster](/tools/lobster) for typed workflows with resumable approvals
-- [Tokenjuice](/tools/tokenjuice) for compacting noisy tool output
-- [Tool Search](/tools/tool-search) for searching and calling large tool catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for node Canvas control and A2UI rendering
+## Extend capabilities
 
-## Tool policy
+Choose the extension path by the job you need OpenClaw to do:
 
-Tool policy is enforced before the model call. A run can lose tools because of
-global config, per-agent config, channel policy, provider restrictions, sandbox
-rules, owner-only gating, or plugin availability.
+- Install or manage an existing plugin with [Plugins](/tools/plugin).
+- Build a new integration, provider, channel, tool, or hook with
+  [Build plugins](/plugins/building-plugins).
+- Add or tune reusable agent instructions with [Skills](/tools/skills) and
+  [Creating skills](/tools/creating-skills).
+- Package reusable workflow material with
+  [Skill workshop](/plugins/skill-workshop) when the workflow belongs in a
+  plugin-distributed skill bundle.
+- Use [Plugin SDK](/plugins/sdk-overview) and [Plugin manifest](/plugins/manifest) when you need implementation contracts.
 
-Use these references when you need to change policy rather than just understand
-the available surfaces:
+## Troubleshoot missing tools
 
-- [Tools and custom providers](/gateway/config-tools) for `tools.*` profiles,
-  groups, allow/deny lists, loop detection, and provider-backed tool settings
-- [Exec approvals](/tools/exec-approvals) for host command approval policy
-- [Elevated exec](/tools/elevated) for controlled access outside sandboxed runs
-- [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) for how sandboxing and tool policy differ
-- [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools) for sub-agent and agent-specific restrictions
+If the model cannot see or call a tool, start with the effective policy for the
+current turn:
+
+1. Check the active profile, `tools.allow`, and `tools.deny` in
+   [Tools and custom providers](/gateway/config-tools).
+2. Check provider-specific restrictions in
+   [Tools and custom providers](/gateway/config-tools) and confirm the selected
+   [model provider](/concepts/model-providers) supports the tool shape.
+3. Check channel permissions, sandbox state, and elevated access with
+   [Sandbox vs tool policy vs elevated](/gateway/sandbox-vs-tool-policy-vs-elevated) and [Elevated exec](/tools/elevated).
+4. Check whether the owning plugin is installed and enabled in
+   [Plugins](/tools/plugin).
+5. For delegated runs, check per-agent restrictions in
+   [Per-agent sandbox and tool restrictions](/tools/multi-agent-sandbox-tools).
+6. For large PI catalogs, confirm whether the run uses direct tool exposure or
+   [Tool Search](/tools/tool-search).
 
 ## Related
 
 - [Automation](/automation) for cron, tasks, heartbeat, commitments, hooks, standing orders, and Task Flow
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and multi-agent coordination
+- [Tools and custom providers](/gateway/config-tools) for the canonical tool policy reference
 - [Plugins](/tools/plugin) for plugin installation and management
 - [Plugin SDK](/plugins/sdk-overview) for plugin author reference
 - [Skills](/tools/skills) for skill load order, gating, and config
+- [Tool Search](/tools/tool-search) for compact PI tool catalog discovery
