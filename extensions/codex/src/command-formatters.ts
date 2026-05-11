@@ -109,7 +109,7 @@ export function formatAccount(
   const formattedLimits = limits.ok
     ? formatCodexRateLimitDetails(limits.value)
     : formatCodexDisplayText(limits.error);
-  const rateLimitBlock = formattedLimits.startsWith("Codex usage:")
+  const rateLimitBlock = formattedLimits.startsWith("Codex is ")
     ? formattedLimits
     : formattedLimits.includes("\n")
       ? `Rate limits:\n${formattedLimits}`

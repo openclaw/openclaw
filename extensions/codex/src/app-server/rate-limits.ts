@@ -82,29 +82,14 @@ export function summarizeCodexAccountRateLimits(
   const blockingSnapshot =
     blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
   if (!blockingSnapshot) {
-    return ["Codex usage: available"];
+    return ["Codex is available."];
   }
-  const blockingLabel = formatLimitLabel(blockingSnapshot);
   const blockingReset = selectSnapshotBlockingReset(blockingSnapshot, nowMs);
-  const otherBlockedLabels = snapshots
-    .filter((snapshot) => snapshot !== blockingSnapshot)
-    .filter(snapshotHasLimitBlock)
-    .slice(0, 4)
-    .map(formatLimitLabel);
   return [
-    "Codex usage: blocked",
-    ...(blockingReset
-      ? [`Resets: ${formatAccountResetTime(blockingReset.resetsAtMs, nowMs)}`]
-      : []),
-    `Bucket: ${blockingLabel} - usage bucket, not model name`,
-    ...formatBlockingReason(blockingSnapshot),
-    ...(otherBlockedLabels.length > 0
-      ? [
-          `${otherBlockedLabels.length === 1 ? "Other blocked bucket" : "Other blocked buckets"}: ${joinHumanList(
-            otherBlockedLabels,
-          )}.`,
-        ]
-      : []),
+    blockingReset
+      ? `Codex is paused until ${formatAccountResetTime(blockingReset.resetsAtMs, nowMs)}.`
+      : "Codex is paused by a usage limit.",
+    formatBlockingLimitReason(blockingReset),
   ];
 }
 
@@ -314,9 +299,9 @@ function formatResetTime(resetsAtMs: number, nowMs: number): string {
 }
 
 function formatAccountResetTime(resetsAtMs: number, nowMs: number): string {
-  return `${formatCalendarResetTime(resetsAtMs, nowMs)}, in ${formatRelativeDuration(
+  return `${formatCalendarResetTime(resetsAtMs, nowMs)} (in ${formatRelativeDuration(
     resetsAtMs - nowMs,
-  )}`;
+  )})`;
 }
 
 function snapshotHasLimitBlock(snapshot: JsonObject): boolean {
@@ -349,19 +334,6 @@ function selectSnapshotBlockingReset(
   return candidates[0];
 }
 
-function formatBlockingReason(snapshot: JsonObject): string[] {
-  const entries = readWindowEntries(snapshot);
-  if (entries.length === 0) {
-    return [];
-  }
-  const details = entries
-    .toSorted(compareWindowEntries)
-    .map(
-      (entry) => `${formatWindowName(entry, entries)} is at ${formatWindowPercent(entry.window)}`,
-    );
-  return details.length > 0 ? [`Why: ${details.join("; ")}.`] : [];
-}
-
 function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
   return LIMIT_WINDOW_KEYS.flatMap((key) => {
     const window = readRateLimitWindow(snapshot, key);
@@ -369,45 +341,24 @@ function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
   });
 }
 
-function compareWindowEntries(left: RateLimitWindowEntry, right: RateLimitWindowEntry): number {
-  return (
-    (right.window.windowDurationMins ?? 0) - (left.window.windowDurationMins ?? 0) ||
-    (right.window.resetsAtMs ?? 0) - (left.window.resetsAtMs ?? 0)
-  );
+function formatBlockingLimitReason(window: RateLimitReset | undefined): string {
+  const period = formatBlockingLimitPeriod(window?.windowDurationMins);
+  return period
+    ? `Your ${period} Codex usage limit is reached.`
+    : "Your Codex usage limit is reached.";
 }
 
-function formatWindowName(entry: RateLimitWindowEntry, entries: RateLimitWindowEntry[]): string {
-  if (entry.window.windowDurationMins !== undefined) {
-    return `${formatWindowDuration(entry.window.windowDurationMins)} window`;
+function formatBlockingLimitPeriod(minutes: number | undefined): string | undefined {
+  if (minutes === 7 * 24 * 60) {
+    return "weekly";
   }
-  if (entries.length <= 1) {
-    return "Usage window";
+  if (minutes === 24 * 60) {
+    return "daily";
   }
-  const sorted = entries.toSorted(compareWindowEntries);
-  return sorted[0] === entry ? "Longer window" : "Shorter window";
-}
-
-function formatWindowDuration(minutes: number): string {
-  if (minutes >= 24 * 60 && minutes % (24 * 60) === 0) {
-    const days = minutes / (24 * 60);
-    return `${days}-day`;
+  if (minutes !== undefined && minutes > 0 && minutes < 24 * 60) {
+    return "short-term";
   }
-  if (minutes >= 60 && minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `${hours}-hour`;
-  }
-  return `${minutes}-minute`;
-}
-
-function formatWindowPercent(window: RateLimitReset): string {
-  return window.usedPercent === undefined ? "unknown usage" : `${Math.round(window.usedPercent)}%`;
-}
-
-function joinHumanList(values: string[]): string {
-  if (values.length <= 2) {
-    return values.join(values.length === 2 ? " and " : "");
-  }
-  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+  return undefined;
 }
 
 function formatCalendarResetTime(resetsAtMs: number, nowMs: number): string {
