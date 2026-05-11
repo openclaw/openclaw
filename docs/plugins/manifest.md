@@ -124,6 +124,16 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
       "onboardingScopes": ["text-inference"]
     }
   ],
+  "authRequirements": [
+    {
+      "id": "openrouter-api-key",
+      "kind": "provider",
+      "provider": "openrouter",
+      "authMethods": ["api-key"],
+      "envVars": ["OPENROUTER_API_KEY"],
+      "setupRefs": ["providerAuthChoices:openrouter-api-key"]
+    }
+  ],
   "uiHints": {
     "apiKey": {
       "label": "API key",
@@ -173,6 +183,7 @@ or npm install metadata. Those belong in your plugin code and `package.json`.
 | `providerAuthChoices`                | No       | `object[]`                       | Cheap auth-choice metadata for onboarding pickers, preferred-provider resolution, and simple CLI flag wiring.                                                                                                                       |
 | `activation`                         | No       | `object`                         | Cheap activation planner metadata for startup, provider, command, channel, route, and capability-triggered loading. Metadata only; plugin runtime still owns actual behavior.                                                       |
 | `setup`                              | No       | `object`                         | Cheap setup/onboarding descriptors that discovery and setup surfaces can inspect without loading plugin runtime.                                                                                                                    |
+| `authRequirements`                   | No       | `object[]`                       | Declarative auth requirements for install, setup, and test planners. Use this to describe provider credentials, channel accounts, external services, and host runtime capabilities without loading plugin runtime.                  |
 | `qaRunners`                          | No       | `object[]`                       | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                      |
 | `contracts`                          | No       | `object`                         | Static capability ownership snapshot for external auth hooks, speech, realtime transcription, realtime voice, media-understanding, image-generation, music-generation, video-generation, web-fetch, web search, and tool ownership. |
 | `mediaUnderstandingProviderMetadata` | No       | `Record<string, object>`         | Cheap media-understanding defaults for provider ids declared in `contracts.mediaUnderstandingProviders`.                                                                                                                            |
@@ -320,6 +331,65 @@ If a tool has no `toolMetadata`, OpenClaw preserves the existing behavior and
 loads the owning plugin when the tool contract matches policy. For hot-path
 tools whose factory depends on auth/config, plugin authors should declare
 `toolMetadata` instead of making core import runtime to ask.
+
+## authRequirements reference
+
+Use `authRequirements` when a plugin needs an install, setup, or test planner to
+understand the auth it will need without executing plugin code. This is a
+metadata contract only. It does not grant credentials, validate tokens, or
+replace plugin runtime auth checks.
+
+The field is optional and additive. Existing plugins that only declare
+`setup.providers`, `providerAuthChoices`, deprecated `providerAuthEnvVars`, or
+`channelEnvVars` continue to work; generic planners can derive compatibility
+hints from those older fields while plugins migrate to explicit
+`authRequirements`.
+
+```json
+{
+  "authRequirements": [
+    {
+      "id": "host-structured-llm",
+      "kind": "host-capability",
+      "capability": "runtime.llm.completeStructured",
+      "description": "Uses the user's configured model auth for structured analysis.",
+      "mockable": true
+    },
+    {
+      "id": "slack-bot-token",
+      "kind": "channel-account",
+      "channel": "slack",
+      "envVars": ["SLACK_BOT_TOKEN"],
+      "setupRefs": ["channelEnvVars:slack"]
+    }
+  ]
+}
+```
+
+| Field         | Required | Type                                                                                                                         | What it means                                                                                                      |
+| ------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `id`          | Yes      | `string`                                                                                                                     | Stable requirement id used by setup, install, and test planners.                                                   |
+| `kind`        | Yes      | `"host-capability"` \| `"provider"` \| `"oauth"` \| `"api-key"` \| `"secret"` \| `"channel-account"` \| `"external-service"` | Broad requirement family.                                                                                          |
+| `label`       | No       | `string`                                                                                                                     | User-facing short label for setup surfaces.                                                                        |
+| `description` | No       | `string`                                                                                                                     | Human-readable explanation of why the credential or capability is needed.                                          |
+| `capability`  | No       | `string`                                                                                                                     | Host runtime capability that can satisfy the requirement, for example `runtime.llm.completeStructured`.            |
+| `provider`    | No       | `string`                                                                                                                     | Provider id that owns the credential or auth choice.                                                               |
+| `channel`     | No       | `string`                                                                                                                     | Channel id that owns the account credential.                                                                       |
+| `service`     | No       | `string`                                                                                                                     | External service name when the requirement is not a model provider or channel.                                     |
+| `authMethods` | No       | `string[]`                                                                                                                   | Setup/auth method ids, such as `api-key`, `oauth`, or provider-specific method ids.                                |
+| `scopes`      | No       | `string[]`                                                                                                                   | OAuth scopes or planner scopes needed by this requirement.                                                         |
+| `envVars`     | No       | `string[]`                                                                                                                   | Environment variables that can satisfy or signal this requirement without loading runtime.                         |
+| `configPaths` | No       | `string[]`                                                                                                                   | Config paths that can satisfy or signal this requirement.                                                          |
+| `secretRefs`  | No       | `string[]`                                                                                                                   | SecretRef surfaces or credential buckets relevant to this requirement.                                             |
+| `setupRefs`   | No       | `string[]`                                                                                                                   | Links to related manifest setup descriptors, such as `setup.providers:openai` or `providerAuthChoices:openai-key`. |
+| `optional`    | No       | `boolean`                                                                                                                    | Whether the plugin can run without this requirement.                                                               |
+| `mockable`    | No       | `boolean`                                                                                                                    | Whether automated benches can replace this requirement with a mock or fixture.                                     |
+| `manual`      | No       | `boolean`                                                                                                                    | Whether setup requires a manual out-of-band step that a planner should surface instead of auto-configuring.        |
+
+Use `kind: "host-capability"` when the plugin should rely on the user's
+existing OpenClaw runtime auth instead of asking for a plugin-owned provider
+secret. Use provider, channel, OAuth, API-key, secret, or external-service
+requirements when the plugin owns a credential surface of its own.
 
 ## providerAuthChoices reference
 
@@ -526,6 +596,10 @@ OpenClaw can also derive simple setup choices from `setup.providers[].authMethod
 when no setup entry is available, or when `setup.requiresRuntime: false`
 declares setup runtime unnecessary. Explicit `providerAuthChoices` entries stay
 preferred for custom labels, CLI flags, onboarding scope, and assistant metadata.
+Install and test planners can also derive compatibility auth requirements from
+`setup.providers`, `providerAuthChoices`, deprecated `providerAuthEnvVars`, and
+`channelEnvVars`, but new plugins should declare explicit `authRequirements`
+when they need a stable modular auth plan.
 
 Set `requiresRuntime: false` only when those descriptors are sufficient for the
 setup surface. OpenClaw treats explicit `false` as a descriptor-only contract
@@ -1340,6 +1414,7 @@ See [Configuration reference](/gateway/configuration) for the full `plugins.*` s
 - Exclusive plugin kinds are selected through `plugins.slots.*`: `kind: "memory"` via `plugins.slots.memory`, `kind: "context-engine"` via `plugins.slots.contextEngine` (default `legacy`).
 - Declare exclusive plugin kind in this manifest. Runtime-entry `OpenClawPluginDefinition.kind` is deprecated and remains only as a compatibility fallback for older plugins.
 - Env-var metadata (`setup.providers[].envVars`, deprecated `providerAuthEnvVars`, and `channelEnvVars`) is declarative only. Status, audit, cron delivery validation, and other read-only surfaces still apply plugin trust and effective activation policy before treating an env var as configured.
+- `authRequirements` is also declarative only. It lets setup, install, and test planners prepare an auth plan before runtime loads, but runtime still enforces its own credential checks.
 - For runtime wizard metadata that requires provider code, see [Provider runtime hooks](/plugins/architecture-internals#provider-runtime-hooks).
 - If your plugin depends on native modules, document the build steps and any package-manager allowlist requirements (for example, pnpm `allow-build-scripts` + `pnpm rebuild <package>`).
 
