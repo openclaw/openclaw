@@ -987,6 +987,86 @@ describe("codex command", () => {
     );
   });
 
+  it("does not report a blocked last-good subscription as active", async () => {
+    const config = {};
+    const now = Date.now();
+    const primaryResetSeconds = Math.ceil(now / 1000) + 5 * 60 * 60;
+    const secondaryResetSeconds = Math.ceil(now / 1000) + 23 * 60 * 60;
+    installAuthProfileStore(
+      {
+        version: 1,
+        profiles: {
+          "openai:personal-email@gmail.com": {
+            type: "oauth",
+            provider: "openai-codex",
+            access: "access-token",
+            refresh: "refresh-token",
+            expires: now + 60 * 60 * 1000,
+            email: "personal-email@gmail.com",
+          },
+          "openai:api-key-backup": {
+            type: "api_key",
+            provider: "openai",
+            key: "sk-test-backup",
+          },
+        },
+        order: {
+          openai: ["openai:personal-email@gmail.com", "openai:api-key-backup"],
+        },
+        lastGood: {
+          openai: "openai:personal-email@gmail.com",
+        },
+        usageStats: {
+          "openai:personal-email@gmail.com": {
+            lastUsed: now - 1_000,
+            blockedUntil: now + 23 * 60 * 60 * 1000,
+          },
+        },
+      },
+      config,
+    );
+
+    const safeCodexControlRequest = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        value: {
+          account: { type: "unknown" },
+          requiresOpenaiAuth: true,
+        },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        error: "chatgpt authentication required to read rate limits",
+      })
+      .mockResolvedValueOnce({
+        ok: true,
+        value: codexRateLimitPayload({
+          primaryUsedPercent: 0,
+          secondaryUsedPercent: 100,
+          primaryResetSeconds,
+          secondaryResetSeconds,
+          reached: true,
+        }),
+      });
+
+    const result = await handleCodexCommand(createContext("account", undefined, { config }), {
+      deps: createDeps({ safeCodexControlRequest }),
+    });
+
+    expect(result.text).toContain("Now using: api-key-backup");
+    expect(result.text).toContain("subscription rate-limited");
+    expect(result.text).toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+    );
+    expect(result.text).toContain(
+      "\n  2. api-key-backup   API key   — active now \u00b7 billed per token",
+    );
+    expect(result.text).not.toContain(
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+    );
+  });
+
   it("escapes successful Codex account fallback summaries before chat display", async () => {
     const unsafe = "<@U123> [trusted](https://evil) @here";
     const safeCodexControlRequest = vi

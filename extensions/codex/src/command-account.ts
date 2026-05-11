@@ -74,6 +74,7 @@ export async function readCodexAccountAuthOverview(params: {
     config,
     account: params.account,
     limits: params.limits,
+    now,
   });
   const subscriptionProfileId = order.find((profileId) =>
     isChatGptSubscriptionProfile(store.profiles[profileId]),
@@ -166,6 +167,7 @@ function resolveActiveProfileId(params: {
   config: AuthProfileOrderConfig;
   account: SafeValue<JsonValue | undefined>;
   limits: SafeValue<JsonValue | undefined>;
+  now: number;
 }): string | undefined {
   const liveProfileId = resolveLiveAccountProfileId({
     account: params.account,
@@ -178,7 +180,12 @@ function resolveActiveProfileId(params: {
   const lastGood = [
     params.store.lastGood?.[OPENAI_PROVIDER_ID],
     params.store.lastGood?.[OPENAI_CODEX_PROVIDER_ID],
-  ].find((profileId): profileId is string => !!profileId && params.order.includes(profileId));
+  ].find(
+    (profileId): profileId is string =>
+      !!profileId &&
+      params.order.includes(profileId) &&
+      isActiveProfileCandidate(params, profileId),
+  );
   if (lastGood) {
     return lastGood;
   }
@@ -187,7 +194,7 @@ function resolveActiveProfileId(params: {
       profileId,
       lastUsed: params.store.usageStats?.[profileId]?.lastUsed ?? 0,
     }))
-    .filter((entry) => entry.lastUsed > 0)
+    .filter((entry) => entry.lastUsed > 0 && isActiveProfileCandidate(params, entry.profileId))
     .toSorted((left, right) => right.lastUsed - left.lastUsed)[0]?.profileId;
   if (mostRecent) {
     return mostRecent;
@@ -205,6 +212,14 @@ function resolveActiveProfileId(params: {
     store: params.store,
     provider: OPENAI_CODEX_PROVIDER_ID,
   })[0];
+}
+
+function isActiveProfileCandidate(
+  params: { store: AuthProfileStore; now: number },
+  profileId: string,
+): boolean {
+  const unusableUntil = resolveProfileUnusableUntilForDisplay(params.store, profileId);
+  return !isActiveUntil(unusableUntil ?? undefined, params.now);
 }
 
 function resolveLiveAccountProfileId(params: {
