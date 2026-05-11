@@ -1,6 +1,7 @@
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.openclaw.js";
 
 const PLUGIN_ENTRY_PATH_PREFIX = "plugins.entries.";
+const PLUGIN_POLICY_PATHS = new Set(["plugins.allow", "plugins.deny"]);
 
 function isPluginEntryIssue(issue: ConfigValidationIssue): boolean {
   const path = issue.path.trim();
@@ -10,8 +11,12 @@ function isPluginEntryIssue(issue: ConfigValidationIssue): boolean {
   return path.slice(PLUGIN_ENTRY_PATH_PREFIX.length).trim().length > 0;
 }
 
+function isPluginPolicyIssue(issue: ConfigValidationIssue): boolean {
+  return PLUGIN_POLICY_PATHS.has(issue.path.trim());
+}
+
 /**
- * Returns true when an invalid config snapshot is scoped entirely to plugin entries.
+ * Returns true when an invalid config snapshot is scoped entirely to stale plugin refs.
  */
 export function isPluginLocalInvalidConfigSnapshot(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "legacyIssues">,
@@ -19,7 +24,7 @@ export function isPluginLocalInvalidConfigSnapshot(
   if (snapshot.valid || snapshot.legacyIssues.length > 0 || snapshot.issues.length === 0) {
     return false;
   }
-  return snapshot.issues.every(isPluginEntryIssue);
+  return snapshot.issues.every((issue) => isPluginEntryIssue(issue) || isPluginPolicyIssue(issue));
 }
 
 /**

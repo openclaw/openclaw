@@ -17,7 +17,7 @@ function snapshot(params: Partial<PolicySnapshot>): PolicySnapshot {
 }
 
 describe("config recovery policy", () => {
-  it("skips whole-file recovery for issues scoped only to plugin entries", () => {
+  it("skips whole-file recovery for issues scoped only to stale plugin refs", () => {
     const current = snapshot({
       issues: [
         {
@@ -27,6 +27,14 @@ describe("config recovery policy", () => {
         {
           path: "plugins.entries.lossless-claw.config.cacheAwareCompaction",
           message: "invalid config: must NOT have additional properties",
+        },
+        {
+          path: "plugins.allow",
+          message: "plugin not found: acpx",
+        },
+        {
+          path: "plugins.deny",
+          message: "plugin not found: missing-deny",
         },
       ],
     });
