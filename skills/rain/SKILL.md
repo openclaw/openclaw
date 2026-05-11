@@ -56,21 +56,31 @@ directly. The MCP is the only path.
 
 ## Buy flow (`rain_build_buy` → wallet sign-tx)
 
-1. **Confirm the three inputs with the user** before calling the tool:
+1. **Confirm the four inputs with the user** before calling the tool:
    - exact market contract address (from `rain_get_market` →
      `details.contractAddress`)
    - option index (`details.options[N].choiceIndex`)
    - amount in the market's base token (compute using
      `details.baseTokenDecimals` — do NOT assume USDT or 6 decimals)
-2. Call `rain_build_buy`. The response includes a `walletRequest`.
+   - agent wallet address (`ownerAddress`) — always pass this so the server
+     can determine approval requirements deterministically
+2. Call `rain_build_buy` with all four fields. The response includes:
+   - `walletRequest` — the buy transaction
+   - `prerequisiteTxs[]` — ordered list of transactions to execute first
+     (empty if no approval needed); each entry has `action` and `walletRequest`
+   - `approvalChecked` — true when the server successfully verified allowance
+   - `approvalMayBeRequired` — true only when `approvalChecked` is false
+     (server could not verify); in this case warn the user
 3. **Show the user the full preview** before any signing:
    - market title, option label, amount in human terms, base token
-   - `approvalMayBeRequired` — if true, an ERC-20 approve tx may precede
-     the buy; warn the user that they'll see two signing prompts
+   - if `prerequisiteTxs` is non-empty: explain that an ERC-20 approve tx
+     must be signed first (two signing prompts)
+   - if `approvalMayBeRequired` is true (fallback): warn that approval may
+     be needed
 4. Ask explicit confirmation. Never proceed on a vague instruction like
-   "buy some" — get all three parameters and an explicit "yes" first.
-5. On confirmation, pass `walletRequest` to the wallet skill's `sign-tx`
-   tool. Report the transaction hash and an Arbiscan link.
+   "buy some" — get all parameters and an explicit "yes" first.
+5. On confirmation: execute `prerequisiteTxs` in order via wallet `sign-tx`,
+   then execute the main `walletRequest`. Report all transaction hashes.
 
 ## Claim flow (`rain_build_claim` → wallet sign-tx)
 

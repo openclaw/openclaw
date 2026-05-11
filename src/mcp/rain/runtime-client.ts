@@ -94,6 +94,7 @@ export class RainRuntimeClient {
     marketContractAddress: string;
     selectedOption: number;
     buyAmountInWei: string;
+    ownerAddress?: string;
   }): Promise<unknown> {
     return this.post("/api/runtime/rain/build-buy", body);
   }

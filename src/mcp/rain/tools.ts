@@ -132,7 +132,9 @@ export const RAIN_TOOLS: ToolDef[] = [
   {
     name: "rain_build_buy",
     description:
-      "Build a buy-option transaction preview. Returns rawTx + walletRequest for the user-approved wallet sign-tx call. approvalMayBeRequired: true means an ERC-20 approve may need to precede the buy.",
+      "Build a buy-option transaction preview. Returns rawTx + walletRequest for the user-approved wallet sign-tx call. " +
+      "Pass ownerAddress (the agent wallet address) to get a deterministic prerequisiteTxs[] list: if the base-token allowance is insufficient an erc20_approve walletRequest is included that must be executed before the buy. " +
+      "Without ownerAddress, approvalMayBeRequired: true is returned and the agent must check allowance separately.",
     inputSchema: {
       type: "object",
       properties: {
@@ -152,6 +154,12 @@ export const RAIN_TOOLS: ToolDef[] = [
           description:
             "Buy amount in the market's base token's smallest unit, as a string-encoded integer > 0. Read details.baseTokenDecimals from rain_get_market first — markets are not all USDT.",
         },
+        ownerAddress: {
+          type: "string",
+          pattern: "^0x[a-fA-F0-9]{40}$",
+          description:
+            "Agent wallet address. When provided, the server checks ERC-20 allowance and populates prerequisiteTxs[] with an erc20_approve entry if approval is needed.",
+        },
       },
       required: ["marketContractAddress", "selectedOption", "buyAmountInWei"],
       additionalProperties: false,
@@ -161,6 +169,7 @@ export const RAIN_TOOLS: ToolDef[] = [
         marketContractAddress: asString(args.marketContractAddress),
         selectedOption: asNumber(args.selectedOption),
         buyAmountInWei: asString(args.buyAmountInWei),
+        ownerAddress: args.ownerAddress != null ? asString(args.ownerAddress) : undefined,
       }),
   },
   {
