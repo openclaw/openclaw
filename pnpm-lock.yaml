@@ -155,6 +155,9 @@ importers:
       qrcode:
         specifier: 1.5.4
         version: 1.5.4
+      quickjs-wasi:
+        specifier: ^2.2.0
+        version: 2.2.0
       tar:
         specifier: 7.5.15
         version: 7.5.15
