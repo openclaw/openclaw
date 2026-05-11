@@ -31,7 +31,8 @@ The tool accepts a single `input` string that wraps one or more file operations:
 ## Notes
 
 - Patch paths support relative paths (from the workspace directory) and absolute paths.
-- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- `apply_patch` is workspace-contained by default. Set `tools.exec.applyPatch.workspaceOnly` to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- When this setting is unset and `tools.exec.security` is `full` and `tools.exec.ask` is `off`, `apply_patch` inherits that no-approval host-write authority instead of requiring a separate `workspaceOnly: false` setting. Set `tools.exec.applyPatch.workspaceOnly: true`, or `tools.fs.workspaceOnly: true`, to keep it inside the workspace.
 - Use `*** Move to:` within an `*** Update File:` hunk to rename files.
 - `*** End of File` marks an EOF-only insert when needed.
 - Available by default for OpenAI and OpenAI Codex models. Set

@@ -49,7 +49,12 @@ describe("Agent-specific tool filtering", () => {
   }
 
   async function withApplyPatchEscapeCase(
-    opts: { workspaceOnly?: boolean },
+    opts: {
+      workspaceOnly?: boolean;
+      fsWorkspaceOnly?: boolean;
+      execSecurity?: "deny" | "allowlist" | "full";
+      execAsk?: "off" | "on-miss" | "always";
+    },
     run: (params: {
       applyPatchTool: ToolWithExecute;
       escapedPath: string;
@@ -64,11 +69,18 @@ describe("Agent-specific tool filtering", () => {
     const relativeEscape = path.relative(workspaceDir, escapedPath);
 
     try {
+      const applyPatchConfig =
+        opts.workspaceOnly === undefined ? {} : { workspaceOnly: opts.workspaceOnly };
       const cfg: OpenClawConfig = {
         tools: {
           allow: ["read", "write", "exec"],
+          ...(opts.fsWorkspaceOnly === undefined
+            ? {}
+            : { fs: { workspaceOnly: opts.fsWorkspaceOnly } }),
           exec: {
-            applyPatch: opts.workspaceOnly === false ? { workspaceOnly: false } : {},
+            ...(opts.execSecurity === undefined ? {} : { security: opts.execSecurity }),
+            ...(opts.execAsk === undefined ? {} : { ask: opts.execAsk }),
+            applyPatch: applyPatchConfig,
           },
         },
       };
@@ -233,6 +245,65 @@ describe("Agent-specific tool filtering", () => {
         await applyPatchTool.execute("tc2", { input: patch });
         const contents = await fs.readFile(escapedPath, "utf8");
         expect(contents).toBe("escaped\n");
+      },
+    );
+  });
+
+  it("inherits no-approval full exec authority for apply_patch paths", async () => {
+    await withApplyPatchEscapeCase(
+      { execSecurity: "full", execAsk: "off" },
+      async ({ applyPatchTool, escapedPath, patch }) => {
+        await applyPatchTool.execute("tc-full-exec", { input: patch });
+        const contents = await fs.readFile(escapedPath, "utf8");
+        expect(contents).toBe("escaped\n");
+      },
+    );
+  });
+
+  it("keeps apply_patch workspace-only when full exec still requires approval", async () => {
+    await withApplyPatchEscapeCase(
+      { execSecurity: "full", execAsk: "on-miss" },
+      async ({ applyPatchTool, escapedPath, patch }) => {
+        await expect(
+          applyPatchTool.execute("tc-full-exec-approval", { input: patch }),
+        ).rejects.toThrow(/Path escapes sandbox root/);
+        const readError = await fs.readFile(escapedPath, "utf8").then(
+          () => undefined,
+          (err: NodeJS.ErrnoException) => err,
+        );
+        expect(readError?.code).toBe("ENOENT");
+      },
+    );
+  });
+
+  it("keeps tools.fs.workspaceOnly as an umbrella guard for apply_patch", async () => {
+    await withApplyPatchEscapeCase(
+      { execSecurity: "full", execAsk: "off", fsWorkspaceOnly: true },
+      async ({ applyPatchTool, escapedPath, patch }) => {
+        await expect(
+          applyPatchTool.execute("tc-full-exec-fs-guard", { input: patch }),
+        ).rejects.toThrow(/Path escapes sandbox root/);
+        const readError = await fs.readFile(escapedPath, "utf8").then(
+          () => undefined,
+          (err: NodeJS.ErrnoException) => err,
+        );
+        expect(readError?.code).toBe("ENOENT");
+      },
+    );
+  });
+
+  it("honors an explicit apply_patch workspace-only setting in full exec mode", async () => {
+    await withApplyPatchEscapeCase(
+      { workspaceOnly: true, execSecurity: "full", execAsk: "off" },
+      async ({ applyPatchTool, escapedPath, patch }) => {
+        await expect(
+          applyPatchTool.execute("tc-full-exec-explicit-apply-patch-guard", { input: patch }),
+        ).rejects.toThrow(/Path escapes sandbox root/);
+        const readError = await fs.readFile(escapedPath, "utf8").then(
+          () => undefined,
+          (err: NodeJS.ErrnoException) => err,
+        );
+        expect(readError?.code).toBe("ENOENT");
       },
     );
   });

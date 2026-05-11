@@ -311,7 +311,8 @@ export type ExecToolConfig = {
     enabled?: boolean;
     /**
      * Restrict apply_patch paths to the workspace directory.
-     * Default: true (safer; does not affect read/write/edit).
+     * Default: true (safer; does not affect read/write/edit), except
+     * configured no-approval full exec mode inherits host-write authority.
      */
     workspaceOnly?: boolean;
     /**

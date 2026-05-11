@@ -670,7 +670,7 @@ export const FIELD_HELP: Record<string, string> = {
   "tools.exec.applyPatch.enabled":
     "Enable or disable apply_patch for OpenAI and OpenAI Codex models when allowed by tool policy (default: true).",
   "tools.exec.applyPatch.workspaceOnly":
-    "Restrict apply_patch paths to the workspace directory (default: true). Set false to allow writing outside the workspace (dangerous).",
+    "Restrict apply_patch paths to the workspace directory (default: true, except configured no-approval full exec inherits host-write authority when unset). Set false to allow writing outside the workspace (dangerous). Set true, or tools.fs.workspaceOnly=true, to force workspace containment.",
   "tools.exec.applyPatch.allowModels":
     'Optional allowlist of model ids (e.g. "gpt-5.4" or "openai/gpt-5.4").',
   "tools.loopDetection.enabled":

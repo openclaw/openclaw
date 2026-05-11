@@ -601,9 +601,16 @@ export function createOpenClawCodingTools(options?: {
   const includePluginTools = toolConstructionPlan.includePluginTools;
   const workspaceOnly = fsPolicy.workspaceOnly;
   const applyPatchConfig = execConfig.applyPatch;
+  const effectiveExecSecurity = options?.exec?.security ?? execConfig.security;
+  const effectiveExecAsk = options?.exec?.ask ?? execConfig.ask;
+  const execCanWriteWithoutApproval =
+    effectiveExecSecurity === "full" && effectiveExecAsk === "off";
   // Secure by default: apply_patch is workspace-contained unless explicitly disabled.
-  // (tools.fs.workspaceOnly is a separate umbrella flag for read/write/edit/apply_patch.)
-  const applyPatchWorkspaceOnly = workspaceOnly || applyPatchConfig?.workspaceOnly !== false;
+  // A no-approval full-exec session already has arbitrary host write authority, so do
+  // not make apply_patch more restrictive than exec in that trusted/yolo mode.
+  // tools.fs.workspaceOnly remains an umbrella filesystem guard for read/write/edit/apply_patch.
+  const applyPatchWorkspaceOnly =
+    workspaceOnly || (applyPatchConfig?.workspaceOnly ?? !execCanWriteWithoutApproval);
   const applyPatchEnabled =
     applyPatchConfig?.enabled !== false &&
     isOpenAIProvider(options?.modelProvider) &&
