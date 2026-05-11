@@ -44,7 +44,7 @@ Client → Gateway:
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 3,
+    "minProtocol": 4,
     "maxProtocol": 4,
     "client": {
       "id": "cli",
@@ -182,7 +182,7 @@ roles still need scopes under their own role prefix.
   "id": "…",
   "method": "connect",
   "params": {
-    "minProtocol": 3,
+    "minProtocol": 4,
     "maxProtocol": 4,
     "client": {
       "id": "ios-node",
@@ -631,9 +631,7 @@ terminal summary, and sanitized error text.
 ## Versioning
 
 - `PROTOCOL_VERSION` lives in `src/gateway/protocol/version.ts`.
-- Clients send `minProtocol` + `maxProtocol`; the server rejects ranges that
-  do not include its current protocol. Native clients use a v3 lower bound so
-  additive v4 clients can still reach v3 gateways.
+- Clients send `minProtocol` + `maxProtocol`; the server rejects mismatches.
 - Schemas + models are generated from TypeBox definitions:
   - `pnpm protocol:gen`
   - `pnpm protocol:gen:swift`
@@ -647,7 +645,6 @@ stable across protocol v4 and are the expected baseline for third-party clients.
 | Constant                                  | Default                                               | Source                                                                                     |
 | ----------------------------------------- | ----------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `PROTOCOL_VERSION`                        | `4`                                                   | `src/gateway/protocol/version.ts`                                                          |
-| `MIN_CLIENT_PROTOCOL_VERSION`             | `3`                                                   | `src/gateway/protocol/version.ts`                                                          |
 | Request timeout (per RPC)                 | `30_000` ms                                           | `src/gateway/client.ts` (`requestTimeoutMs`)                                               |
 | Preauth / connect-challenge timeout       | `15_000` ms                                           | `src/gateway/handshake-timeouts.ts` (config/env can raise the paired server/client budget) |
 | Initial reconnect backoff                 | `1_000` ms                                            | `src/gateway/client.ts` (`backoffMs`)                                                      |
@@ -741,6 +738,7 @@ rather than the pre-handshake defaults.
   - `gateway.controlUi.dangerouslyDisableDeviceAuth=true` (break-glass, severe security downgrade).
   - direct-loopback `gateway-client` backend RPCs authenticated with the shared
     gateway token/password.
+- Device-less trusted-proxy Control UI sessions receive a reduced operator scope set. Admin and gateway-management scopes are withheld until the browser completes device pairing.
 - All connections must sign the server-provided `connect.challenge` nonce.
 
 ### Device auth migration diagnostics

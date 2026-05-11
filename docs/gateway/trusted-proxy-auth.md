@@ -59,6 +59,19 @@ Implications:
 - Your reverse proxy auth policy and `allowUsers` become the effective access control.
 - Keep gateway ingress locked to trusted proxy IPs only (`gateway.trustedProxies` + firewall).
 
+## Scope clearing without device identity
+
+When a Control UI WebSocket session connects via trusted-proxy auth **without** a paired device identity:
+
+- The Gateway cannot bind the session to a persistent device token.
+- Operator scopes are narrowed to a safe default subset (typically `operator.read` and `operator.write` only; `operator.admin` and gateway-management scopes are withheld).
+- Methods that require `operator.admin` or `gateway.config.*` scope will return `missing scope` even though the connection itself succeeded.
+
+If your deployment intentionally uses trusted-proxy without device pairing and you need broader Control UI access:
+
+- Pair the browser first (open Control UI over HTTPS with `gateway.controlUi.allowedOrigins` set, then approve the pairing prompt), or
+- As a break-glass option for local development only, set `gateway.controlUi.dangerouslyDisableDeviceAuth = true`. **This disables device identity checks entirely and is a severe security downgrade.** Revert immediately after use.
+
 ## Configuration
 
 ```json5
@@ -309,7 +322,11 @@ Loopback trusted-proxy identity headers still fail closed: same-host callers are
 
 ## Operator scopes header
 
-Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes`.
+Trusted-proxy auth is an **identity-bearing** HTTP mode, so callers may optionally declare operator scopes with `x-openclaw-scopes` on **HTTP API endpoints**.
+
+<Note>
+`x-openclaw-scopes` applies to HTTP endpoints only. WebSocket connections do not carry HTTP headers after the upgrade, so Control UI sessions authenticated via trusted-proxy without a paired [device identity](/gateway/protocol#device-identity--pairing) receive a reduced scope set. See [Scope clearing without device identity](#scope-clearing-without-device-identity) below.
+</Note>
 
 Examples:
 
@@ -415,6 +432,18 @@ The audit checks for:
     - Passes the identity headers on WebSocket upgrade requests (not just HTTP).
     - Doesn't have a separate auth path for WebSocket connections.
 
+  </Accordion>
+  <Accordion title="Connection succeeds but methods report missing scope">
+    Trusted-proxy WebSocket connections can succeed while individual methods fail with `missing scope`.
+
+    Common cause:
+    - The Control UI browser has **not completed device pairing**, so the session operates with a reduced default scope set.
+    - Methods requiring `operator.admin`, `gateway.config.read`, or gateway-management scopes are unavailable to device-less sessions.
+
+    Fix:
+    - Complete browser device pairing: open Control UI, approve the pairing prompt, and let the browser obtain a device token.
+    - If pairing is not possible in your environment, verify that `x-openclaw-scopes` headers are being sent on **HTTP API calls** (not WebSocket). WebSocket connections do not carry per-request scope headers.
+    - For local development only, `gateway.controlUi.dangerouslyDisableDeviceAuth = true` removes the scope restriction, but removes the security boundary entirely.
   </Accordion>
 </AccordionGroup>
 
