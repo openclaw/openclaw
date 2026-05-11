@@ -466,7 +466,7 @@ describe("codex command", () => {
     const statusResult = await handleCodexCommand(createContext("status"), { deps });
     expectResultTextContains(statusResult, "Rate limits: Codex: primary 42%");
     const accountResult = await handleCodexCommand(createContext("account"), { deps });
-    expectResultTextContains(accountResult, "Rate limits:\n- Codex\n  - Primary: 42%");
+    expectResultTextContains(accountResult, "Codex usage: available");
   });
 
   it("rejects extra operands for read-only Codex commands", async () => {
@@ -547,7 +547,7 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Account: codex@example.com");
-    expect(result.text).toContain("Rate limits:\n- Codex\n  - Primary: 50%, resets in");
+    expect(result.text).toContain("Codex usage: available");
     const cachedLimits = requireRecord(
       readRecentCodexRateLimits(),
       "expected cached Codex rate limits",
@@ -579,7 +579,7 @@ describe("codex command", () => {
     expect(result.text).not.toContain("@here");
   });
 
-  it("formats account rate limits as a readable multiline block", async () => {
+  it("summarizes blocked account rate limits as a human takeaway", async () => {
     const resetsAt = Math.ceil(Date.now() / 1000) + 120;
     const safeCodexControlRequest = vi
       .fn()
@@ -620,11 +620,13 @@ describe("codex command", () => {
       deps: createDeps({ safeCodexControlRequest }),
     });
 
-    expect(result.text).toContain("Rate limits:\n- Codex");
-    expect(result.text).toContain("  - Primary: 0%, resets in");
-    expect(result.text).toContain("  - Secondary: 100%, resets in");
-    expect(result.text).toContain(" - rate limit reached");
-    expect(result.text).toContain("- GPT 5.3 Codex Spark\n  - Primary: 0%, resets in");
+    expect(result.text).toContain("Codex usage: blocked");
+    expect(result.text).toContain("Resets: ");
+    expect(result.text).toContain("Bucket: Codex - usage bucket, not model name");
+    expect(result.text).toContain("Why: 7-day window is at 100%; 5-hour window is at 0%.");
+    expect(result.text).not.toContain("GPT 5.3 Codex Spark");
+    expect(result.text).not.toContain("Primary:");
+    expect(result.text).not.toContain("Secondary:");
     expect(result.text).not.toContain("; GPT 5.3 Codex Spark");
     expect(result.text).not.toContain("\uff08rate limit reached\uff09");
   });

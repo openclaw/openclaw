@@ -2,7 +2,7 @@ import type { CodexComputerUseStatus } from "./app-server/computer-use.js";
 import type { CodexAppServerModelListResult } from "./app-server/models.js";
 import { isJsonObject, type JsonObject, type JsonValue } from "./app-server/protocol.js";
 import {
-  summarizeCodexRateLimitLines,
+  summarizeCodexAccountRateLimits,
   summarizeCodexRateLimits,
 } from "./app-server/rate-limits.js";
 import type { SafeValue } from "./command-rpc.js";
@@ -109,9 +109,11 @@ export function formatAccount(
   const formattedLimits = limits.ok
     ? formatCodexRateLimitDetails(limits.value)
     : formatCodexDisplayText(limits.error);
-  const rateLimitBlock = formattedLimits.includes("\n")
-    ? `Rate limits:\n${formattedLimits}`
-    : `Rate limits: ${formattedLimits}`;
+  const rateLimitBlock = formattedLimits.startsWith("Codex usage:")
+    ? formattedLimits
+    : formattedLimits.includes("\n")
+      ? `Rate limits:\n${formattedLimits}`
+      : `Rate limits: ${formattedLimits}`;
   return [
     `Account: ${account.ok ? formatCodexAccountSummary(account.value) : formatCodexDisplayText(account.error)}`,
     rateLimitBlock,
@@ -291,16 +293,11 @@ function formatCodexRateLimitSummary(value: JsonValue | undefined): string {
 }
 
 function formatCodexRateLimitDetails(value: JsonValue | undefined): string {
-  const lines = summarizeCodexRateLimitLines(value);
+  const lines = summarizeCodexAccountRateLimits(value);
   if (!lines) {
     return formatCodexDisplayText(summarizeRateLimits(value));
   }
-  return lines.map(formatCodexRateLimitLine).join("\n");
-}
-
-function formatCodexRateLimitLine(value: string): string {
-  const indentation = /^\s*/u.exec(value)?.[0] ?? "";
-  return `${indentation}${formatCodexDisplayText(value.slice(indentation.length))}`;
+  return lines.map(formatCodexDisplayText).join("\n");
 }
 
 function summarizeRateLimits(value: JsonValue | undefined): string {
