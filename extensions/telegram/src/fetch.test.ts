@@ -100,6 +100,10 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   isWSL2Sync: () => false,
 }));
 
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => ({
+  OPENCLAW_VERSION: "2026.5.10-test",
+}));
+
 let resolveTelegramFetch: typeof import("./fetch.js").resolveTelegramFetch;
 let resolveTelegramApiBase: typeof import("./fetch.js").resolveTelegramApiBase;
 let resolveTelegramTransport: typeof import("./fetch.js").resolveTelegramTransport;
@@ -338,7 +342,10 @@ describe("resolveTelegramFetch", () => {
 
     const resolved = resolveTelegramFetch(wrapped);
 
-    expect(resolved).toBe(wrapped);
+    // stampUserAgent is a thin UA-stamping wrapper; the underlying call still
+    // delegates to the caller-provided fetch, not to undiciFetch.
+    expect(resolved).not.toBe(undiciFetch);
+    expect(typeof resolved).toBe("function");
   });
 
   it("uses resolver-scoped Agent dispatcher with configured transport policy", async () => {
@@ -542,9 +549,11 @@ describe("resolveTelegramFetch", () => {
     await expect(
       transport.sourceFetch("https://api.telegram.org/botTOKEN/getFile"),
     ).resolves.toEqual({ ok: true });
-    expect(undiciFetch).toHaveBeenCalledWith(
-      "https://api.telegram.org/botTOKEN/getFile",
-      undefined,
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    const [calledUrl, calledInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    expect(calledUrl).toBe("https://api.telegram.org/botTOKEN/getFile");
+    expect((calledInit?.headers as Headers | undefined)?.get("User-Agent")).toBe(
+      "OpenClawBot/2026.5.10-test",
     );
     expect(transport.fetch).not.toBe(transport.sourceFetch);
     expect(transport.dispatcherAttempts).toHaveLength(3);
@@ -1033,6 +1042,43 @@ describe("resolveTelegramFetch", () => {
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(setDefaultResultOrder).not.toHaveBeenCalled();
     expect(setDefaultAutoSelectFamily).not.toHaveBeenCalled();
+  });
+
+  it("stamps OpenClawBot User-Agent on all outbound requests", async () => {
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await transport.sourceFetch("https://api.telegram.org/botTOKEN/getMe");
+
+    expect(undiciFetch).toHaveBeenCalledTimes(1);
+    const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    const headers = callInit?.headers as Headers | undefined;
+    expect(headers?.get("User-Agent")).toBe("OpenClawBot/2026.5.10-test");
+  });
+
+  it("does not overwrite a caller-provided User-Agent header", async () => {
+    undiciFetch.mockResolvedValue({ ok: true } as Response);
+
+    const transport = resolveTelegramTransport(undefined, {
+      network: {
+        autoSelectFamily: false,
+        dnsResultOrder: "ipv4first",
+      },
+    });
+
+    await transport.sourceFetch("https://api.telegram.org/botTOKEN/getMe", {
+      headers: { "User-Agent": "CustomBot/1.0" },
+    } as RequestInit);
+
+    const [, callInit] = undiciFetch.mock.calls[0] as [unknown, RequestInit | undefined];
+    const headers = callInit?.headers as Headers | undefined;
+    expect(headers?.get("User-Agent")).toBe("CustomBot/1.0");
   });
 
   describe("transport lifecycle", () => {
