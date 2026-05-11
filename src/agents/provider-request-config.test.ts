@@ -532,7 +532,7 @@ describe("provider request config", () => {
     expect(resolved.headers?.["X-Custom"]).toBe("1");
   });
 
-  it("auto-allows loopback model-provider stream requests", () => {
+  it("does not convert implicit loopback model requests into broad private-network trust", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",
       api: "openai-completions",
@@ -541,7 +541,7 @@ describe("provider request config", () => {
       transport: "stream",
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.allowPrivateNetwork).toBe(false);
     expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 
