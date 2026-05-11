@@ -34,7 +34,12 @@ function getRepoRoot() {
 
 function getNearestUpstreamTag() {
   // Find the nearest reachable tag matching upstream/*
-  const tag = sh('git', ['describe', '--tags', '--match', 'upstream/*', '--abbrev=0']);
+  let tag = '';
+  try {
+    tag = sh('git', ['describe', '--tags', '--match', 'upstream/*', '--abbrev=0']);
+  } catch {
+    fail('no reachable upstream/* tag found from HEAD; tag the upstream base first');
+  }
   if (!tag.startsWith('upstream/')) fail(`nearest upstream tag did not match expected format: ${tag}`);
   return tag;
 }
