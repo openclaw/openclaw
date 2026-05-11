@@ -236,6 +236,13 @@ export async function list(state: CronServiceState, opts?: { includeDisabled?: b
   });
 }
 
+export async function readJob(state: CronServiceState, id: string) {
+  return await locked(state, async () => {
+    await ensureLoadedForRead(state);
+    return state.store?.jobs.find((job) => job.id === id);
+  });
+}
+
 function resolveEnabledFilter(opts?: CronListPageOptions): CronJobsEnabledFilter {
   if (opts?.enabled === "all" || opts?.enabled === "enabled" || opts?.enabled === "disabled") {
     return opts.enabled;

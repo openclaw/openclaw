@@ -29,6 +29,7 @@ export interface CronServiceContract {
   run(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   enqueueRun(id: string, mode?: CronRunMode): Promise<CronServiceRunResult>;
   getJob(id: string): CronJob | undefined;
+  readJob(id: string): Promise<CronJob | undefined>;
   getDefaultAgentId(): string | undefined;
   wake(opts: { mode: CronWakeMode; text: string; sessionKey?: string }): CronWakeResult;
 }
