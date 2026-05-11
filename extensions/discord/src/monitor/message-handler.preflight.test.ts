@@ -1017,7 +1017,7 @@ describe("preflightDiscordMessage", () => {
     expect(expectPreflightResult(result).message.id).toBe("m-bot-mentions-on");
   });
 
-  it("allows bot explicit mentions when allowBots=mentions and implicitReplyMentions.fromBots=false", async () => {
+  it("allows bot native replies with explicit mentions when allowBots=mentions and implicitReplyMentions.fromBots=false", async () => {
     const channelId = "channel-bot-mentions-policy-off";
     const guildId = "guild-bot-mentions-policy-off";
     const message = createDiscordMessage({
@@ -1025,6 +1025,7 @@ describe("preflightDiscordMessage", () => {
       channelId,
       content: "hi <@openclaw-bot>",
       mentionedUsers: [{ id: "openclaw-bot" }],
+      referencedMessage: createReferencedBotMessage(channelId),
       author: {
         id: "relay-bot-1",
         bot: true,

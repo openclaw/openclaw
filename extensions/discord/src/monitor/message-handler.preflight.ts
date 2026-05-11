@@ -311,7 +311,11 @@ export async function preflightDiscordMessage(
   const allowReplyOnlyMention = replyAuthorIsBot
     ? implicitReplyMentions?.fromBots !== false
     : implicitReplyMentions?.fromUsers !== false;
-  const hasBotMentionInText = Boolean(botId && new RegExp(`<@!?${botId}>`).test(baseText));
+  const rawMessageContent = typeof message.content === "string" ? message.content : "";
+  const hasBotMentionInText = Boolean(
+    botId &&
+      (rawMessageContent.includes(`<@${botId}>`) || rawMessageContent.includes(`<@!${botId}>`)),
+  );
   const replyOnlyBotMentionSuppressed = Boolean(
     rawExplicitlyMentioned &&
     botId &&
