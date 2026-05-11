@@ -645,9 +645,10 @@ export async function runEmbeddedPiAgent(
         if (!pluginHarnessOwnsTransport || !profileId) {
           return false;
         }
+        const profileCredentialProvider = attemptAuthProfileStore.profiles?.[profileId]?.provider;
         const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
           provider,
-          authProfileProvider: profileId.split(":", 1)[0],
+          authProfileProvider: profileCredentialProvider ?? profileId.split(":", 1)[0],
           sessionAuthProfileId: profileId,
           config: params.config,
           workspaceDir: resolvedWorkspace,

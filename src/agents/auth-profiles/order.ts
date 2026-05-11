@@ -24,6 +24,9 @@ export type AuthProfileEligibility = {
   reasonCode: AuthProfileEligibilityReasonCode;
 };
 
+const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_CODEX_PROVIDER_ID = "openai-codex";
+
 function resolveProviderAuthMode(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -126,11 +129,22 @@ export function resolveAuthProfileOrder(params: {
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
+  const openAIOrderAliasProvider =
+    providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
+      ? OPENAI_PROVIDER_ID
+      : undefined;
   const storedOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
+    resolveAuthOrder(store.order, providerAuthKey) ??
+    resolveAuthOrder(store.order, providerKey) ??
+    (openAIOrderAliasProvider
+      ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
+      : undefined);
   const configuredOrder =
     resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey);
+    resolveAuthOrder(cfg?.auth?.order, providerKey) ??
+    (openAIOrderAliasProvider
+      ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
+      : undefined);
   const explicitOrder = storedOrder ?? configuredOrder;
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)

@@ -17,9 +17,9 @@ selection, OpenClaw dynamic tools, approvals, media delivery, and the visible
 transcript mirror.
 
 The normal setup uses canonical OpenAI model refs such as `openai/gpt-5.5`.
-Do not configure `openai-codex/gpt-*` model refs. `openai-codex` is the auth
-profile provider for Codex OAuth or Codex API-key profiles, not the model
-provider prefix for new agent config.
+Do not configure `openai-codex/gpt-*` model refs. Put OpenAI agent auth order
+under `auth.order.openai`; older `openai-codex:*` profiles and
+`auth.order.openai-codex` entries remain supported for existing installs.
 
 OpenClaw starts Codex app-server threads with Codex native code mode and
 code-mode-only enabled. That keeps deferred/searchable OpenClaw dynamic tools
@@ -113,9 +113,10 @@ harness options in OpenClaw config, and use the CLI only for Codex auth:
 | Enable native Codex plugin apps        | `plugins.entries.codex.config.codexPlugins.*`                      | Codex plugin config            |
 | Enable Codex Computer Use              | `plugins.entries.codex.config.computerUse.*`                       | Codex plugin config            |
 
-Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns.
-`openai-codex` is only the auth-profile provider name for Codex OAuth and
-Codex API-key profiles. Do not write new `openai-codex/gpt-*` model refs.
+Use `openai/gpt-*` model refs for Codex-backed OpenAI agent turns. Prefer
+`auth.order.openai` for subscription-first/API-key-backup ordering. Existing
+`openai-codex:*` auth profiles and `auth.order.openai-codex` remain valid, but
+do not write new `openai-codex/gpt-*` model refs.
 
 The rest of this page covers common variants users must choose between:
 deployment shape, fail-closed routing, guardian approval policy, native Codex
