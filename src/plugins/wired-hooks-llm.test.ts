@@ -136,11 +136,11 @@ describe("llm hook runner methods", () => {
 
   it("agent_start fires before the first llm_input when invoked in the attempt.ts order", async () => {
     const calls: Array<{ hook: "agent_start" | "llm_input"; event: Record<string, unknown> }> = [];
-    const agentStartHandler = vi.fn((event: Record<string, unknown>) => {
-      calls.push({ hook: "agent_start", event });
+    const agentStartHandler = vi.fn((event: unknown) => {
+      calls.push({ hook: "agent_start", event: event as Record<string, unknown> });
     });
-    const llmInputHandler = vi.fn((event: Record<string, unknown>) => {
-      calls.push({ hook: "llm_input", event });
+    const llmInputHandler = vi.fn((event: unknown) => {
+      calls.push({ hook: "llm_input", event: event as Record<string, unknown> });
     });
     const { runner } = createHookRunnerWithRegistry([
       { hookName: "agent_start", handler: agentStartHandler },
@@ -203,8 +203,8 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
       userPrompt?: string;
       prependedContext?: string;
     }> = [];
-    const handler = vi.fn((event: (typeof events)[number]) => {
-      events.push(event);
+    const handler = vi.fn((event: unknown) => {
+      events.push(event as (typeof events)[number]);
     });
     const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
 
@@ -232,8 +232,8 @@ describe("llm_input userPrompt/prependedContext plumbing", () => {
 
   it("passes undefined prependedContext through when hook did not prepend", async () => {
     const events: Array<{ userPrompt?: string; prependedContext?: string }> = [];
-    const handler = vi.fn((event: (typeof events)[number]) => {
-      events.push(event);
+    const handler = vi.fn((event: unknown) => {
+      events.push(event as (typeof events)[number]);
     });
     const { runner } = createHookRunnerWithRegistry([{ hookName: "llm_input", handler }]);
 

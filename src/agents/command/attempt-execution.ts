@@ -367,7 +367,7 @@ export function runAgentAttempt(params: {
   opts: AgentCommandOpts & { senderIsOwner: boolean };
   runContext: ReturnType<typeof resolveAgentRunContext>;
   spawnedBy: string | undefined;
-  spawnedByRunId: string | undefined;
+  spawnedByRunId?: string;
   messageChannel: ReturnType<typeof resolveMessageChannel>;
   skillsSnapshot: ReturnType<typeof buildWorkspaceSkillSnapshot> | undefined;
   resolvedVerboseLevel: VerboseLevel | undefined;

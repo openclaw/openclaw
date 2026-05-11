@@ -738,6 +738,7 @@ public struct AgentParams: Codable, Sendable {
     public let groupid: String?
     public let groupchannel: String?
     public let groupspace: String?
+    public let spawnedbyrunid: String?
     public let timeout: Int?
     public let besteffortdeliver: Bool?
     public let lane: String?
@@ -775,6 +776,7 @@ public struct AgentParams: Codable, Sendable {
         groupid: String?,
         groupchannel: String?,
         groupspace: String?,
+        spawnedbyrunid: String?,
         timeout: Int?,
         besteffortdeliver: Bool?,
         lane: String?,
@@ -811,6 +813,7 @@ public struct AgentParams: Codable, Sendable {
         self.groupid = groupid
         self.groupchannel = groupchannel
         self.groupspace = groupspace
+        self.spawnedbyrunid = spawnedbyrunid
         self.timeout = timeout
         self.besteffortdeliver = besteffortdeliver
         self.lane = lane
@@ -849,6 +852,7 @@ public struct AgentParams: Codable, Sendable {
         case groupid = "groupId"
         case groupchannel = "groupChannel"
         case groupspace = "groupSpace"
+        case spawnedbyrunid = "spawnedByRunId"
         case timeout
         case besteffortdeliver = "bestEffortDeliver"
         case lane
