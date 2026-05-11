@@ -1,1 +1,1 @@
-export { convertMessages } from "@mariozechner/pi-ai/openai-completions";
+export { convertMessages } from "@earendil-works/pi-ai/openai-completions";

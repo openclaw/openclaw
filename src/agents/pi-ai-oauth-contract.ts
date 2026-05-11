@@ -1,1 +1,1 @@
-export * from "@mariozechner/pi-ai/oauth";
+export * from "@earendil-works/pi-ai/oauth";

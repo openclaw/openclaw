@@ -8,7 +8,7 @@ import {
   type AgentToolUpdateCallback as PiAgentToolUpdateCallback,
   type StreamFn as PiStreamFn,
   type ThinkingLevel as PiThinkingLevel,
-} from "@mariozechner/pi-agent-core";
+} from "@earendil-works/pi-agent-core";
 
 export type AgentMessage = PiAgentMessage;
 export type AgentEvent = PiAgentEvent;
