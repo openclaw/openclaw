@@ -255,7 +255,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const forkCall = client.request.mock.calls[0];
     expect(forkCall?.[0]).toBe("thread/fork");
     const forkParams = forkCall?.[1] as Record<string, unknown> | undefined;
-    expect(Object.keys(forkParams ?? {}).sort()).toEqual([
+    expect(Object.keys(forkParams ?? {}).toSorted()).toEqual([
       "approvalPolicy",
       "approvalsReviewer",
       "config",
