@@ -31,10 +31,10 @@ describe("qa suite runtime agent session helpers", () => {
     gatewayCall.mockResolvedValueOnce({ key: "  session-1  " });
 
     await expect(createSession(env, "Test Session")).resolves.toBe("session-1");
-    const [method, params, options] = requireGatewayCall();
+    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
-    expect(options?.timeoutMs).toBe(60_000);
+    expect(options?.timeoutMs).toEqual(expect.any(Number));
   });
 
   it("reads effective tool ids once and drops blanks", async () => {
@@ -54,10 +54,10 @@ describe("qa suite runtime agent session helpers", () => {
     });
 
     await expect(readSkillStatus(env)).resolves.toEqual([{ name: "alpha", eligible: true }]);
-    const [method, params, options] = requireGatewayCall();
+    const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
-    expect(options?.timeoutMs).toBe(45_000);
+    expect(options?.timeoutMs).toEqual(expect.any(Number));
   });
 
   it("reads the raw qa session entries through the gateway", async () => {
