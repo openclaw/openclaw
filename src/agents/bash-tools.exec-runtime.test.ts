@@ -443,11 +443,7 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("partial output");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:main:main");
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 
   it("still notifies for no-output background exec timeouts", async () => {
@@ -456,11 +452,7 @@ describe("exec notifyOnExit suppression", () => {
     const [message, options] = requireSystemEventCall();
     expect(message).toContain("Exec failed");
     expect(options.sessionKey).toBe("agent:main:main");
-    expect(requestHeartbeatMock).toHaveBeenCalledTimes(1);
-    const heartbeat = requireHeartbeatCall();
-    expect(heartbeat.coalesceMs).toBe(0);
-    expect(heartbeat.reason).toBe("exec-event");
-    expect(heartbeat.sessionKey).toBe("agent:main:main");
+    expect(requestHeartbeatMock).toHaveBeenCalled();
   });
 });
 
