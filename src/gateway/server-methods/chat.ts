@@ -1032,10 +1032,10 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   message: string;
   savedImages: SavedMedia[];
   cfg: OpenClawConfig;
-}) {
+}): Promise<{ changed: boolean; message?: AgentMessage; messageId?: string }> {
   const mediaFields = resolveChatSendTranscriptMediaFields(params.savedImages);
   if (!("MediaPath" in mediaFields)) {
-    return;
+    return { changed: false };
   }
   const index = await readSessionTranscriptIndex(params.transcriptPath);
   const target = index?.entries.toReversed().find((entry) => {
@@ -1057,13 +1057,13 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
   });
   const targetMessage = target?.record.message as Record<string, unknown> | undefined;
   if (!target || !target.id || !targetMessage) {
-    return;
+    return { changed: false };
   }
   const rewrittenMessage = {
     ...targetMessage,
     ...mediaFields,
-  };
-  await rewriteTranscriptEntriesInSessionFile({
+  } as AgentMessage;
+  const result = await rewriteTranscriptEntriesInSessionFile({
     sessionFile: params.transcriptPath,
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -1071,11 +1071,30 @@ async function rewriteChatSendUserTurnMediaPaths(params: {
       replacements: [
         {
           entryId: target.id,
-          message: rewrittenMessage as AgentMessage,
+          message: rewrittenMessage,
         },
       ],
     },
   });
+  if (!result.changed) {
+    return { changed: false };
+  }
+  const rewrittenIndex = await readSessionTranscriptIndex(params.transcriptPath);
+  const rewrittenEntryId = rewrittenIndex?.entries.toReversed().find((entry) => {
+    const message = entry.record.message as Record<string, unknown> | undefined;
+    if (!message || message.role !== "user") {
+      return false;
+    }
+    return (
+      extractTranscriptUserText((message as { content?: unknown }).content) === params.message &&
+      (message as { MediaPath?: unknown }).MediaPath === mediaFields.MediaPath
+    );
+  })?.id;
+  return {
+    changed: true,
+    message: rewrittenMessage,
+    ...(rewrittenEntryId ? { messageId: rewrittenEntryId } : {}),
+  };
 }
 
 function extractChatHistoryBlockText(message: unknown): string | undefined {
@@ -2225,12 +2244,16 @@ export const chatHandlers: GatewayRequestHandlers = {
         status: "started" as const,
       };
       respond(true, ackPayload, undefined, { runId: clientRunId });
+      let persistedImagesSnapshot: SavedMedia[] | null = null;
       const persistedImagesPromise = persistChatSendImages({
         images: parsedImages,
         imageOrder,
         offloadedRefs,
         client,
         logGateway: context.logGateway,
+      }).then((images) => {
+        persistedImagesSnapshot = images;
+        return images;
       });
       const pluginBoundMediaFields =
         explicitOriginTargetsPlugin && parsedImages.length > 0
@@ -2320,6 +2343,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       let userTranscriptPersistedEntryId: string | undefined;
       const isResetCommandMessage = isChatSendResetCommandMessage(parsedMessage, cfg);
       const skipDurableUserTranscript = isBtwRequestText(parsedMessage) || isResetCommandMessage;
+      const hasTranscriptMedia = parsedImages.length > 0 || offloadedRefs.length > 0;
       const hookRunner = getGlobalHookRunner();
       const hasBeforeAgentRunGate = hookRunner?.hasHooks("before_agent_run") === true;
       const hasBeforeMessageWriteHook = hookRunner?.hasHooks("before_message_write") === true;
@@ -2387,7 +2411,13 @@ export const chatHandlers: GatewayRequestHandlers = {
               if (!transcriptPath) {
                 return;
               }
-              const persistedImages = await persistedImagesPromise;
+              const persistedImages =
+                timing === "eager" ? (persistedImagesSnapshot ?? []) : await persistedImagesPromise;
+              const shouldDeferTranscriptMessageEmit =
+                timing === "eager" &&
+                hasTranscriptMedia &&
+                persistedImagesSnapshot === null &&
+                !isAcpBridgeClient(client);
               const message = applySessionMessagePersistenceTransforms({
                 message: buildChatSendTranscriptMessage({
                   message: parsedMessage,
@@ -2416,7 +2446,7 @@ export const chatHandlers: GatewayRequestHandlers = {
               emitSessionTranscriptUpdate({
                 sessionFile: transcriptPath,
                 sessionKey: target.sessionKey,
-                message,
+                ...(shouldDeferTranscriptMessageEmit ? {} : { message }),
                 messageId,
               });
             },
@@ -2458,13 +2488,21 @@ export const chatHandlers: GatewayRequestHandlers = {
           return;
         }
         transcriptMediaRewriteDone = true;
-        await rewriteChatSendUserTurnMediaPaths({
+        const rewriteResult = await rewriteChatSendUserTurnMediaPaths({
           transcriptPath,
           sessionKey,
           message: parsedMessage,
           savedImages: await persistedImagesPromise,
           cfg,
         });
+        if (rewriteResult.message) {
+          emitSessionTranscriptUpdate({
+            sessionFile: transcriptPath,
+            sessionKey,
+            message: rewriteResult.message,
+            messageId: rewriteResult.messageId,
+          });
+        }
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
