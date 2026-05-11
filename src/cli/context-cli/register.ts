@@ -26,7 +26,7 @@ async function fetchSessionReport(
     params.key = sessionKey;
   }
 
-  const res = (await callGatewayFromCli("sessions.list", opts, params)) as SessionsListResponse;
+  const res = (await callGatewayFromCli("sessions.usage", opts, params)) as SessionsListResponse;
   const sessions = res?.sessions ?? [];
 
   // If no specific key requested, pick the most recently updated session with a report
