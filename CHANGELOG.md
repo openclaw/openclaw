@@ -25,6 +25,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- CLI/lazy-runtime: await dynamic-import-driven eager registration in `registerCommandGroups` so `OPENCLAW_DISABLE_LAZY_SUBCOMMANDS=1` actually works. The previous fire-and-forget `void entry.register(program)` returned before any sub-command handler was attached, so commander's subsequent `parseAsync` raced the imports and rejected legitimate calls with `error: too many arguments for '<group>'`. The fix propagates async through `registerBrowserCli`, `registerCoreCliCommands`, `registerSubCliCommands`, `registerProgramCommands`, and `buildProgram`; all CLI bootstrap callsites are already in await contexts (`startupTrace.measure(...)`), so there is no behavior change in lazy mode. Thanks @hanamizuki.
 - Feishu: refresh inbound session delivery context for DM, group, and broadcast turns so later replies do not inherit stale WebChat routing. Fixes #78274.
 - QA-Lab/qa-channel: attach redacted agent tool-start traces to outbound `QaBusMessage` records so scenarios can assert actual tool use instead of relying only on reply text. Fixes #67637. Thanks @100yenadmin.
 - QA-Lab: fail live runtime parity reports when assistant-message usage is missing, preventing `0 vs 0` live token rows from being reported as passing proof. Fixes #80411. Thanks @100yenadmin.
