@@ -79,6 +79,7 @@ public struct WebSocketSessionBox: @unchecked Sendable {
 public struct GatewayConnectOptions: Sendable {
     public var role: String
     public var scopes: [String]
+    public var scopesAreExplicit: Bool
     public var caps: [String]
     public var commands: [String]
     public var permissions: [String: Bool]
@@ -93,6 +94,7 @@ public struct GatewayConnectOptions: Sendable {
     public init(
         role: String,
         scopes: [String],
+        scopesAreExplicit: Bool = false,
         caps: [String],
         commands: [String],
         permissions: [String: Bool],
@@ -103,6 +105,7 @@ public struct GatewayConnectOptions: Sendable {
     {
         self.role = role
         self.scopes = scopes
+        self.scopesAreExplicit = scopesAreExplicit
         self.caps = caps
         self.commands = commands
         self.permissions = permissions
@@ -412,6 +415,7 @@ public actor GatewayChannelActor {
         let clientMode = options.clientMode
         let role = options.role
         let requestedScopes = options.scopes
+        let scopesAreExplicit = options.scopesAreExplicit
         let includeDeviceIdentity = options.includeDeviceIdentity
         let identity = includeDeviceIdentity ? DeviceIdentityStore.loadOrCreate() : nil
         let selectedAuth = self.selectConnectAuth(
@@ -421,6 +425,7 @@ public actor GatewayChannelActor {
         let scopes = self.resolveConnectScopes(
             role: role,
             requestedScopes: requestedScopes,
+            scopesAreExplicit: scopesAreExplicit,
             selectedAuth: selectedAuth)
 
         let reqId = UUID().uuidString
@@ -608,6 +613,7 @@ public actor GatewayChannelActor {
     private func resolveConnectScopes(
         role: String,
         requestedScopes: [String],
+        scopesAreExplicit: Bool,
         selectedAuth: SelectedConnectAuth) -> [String]
     {
         if selectedAuth.authSource == .bootstrapToken,
@@ -616,6 +622,7 @@ public actor GatewayChannelActor {
             return filteredScopes
         }
         if selectedAuth.authSource == .deviceToken,
+           !scopesAreExplicit,
            let storedScopes = selectedAuth.storedScopes,
            !storedScopes.isEmpty
         {

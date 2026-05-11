@@ -268,6 +268,45 @@ struct GatewayChannelConnectTests {
         }
     }
 
+    @Test func `explicit device token connect scopes preserve requested scopes`() async throws {
+        try await self.withTemporaryStateDir {
+            let identity = DeviceIdentityStore.loadOrCreate()
+            _ = DeviceAuthStore.storeToken(
+                deviceId: identity.deviceId,
+                role: "operator",
+                token: "bootstrap-device-token",
+                scopes: ["operator.read", "operator.write", "operator.approvals"])
+            let requestedScopes = ["operator.admin", "operator.pairing"]
+            let capture = ScopeCapture()
+            let session = GatewayTestWebSocketSession(
+                taskFactory: {
+                    GatewayTestWebSocketTask(sendHook: { _, message, sendIndex in
+                        if sendIndex == 0 {
+                            capture.set(GatewayWebSocketTestSupport.connectScopes(from: message))
+                        }
+                    })
+                })
+            let channel = try GatewayChannelActor(
+                url: #require(URL(string: "ws://example.invalid")),
+                token: nil,
+                session: WebSocketSessionBox(session: session),
+                connectOptions: GatewayConnectOptions(
+                    role: "operator",
+                    scopes: requestedScopes,
+                    scopesAreExplicit: true,
+                    caps: [],
+                    commands: [],
+                    permissions: [:],
+                    clientId: "openclaw-macos",
+                    clientMode: "ui",
+                    clientDisplayName: "OpenClaw macOS Debug CLI"))
+
+            try await channel.connect()
+
+            #expect(capture.snapshot() == requestedScopes)
+        }
+    }
+
     @Test func `connect surfaces structured auth failure`() async throws {
         let session = self.makeSession(response: .authFailed(
             delayMs: 0,
