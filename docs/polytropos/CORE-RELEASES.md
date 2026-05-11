@@ -64,16 +64,58 @@ systemctl --user restart openclaw-gateway
 
 Rollback is the same operation, pointing `current` back to the prior release.
 
-## Creating a versioned release
+## Release procedure (build + publish + switch)
 
 Policy: a new release directory should only be created from a **versioned tag** in the core repo.
 
-High level:
+### 1) Build (produce dist/)
 
-1) Check out the tag.
-2) Build the fork to produce `dist/`.
-3) Copy `dist/` into `~/polytropos/releases/<tag>/`.
-4) Optionally switch `current` to that version and restart.
+Canonical build sequence (deterministic):
+
+```bash
+pnpm install
+pnpm ui:build
+pnpm build
+```
+
+Output: `<repo>/dist/`.
+
+### 2) Publish (create the release directory)
+
+```bash
+mkdir -p ~/polytropos/releases/<tag>
+cp -a <repo>/dist/. ~/polytropos/releases/<tag>/
+test -f ~/polytropos/releases/<tag>/index.js
+```
+
+### 3) Initialize and/or update symlinks
+
+- `dev` points at the core repo build output:
+
+```bash
+ln -sfn ~/polytropos/openclaw-polytropos/dist ~/polytropos/releases/dev
+```
+
+- `previous` should always be the prior `current` target (mandatory):
+
+```bash
+# capture current target if it exists
+if [ -L ~/polytropos/releases/current ]; then
+  ln -sfn "$(readlink -f ~/polytropos/releases/current)" ~/polytropos/releases/previous
+fi
+```
+
+- switch `current` to the new release:
+
+```bash
+ln -sfn ~/polytropos/releases/<tag> ~/polytropos/releases/current
+```
+
+### 4) Restart + verify
+
+Restart the gateway and verify health.
+
+(One-time systemd cutover is documented separately in [`docs/polytropos/planning/CUTOVER-EXECSTART.md`](./planning/CUTOVER-EXECSTART.md).)
 
 ## Dev mode (without a second gateway)
 
