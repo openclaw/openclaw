@@ -21,6 +21,14 @@ function attachOpenSocket(gateway: GatewayPlugin) {
   return send;
 }
 
+function sentGatewayOpcodes(send: ReturnType<typeof attachOpenSocket>) {
+  return send.mock.calls.map((call) => {
+    const [rawPayload] = call;
+    const payload = JSON.parse(String(rawPayload)) as { op?: unknown };
+    return payload.op;
+  });
+}
+
 function presenceUpdate(
   status: PresenceUpdateStatus.Online | PresenceUpdateStatus.Idle = PresenceUpdateStatus.Online,
 ): GatewaySendPayload {
@@ -45,12 +53,12 @@ class TestGatewayPlugin extends GatewayPlugin {
   sockets: FakeSocket[] = [];
   connectCalls: boolean[] = [];
 
-  connect(resume = false): void {
+  override connect(resume = false): void {
     this.connectCalls.push(resume);
     super.connect(resume);
   }
 
-  protected createWebSocket(): never {
+  protected override createWebSocket(): never {
     const socket = new FakeSocket();
     this.sockets.push(socket);
     return socket as never;
@@ -553,17 +561,11 @@ describe("GatewayPlugin", () => {
     }
 
     await vi.advanceTimersByTimeAsync(0);
-    expect(firstSend).toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
-    expect(secondSend).not.toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
+    expect(sentGatewayOpcodes(firstSend)).toContain(GatewayOpcodes.Identify);
+    expect(sentGatewayOpcodes(secondSend)).not.toContain(GatewayOpcodes.Identify);
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(secondSend).toHaveBeenCalledWith(
-      expect.stringContaining(`"op":${GatewayOpcodes.Identify}`),
-    );
+    expect(sentGatewayOpcodes(secondSend)).toContain(GatewayOpcodes.Identify);
   });
 
   it("validates requestGuildMembers before sending", () => {

@@ -160,14 +160,11 @@ describe("slack prepareSlackMessage inbound contract", () => {
     const prepared = await prepareWithDefaultCtx(createSlackMessage({}));
 
     assertPrepared(prepared);
-    expect(enqueueSystemEventMock).toHaveBeenCalledWith(
-      expect.stringContaining("Slack DM from Alice: hi"),
-      expect.objectContaining({
-        sessionKey: expect.any(String),
-        contextKey: "slack:message:D123:1.000",
-        trusted: false,
-      }),
-    );
+    expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack DM from Alice: hi", {
+      sessionKey: prepared.ctxPayload.SessionKey,
+      contextKey: "slack:message:D123:1.000",
+      trusted: false,
+    });
   });
 
   function createThreadSlackCtx(params: { cfg: OpenClawConfig; replies: unknown }) {
@@ -601,9 +598,7 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     expect(prepared).toBeNull();
-    expect(members).toHaveBeenCalledWith(
-      expect.objectContaining({ token: "token", channel: "C123", limit: 999 }),
-    );
+    expect(members).toHaveBeenCalledWith({ token: "token", channel: "C123", limit: 999 });
   });
 
   it("allows bot-authored room messages when an explicit owner is present (#59284)", async () => {
@@ -1076,11 +1071,13 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     );
 
     assertPrepared(prepared);
-    expect(history).toHaveBeenCalledWith(
-      expect.objectContaining({
-        limit: 2,
-      }),
-    );
+    expect(history).toHaveBeenCalledWith({
+      token: "token",
+      channel: "D123",
+      latest: "400.000",
+      inclusive: true,
+      limit: 2,
+    });
 
     history.mockClear();
     fs.writeFileSync(
@@ -1358,7 +1355,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:slack:direct:u1:thread:500.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
-    ).toEqual(expect.objectContaining({ sessionKey: prepared.ctxPayload.SessionKey }));
+    ).toEqual({
+      sessionKey: prepared.ctxPayload.SessionKey,
+      channel: "slack",
+      to: "user:U1",
+      accountId: "default",
+      threadId: "500.000",
+      mainDmOwnerPin: undefined,
+    });
   });
 
   it("keeps default main-scope DM last-route metadata on the main session", async () => {
@@ -1384,7 +1388,14 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(prepared.ctxPayload.SessionKey).toBe("agent:main:main:thread:600.000");
     expect(
       (prepared.turn.record as { updateLastRoute?: { sessionKey?: string } }).updateLastRoute,
-    ).toEqual(expect.objectContaining({ sessionKey: "agent:main:main" }));
+    ).toEqual({
+      sessionKey: "agent:main:main",
+      channel: "slack",
+      to: "user:U1",
+      accountId: "default",
+      threadId: "600.000",
+      mainDmOwnerPin: undefined,
+    });
   });
 
   it("routes Slack thread replies through runtime conversation bindings", async () => {

@@ -756,7 +756,10 @@ describe("ollama setup", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Ollama could not be reached at http://127.0.0.1:11435."),
+      [
+        "Ollama could not be reached at http://127.0.0.1:11435.",
+        "Download it at https://ollama.com/download",
+      ].join("\n"),
     );
     expect(runtime.exit).toHaveBeenCalledWith(1);
     expect(result).toBe(nextConfig);

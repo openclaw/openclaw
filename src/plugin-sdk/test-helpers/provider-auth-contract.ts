@@ -280,13 +280,13 @@ export function describeOpenAICodexProviderAuthContract(
       );
     });
 
-    it("keeps OAuth failures non-fatal at the provider layer", async () => {
+    it("surfaces OAuth failures instead of silently succeeding with no profiles", async () => {
       const provider = await getProvider();
       loginOpenAICodexOAuthMock.mockRejectedValueOnce(new Error("oauth failed"));
 
-      await expect(provider.auth[0]?.run(buildAuthContext() as never)).resolves.toEqual({
-        profiles: [],
-      });
+      await expect(provider.auth[0]?.run(buildAuthContext() as never)).rejects.toThrow(
+        "oauth failed",
+      );
     });
   });
 }

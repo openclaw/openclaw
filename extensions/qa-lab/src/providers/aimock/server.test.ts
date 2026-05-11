@@ -70,10 +70,23 @@ describe("qa aimock server", () => {
 
       const debug = await fetch(`${server.baseUrl}/debug/requests`);
       expect(debug.status).toBe(200);
+      const expectedBody = {
+        model: "aimock/gpt-5.5",
+        messages: [{ role: "user", content: "@openclaw explain the QA lab" }],
+        stream: false,
+        _endpointType: "chat",
+      };
       expect(await debug.json()).toEqual([
-        expect.objectContaining({
+        {
+          raw: JSON.stringify(expectedBody),
+          body: expectedBody,
           prompt: "@openclaw explain the QA lab",
-        }),
+          allInputText: "@openclaw explain the QA lab",
+          toolOutput: "",
+          model: "aimock/gpt-5.5",
+          providerVariant: "openai",
+          imageInputCount: 0,
+        },
       ]);
     } finally {
       await server.stop();

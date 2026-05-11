@@ -131,7 +131,7 @@ type SessionFile = {
 
 const DEFAULT_SKILL_DIR = "~/.codex/skills/custom/telegram-e2e-bot-to-bot";
 const DEFAULT_CONVEX_ENV_FILE = `${DEFAULT_SKILL_DIR}/convex.local.env`;
-const DEFAULT_USER_DRIVER = `${DEFAULT_SKILL_DIR}/scripts/user-driver.py`;
+const DEFAULT_USER_DRIVER = "scripts/e2e/telegram-user-driver.py";
 const DEFAULT_OUTPUT_ROOT = ".artifacts/qa-e2e/telegram-user-crabbox";
 const REMOTE_ROOT = "/tmp/openclaw-telegram-user-crabbox";
 const CREDENTIAL_SCRIPT = fileURLToPath(new URL("./telegram-user-credential.ts", import.meta.url));
@@ -250,7 +250,8 @@ function parseArgs(argv: string[]): Options {
     text: "/status",
     timeoutMs: 90_000,
     ttl: "120m",
-    userDriverScript: DEFAULT_USER_DRIVER,
+    userDriverScript:
+      trimToValue(process.env.OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT) ?? DEFAULT_USER_DRIVER,
   };
   const commandSeparator = argv.indexOf("--");
   if (command === "run" && commandSeparator >= 0) {

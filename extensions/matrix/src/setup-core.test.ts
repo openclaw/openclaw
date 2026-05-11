@@ -187,6 +187,7 @@ describe("matrixSetupAdapter", () => {
           userId: "@default:example.org",
           accessToken: "default-token",
           deviceName: "Default device",
+          dangerouslyAllowNameMatching: true,
         },
       },
     } as CoreConfig;
@@ -205,11 +206,13 @@ describe("matrixSetupAdapter", () => {
     expect(next.channels?.matrix?.homeserver).toBeUndefined();
     expect(next.channels?.matrix?.userId).toBeUndefined();
     expect(next.channels?.matrix?.accessToken).toBeUndefined();
+    expect(next.channels?.matrix?.dangerouslyAllowNameMatching).toBeUndefined();
     expectFields(next.channels?.matrix?.accounts?.default, {
       homeserver: "https://matrix.example.org",
       userId: "@default:example.org",
       accessToken: "default-token",
       deviceName: "Default device",
+      dangerouslyAllowNameMatching: true,
     });
     expectFields(next.channels?.matrix?.accounts?.ops, {
       name: "Ops",
@@ -218,6 +221,7 @@ describe("matrixSetupAdapter", () => {
       userId: "@ops:example.org",
       accessToken: "ops-token",
     });
+    expect(next.channels?.matrix?.accounts?.ops?.dangerouslyAllowNameMatching).toBeUndefined();
   });
 
   it("reuses an existing raw default-account key during promotion", () => {

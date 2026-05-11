@@ -368,7 +368,10 @@ describe("lmstudio-models", () => {
     if (!loadCall) {
       throw new Error("expected LM Studio model load request");
     }
-    expect(loadCall[1]).toMatchObject({
+    const loadInit = loadCall[1] as RequestInit;
+    const { signal, ...stableLoadInit } = loadInit;
+    expect(signal).toBeInstanceOf(AbortSignal);
+    expect(stableLoadInit).toEqual({
       method: "POST",
       headers: {
         "X-Proxy-Auth": "required",
@@ -380,7 +383,6 @@ describe("lmstudio-models", () => {
         context_length: 32768,
       }),
     });
-    const loadInit = loadCall[1] as RequestInit;
     const loadBody = parseJsonRequestBody(loadInit) as { context_length: number };
     expect(loadBody.context_length).not.toBe(LMSTUDIO_DEFAULT_LOAD_CONTEXT_LENGTH);
   });

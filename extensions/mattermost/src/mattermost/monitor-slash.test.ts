@@ -168,9 +168,7 @@ describe("mattermost monitor slash", () => {
     });
 
     expect(runtime.error).toHaveBeenCalledWith(
-      expect.stringContaining(
-        "slash commands callbackUrl resolved to http://127.0.0.1:18789/slash",
-      ),
+      "mattermost: slash commands callbackUrl resolved to http://127.0.0.1:18789/slash (loopback) while baseUrl is https://chat.example.com. This MAY be unreachable depending on your deployment. If native slash commands don't work, set channels.mattermost.commands.callbackUrl to a URL reachable from the Mattermost server (e.g. your public reverse proxy URL).",
     );
     expect(runtime.error).toHaveBeenCalledWith(
       "mattermost: failed to register slash commands for team team-2: Error: boom",
