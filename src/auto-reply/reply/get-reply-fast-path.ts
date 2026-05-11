@@ -248,20 +248,16 @@ export function initFastReplySessionState(params: {
     updatedAt: now,
     sessionStartedAt: resetTriggered ? now : (existingEntry?.sessionStartedAt ?? now),
     lastInteractionAt: now,
-    thinkingLevel: resetTriggered ? undefined : existingEntry?.thinkingLevel,
-    verboseLevel: resetTriggered ? undefined : existingEntry?.verboseLevel,
-    reasoningLevel: resetTriggered ? undefined : existingEntry?.reasoningLevel,
-    ttsAuto: resetTriggered ? undefined : existingEntry?.ttsAuto,
+    thinkingLevel: existingEntry?.thinkingLevel,
+    verboseLevel: existingEntry?.verboseLevel,
+    reasoningLevel: existingEntry?.reasoningLevel,
+    ttsAuto: existingEntry?.ttsAuto,
     responseUsage: !resetTriggered ? existingEntry?.responseUsage : undefined,
-    modelOverride: resetTriggered ? undefined : existingEntry?.modelOverride,
-    providerOverride: resetTriggered ? undefined : existingEntry?.providerOverride,
-    authProfileOverride: resetTriggered ? undefined : existingEntry?.authProfileOverride,
-    authProfileOverrideSource: resetTriggered
-      ? undefined
-      : existingEntry?.authProfileOverrideSource,
-    authProfileOverrideCompactionCount: resetTriggered
-      ? undefined
-      : existingEntry?.authProfileOverrideCompactionCount,
+    modelOverride: existingEntry?.modelOverride,
+    providerOverride: existingEntry?.providerOverride,
+    authProfileOverride: existingEntry?.authProfileOverride,
+    authProfileOverrideSource: existingEntry?.authProfileOverrideSource,
+    authProfileOverrideCompactionCount: existingEntry?.authProfileOverrideCompactionCount,
     ...(normalizedChatType ? { chatType: normalizedChatType } : {}),
     ...(normalizeOptionalString(ctx.Provider)
       ? { channel: normalizeOptionalString(ctx.Provider) }
