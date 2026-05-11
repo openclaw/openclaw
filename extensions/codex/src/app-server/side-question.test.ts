@@ -376,6 +376,7 @@ describe("runCodexAppServerSideQuestion", () => {
 
   it("returns an empty response for side-thread user input requests", async () => {
     const client = createFakeClient();
+    let unrelatedUserInputResponse: unknown;
     let userInputResponse: unknown;
     client.request.mockImplementation(async (method: string) => {
       if (method === "thread/fork") {
@@ -386,6 +387,16 @@ describe("runCodexAppServerSideQuestion", () => {
       }
       if (method === "turn/start") {
         setTimeout(async () => {
+          unrelatedUserInputResponse = await client.handleRequest({
+            id: 42,
+            method: "item/tool/requestUserInput",
+            params: {
+              threadId: "parent-thread",
+              turnId: "parent-turn",
+              itemId: "input-parent",
+              questions: [],
+            },
+          });
           userInputResponse = await client.handleRequest({
             id: 43,
             method: "item/tool/requestUserInput",
@@ -417,6 +428,7 @@ describe("runCodexAppServerSideQuestion", () => {
     const result = await runCodexAppServerSideQuestion(sideParams());
 
     expect(result).toEqual({ text: "No input needed." });
+    expect(unrelatedUserInputResponse).toBeUndefined();
     expect(userInputResponse).toEqual({ answers: {} });
   });
 

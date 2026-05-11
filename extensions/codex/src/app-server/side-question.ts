@@ -152,7 +152,9 @@ export async function runCodexAppServerSideQuestion(
         });
       }
       if (request.method === "item/tool/requestUserInput") {
-        return emptySideUserInputResponse();
+        return isSideUserInputRequest(request.params, childThreadId, turnId)
+          ? emptySideUserInputResponse()
+          : undefined;
       }
       if (isCodexAppServerApprovalRequest(request.method)) {
         return handleCodexAppServerApprovalRequest({
@@ -452,6 +454,14 @@ function failedSideDynamicToolResponse(message: string): CodexDynamicToolCallRes
 
 function emptySideUserInputResponse(): JsonObject {
   return { answers: {} };
+}
+
+function isSideUserInputRequest(
+  value: JsonValue | undefined,
+  threadId: string,
+  turnId: string,
+): boolean {
+  return isJsonObject(value) && value.threadId === threadId && value.turnId === turnId;
 }
 
 function resolveSideDynamicToolCallTimeoutMs(params: {

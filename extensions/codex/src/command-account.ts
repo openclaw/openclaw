@@ -217,6 +217,7 @@ async function readSubscriptionUsage(params: {
     {
       config: params.config,
       authProfileId: params.subscriptionProfileId,
+      isolated: true,
     },
   );
   if (!limits.ok) {
