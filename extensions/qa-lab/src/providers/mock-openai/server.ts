@@ -829,19 +829,42 @@ function extractBareToolArg(text: string, name: string) {
 
 function hasDeclaredTool(body: Record<string, unknown>, name: string) {
   const tools = Array.isArray(body.tools) ? body.tools : [];
-  return tools.some((tool) => {
-    if (!tool || typeof tool !== "object") {
-      return false;
-    }
-    const record = tool as Record<string, unknown>;
-    if (record.name === name) {
+  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
+  if (
+    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
+    instructionTextMentionsToolName(extractInstructionsText(body), name)
+  ) {
+    return true;
+  }
+  return false;
+}
+
+function toolDefinitionMentionsName(value: unknown, name: string, depth = 0): boolean {
+  if (depth > 6 || !value || typeof value !== "object") {
+    return false;
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+  }
+  const record = value as Record<string, unknown>;
+  for (const key of ["name", "tool", "functionName"]) {
+    if (record[key] === name) {
       return true;
     }
-    const nested = record.function;
-    return Boolean(
-      nested && typeof nested === "object" && (nested as { name?: unknown }).name === name,
-    );
-  });
+  }
+  return Object.values(record).some((item) => toolDefinitionMentionsName(item, name, depth + 1));
+}
+
+function instructionTextMentionsToolName(text: string, name: string) {
+  if (!text) {
+    return false;
+  }
+  const escapedName = escapeRegExp(name);
+  return new RegExp(`(^|[^A-Za-z0-9_])${escapedName}([^A-Za-z0-9_]|$)`).test(text);
+}
+
+function isQaToolSearchFixture(text: string) {
+  return QA_TOOL_SEARCH_PROMPT_RE.test(text) || QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(text);
 }
 
 function buildExplicitSessionsSpawnArgs(text: string): Record<string, unknown> | null {
@@ -1505,7 +1528,7 @@ async function buildResponsesPayload(
         ].join("\n"),
       });
     }
-    if (targetTool && hasDeclaredTool(body, targetTool)) {
+    if (targetTool && (hasDeclaredTool(body, targetTool) || isQaToolSearchFixture(allInputText))) {
       return buildToolCallEventsWithArgs(targetTool, plannedArgs);
     }
   }
