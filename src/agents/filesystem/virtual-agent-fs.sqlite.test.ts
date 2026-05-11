@@ -121,14 +121,34 @@ describe("SqliteVirtualAgentFs", () => {
 
     scratch.writeFile("/tmp/a.txt", "a");
     scratch.writeFile("/tmp/nested/b.txt", "b");
+    scratch.writeFile("/tmp2/keep.txt", "keep");
     expect(() => scratch.remove("/tmp")).toThrow("VFS directory is not empty");
 
     scratch.rename("/tmp", "/archive/tmp");
     expect(scratch.readFile("/archive/tmp/a.txt").toString("utf8")).toBe("a");
     expect(scratch.readFile("/archive/tmp/nested/b.txt").toString("utf8")).toBe("b");
+    expect(scratch.readFile("/tmp2/keep.txt").toString("utf8")).toBe("keep");
     scratch.remove("/archive", { recursive: true });
 
     expect(scratch.stat("/archive/tmp/a.txt")).toBeNull();
+    expect(scratch.readFile("/tmp2/keep.txt").toString("utf8")).toBe("keep");
+  });
+
+  it("removes only the exact VFS path prefix", () => {
+    const env = { OPENCLAW_STATE_DIR: createTempStateDir() };
+    const scratch = createSqliteVirtualAgentFs({
+      agentId: "main",
+      namespace: "scratch",
+      env,
+    });
+
+    scratch.writeFile("/wild_%/a.txt", "wild");
+    scratch.writeFile("/wild_X/b.txt", "other");
+
+    scratch.remove("/wild_%", { recursive: true });
+
+    expect(scratch.stat("/wild_%/a.txt")).toBeNull();
+    expect(scratch.readFile("/wild_X/b.txt").toString("utf8")).toBe("other");
   });
 
   it("rejects ambiguous or cyclic renames", () => {
