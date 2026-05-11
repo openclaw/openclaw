@@ -44,6 +44,9 @@ type RuntimeLifecycleSnapshot = {
   lastError?: string | null;
   lastInboundAt?: number | null;
   lastOutboundAt?: number | null;
+  busy?: boolean | null;
+  activeRuns?: number | null;
+  lastRunActivityAt?: number | null;
 };
 
 type StatusSnapshotExtra = Record<string, unknown>;
@@ -384,6 +387,11 @@ export function buildRuntimeAccountStatusSnapshot<TExtra extends StatusSnapshotE
       : {}),
     ...(typeof runtime?.healthState === "string" ? { healthState: runtime.healthState } : {}),
     ...(runtime?.terminalDisconnect ? { terminalDisconnect: runtime.terminalDisconnect } : {}),
+    ...(typeof runtime?.busy === "boolean" ? { busy: runtime.busy } : {}),
+    ...(typeof runtime?.activeRuns === "number" ? { activeRuns: runtime.activeRuns } : {}),
+    ...(runtime?.lastRunActivityAt !== undefined
+      ? { lastRunActivityAt: runtime.lastRunActivityAt ?? null }
+      : {}),
     ...(extra ?? ({} as TExtra)),
   };
 }

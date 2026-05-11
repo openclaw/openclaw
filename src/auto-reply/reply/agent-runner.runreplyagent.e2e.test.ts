@@ -947,6 +947,24 @@ describe("runReplyAgent heartbeat followup guard", () => {
     expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
   });
 
+  it("returns a visible Discord acknowledgement when a followup is queued", async () => {
+    const { run } = createMinimalRun({
+      opts: { isHeartbeat: false },
+      isActive: true,
+      shouldFollowup: true,
+      resolvedQueueMode: "collect",
+      sessionCtx: { Provider: "discord" },
+    });
+
+    const result = await run();
+
+    expect(result).toEqual({
+      text: "I'm still working on the previous request, so I queued this follow-up.",
+    });
+    expect(vi.mocked(enqueueFollowupRun)).toHaveBeenCalledTimes(1);
+    expect(state.runEmbeddedAgentMock).not.toHaveBeenCalled();
+  });
+
   it("defers hooks until an active run's follow-up is admitted", async () => {
     state.beforeAgentReplyHasHooksMock.mockImplementation(
       (hookName) => hookName === "before_agent_reply",
