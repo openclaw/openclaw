@@ -497,6 +497,8 @@ Completed consolidation/deletion highlights:
 - Restart/update delivery extraction now lets the typed SQLite delivery
   `threadId` win over topic/thread fragments parsed from `sessionKey`; parsing
   is only a fallback for legacy thread-shaped keys.
+- Hook agent context channel ids now prefer typed SQLite conversation identity
+  over parsing provider/group/channel fragments from `sessionKey`.
 - Gateway `chat.send` external-route inheritance now reads typed SQLite session
   routing metadata instead of inferring channel/direct/group scope from
   `sessionKey` pieces. Channel-scoped sessions inherit only when the typed

@@ -1,10 +1,62 @@
-import { describe, expect, it } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import { upsertSessionEntry } from "../config/sessions/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import {
   buildAgentHookContextChannelFields,
   resolveAgentHookChannelId,
 } from "./hook-agent-context.js";
 
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+
+function useTempStateDir(): NodeJS.ProcessEnv {
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-hook-context-"));
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  return { OPENCLAW_STATE_DIR: stateDir };
+}
+
+afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  if (ORIGINAL_STATE_DIR === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
+  }
+});
+
 describe("resolveAgentHookChannelId", () => {
+  it("prefers typed SQLite conversation identity over session-key shape", () => {
+    const env = useTempStateDir();
+    upsertSessionEntry({
+      agentId: "main",
+      env,
+      sessionKey: "agent:main:discord:channel:stale",
+      entry: {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+        deliveryContext: {
+          channel: "discord",
+          to: "channel:typed",
+          accountId: "default",
+        },
+        chatType: "channel",
+      },
+    });
+
+    expect(
+      resolveAgentHookChannelId({
+        sessionKey: "agent:main:discord:channel:stale",
+        messageChannel: "discord",
+        messageProvider: "discord",
+        currentChannelId: "channel:metadata",
+      }),
+    ).toBe("typed");
+  });
+
   it("derives the conversation id from channel session keys", () => {
     expect(
       resolveAgentHookChannelId({
