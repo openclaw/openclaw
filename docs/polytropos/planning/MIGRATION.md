@@ -9,7 +9,7 @@ After this migration, core updates/releases are performed by running the release
 - installs `current.tgz` globally
 - restarts the gateway
 
-See: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
+Dev mode (if/when needed) uses `npm link` (documented in [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)).
 
 ## Current state (reference)
 

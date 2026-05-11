@@ -77,11 +77,29 @@ What it does (high level):
 
 ## Dev mode (without a second gateway)
 
-Dev mode is simply:
+Dev mode uses `npm link` so the **globally installed** `openclaw` package resolves to your working tree checkout.
 
-- `current.tgz` points at a "dev" tarball you built/packed from your working tree (if you want to run dev builds).
+High level:
 
-(We can add a `dev.tgz` convention later; for now dev is just "point current.tgz at the tarball you want installed".)
+1) In the fork repo:
+
+```bash
+cd ~/polytropos/openclaw-polytropos
+pnpm install
+pnpm build
+pnpm ui:build
+npm link
+```
+
+2) Link the global package name to that checkout:
+
+```bash
+npm link openclaw
+```
+
+After this, the systemd unit continues to run the same ExecStart, but the underlying `openclaw` install points at the dev checkout.
+
+To exit dev mode, reinstall a released tarball (see release procedure above).
 
 ---
 
