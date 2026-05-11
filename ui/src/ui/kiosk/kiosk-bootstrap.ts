@@ -83,3 +83,53 @@ function hashMatchesKiosk(hash: string): boolean {
   const trimmed = hash.split("?")[0];
   return trimmed === KIOSK_HASH || trimmed === "#kiosk";
 }
+
+/**
+ * Self-bootstrapping entry: if the location hash is `#/kiosk`, wait for the
+ * `<openclaw-app>` element to mount and its gateway client to come online,
+ * then mount the kiosk shell as a body-level sibling and hide the rest of
+ * the UI. Imported once from `ui/src/main.ts` -- the host app does not need
+ * to know it exists.
+ *
+ * No-op if the hash does not match.
+ */
+export function autoMountKioskOnHashRoute(options?: {
+  pollIntervalMs?: number;
+  timeoutMs?: number;
+  appSelector?: string;
+}): void {
+  if (!hashMatchesKiosk(window.location.hash)) {
+    return;
+  }
+  const pollIntervalMs = options?.pollIntervalMs ?? 100;
+  const timeoutMs = options?.timeoutMs ?? 30_000;
+  const appSelector = options?.appSelector ?? "openclaw-app";
+
+  const deadline = Date.now() + timeoutMs;
+  let mounted: MountKioskResult | null = null;
+
+  const tryMount = (): boolean => {
+    if (mounted?.mounted) return true;
+    const app = document.querySelector(appSelector) as
+      | (HTMLElement & { client?: HaGatewayClient | null })
+      | null;
+    const client = app?.client ?? null;
+    if (!client) return false;
+    mounted = mountKioskIfRequested({ client });
+    return mounted.mounted;
+  };
+
+  if (tryMount()) return;
+
+  const handle = window.setInterval(() => {
+    if (tryMount() || Date.now() > deadline) {
+      window.clearInterval(handle);
+      if (!mounted?.mounted) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[kiosk] gateway client did not come online within timeout; kiosk view not mounted",
+        );
+      }
+    }
+  }, pollIntervalMs);
+}

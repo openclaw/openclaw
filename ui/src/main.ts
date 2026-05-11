@@ -1,5 +1,10 @@
 import "./styles.css";
 import "./ui/app.ts";
+import { autoMountKioskOnHashRoute } from "./ui/kiosk/kiosk-bootstrap.ts";
+
+// Self-bootstrap: if the URL is #/kiosk, wait for the gateway client to
+// come online and mount the wall-tablet kiosk view. No-op otherwise.
+autoMountKioskOnHashRoute();
 
 type ViteImportMeta = ImportMeta & {
   readonly env?: {

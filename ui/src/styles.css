@@ -8,6 +8,7 @@
 @import "./styles/cron-quick-create.css";
 @import "./styles/usage.css";
 @import "./styles/dreams.css";
+@import "./styles/kiosk.css";
 @import "@create-markdown/preview/themes/system.css";
 
 .cm-preview {
