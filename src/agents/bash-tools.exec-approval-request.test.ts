@@ -8,6 +8,9 @@ const commandExplainerMock = vi.hoisted(() => ({
   importCount: 0,
   explainShellCommand: vi.fn(async (command: string): Promise<string> => command),
   formatCommandSpans: vi.fn((command: string) => {
+    if (command.startsWith("pwsh ") || command.startsWith("cmd.exe ")) {
+      return [];
+    }
     if (command.startsWith("node ")) {
       return [{ startIndex: 0, endIndex: 4 }];
     }
