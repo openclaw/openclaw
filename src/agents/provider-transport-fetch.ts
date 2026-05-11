@@ -408,7 +408,11 @@ function resolveModelTransportSsrFPolicy(params: {
   return params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined;
 }
 
-export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): typeof fetch {
+export function buildGuardedModelFetch(
+  model: Model<Api>,
+  timeoutMs?: number,
+  options?: { sanitizeSse?: boolean },
+): typeof fetch {
   const requestConfig = resolveModelRequestPolicy(model);
   const dispatcherPolicy = buildProviderRequestDispatcherPolicy(requestConfig);
   const requestTimeoutMs = resolveModelRequestTimeoutMs(model, timeoutMs);
@@ -489,6 +493,8 @@ export function buildGuardedModelFetch(model: Model<Api>, timeoutMs?: number): t
       result.refreshTimeout,
       localServiceLease,
     );
-    return sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
+    return options?.sanitizeSse === false
+      ? response
+      : sanitizeOpenAISdkSseResponse(response, { synthesizeJsonAsSse });
   };
 }

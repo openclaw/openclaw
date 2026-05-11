@@ -18,6 +18,10 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
+type KimiThinkingConfig = {
+  type: KimiThinkingType;
+  budget_tokens?: number;
+};
 type KimiThinkingLevel =
   | "off"
   | "minimal"
@@ -27,6 +31,40 @@ type KimiThinkingLevel =
   | "xhigh"
   | "adaptive"
   | "max";
+
+const KIMI_ANTHROPIC_THINKING_BUDGETS: Record<Exclude<KimiThinkingLevel, "off">, number> = {
+  minimal: 1024,
+  low: 1024,
+  medium: 4096,
+  high: 8192,
+  adaptive: 8192,
+  xhigh: 8192,
+  max: 8192,
+};
+const KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS = 1024;
+
+function normalizeKimiThinkingBudgetTokens(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return undefined;
+  }
+  const normalized = Math.floor(value);
+  return normalized >= 1024 ? normalized : undefined;
+}
+
+function clampKimiAnthropicMaxTokens(
+  payloadObj: Record<string, unknown>,
+  thinkingConfig: KimiThinkingConfig,
+): void {
+  if (thinkingConfig.type !== "enabled" || thinkingConfig.budget_tokens === undefined) {
+    return;
+  }
+  const limit = thinkingConfig.budget_tokens + KIMI_ANTHROPIC_VISIBLE_OUTPUT_RESERVE_TOKENS;
+  const current =
+    typeof payloadObj.max_tokens === "number" && Number.isFinite(payloadObj.max_tokens)
+      ? Math.floor(payloadObj.max_tokens)
+      : undefined;
+  payloadObj.max_tokens = current === undefined ? limit : Math.min(current, limit);
+}
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
   if (typeof value === "boolean") {
@@ -51,18 +89,57 @@ function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined
   return undefined;
 }
 
-export function resolveKimiThinkingType(params: {
+function normalizeKimiThinkingConfig(value: unknown): KimiThinkingConfig | undefined {
+  const type = normalizeKimiThinkingType(value);
+  if (!type) {
+    return undefined;
+  }
+  if (type === "disabled") {
+    return { type: "disabled" };
+  }
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return { type: "enabled" };
+  }
+  const record = value as Record<string, unknown>;
+  const budgetTokens = normalizeKimiThinkingBudgetTokens(
+    record.budget_tokens ?? record.budgetTokens,
+  );
+  return budgetTokens === undefined
+    ? { type: "enabled" }
+    : { type: "enabled", budget_tokens: budgetTokens };
+}
+
+function resolveKimiAnthropicThinkingBudgetTokens(
+  thinkingLevel: KimiThinkingLevel | undefined,
+): number | undefined {
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return undefined;
+  }
+  return KIMI_ANTHROPIC_THINKING_BUDGETS[thinkingLevel];
+}
+
+export function resolveKimiThinkingConfig(params: {
   configuredThinking: unknown;
   thinkingLevel?: KimiThinkingLevel;
-}): KimiThinkingType {
-  const configured = normalizeKimiThinkingType(params.configuredThinking);
+}): KimiThinkingConfig {
+  const configured = normalizeKimiThinkingConfig(params.configuredThinking);
   if (configured) {
     return configured;
   }
   if (!params.thinkingLevel || params.thinkingLevel === "off") {
-    return "disabled";
+    return { type: "disabled" };
   }
-  return "enabled";
+  const budgetTokens = resolveKimiAnthropicThinkingBudgetTokens(params.thinkingLevel);
+  return budgetTokens === undefined
+    ? { type: "enabled" }
+    : { type: "enabled", budget_tokens: budgetTokens };
+}
+
+export function resolveKimiThinkingType(params: {
+  configuredThinking: unknown;
+  thinkingLevel?: KimiThinkingLevel;
+}): KimiThinkingType {
+  return resolveKimiThinkingConfig(params).type;
 }
 
 function stripTaggedToolCallCounter(value: string): string {
@@ -232,12 +309,18 @@ export function createKimiToolCallMarkupWrapper(baseStreamFn: StreamFn | undefin
 
 export function createKimiThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
-  thinkingType: KimiThinkingType,
+  thinkingConfig: KimiThinkingConfig | KimiThinkingType,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) =>
     streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      payloadObj.thinking = { type: thinkingType };
+      const normalized =
+        typeof thinkingConfig === "string" ? { type: thinkingConfig } : thinkingConfig;
+      payloadObj.thinking =
+        model.api === "anthropic-messages" ? { ...normalized } : { type: normalized.type };
+      if (model.api === "anthropic-messages") {
+        clampKimiAnthropicMaxTokens(payloadObj, normalized);
+      }
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
@@ -245,9 +328,9 @@ export function createKimiThinkingWrapper(
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {
-  const thinkingType = resolveKimiThinkingType({
+  const thinkingConfig = resolveKimiThinkingConfig({
     configuredThinking: ctx.extraParams?.thinking,
     thinkingLevel: ctx.thinkingLevel,
   });
-  return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingType));
+  return createKimiToolCallMarkupWrapper(createKimiThinkingWrapper(ctx.streamFn, thinkingConfig));
 }

@@ -307,7 +307,7 @@ describe("kimi tool-call markup wrapper", () => {
     });
   });
 
-  it("enables Kimi thinking only when explicitly requested", () => {
+  it("enables Kimi Anthropic thinking with a bounded high budget", () => {
     const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
 
     const wrapped = wrapKimiProviderStream({
@@ -328,7 +328,72 @@ describe("kimi tool-call markup wrapper", () => {
     );
 
     expect(getCapturedPayload()).toEqual({
-      thinking: { type: "enabled" },
+      max_tokens: 9216,
+      thinking: { type: "enabled", budget_tokens: 8192 },
     });
+  });
+
+  it("preserves explicit Kimi Anthropic thinking budgets", () => {
+    const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+
+    const wrapped = wrapKimiProviderStream({
+      provider: "kimi",
+      modelId: "kimi-code",
+      extraParams: { thinking: { type: "enabled", budget_tokens: 4096 } },
+      thinkingLevel: "high",
+      streamFn: baseStreamFn,
+    } as never);
+
+    void wrapped(
+      {
+        api: "anthropic-messages",
+        provider: "kimi",
+        id: "kimi-code",
+      } as Model<"anthropic-messages">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(getCapturedPayload()).toEqual({
+      max_tokens: 5120,
+      thinking: { type: "enabled", budget_tokens: 4096 },
+    });
+  });
+
+  it("bounds Kimi Anthropic thinking for session thinking levels", () => {
+    const cases = [
+      ["minimal", 1024],
+      ["low", 1024],
+      ["medium", 4096],
+      ["high", 8192],
+      ["adaptive", 8192],
+      ["xhigh", 8192],
+      ["max", 8192],
+    ] as const;
+
+    for (const [thinkingLevel, budgetTokens] of cases) {
+      const { streamFn: baseStreamFn, getCapturedPayload } = createPayloadCapturingStream();
+      const wrapped = wrapKimiProviderStream({
+        provider: "kimi",
+        modelId: "kimi-code",
+        thinkingLevel,
+        streamFn: baseStreamFn,
+      } as never);
+
+      void wrapped(
+        {
+          api: "anthropic-messages",
+          provider: "kimi",
+          id: "kimi-code",
+        } as Model<"anthropic-messages">,
+        { messages: [] } as Context,
+        {},
+      );
+
+      expect(getCapturedPayload()).toEqual({
+        max_tokens: budgetTokens + 1024,
+        thinking: { type: "enabled", budget_tokens: budgetTokens },
+      });
+    }
   });
 });
