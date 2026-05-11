@@ -551,6 +551,33 @@ describe("startHeartbeatRunner", () => {
     runner.stop();
   });
 
+  it("dispatches targeted exec-event wakes even when heartbeat every is 0m", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+    const runner = await expectWakeDispatch({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runSpy,
+      wake: {
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      },
+      expectedCall: {
+        agentId: "main",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    runner.stop();
+  });
+
   // Regression for runaway heartbeat loop: backgrounded `process.start` exits
   // call `requestHeartbeat({reason: "exec-event"})` from
   // `bash-tools.exec-runtime.ts:347` (`maybeNotifyOnExit`). If a heartbeat run
@@ -599,6 +626,47 @@ describe("startHeartbeatRunner", () => {
 
     // Total elapsed: ~40s. Configured `every` is 30m. Subsequent exec-events
     // should NOT trigger fresh runs within the cooldown window.
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    runner.stop();
+  });
+
+  it("keeps cooldown bookkeeping for repeated zero-interval exec-event wakes", async () => {
+    useFakeHeartbeatTime();
+    const runSpy = vi.fn().mockResolvedValue({ status: "ran", durationMs: 1 });
+
+    const runner = startHeartbeatRunner({
+      cfg: {
+        agents: {
+          defaults: { heartbeat: { every: "0m" } },
+        },
+      } as OpenClawConfig,
+      runOnce: runSpy,
+      stableSchedulerSeed: TEST_SCHEDULER_SEED,
+    });
+
+    requestHeartbeat({
+      source: "exec-event",
+      intent: "event",
+      reason: "exec-event",
+      sessionKey: "agent:main:main",
+      coalesceMs: 0,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(runSpy).toHaveBeenCalledTimes(1);
+
+    for (let i = 0; i < 3; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      requestHeartbeat({
+        source: "exec-event",
+        intent: "event",
+        reason: "exec-event",
+        sessionKey: "agent:main:main",
+        coalesceMs: 0,
+      });
+      await vi.advanceTimersByTimeAsync(1);
+    }
+
     expect(runSpy).toHaveBeenCalledTimes(1);
 
     runner.stop();
