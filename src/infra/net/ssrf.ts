@@ -204,7 +204,9 @@ export function resolveSsrFPolicyForUrl(url: URL, policy?: SsrFPolicy): SsrFPoli
   }
   return {
     ...policy,
-    allowedHostnames: Array.from(new Set([...(policy.allowedHostnames ?? []), url.hostname])),
+    allowedHostnames: Array.from(
+      new Set([...(policy.allowedHostnames ?? []), url.hostname.toLowerCase()]),
+    ),
   };
 }
 

@@ -157,6 +157,14 @@ describe("ssrfPolicyFromHttpBaseUrlAllowedOrigin", () => {
 });
 
 describe("resolveSsrFPolicyForUrl", () => {
+  it("returns missing and originless policies unchanged", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), undefined),
+    ).toBeUndefined();
+    const policy = { allowedOrigins: [], hostnameAllowlist: ["api.example.com"] };
+    expect(resolveSsrFPolicyForUrl(new URL("https://api.example.com/v1"), policy)).toBe(policy);
+  });
+
   it("converts matching allowed origins into per-request hostname trust", () => {
     expect(
       resolveSsrFPolicyForUrl(new URL("http://10.0.0.5:1234/v1/chat/completions"), {
@@ -175,6 +183,17 @@ describe("resolveSsrFPolicyForUrl", () => {
       }),
     ).toEqual({
       allowedOrigins: ["http://10.0.0.5:1234"],
+    });
+  });
+
+  it("supports IPv6 origins when the exact origin matches", () => {
+    expect(
+      resolveSsrFPolicyForUrl(new URL("http://[fd00::1]:11434/v1/chat/completions"), {
+        allowedOrigins: ["http://[fd00::1]:11434"],
+      }),
+    ).toEqual({
+      allowedOrigins: ["http://[fd00::1]:11434"],
+      allowedHostnames: ["[fd00::1]"],
     });
   });
 });
