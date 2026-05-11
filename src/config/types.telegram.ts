@@ -220,6 +220,31 @@ export type TelegramAccountConfig = {
   trustedLocalFileRoots?: string[];
   /** Auto-rename DM forum topics on first message using LLM. Default: true. */
   autoTopicLabel?: AutoTopicLabelConfig;
+  /**
+   * Three-phase presence indicator config (👀 on receive, 👨‍💻 + typing while
+   * processing, cleared on done). Defaults to enabled.
+   */
+  presence?: TelegramPresenceConfig;
+};
+
+/**
+ * Per-account presence indicator config. All fields optional and
+ * backward-compatible: existing configs without `presence` default to enabled
+ * with built-in emoji.
+ */
+export type TelegramPresenceConfig = {
+  /** Enable the typing-indicator loop while the agent processes. Default: true. */
+  typing?: boolean;
+  /**
+   * Emoji set on the user's message when received (before queue/dispatch).
+   * Use `null` to disable reactions entirely. Default: "👀".
+   */
+  reaction?: string | null;
+  /**
+   * Emoji swapped in while the agent is actively processing. Use `null` to
+   * skip the swap. Default: "👨‍💻".
+   */
+  workingReaction?: string | null;
 };
 
 export type TelegramDmThreadReplies = "off" | "inbound" | "always";

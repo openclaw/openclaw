@@ -122,6 +122,7 @@ import {
   resolveModelSelection,
   type ProviderInfo,
 } from "./model-buttons.js";
+import { NOOP_PRESENCE_INDICATOR } from "./presence-indicator.js";
 import { buildInlineKeyboard } from "./send.js";
 
 export const registerTelegramHandlers = ({
@@ -139,9 +140,11 @@ export const registerTelegramHandlers = ({
   resolveTelegramGroupConfig,
   shouldSkipUpdate,
   processMessage,
+  presence,
   logger,
   telegramDeps,
 }: RegisterTelegramHandlerParams) => {
+  const presenceIndicator = presence ?? NOOP_PRESENCE_INDICATOR;
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
     cfg,
     accountId,
@@ -2361,6 +2364,17 @@ export const registerTelegramHandlers = ({
     if (normalizedMsg.from?.id != null && normalizedMsg.from.id === ctx.me?.id) {
       return;
     }
+    // Fire presence "received" hook BEFORE queueing/dispatch so the user sees an
+    // acknowledgement even if the agent is busy. Errors are swallowed inside.
+    if (normalizedMsg.message_id != null) {
+      void presenceIndicator
+        .onMessageReceived({
+          chatId: normalizedMsg.chat.id,
+          messageId: normalizedMsg.message_id,
+          threadId: normalizedMsg.message_thread_id ?? undefined,
+        })
+        .catch(() => undefined);
+    }
     await handleInboundMessageLike({
       ctxForDedupe: ctx,
       ctx: buildSyntheticContext(ctx, normalizedMsg),
@@ -2397,6 +2411,16 @@ export const registerTelegramHandlers = ({
 
     const chatId = post.chat.id;
     const syntheticMsg = normalizeChannelPostMessage(post);
+
+    if (syntheticMsg.message_id != null) {
+      void presenceIndicator
+        .onMessageReceived({
+          chatId,
+          messageId: syntheticMsg.message_id,
+          threadId: syntheticMsg.message_thread_id ?? undefined,
+        })
+        .catch(() => undefined);
+    }
 
     await handleInboundMessageLike({
       ctxForDedupe: ctx,

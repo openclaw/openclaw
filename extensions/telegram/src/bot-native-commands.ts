@@ -420,6 +420,8 @@ export type RegisterTelegramHandlerParams = {
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
     promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
   ) => Promise<void>;
+  /** Optional presence indicator. When omitted, presence hooks are no-ops. */
+  presence?: import("./presence-indicator.js").PresenceIndicator;
   logger: ReturnType<typeof getChildLogger>;
 };
 

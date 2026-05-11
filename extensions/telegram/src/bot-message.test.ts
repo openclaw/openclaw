@@ -238,4 +238,59 @@ describe("telegram bot message processor", () => {
     );
     expect(runtimeError).toHaveBeenCalledWith(expect.stringContaining("dispatch exploded"));
   });
+
+  it("invokes presence.onProcessingStart and onProcessingEnd around dispatch", async () => {
+    const onProcessingStart = vi.fn().mockResolvedValue(undefined);
+    const onProcessingEnd = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      presence: {
+        onMessageReceived: vi.fn().mockResolvedValue(undefined),
+        onProcessingStart,
+        onProcessingEnd,
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processSampleMessage(processMessage);
+
+    expect(onProcessingStart).toHaveBeenCalledWith({
+      chatId: 123,
+      messageId: 456,
+      threadId: undefined,
+    });
+    expect(onProcessingEnd).toHaveBeenCalledWith({
+      chatId: 123,
+      messageId: 456,
+      threadId: undefined,
+    });
+    // Start must run before dispatch; end must run after.
+    expect(onProcessingStart.mock.invocationCallOrder[0]).toBeLessThan(
+      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    );
+    expect(onProcessingEnd.mock.invocationCallOrder[0]).toBeGreaterThan(
+      dispatchTelegramMessage.mock.invocationCallOrder[0],
+    );
+  });
+
+  it("invokes presence.onProcessingEnd even when dispatch throws", async () => {
+    const onProcessingEnd = vi.fn().mockResolvedValue(undefined);
+    const sendMessage = vi.fn().mockResolvedValue(undefined);
+    buildTelegramMessageContext.mockResolvedValue(createMessageContext());
+    dispatchTelegramMessage.mockRejectedValue(new Error("agent exploded"));
+
+    const processMessage = createTelegramMessageProcessor({
+      ...baseDeps,
+      bot: { api: { sendMessage } },
+      runtime: { error: vi.fn() },
+      presence: {
+        onMessageReceived: vi.fn().mockResolvedValue(undefined),
+        onProcessingStart: vi.fn().mockResolvedValue(undefined),
+        onProcessingEnd,
+      },
+    } as unknown as Parameters<typeof createTelegramMessageProcessor>[0]);
+    await processSampleMessage(processMessage);
+
+    expect(onProcessingEnd).toHaveBeenCalledTimes(1);
+  });
 });
