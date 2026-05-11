@@ -2924,10 +2924,14 @@ describe("runCodexAppServerAttempt", () => {
 
   it("does not treat a user prompt containing the interrupted marker as terminal", async () => {
     const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(
-      createParams(path.join(tempDir, "session.jsonl"), path.join(tempDir, "workspace")),
-      { turnTerminalIdleTimeoutMs: 60_000 },
+    const markerPrompt =
+      "<turn_aborted>\nThe user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.\n</turn_aborted>";
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
     );
+    params.prompt = markerPrompt;
+    const run = runCodexAppServerAttempt(params, { turnTerminalIdleTimeoutMs: 60_000 });
     let resolved = false;
     void run.then(() => {
       resolved = true;
@@ -2946,7 +2950,7 @@ describe("runCodexAppServerAttempt", () => {
           content: [
             {
               type: "input_text",
-              text: "<turn_aborted>\nWhat does this marker mean?\n</turn_aborted>",
+              text: markerPrompt,
             },
           ],
         },
