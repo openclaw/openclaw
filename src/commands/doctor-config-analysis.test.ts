@@ -32,9 +32,8 @@ describe("doctor config analysis helpers", () => {
     expect((result.config as Record<string, unknown>).hooks).toStrictEqual({});
   });
 
-  it("preserves root-level defaultModel and agent description fields", () => {
+  it("preserves agent description field and excludes unknown root keys", () => {
     const result = stripUnknownConfigKeys({
-      defaultModel: "openrouter/openrouter/free",
       agents: {
         list: [
           {
@@ -43,10 +42,10 @@ describe("doctor config analysis helpers", () => {
           },
         ],
       },
+      unknownRootKey: true,
     } as never);
-    expect(result.removed).toHaveLength(0);
+    expect(result.removed).toContain("unknownRootKey");
     const cfg = result.config as Record<string, unknown>;
-    expect(cfg.defaultModel).toBe("openrouter/openrouter/free");
     const agents = cfg.agents as { list: Array<Record<string, unknown>> };
     expect(agents.list[0].description).toBe("Main agent for general tasks");
   });
