@@ -545,6 +545,49 @@ describe("runAgentTurnWithFallback", () => {
     });
   });
 
+  it("hooks onReasoningStream when explicitly requested by followupRun.run.reasoningLevel", async () => {
+    state.runEmbeddedPiAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "final" }],
+      meta: {},
+    });
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const followupRun = createFollowupRun();
+    followupRun.run.provider = "anthropic";
+    followupRun.run.model = "claude";
+    followupRun.run.reasoningLevel = "stream";
+
+    await runAgentTurnWithFallback({
+      commandBody: "hello",
+      followupRun,
+      sessionCtx: {
+        Provider: "whatsapp",
+        MessageSid: "msg",
+      } as unknown as TemplateContext,
+      opts: {}, // NO onReasoningStream passed here
+      typingSignals: createMockTypingSignaler(), // shouldStartOnReasoning defaults to false
+      blockReplyPipeline: null,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      applyReplyToMode: (payload) => payload,
+      shouldEmitToolResult: () => true,
+      shouldEmitToolOutput: () => false,
+      pendingToolTasks: new Set(),
+      resetSessionAfterCompactionFailure: async () => false,
+      resetSessionAfterRoleOrderingConflict: async () => false,
+      isHeartbeat: false,
+      sessionKey: "main",
+      getActiveSessionEntry: () => undefined,
+      resolvedVerboseLevel: "off",
+    });
+
+    const callArgs = state.runEmbeddedPiAgentMock.mock.calls[0]?.[0] as {
+      onReasoningStream?: unknown;
+    };
+    expect(callArgs?.onReasoningStream).toBeDefined();
+    expect(typeof callArgs?.onReasoningStream).toBe("function");
+  });
+
   it("bridges CLI assistant agent events into onPartialReply for live preview (#76869)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
