@@ -28,6 +28,21 @@ public enum WebViewJavaScriptSupport {
     }
 
     @MainActor
+    public static func applyHomeCanvasState(webView: WKWebView, json: String?) {
+        let payload = json ?? "null"
+        let js = """
+        (() => {
+          try {
+            const api = globalThis.__openclaw;
+            if (!api || typeof api.renderHome !== 'function') return;
+            api.renderHome(\(payload));
+          } catch (_) {}
+        })()
+        """
+        webView.evaluateJavaScript(js) { _, _ in }
+    }
+
+    @MainActor
     public static func evaluateToString(webView: WKWebView, javaScript: String) async throws -> String {
         try await withCheckedThrowingContinuation { cont in
             webView.evaluateJavaScript(javaScript) { result, error in

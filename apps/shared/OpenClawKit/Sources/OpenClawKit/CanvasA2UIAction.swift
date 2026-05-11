@@ -48,6 +48,15 @@ public enum OpenClawCanvasA2UIAction: Sendable {
         return nil
     }
 
+    public static func isTalkRealtimeActionName(_ name: String) -> Bool {
+        switch name.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "talk.realtime.toggle", "talk.realtime.start", "talk.realtime.stop":
+            true
+        default:
+            false
+        }
+    }
+
     public static func sanitizeTagValue(_ value: String) -> String {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         let nonEmpty = trimmed.isEmpty ? "-" : trimmed
@@ -80,12 +89,25 @@ public enum OpenClawCanvasA2UIAction: Sendable {
         ].joined(separator: " ")
     }
 
-    public static func jsDispatchA2UIActionStatus(actionId: String, ok: Bool, error: String?) -> String {
-        let payload: [String: Any] = [
+    public static func jsDispatchA2UIActionStatus(
+        actionId: String,
+        ok: Bool,
+        error: String?,
+        state: String? = nil,
+        message: String? = nil)
+        -> String
+    {
+        var payload: [String: Any] = [
             "id": actionId,
             "ok": ok,
             "error": error ?? "",
         ]
+        if let state {
+            payload["state"] = state
+        }
+        if let message {
+            payload["message"] = message
+        }
         let json: String = {
             if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
                let str = String(data: data, encoding: .utf8)
@@ -98,6 +120,35 @@ public enum OpenClawCanvasA2UIAction: Sendable {
         (() => {
           const detail = \(json);
           window.dispatchEvent(new CustomEvent('openclaw:a2ui-action-status', { detail }));
+        })();
+        """
+    }
+
+    public static func jsDispatchLiveThomasStatus(_ status: CanvasRealtimeTalkStatus) -> String {
+        var payload: [String: Any] = [
+            "ok": status.ok,
+            "state": status.state,
+            "message": status.message ?? "",
+            "provider": status.provider ?? "",
+            "model": status.model ?? "",
+            "voice": status.voice ?? "",
+        ]
+        if let data = try? JSONSerialization.data(withJSONObject: payload, options: []),
+           let str = String(data: data, encoding: .utf8)
+        {
+            return """
+            (() => {
+              const detail = \(str);
+              window.dispatchEvent(new CustomEvent('openclaw:live-thomas-status', { detail }));
+            })();
+            """
+        }
+        payload["message"] = ""
+        return """
+        (() => {
+          window.dispatchEvent(new CustomEvent('openclaw:live-thomas-status', {
+            detail: { ok: \(status.ok ? "true" : "false"), state: "\(status.state)" }
+          }));
         })();
         """
     }

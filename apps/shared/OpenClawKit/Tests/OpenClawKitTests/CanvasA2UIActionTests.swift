@@ -16,6 +16,27 @@ import Testing
         #expect(OpenClawCanvasA2UIAction.extractActionName(["action": " "]) == nil)
     }
 
+    @Test func talkRealtimeActionNamesAreRecognizedForNativeCanvasBridge() {
+        #expect(OpenClawCanvasA2UIAction.isTalkRealtimeActionName("talk.realtime.toggle"))
+        #expect(OpenClawCanvasA2UIAction.isTalkRealtimeActionName("talk.realtime.start"))
+        #expect(OpenClawCanvasA2UIAction.isTalkRealtimeActionName("talk.realtime.stop"))
+        #expect(OpenClawCanvasA2UIAction.isTalkRealtimeActionName(" Talk.Realtime.Toggle "))
+        #expect(!OpenClawCanvasA2UIAction.isTalkRealtimeActionName("canvas.reveal"))
+    }
+
+    @Test func jsDispatchA2UIActionStatusCanReportSetupWithoutErrorText() {
+        let js = OpenClawCanvasA2UIAction.jsDispatchA2UIActionStatus(
+            actionId: "live-thomas-test",
+            ok: false,
+            error: nil,
+            state: "setup",
+            message: "Dedicated realtime bridge is being prepared.")
+
+        #expect(js.contains("\"state\":\"setup\""))
+        #expect(js.contains("\"message\":\"Dedicated realtime bridge is being prepared.\""))
+        #expect(js.contains("\"error\":\"\""))
+    }
+
     @Test func formatAgentMessageIsTokenEfficientAndUnambiguous() {
         let messageContext = OpenClawCanvasA2UIAction.AgentMessageContext(
             actionName: "Get Weather",

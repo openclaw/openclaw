@@ -393,6 +393,16 @@ describe("canvas host", () => {
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
+      expect(js).toContain("Thomas Workbench");
+      expect(js).toContain("Good. The desk is awake.");
+      expect(js).toContain("A living command surface");
+      expect(js).toContain("Proactive queue");
+      expect(js).toContain("Notion Focus");
+      expect(js).toContain("Recent cron runs");
+      expect(js).toContain("Serious suggestion");
+      expect(js).toContain("Fun suggestion");
+      expect(js).toContain("renderHome");
+      expect(js).not.toContain("Canvas (A2UI)");
       const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");

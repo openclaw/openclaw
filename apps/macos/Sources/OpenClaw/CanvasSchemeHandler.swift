@@ -78,6 +78,9 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
         let resolved = self.resolveFileURL(sessionRoot: sessionRoot, requestPath: path)
         guard let fileURL = resolved else {
+            if let bundled = self.scaffoldResource(path: path) {
+                return bundled
+            }
             return self.html("Not Found", title: "Canvas: 404")
         }
 
@@ -212,6 +215,12 @@ final class CanvasSchemeHandler: NSObject, WKURLSchemeHandler {
 
         // Fallback for dev misconfiguration: show the classic welcome page.
         return self.welcomePage(sessionRoot: sessionRoot)
+    }
+
+    private func scaffoldResource(path: String) -> CanvasResponse? {
+        guard path == "thomas_avatar.png" else { return nil }
+        guard let data = self.loadBundledResourceData(relativePath: "CanvasScaffold/\(path)") else { return nil }
+        return CanvasResponse(mime: CanvasScheme.mimeType(forExtension: "png"), data: data)
     }
 
     private func loadBundledResourceData(relativePath: String) -> Data? {

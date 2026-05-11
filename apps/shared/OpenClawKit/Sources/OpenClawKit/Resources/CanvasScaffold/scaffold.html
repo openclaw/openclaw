@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <title>OpenClaw</title>
+    <title>Thomas Workbench</title>
     <script>
       (() => {
         try {
@@ -13,7 +13,10 @@
             document.documentElement.dataset.platform = platform;
             return;
           }
-          if (/android/i.test(navigator.userAgent || '')) {
+
+          if (/macintosh|mac os x/i.test(navigator.userAgent || '')) {
+            document.documentElement.dataset.platform = 'macos';
+          } else if (/android/i.test(navigator.userAgent || '')) {
             document.documentElement.dataset.platform = 'android';
           } else {
             document.documentElement.dataset.platform = 'ios';
@@ -24,80 +27,99 @@
     <style>
       :root {
         color-scheme: dark;
-        --bg: #06070b;
-        --panel: rgba(14, 17, 24, 0.74);
-        --panel-strong: rgba(18, 23, 32, 0.86);
-        --line: rgba(255, 255, 255, 0.1);
-        --line-strong: rgba(255, 255, 255, 0.18);
-        --text: rgba(255, 255, 255, 0.96);
-        --muted: rgba(222, 229, 239, 0.72);
-        --soft: rgba(222, 229, 239, 0.5);
-        --accent: #8ec5ff;
-        --accent-strong: #5b9dff;
-        --accent-warm: #ff9159;
-        --accent-rose: #ff5fa2;
-        --state: #7d8ca3;
+        --bg-top: #08111f;
+        --bg-bottom: #180b13;
+        --panel: rgba(16, 20, 35, 0.76);
+        --panel-strong: rgba(20, 28, 45, 0.94);
+        --panel-soft: rgba(255, 255, 255, 0.075);
+        --line: rgba(255, 255, 255, 0.18);
+        --line-strong: rgba(255, 255, 255, 0.32);
+        --text: rgba(248, 250, 252, 0.98);
+        --muted: rgba(226, 232, 240, 0.82);
+        --soft: rgba(226, 232, 240, 0.62);
+        --studio-blue: #52c8ff;
+        --studio-coral: #ff6f61;
+        --studio-lime: #58e6a7;
+        --studio-gold: #ffc941;
+        --studio-violet: #a78bfa;
+        --studio-pink: #ff4fa3;
+        --studio-orange: #ff8a2a;
+        --studio-teal: #36f2d2;
+        --state: #9daabc;
         --safe-top: env(safe-area-inset-top, 0px);
         --safe-bottom: env(safe-area-inset-bottom, 0px);
+        --thomas-x: 18%;
+        --thomas-y: 15%;
       }
 
-      html, body {
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
         height: 100%;
         margin: 0;
       }
 
       body {
-        font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
+        font-family:
+          "SF Pro Rounded",
+          "SF Pro Display",
+          "Avenir Next",
+          "Nunito Sans",
+          system-ui,
+          sans-serif;
         background:
-          radial-gradient(900px 640px at 12% 10%, rgba(91, 157, 255, 0.36), rgba(0, 0, 0, 0) 58%),
-          radial-gradient(840px 600px at 88% 16%, rgba(255, 95, 162, 0.24), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(960px 720px at 50% 100%, rgba(255, 145, 89, 0.18), rgba(0, 0, 0, 0) 60%),
-          linear-gradient(180deg, #090b11 0%, #05060a 100%);
+          linear-gradient(118deg, rgba(82, 200, 255, 0.25) 0 18%, transparent 18% 100%),
+          linear-gradient(232deg, rgba(255, 111, 97, 0.22) 0 16%, transparent 16% 100%),
+          linear-gradient(18deg, rgba(88, 230, 167, 0.16) 0 22%, transparent 22% 100%),
+          linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
         color: var(--text);
         overflow: hidden;
       }
 
-      body::before,
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        background:
+          linear-gradient(rgba(255, 255, 255, 0.028) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+        background-size: 48px 48px;
+        mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.82), transparent 88%);
+        opacity: 0.6;
+      }
+
       body::after {
         content: "";
         position: fixed;
-        inset: -10%;
+        inset: 0;
         pointer-events: none;
-      }
-
-      body::before {
         background:
-          repeating-linear-gradient(
-            90deg,
-            rgba(255, 255, 255, 0.025) 0,
-            rgba(255, 255, 255, 0.025) 1px,
-            transparent 1px,
-            transparent 52px
-          ),
-          repeating-linear-gradient(
-            0deg,
-            rgba(255, 255, 255, 0.025) 0,
-            rgba(255, 255, 255, 0.025) 1px,
-            transparent 1px,
-            transparent 52px
-          );
-        opacity: 0.42;
-        transform: rotate(-7deg);
+          linear-gradient(112deg, transparent 0 12%, rgba(255, 201, 65, 0.18) 12% 13%, transparent 13% 100%),
+          linear-gradient(156deg, transparent 0 58%, rgba(54, 242, 210, 0.14) 58% 59.5%, transparent 59.5% 100%),
+          linear-gradient(24deg, transparent 0 76%, rgba(255, 79, 163, 0.14) 76% 77.5%, transparent 77.5% 100%);
+        opacity: 0.9;
+        z-index: 0;
       }
 
-      body::after {
-        background:
-          radial-gradient(700px 460px at 20% 18%, rgba(142, 197, 255, 0.18), rgba(0, 0, 0, 0) 62%),
-          radial-gradient(720px 520px at 84% 20%, rgba(255, 95, 162, 0.14), rgba(0, 0, 0, 0) 66%),
-          radial-gradient(860px 620px at 52% 88%, rgba(255, 145, 89, 0.14), rgba(0, 0, 0, 0) 64%);
-        filter: blur(28px);
-        opacity: 0.95;
+      body[data-state="connected"] {
+        --state: var(--studio-lime);
       }
 
-      body[data-state="connected"] { --state: #61d58b; }
-      body[data-state="connecting"] { --state: #ffd05f; }
-      body[data-state="error"] { --state: #ff6d6d; }
-      body[data-state="offline"] { --state: #95a3b9; }
+      body[data-state="connecting"] {
+        --state: var(--studio-gold);
+      }
+
+      body[data-state="error"] {
+        --state: var(--studio-coral);
+      }
+
+      body[data-state="offline"] {
+        --state: #8b96a8;
+      }
 
       canvas {
         position: fixed;
@@ -106,183 +128,360 @@
         height: 100vh;
         display: block;
         z-index: 1;
+        opacity: 0.92;
+      }
+
+      .aurora-field,
+      .shape-cluster {
+        position: fixed;
+        inset: auto;
+        pointer-events: none;
+        z-index: 1;
+        mix-blend-mode: screen;
+      }
+
+      .aurora-field {
+        width: 34vw;
+        height: 22vw;
+        min-width: 260px;
+        min-height: 180px;
+        border-radius: 30% 70% 44% 56% / 58% 34% 66% 42%;
+        filter: blur(18px);
+        opacity: 0.64;
+        animation: drift 16s ease-in-out infinite alternate;
+      }
+
+      .aurora-a {
+        top: 8%;
+        left: -4%;
+        background: linear-gradient(135deg, rgba(82, 200, 255, 0.88), rgba(255, 79, 163, 0.08));
+        clip-path: polygon(0 16%, 92% 0, 100% 62%, 22% 100%);
+      }
+
+      .aurora-b {
+        right: -8%;
+        bottom: 14%;
+        background: linear-gradient(135deg, rgba(255, 138, 42, 0.78), rgba(88, 230, 167, 0.28));
+        clip-path: polygon(12% 0, 100% 18%, 82% 100%, 0 72%);
+        animation-duration: 22s;
+      }
+
+      .shape-cluster {
+        width: 16rem;
+        height: 16rem;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        opacity: 0.46;
+        box-shadow: inset 0 0 44px rgba(255, 255, 255, 0.08);
+        animation: shape-breathe 9s ease-in-out infinite alternate;
+      }
+
+      .shape-cluster-a {
+        top: 22%;
+        right: 18%;
+        background: linear-gradient(135deg, rgba(167, 139, 250, 0.5), rgba(82, 200, 255, 0.08));
+        clip-path: polygon(16% 0, 100% 24%, 80% 100%, 0 70%);
+        transform: rotate(18deg);
+      }
+
+      .shape-cluster-b {
+        bottom: 18%;
+        left: 14%;
+        background: linear-gradient(135deg, rgba(88, 230, 167, 0.48), rgba(255, 201, 65, 0.12));
+        clip-path: polygon(0 26%, 86% 0, 100% 74%, 22% 100%);
+        transform: rotate(-18deg);
+      }
+
+      .studio-ribbon {
+        position: fixed;
+        pointer-events: none;
+        z-index: 1;
+        width: 38vw;
+        height: 6px;
+        min-width: 260px;
+        border-radius: 999px;
+        opacity: 0.75;
+        filter: drop-shadow(0 0 16px rgba(255, 255, 255, 0.18));
+        animation: ribbon-slide 13s ease-in-out infinite alternate;
+      }
+
+      .studio-ribbon-a {
+        top: 19%;
+        left: 7%;
+        background: linear-gradient(90deg, var(--studio-blue), var(--studio-gold), transparent);
+        transform: rotate(-11deg);
+      }
+
+      .studio-ribbon-b {
+        right: 3%;
+        bottom: 29%;
+        background: linear-gradient(90deg, transparent, var(--studio-pink), var(--studio-teal));
+        transform: rotate(13deg);
+        animation-delay: -4s;
       }
 
       #openclaw-home {
         position: fixed;
         inset: 0;
         z-index: 2;
-        display: flex;
-        align-items: flex-start;
-        justify-content: center;
+        overflow: auto;
         padding: calc(var(--safe-top) + 18px) 16px calc(var(--safe-bottom) + 18px);
-        box-sizing: border-box;
-        overflow-y: auto;
-        overflow-x: hidden;
         -webkit-overflow-scrolling: touch;
       }
 
       .shell {
-        width: min(100%, 760px);
-        display: flex;
-        flex-direction: column;
-        justify-content: flex-start;
+        width: min(1280px, 100%);
+        margin: 0 auto;
+        display: grid;
+        grid-template-columns: minmax(0, 1.42fr) minmax(300px, 0.78fr);
         gap: 16px;
-        min-height: 100%;
-        box-sizing: border-box;
+        position: relative;
       }
 
-      .hero {
+      .creative-control-room {
+        isolation: isolate;
+      }
+
+      .masthead,
+      .panel,
+      .rail-panel {
         position: relative;
         overflow: hidden;
-        border-radius: 28px;
-        background: linear-gradient(180deg, rgba(18, 24, 34, 0.86), rgba(10, 13, 19, 0.94));
         border: 1px solid var(--line);
-        box-shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
-        padding: 22px 22px 18px;
+        background:
+          linear-gradient(155deg, rgba(255, 255, 255, 0.11), rgba(255, 255, 255, 0.035)),
+          var(--panel);
+        border-radius: 26px;
+        box-shadow:
+          0 22px 70px rgba(0, 0, 0, 0.34),
+          inset 0 1px 0 rgba(255, 255, 255, 0.08);
+        -webkit-backdrop-filter: blur(22px);
+        backdrop-filter: blur(22px);
       }
 
-      .hero::before {
+      .masthead::before,
+      .panel::before,
+      .rail-panel::before {
         content: "";
         position: absolute;
-        inset: -30% auto auto -20%;
-        width: 240px;
-        height: 240px;
-        border-radius: 999px;
-        background: radial-gradient(circle, rgba(142, 197, 255, 0.18), rgba(0, 0, 0, 0));
+        inset: 0;
         pointer-events: none;
+        background:
+          linear-gradient(145deg, rgba(255, 255, 255, 0.12), transparent 30%, transparent 66%, rgba(82, 200, 255, 0.1)),
+          linear-gradient(90deg, var(--panel-accent, rgba(82, 200, 255, 0.35)) 0 6px, transparent 6px 100%);
+      }
+
+      .masthead {
+        --panel-accent: rgba(255, 201, 65, 0.85);
+      }
+
+      #openclaw-home-notion {
+        --panel-accent: rgba(82, 200, 255, 0.88);
+      }
+
+      #openclaw-home-cron {
+        --panel-accent: rgba(255, 111, 97, 0.88);
+      }
+
+      #openclaw-home-suggestions {
+        --panel-accent: rgba(255, 79, 163, 0.88);
+      }
+
+      #openclaw-home-plan {
+        --panel-accent: rgba(88, 230, 167, 0.88);
+      }
+
+      #openclaw-home-devices {
+        --panel-accent: rgba(167, 139, 250, 0.9);
+      }
+
+      #openclaw-home-agents {
+        --panel-accent: rgba(54, 242, 210, 0.88);
+      }
+
+      #openclaw-home-attention {
+        --panel-accent: rgba(255, 138, 42, 0.92);
+      }
+
+      #openclaw-home-memory {
+        --panel-accent: rgba(255, 201, 65, 0.88);
+      }
+
+      .masthead {
+        grid-column: 1 / -1;
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(240px, 300px);
+        gap: 20px;
+        padding: 24px;
+      }
+
+      .identity,
+      .mood,
+      .panel,
+      .rail-panel {
+        position: relative;
+        z-index: 1;
       }
 
       .eyebrow {
         display: inline-flex;
         align-items: center;
-        gap: 9px;
-        padding: 8px 12px;
-        border-radius: 999px;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        gap: 10px;
         color: var(--muted);
         font-size: 12px;
-        font-weight: 700;
+        font-weight: 800;
         letter-spacing: 0.06em;
         text-transform: uppercase;
-        max-width: 100%;
-        box-sizing: border-box;
       }
 
       .eyebrow-dot {
-        flex: 0 0 auto;
-        width: 9px;
-        height: 9px;
-        border-radius: 999px;
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
         background: var(--state);
-        box-shadow: 0 0 18px color-mix(in srgb, var(--state) 68%, transparent);
+        box-shadow: 0 0 22px color-mix(in srgb, var(--state) 76%, transparent);
       }
 
-      #openclaw-home-eyebrow {
-        min-width: 0;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
-      }
-
-      .hero h1 {
-        margin: 18px 0 0;
-        font-size: clamp(32px, 7vw, 52px);
-        line-height: 0.98;
-        letter-spacing: -0.04em;
-      }
-
-      .hero p {
+      #openclaw-home-title {
         margin: 14px 0 0;
-        font-size: 16px;
-        line-height: 1.5;
+        font-size: clamp(34px, 6vw, 56px);
+        line-height: 0.96;
+        letter-spacing: -0.04em;
+        max-width: 10.5ch;
+      }
+
+      #openclaw-home-subtitle {
+        margin: 14px 0 0;
+        max-width: 54rem;
         color: var(--muted);
-        max-width: 32rem;
+        font-size: 15px;
+        line-height: 1.6;
       }
 
-      .hero-grid {
-        display: grid;
-        grid-template-columns: 1.2fr 1fr;
-        gap: 12px;
-        margin-top: 22px;
-      }
-
-      .meta-card,
-      .agent-card {
-        border-radius: 22px;
-        background: var(--panel);
-        border: 1px solid var(--line);
-        backdrop-filter: blur(18px);
-        -webkit-backdrop-filter: blur(18px);
-      }
-
-      .meta-card {
-        padding: 16px 16px 15px;
-      }
-
-      .meta-label {
-        font-size: 11px;
-        letter-spacing: 0.08em;
-        text-transform: uppercase;
-        color: var(--soft);
-      }
-
-      .meta-value {
-        margin-top: 8px;
-        font-size: 24px;
-        font-weight: 700;
-        letter-spacing: -0.03em;
-        overflow-wrap: anywhere;
-      }
-
-      .meta-subtitle {
-        margin-top: 6px;
-        color: var(--muted);
-        font-size: 13px;
-        line-height: 1.4;
-      }
-
-      .agent-focus {
-        display: flex;
-        align-items: flex-start;
-        gap: 14px;
-        margin-top: 8px;
-      }
-
-      .agent-badge {
-        width: 56px;
-        height: 56px;
-        border-radius: 18px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background:
-          linear-gradient(135deg, rgba(142, 197, 255, 0.22), rgba(91, 157, 255, 0.1)),
-          rgba(255, 255, 255, 0.04);
+      .mood {
+        align-self: stretch;
+        padding: 16px;
+        border-radius: 20px;
         border: 1px solid rgba(255, 255, 255, 0.12);
-        font-size: 24px;
-        font-weight: 700;
+        background:
+          linear-gradient(145deg, rgba(255, 201, 65, 0.28), rgba(255, 79, 163, 0.18)),
+          linear-gradient(18deg, rgba(54, 242, 210, 0.13), transparent 62%),
+          rgba(255, 255, 255, 0.045);
+        display: grid;
+        align-content: space-between;
+        gap: 18px;
       }
 
-      .agent-focus .name {
-        font-size: 22px;
-        font-weight: 700;
-        letter-spacing: -0.03em;
+      .mood-label,
+      .label,
+      .insight-kicker {
+        color: var(--soft);
+        font-size: 11px;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+      }
+
+      .mood-value {
+        font-size: 26px;
+        font-weight: 850;
+      }
+
+      .mood-note {
+        color: var(--muted);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      .main-column,
+      .rail {
+        display: grid;
+        gap: 16px;
+        align-content: start;
+      }
+
+      .status-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .stat {
+        position: relative;
+        min-height: 124px;
+        padding: 16px;
+        border-radius: 22px;
+        border: 1px solid var(--line);
+        background:
+          linear-gradient(155deg, rgba(255, 255, 255, 0.1), rgba(255, 255, 255, 0.035)),
+          linear-gradient(25deg, var(--stat-accent, rgba(82, 200, 255, 0.18)), transparent 62%),
+          rgba(255, 255, 255, 0.035);
+        overflow: hidden;
+        transition:
+          transform 260ms ease,
+          border-color 260ms ease,
+          box-shadow 260ms ease;
+      }
+
+      .stat::after {
+        content: "";
+        position: absolute;
+        inset: auto -20% -30% auto;
+        width: 7rem;
+        height: 7rem;
+        border-radius: 999px;
+        background: conic-gradient(from 120deg, transparent, var(--stat-accent, rgba(82, 200, 255, 0.44)), transparent 68%);
+        opacity: 0.76;
+      }
+
+      #openclaw-home-gateway-stat {
+        --stat-accent: rgba(82, 200, 255, 0.34);
+      }
+
+      #openclaw-home-active-stat {
+        --stat-accent: rgba(88, 230, 167, 0.34);
+      }
+
+      #openclaw-home-talk-stat {
+        --stat-accent: rgba(255, 201, 65, 0.34);
+      }
+
+      #openclaw-home-next-stat {
+        --stat-accent: rgba(255, 79, 163, 0.32);
+      }
+
+      .stat.is-bursting,
+      .panel.is-bursting,
+      .rail-panel.is-bursting {
+        transform: translateY(-5px) scale(1.018) rotate(var(--burst-tilt, 0deg));
+        border-color: rgba(255, 255, 255, 0.38);
+        box-shadow:
+          0 28px 70px rgba(0, 0, 0, 0.34),
+          0 0 0 1px rgba(255, 255, 255, 0.12),
+          0 0 36px color-mix(in srgb, var(--panel-accent, var(--studio-blue)) 48%, transparent);
+      }
+
+      .stat-value {
+        margin-top: 12px;
+        font-size: 20px;
+        font-weight: 850;
+        line-height: 1.08;
         overflow-wrap: anywhere;
       }
 
-      .agent-focus .caption {
-        margin-top: 4px;
-        font-size: 13px;
+      .stat-caption {
+        margin-top: 8px;
         color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
       }
 
-      .section {
-        padding: 16px 16px 14px;
+      .panel,
+      .rail-panel {
+        padding: 16px;
       }
 
-      .section-header {
+      .panel-header {
         display: flex;
         align-items: center;
         justify-content: space-between;
@@ -290,80 +489,670 @@
         margin-bottom: 12px;
       }
 
-      .section-title {
-        font-size: 14px;
-        font-weight: 700;
-        color: var(--muted);
+      .panel-title {
+        font-size: 15px;
+        font-weight: 850;
       }
 
-      .section-count {
-        font-size: 12px;
-        font-weight: 700;
+      .panel-meta {
         color: var(--soft);
+        font-size: 12px;
+        font-weight: 800;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
       }
 
-      .agent-grid {
+      .panel-meta.slot-reel {
+        font-variant-numeric: tabular-nums;
+      }
+
+      .dashboard-grid,
+      .suggestion-grid {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 12px;
+      }
+
+      .work-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.78fr);
+        gap: 12px;
+      }
+
+      .checklist,
+      .line-list,
+      .agent-grid,
+      .device-list,
+      .memory-list {
+        display: grid;
+        gap: 10px;
+      }
+
+      .task,
+      .action,
+      .line-card,
+      .suggestion,
+      .agent-card,
+      .device,
+      .memory {
+        position: relative;
+        overflow: hidden;
+        padding: 12px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 72%),
+          rgba(255, 255, 255, 0.052);
+        transition:
+          transform 220ms ease,
+          background 220ms ease,
+          border-color 220ms ease;
+      }
+
+      .task::before,
+      .action::before,
+      .line-card::before,
+      .suggestion::before,
+      .agent-card::before,
+      .device::before,
+      .memory::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        background: linear-gradient(160deg, rgba(255, 255, 255, 0.08), transparent 46%);
+      }
+
+      .task:hover,
+      .action:hover,
+      .line-card:hover,
+      .suggestion:hover,
+      .agent-card:hover,
+      .device:hover,
+      .memory:hover {
+        transform: translateY(-3px) scale(1.01);
+        border-color: rgba(255, 255, 255, 0.3);
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.13), transparent 72%),
+          rgba(255, 255, 255, 0.07);
+      }
+
+      .task {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        gap: 10px;
+        align-items: start;
+      }
+
+      .task-mark {
+        width: 28px;
+        height: 28px;
+        border-radius: 999px;
+        display: inline-grid;
+        place-items: center;
+        border: 1px solid var(--line-strong);
+        color: var(--studio-lime);
+        background: rgba(255, 255, 255, 0.03);
+        font-size: 13px;
+        font-weight: 850;
+      }
+
+      .task-title,
+      .action-title,
+      .line-card-title,
+      .suggestion-title,
+      .name {
+        position: relative;
+        z-index: 1;
+        font-size: 14px;
+        font-weight: 850;
+      }
+
+      .task-caption,
+      .action-caption,
+      .caption,
+      .empty-state,
+      .suggestion-copy {
+        position: relative;
+        z-index: 1;
+        color: var(--muted);
+        font-size: 12px;
+        line-height: 1.45;
+      }
+
+      .task-caption,
+      .caption,
+      .action-caption {
+        margin-top: 4px;
+      }
+
+      .pill {
+        position: relative;
+        z-index: 1;
+        border: 1px solid rgba(255, 255, 255, 0.12);
+        border-radius: 999px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 800;
+        padding: 4px 8px;
+        white-space: nowrap;
+      }
+
+      .actions {
         display: grid;
         grid-template-columns: repeat(2, minmax(0, 1fr));
         gap: 10px;
       }
 
-      .agent-card {
-        padding: 13px 13px 12px;
+      .action-kicker {
+        position: relative;
+        z-index: 1;
+        color: var(--studio-blue);
+        font-size: 11px;
+        font-weight: 850;
+        text-transform: uppercase;
+        letter-spacing: 0.07em;
       }
 
-      .agent-card.active {
-        background: var(--panel-strong);
-        border-color: var(--line-strong);
-        box-shadow: inset 0 0 0 1px rgba(142, 197, 255, 0.12);
+      .suggestion {
+        min-height: 150px;
+        display: grid;
+        align-content: start;
       }
 
-      .agent-row {
+      .suggestion.work {
+        background:
+          linear-gradient(145deg, rgba(114, 195, 255, 0.18), rgba(255, 255, 255, 0.04)),
+          rgba(255, 255, 255, 0.03);
+        border-color: rgba(114, 195, 255, 0.24);
+      }
+
+      .suggestion.fun {
+        background:
+          linear-gradient(145deg, rgba(255, 211, 111, 0.16), rgba(139, 229, 177, 0.12)),
+          rgba(255, 255, 255, 0.03);
+        border-color: rgba(255, 211, 111, 0.24);
+      }
+
+      .suggestion-title {
+        margin-top: 8px;
+        font-size: 18px;
+        line-height: 1.08;
+      }
+
+      .suggestion-action {
+        position: relative;
+        z-index: 1;
+        display: inline-flex;
+        width: fit-content;
+        margin-top: 10px;
+        padding: 6px 10px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        color: var(--text);
+        font-size: 11px;
+        font-weight: 850;
+        background: rgba(255, 255, 255, 0.06);
+      }
+
+      .live-thomas-card {
+        position: relative;
+        overflow: hidden;
+        min-height: 248px;
+        isolation: isolate;
+        background:
+          radial-gradient(circle at 20% 18%, rgba(255, 201, 65, 0.28), transparent 34%),
+          radial-gradient(circle at 78% 24%, rgba(82, 200, 255, 0.26), transparent 38%),
+          linear-gradient(145deg, rgba(255, 79, 163, 0.16), rgba(88, 230, 167, 0.09)),
+          rgba(255, 255, 255, 0.055);
+        border-color: rgba(255, 255, 255, 0.18);
+      }
+
+      .live-thomas-card::before,
+      .live-thomas-card::after {
+        content: "";
+        position: absolute;
+        pointer-events: none;
+        border-radius: 999px;
+        z-index: -1;
+      }
+
+      .live-thomas-card::before {
+        width: 210px;
+        height: 210px;
+        right: -82px;
+        top: -74px;
+        background: conic-gradient(from 20deg, var(--studio-gold), var(--studio-pink), var(--studio-teal), var(--studio-gold));
+        opacity: 0.22;
+        animation: live-orbit 12s linear infinite;
+      }
+
+      .live-thomas-card::after {
+        inset: 14px;
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        opacity: 0.72;
+        animation: live-breathe-frame 4.6s ease-in-out infinite;
+      }
+
+      .live-thomas-stage {
+        display: grid;
+        grid-template-columns: 88px minmax(0, 1fr);
+        gap: 12px;
+        align-items: center;
+      }
+
+      .live-orb {
+        position: relative;
+        width: 84px;
+        height: 84px;
+        border-radius: 50%;
+        padding: 5px;
+        background:
+          conic-gradient(from var(--live-spin, 0deg), var(--studio-blue), var(--studio-teal), var(--studio-gold), var(--studio-pink), var(--studio-blue));
+        box-shadow:
+          0 18px 42px rgba(0, 0, 0, 0.34),
+          0 0 26px rgba(82, 200, 255, 0.3);
+        animation: live-breathe 3.2s ease-in-out infinite;
+      }
+
+      .live-orb::before {
+        content: "";
+        position: absolute;
+        inset: -10px;
+        border-radius: 50%;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        animation: live-pulse-ring 2.6s ease-in-out infinite;
+      }
+
+      .live-orb img {
+        position: relative;
+        z-index: 1;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+      }
+
+      .live-copy {
+        min-width: 0;
+      }
+
+      .live-title-row {
         display: flex;
         align-items: center;
-        gap: 10px;
+        justify-content: space-between;
+        gap: 8px;
       }
 
-      .agent-row .badge {
-        width: 38px;
-        height: 38px;
-        border-radius: 14px;
-        display: inline-flex;
-        align-items: center;
-        justify-content: center;
-        background: rgba(255, 255, 255, 0.05);
-        border: 1px solid rgba(255, 255, 255, 0.08);
-        font-size: 16px;
-        font-weight: 700;
+      .live-title {
+        font-size: 18px;
+        line-height: 1.05;
+        font-weight: 900;
       }
 
-      .agent-row .name {
-        font-size: 15px;
-        font-weight: 700;
-        line-height: 1.2;
-        overflow-wrap: anywhere;
+      .live-status-pill {
+        flex: 0 0 auto;
+        border-radius: 999px;
+        padding: 4px 8px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        color: var(--muted);
+        font-size: 10px;
+        font-weight: 900;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        background: rgba(255, 255, 255, 0.055);
       }
 
-      .agent-row .caption {
-        margin-top: 3px;
+      .live-caption {
+        margin-top: 7px;
+        color: var(--muted);
         font-size: 12px;
-        color: var(--muted);
-      }
-
-      .empty-state {
-        padding: 18px;
-        border-radius: 18px;
-        background: rgba(255, 255, 255, 0.03);
-        border: 1px dashed rgba(255, 255, 255, 0.12);
-        color: var(--muted);
-        font-size: 14px;
         line-height: 1.45;
       }
 
-      .footer-note {
+      .live-controls {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 9px;
+        margin-top: 14px;
+      }
+
+      .live-toggle {
+        appearance: none;
+        border: 0;
+        border-radius: 18px;
+        padding: 12px 14px;
+        color: #06111f;
+        font: inherit;
+        font-size: 13px;
+        font-weight: 950;
+        cursor: pointer;
+        background: linear-gradient(135deg, var(--studio-gold), var(--studio-teal));
+        box-shadow:
+          0 14px 28px rgba(0, 0, 0, 0.24),
+          0 0 28px rgba(255, 201, 65, 0.24);
+        transition:
+          transform 180ms ease,
+          filter 180ms ease;
+      }
+
+      .live-toggle:hover,
+      .live-toggle:focus-visible {
+        outline: none;
+        transform: translateY(-2px) scale(1.02);
+        filter: saturate(1.15) brightness(1.05);
+      }
+
+      .live-meter {
+        min-width: 70px;
+        border-radius: 18px;
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background:
+          linear-gradient(180deg, rgba(255, 255, 255, 0.08), rgba(255, 255, 255, 0.025));
+        position: relative;
+        overflow: hidden;
+      }
+
+      .live-meter::before {
+        content: "";
+        position: absolute;
+        left: 8px;
+        right: 8px;
+        bottom: 8px;
+        height: var(--live-level, 28%);
+        border-radius: 12px;
+        background: linear-gradient(180deg, var(--studio-pink), var(--studio-blue), var(--studio-lime));
+        box-shadow: 0 0 18px rgba(82, 200, 255, 0.32);
+        transition: height 220ms ease;
+      }
+
+      .live-transcript {
+        display: grid;
+        gap: 7px;
         margin-top: 12px;
-        color: var(--soft);
-        font-size: 12px;
+      }
+
+      .live-chip {
+        border-radius: 16px;
+        padding: 8px 10px;
+        color: var(--muted);
+        font-size: 11px;
+        line-height: 1.35;
+        background: rgba(0, 0, 0, 0.16);
+        border: 1px solid rgba(255, 255, 255, 0.09);
+      }
+
+      .live-chip strong {
+        color: var(--text);
+      }
+
+      .live-thomas-card[data-live-state="active"],
+      .live-thomas-card[data-live-state="listening"],
+      .live-thomas-card[data-live-state="speaking"] {
+        border-color: rgba(88, 230, 167, 0.38);
+        box-shadow:
+          0 22px 58px rgba(0, 0, 0, 0.3),
+          0 0 42px rgba(88, 230, 167, 0.16);
+      }
+
+      .live-thomas-card[data-live-state="active"] .live-orb,
+      .live-thomas-card[data-live-state="listening"] .live-orb,
+      .live-thomas-card[data-live-state="speaking"] .live-orb {
+        animation:
+          live-breathe 1.8s ease-in-out infinite,
+          live-jitter 620ms ease-in-out infinite;
+      }
+
+      .live-thomas-card[data-live-state="pending"] .live-orb {
+        animation:
+          live-breathe 1.2s ease-in-out infinite,
+          live-orbit 2.2s linear infinite;
+      }
+
+      .live-thomas-card[data-live-state="setup"] {
+        border-color: rgba(255, 213, 92, 0.34);
+        box-shadow:
+          0 22px 58px rgba(0, 0, 0, 0.3),
+          0 0 38px rgba(255, 213, 92, 0.12);
+      }
+
+      .live-thomas-card[data-live-state="setup"] .live-orb {
+        animation:
+          live-breathe 2.4s ease-in-out infinite,
+          live-orbit 5.5s linear infinite;
+      }
+
+      .live-thomas-card.is-kicked {
+        animation: live-card-kick 520ms cubic-bezier(0.18, 0.84, 0.28, 1);
+      }
+
+      .agent-card.active,
+      .device.active,
+      .memory.active {
+        border-color: rgba(114, 195, 255, 0.28);
+        background: rgba(114, 195, 255, 0.1);
+      }
+
+      .row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-width: 0;
+      }
+
+      .badge {
+        position: relative;
+        z-index: 1;
+        flex: 0 0 auto;
+        width: 42px;
+        height: 42px;
+        border-radius: 14px;
+        display: inline-grid;
+        place-items: center;
+        background: rgba(255, 255, 255, 0.08);
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        font-size: 14px;
+        font-weight: 850;
+      }
+
+      .empty-state {
+        padding: 13px;
+        border-radius: 16px;
+        border: 1px dashed rgba(255, 255, 255, 0.18);
+        background: rgba(255, 255, 255, 0.02);
+      }
+
+      .slot-reel {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-variant-numeric: tabular-nums;
+      }
+
+      .slot-digit {
+        min-width: 1.4ch;
+        display: inline-block;
+      }
+
+      .slot-reel.is-spinning {
+        color: var(--text);
+        text-shadow:
+          0 0 12px rgba(255, 201, 65, 0.5),
+          0 0 22px rgba(82, 200, 255, 0.32);
+        animation: slot-bounce 640ms cubic-bezier(0.2, 0.9, 0.2, 1);
+      }
+
+      #openclaw-home-thomas-stage {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 4;
+      }
+
+      #openclaw-home-thomas {
+        position: absolute;
+        left: var(--thomas-x);
+        top: var(--thomas-y);
+        width: 94px;
+        height: 94px;
+        margin: -32px 0 0 -32px;
+        border: 0;
+        padding: 5px;
+        border-radius: 50%;
+        pointer-events: auto;
+        cursor: pointer;
+        color: inherit;
+        background:
+          conic-gradient(from var(--thomas-spin, 0deg), var(--studio-gold), var(--studio-orange), var(--studio-pink), var(--studio-teal), var(--studio-gold));
+        box-shadow:
+          0 22px 52px rgba(0, 0, 0, 0.42),
+          0 0 0 1px rgba(255, 255, 255, 0.24),
+          0 0 32px rgba(255, 138, 42, 0.3),
+          0 0 56px rgba(82, 200, 255, 0.2);
+        transform:
+          translate3d(0, 0, 0)
+          rotate(var(--thomas-tilt, 0deg))
+          scale(var(--thomas-scale, 1));
+        transition:
+          left 320ms ease,
+          top 320ms ease,
+          transform 180ms ease,
+          box-shadow 180ms ease;
+      }
+
+      #openclaw-home-thomas::before,
+      #openclaw-home-thomas::after {
+        content: "";
+        position: absolute;
+        border-radius: 999px;
+      }
+
+      #openclaw-home-thomas::before {
+        inset: -8px;
+        border: 1px solid rgba(255, 201, 65, 0.38);
+        background: transparent;
+        opacity: 0.72;
+        animation: thomas-ring 2.8s ease-in-out infinite;
+      }
+
+      #openclaw-home-thomas::after {
+        inset: 8px;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.24), transparent 42%),
+          transparent;
+        pointer-events: none;
+      }
+
+      .thomas-avatar {
+        position: relative;
+        z-index: 1;
+        display: block;
+        width: 100%;
+        height: 100%;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid rgba(255, 255, 255, 0.42);
+        box-shadow: inset 0 0 20px rgba(0, 0, 0, 0.28);
+      }
+
+      .thomas-spark {
+        position: absolute;
+        z-index: 2;
+        width: 10px;
+        height: 10px;
+        border-radius: 999px;
+        background: var(--studio-gold);
+        box-shadow: 0 0 16px var(--studio-gold);
+        pointer-events: none;
+      }
+
+      .thomas-spark.one {
+        top: 8px;
+        right: 4px;
+      }
+
+      .thomas-spark.two {
+        left: 2px;
+        bottom: 16px;
+        width: 7px;
+        height: 7px;
+        background: var(--studio-teal);
+        box-shadow: 0 0 14px var(--studio-teal);
+      }
+
+      #openclaw-home-thomas:hover,
+      #openclaw-home-thomas:focus-visible {
+        outline: none;
+        --thomas-scale: 1.06;
+        box-shadow:
+          0 26px 62px rgba(0, 0, 0, 0.46),
+          0 0 0 1px rgba(255, 255, 255, 0.3),
+          0 0 38px rgba(255, 201, 65, 0.38),
+          0 0 72px rgba(54, 242, 210, 0.28);
+      }
+
+      #openclaw-home-thomas.is-bursting {
+        animation: thomas-burst 520ms cubic-bezier(0.18, 0.84, 0.28, 1);
+      }
+
+      #openclaw-home-insight-layer {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+
+      .insight-card {
+        position: absolute;
+        width: min(320px, calc(100vw - 48px));
+        padding: 14px;
+        border-radius: 20px;
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        background:
+          linear-gradient(155deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0.055)),
+          linear-gradient(35deg, rgba(255, 201, 65, 0.16), rgba(82, 200, 255, 0.12)),
+          rgba(15, 23, 38, 0.9);
+        box-shadow:
+          0 26px 60px rgba(0, 0, 0, 0.34),
+          0 0 24px rgba(255, 201, 65, 0.24),
+          0 0 44px rgba(82, 200, 255, 0.18);
+        opacity: 0;
+        transform: translate3d(0, 18px, 0) scale(0.96);
+        transition:
+          opacity 220ms ease,
+          transform 220ms ease;
+      }
+
+      .insight-card.is-visible {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1) rotate(var(--insight-tilt, -1deg));
+      }
+
+      .burst-ripple {
+        position: absolute;
+        z-index: 3;
+        width: 12px;
+        height: 12px;
+        border-radius: 999px;
+        pointer-events: none;
+        border: 2px solid var(--studio-gold);
+        box-shadow:
+          0 0 18px rgba(255, 201, 65, 0.45),
+          inset 0 0 18px rgba(82, 200, 255, 0.26);
+        animation: ripple-pop 760ms ease-out forwards;
+      }
+
+      .insight-card h2 {
+        margin: 8px 0 0;
+        font-size: 18px;
+        line-height: 1.08;
+      }
+
+      .insight-card p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 13px;
         line-height: 1.45;
       }
 
@@ -376,164 +1165,442 @@
         flex-direction: column;
         padding-top: calc(var(--safe-top) + 18px);
         pointer-events: none;
-        z-index: 3;
+        z-index: 5;
       }
 
       #openclaw-status .card {
         text-align: center;
-        padding: 16px 18px;
-        border-radius: 14px;
-        background: rgba(18, 18, 22, 0.46);
-        border: 1px solid rgba(255, 255, 255, 0.08);
+        padding: 14px 16px;
+        border-radius: 18px;
+        background: rgba(18, 22, 27, 0.72);
+        border: 1px solid rgba(255, 255, 255, 0.1);
         box-shadow: 0 18px 60px rgba(0, 0, 0, 0.55);
         -webkit-backdrop-filter: blur(14px);
         backdrop-filter: blur(14px);
       }
 
       #openclaw-status .title {
-        font: 600 20px -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", system-ui, sans-serif;
-        color: rgba(255, 255, 255, 0.92);
+        font-size: 18px;
+        font-weight: 800;
       }
 
       #openclaw-status .subtitle {
         margin-top: 6px;
-        font: 500 12px -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
-        color: rgba(255, 255, 255, 0.58);
+        font-size: 12px;
+        font-weight: 600;
+        color: var(--muted);
       }
 
-      @media (max-width: 640px) {
-        #openclaw-home {
-          padding-left: 12px;
-          padding-right: 12px;
+      @keyframes drift {
+        from {
+          transform: translate3d(0, 0, 0) scale(1);
         }
-
-        .hero {
-          border-radius: 24px;
-          padding: 18px 16px 16px;
+        to {
+          transform: translate3d(3.2rem, -1.8rem, 0) scale(1.08) rotate(3deg);
         }
+      }
 
-        .hero-grid,
-        .agent-grid {
+      @keyframes shape-breathe {
+        from {
+          opacity: 0.34;
+          filter: saturate(1) brightness(1);
+        }
+        to {
+          opacity: 0.58;
+          filter: saturate(1.35) brightness(1.12);
+        }
+      }
+
+      @keyframes ribbon-slide {
+        from {
+          translate: -18px 0;
+          opacity: 0.5;
+        }
+        to {
+          translate: 24px 10px;
+          opacity: 0.86;
+        }
+      }
+
+      @keyframes slot-bounce {
+        0% {
+          transform: translateY(-14px) rotateX(70deg);
+          opacity: 0.42;
+        }
+        38% {
+          transform: translateY(6px) rotateX(-16deg);
+          opacity: 1;
+        }
+        70% {
+          transform: translateY(-2px);
+        }
+        100% {
+          transform: translateY(0);
+        }
+      }
+
+      @keyframes thomas-ring {
+        0%,
+        100% {
+          transform: scale(0.96);
+          opacity: 0.42;
+        }
+        50% {
+          transform: scale(1.08);
+          opacity: 0.9;
+        }
+      }
+
+      @keyframes thomas-burst {
+        0% {
+          transform: translate3d(0, 0, 0) rotate(var(--thomas-tilt, 0deg)) scale(1);
+        }
+        30% {
+          transform: translate3d(0, -16px, 0) rotate(calc(var(--thomas-tilt, 0deg) - 9deg)) scale(1.12, 0.94);
+        }
+        62% {
+          transform: translate3d(0, 5px, 0) rotate(calc(var(--thomas-tilt, 0deg) + 7deg)) scale(0.96, 1.08);
+        }
+        100% {
+          transform: translate3d(0, 0, 0) rotate(var(--thomas-tilt, 0deg)) scale(1);
+        }
+      }
+
+      @keyframes ripple-pop {
+        0% {
+          opacity: 0.95;
+          transform: translate(-50%, -50%) scale(0.4);
+        }
+        100% {
+          opacity: 0;
+          transform: translate(-50%, -50%) scale(14);
+        }
+      }
+
+      @keyframes live-orbit {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      @keyframes live-breathe {
+        0%,
+        100% {
+          transform: scale(0.98);
+          filter: saturate(1);
+        }
+        50% {
+          transform: scale(1.04);
+          filter: saturate(1.28) brightness(1.08);
+        }
+      }
+
+      @keyframes live-breathe-frame {
+        0%,
+        100% {
+          transform: scale(0.985);
+          opacity: 0.42;
+        }
+        50% {
+          transform: scale(1.012);
+          opacity: 0.86;
+        }
+      }
+
+      @keyframes live-pulse-ring {
+        0%,
+        100% {
+          transform: scale(0.9);
+          opacity: 0.3;
+        }
+        50% {
+          transform: scale(1.13);
+          opacity: 0.86;
+        }
+      }
+
+      @keyframes live-jitter {
+        0%,
+        100% {
+          translate: 0 0;
+        }
+        50% {
+          translate: 0 -3px;
+        }
+      }
+
+      @keyframes live-card-kick {
+        0% {
+          transform: translate3d(0, 0, 0) rotate(0deg);
+        }
+        34% {
+          transform: translate3d(0, -9px, 0) rotate(-1.2deg);
+        }
+        70% {
+          transform: translate3d(0, 3px, 0) rotate(0.8deg);
+        }
+        100% {
+          transform: translate3d(0, 0, 0) rotate(0deg);
+        }
+      }
+
+      @media (max-width: 1100px) {
+        .shell,
+        .masthead,
+        .work-grid {
           grid-template-columns: 1fr;
         }
 
-        .hero h1 {
-          font-size: 34px;
+        .status-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
         }
       }
 
-      @media (max-height: 760px) {
+      @media (max-width: 720px) {
         #openclaw-home {
-          padding-top: calc(var(--safe-top) + 14px);
-          padding-bottom: calc(var(--safe-bottom) + 12px);
+          padding: calc(var(--safe-top) + 12px) 10px calc(var(--safe-bottom) + 12px);
         }
 
         .shell {
           gap: 12px;
         }
 
-        .hero {
-          border-radius: 24px;
-          padding: 16px 15px 15px;
+        .masthead,
+        .panel,
+        .rail-panel {
+          border-radius: 22px;
         }
 
-        .hero h1 {
-          margin-top: 14px;
-          font-size: clamp(28px, 8vw, 38px);
+        .dashboard-grid,
+        .suggestion-grid,
+        .actions,
+        .status-grid {
+          grid-template-columns: 1fr;
         }
 
-        .hero p {
-          margin-top: 10px;
-          font-size: 15px;
-          line-height: 1.42;
+        #openclaw-home-title {
+          max-width: none;
+          font-size: clamp(30px, 10vw, 44px);
         }
 
-        .hero-grid {
-          margin-top: 18px;
-        }
-
-        .meta-card {
-          padding: 14px 14px 13px;
-        }
-
-        .meta-value {
-          font-size: 22px;
-        }
-
-        .agent-badge {
-          width: 50px;
-          height: 50px;
-          border-radius: 16px;
-          font-size: 22px;
-        }
-
-        .agent-focus .name {
-          font-size: 20px;
-        }
-
-        .section {
-          padding: 14px 14px 12px;
-        }
-
-        .section-header {
-          margin-bottom: 10px;
+        #openclaw-home-thomas {
+          width: 76px;
+          height: 76px;
+          margin: -26px 0 0 -26px;
         }
       }
 
       @media (prefers-reduced-motion: reduce) {
-        body::before,
-        body::after {
-          animation: none !important;
+        .aurora-field,
+        .shape-cluster,
+        canvas {
+          display: none;
+        }
+
+        .slot-reel.is-spinning,
+        #openclaw-home-thomas.is-bursting,
+        .burst-ripple,
+        .live-thomas-card,
+        .live-thomas-card::before,
+        .live-thomas-card::after,
+        .live-orb,
+        .live-orb::before {
+          animation: none;
+        }
+
+        .stat,
+        .panel,
+        .rail-panel,
+        .task,
+        .action,
+        .line-card,
+        .suggestion,
+        .agent-card,
+        .device,
+        .memory {
+          transition: none;
         }
       }
     </style>
   </head>
   <body data-state="offline">
     <canvas id="openclaw-canvas"></canvas>
-    <div id="openclaw-home">
-      <div class="shell">
-        <div class="hero">
-          <div class="eyebrow">
-            <span class="eyebrow-dot"></span>
-            <span id="openclaw-home-eyebrow">Welcome to OpenClaw</span>
-          </div>
-          <h1 id="openclaw-home-title">Your phone stays quiet until it is needed</h1>
-          <p id="openclaw-home-subtitle">
-            Pair this device to your gateway to wake it only for real work, keep a live agent overview handy, and avoid battery-draining background loops.
-          </p>
+    <div class="aurora-field aurora-a"></div>
+    <div class="aurora-field aurora-b"></div>
+    <div class="shape-cluster shape-cluster-a"></div>
+    <div class="shape-cluster shape-cluster-b"></div>
+    <div class="studio-ribbon studio-ribbon-a"></div>
+    <div class="studio-ribbon studio-ribbon-b"></div>
 
-          <div class="hero-grid">
-            <div class="meta-card">
-              <div class="meta-label">Gateway</div>
-              <div class="meta-value" id="openclaw-home-gateway">Gateway</div>
-              <div class="meta-subtitle" id="openclaw-home-gateway-caption">Connect to load your agents</div>
+    <main id="openclaw-home">
+      <section class="shell creative-control-room" aria-label="Thomas Workbench">
+        <header class="masthead">
+          <div class="identity">
+            <div class="eyebrow">
+              <span class="eyebrow-dot"></span>
+              <span id="openclaw-home-eyebrow">Thomas Workbench</span>
+            </div>
+            <h1 id="openclaw-home-title">Good. The desk is awake.</h1>
+            <p id="openclaw-home-subtitle">
+              Your assistant surface for active work, connected devices, useful shortcuts, and the little bits Thomas should remember.
+            </p>
+          </div>
+
+          <aside class="mood" aria-label="Thomas status">
+            <div>
+              <div class="mood-label">Current posture</div>
+              <div class="mood-value" id="openclaw-home-mood">Ready</div>
+            </div>
+            <div class="mood-note" id="openclaw-home-mood-note">
+              Connected enough to be helpful, caffeinated enough to be dangerous.
+            </div>
+          </aside>
+        </header>
+
+        <div id="openclaw-home-thomas-stage" aria-hidden="false">
+          <button id="openclaw-home-thomas" type="button" aria-label="Ask Thomas for insight">
+            <img class="thomas-avatar" src="thomas_avatar.png" alt="" />
+            <span class="thomas-spark one"></span>
+            <span class="thomas-spark two"></span>
+          </button>
+          <div id="openclaw-home-insight-layer"></div>
+        </div>
+
+        <section class="main-column">
+          <div class="status-grid">
+            <div class="stat" id="openclaw-home-gateway-stat">
+              <div class="label">Gateway</div>
+              <div class="stat-value" id="openclaw-home-gateway">Gateway</div>
+              <div class="stat-caption" id="openclaw-home-gateway-caption">Waiting for live status</div>
             </div>
 
-            <div class="meta-card">
-              <div class="meta-label">Active Agent</div>
-              <div class="agent-focus">
-                <div class="agent-badge" id="openclaw-home-active-badge">OC</div>
-                <div>
-                  <div class="name" id="openclaw-home-active-name">Main</div>
-                  <div class="caption" id="openclaw-home-active-caption">Connect to load your agents</div>
+            <div class="stat" id="openclaw-home-active-stat">
+              <div class="label">Active Agent</div>
+              <div class="stat-value" id="openclaw-home-active-name">Main</div>
+              <div class="stat-caption" id="openclaw-home-active-caption">Thomas is on standby</div>
+            </div>
+
+            <div class="stat" id="openclaw-home-talk-stat">
+              <div class="label">Talk</div>
+              <div class="stat-value" id="openclaw-home-talk">Standby</div>
+              <div class="stat-caption" id="openclaw-home-talk-caption">Voice is ready when configured</div>
+            </div>
+
+            <div class="stat" id="openclaw-home-next-stat">
+              <div class="label">Next</div>
+              <div class="stat-value" id="openclaw-home-next">Choose task</div>
+              <div class="stat-caption" id="openclaw-home-next-caption">No urgent item reported</div>
+            </div>
+          </div>
+
+          <section class="dashboard-grid">
+            <section class="panel" id="openclaw-home-notion">
+              <div class="panel-header">
+                <div class="panel-title">Notion Focus</div>
+                <div class="panel-meta slot-reel" id="openclaw-home-notion-count">0</div>
+              </div>
+              <div class="line-list" id="openclaw-home-notion-list"></div>
+            </section>
+
+            <section class="panel" id="openclaw-home-cron">
+              <div class="panel-header">
+                <div class="panel-title">Recent cron runs</div>
+                <div class="panel-meta slot-reel" id="openclaw-home-cron-count">0</div>
+              </div>
+              <div class="line-list" id="openclaw-home-cron-list"></div>
+            </section>
+          </section>
+
+          <section class="panel" id="openclaw-home-suggestions">
+            <div class="panel-header">
+              <div class="panel-title">Proactive suggestions</div>
+              <div class="panel-meta">2 ideas</div>
+            </div>
+            <div class="suggestion-grid" id="openclaw-home-suggestion-list"></div>
+          </section>
+
+          <section class="panel" id="openclaw-home-plan">
+            <div class="panel-header">
+              <div class="panel-title">Current plan</div>
+              <div class="panel-meta" id="openclaw-home-plan-count">3 steps</div>
+            </div>
+            <div class="work-grid">
+              <div class="checklist" id="openclaw-home-plan-list"></div>
+              <section id="openclaw-home-actions">
+                <div class="panel-header">
+                  <div class="panel-title">Quick actions</div>
+                  <div class="panel-meta slot-reel" id="openclaw-home-action-count">4</div>
+                </div>
+                <div class="actions" id="openclaw-home-action-list"></div>
+              </section>
+            </div>
+          </section>
+        </section>
+
+        <aside class="rail">
+          <section class="rail-panel" id="openclaw-home-devices">
+            <div class="panel-header">
+              <div class="panel-title">Devices</div>
+              <div class="panel-meta slot-reel" id="openclaw-home-device-count">2</div>
+            </div>
+            <div class="device-list" id="openclaw-home-device-list"></div>
+          </section>
+
+          <section class="rail-panel live-thomas-card" id="openclaw-live-thomas-card" data-live-state="idle">
+            <div class="panel-header">
+              <div class="panel-title">Live Thomas</div>
+              <div class="panel-meta" id="openclaw-live-thomas-provider">OpenAI Realtime</div>
+            </div>
+            <div class="live-thomas-stage">
+              <div class="live-orb" aria-hidden="true">
+                <img src="thomas_avatar.png" alt="" />
+              </div>
+              <div class="live-copy">
+                <div class="live-title-row">
+                  <div class="live-title" id="openclaw-live-thomas-title">Conversation cockpit</div>
+                  <div class="live-status-pill" id="openclaw-live-thomas-state">Idle</div>
+                </div>
+                <div class="live-caption" id="openclaw-live-thomas-caption">
+                  Dedicated realtime bridge only. This control will not wake fallback Talk Mode.
                 </div>
               </div>
             </div>
-          </div>
-        </div>
+            <div class="live-controls">
+              <button class="live-toggle" id="openclaw-live-thomas-toggle" type="button">Start realtime</button>
+              <div class="live-meter" aria-hidden="true"></div>
+            </div>
+            <div class="live-transcript" aria-live="polite">
+              <div class="live-chip"><strong>Thomas:</strong> I am quiet, but the room is breathing.</div>
+              <div class="live-chip" id="openclaw-live-thomas-bridge">Bridge: dedicated realtime bridge pending.</div>
+            </div>
+          </section>
 
-        <div class="meta-card section">
-          <div class="section-header">
-            <div class="section-title">Live agents</div>
-            <div class="section-count" id="openclaw-home-agent-count">0 agents</div>
-          </div>
-          <div class="agent-grid" id="openclaw-home-agent-grid"></div>
-          <div class="footer-note" id="openclaw-home-footer">
-            When connected, the gateway can wake the phone with a silent push instead of holding an always-on session.
-          </div>
-        </div>
-      </div>
-    </div>
+          <section class="rail-panel" id="openclaw-home-agents">
+            <div class="panel-header">
+              <div class="panel-title">Live agents</div>
+              <div class="panel-meta slot-reel" id="openclaw-home-agent-count">0 agents</div>
+            </div>
+            <div class="agent-grid" id="openclaw-home-agent-grid"></div>
+          </section>
+
+          <section class="rail-panel" id="openclaw-home-attention">
+            <div class="panel-header">
+              <div class="panel-title">Attention</div>
+              <div class="panel-meta slot-reel" id="openclaw-home-attention-count">0</div>
+            </div>
+            <div class="line-list" id="openclaw-home-attention-list"></div>
+          </section>
+
+          <section class="rail-panel" id="openclaw-home-memory">
+            <div class="panel-header">
+              <div class="panel-title">Memory and context</div>
+              <div class="panel-meta slot-reel" id="openclaw-home-memory-count">3</div>
+            </div>
+            <div class="memory-list" id="openclaw-home-memory-list"></div>
+          </section>
+        </aside>
+      </section>
+    </main>
 
     <div id="openclaw-status">
       <div class="card">
@@ -544,25 +1611,190 @@
 
     <script>
       (() => {
+        const prefersReducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
         const canvas = document.getElementById('openclaw-canvas');
         const ctx = canvas.getContext('2d');
         const statusEl = document.getElementById('openclaw-status');
         const titleEl = document.getElementById('openclaw-status-title');
         const subtitleEl = document.getElementById('openclaw-status-subtitle');
+        const html = document.documentElement;
+        const body = document.body;
         const home = {
           root: document.getElementById('openclaw-home'),
           eyebrow: document.getElementById('openclaw-home-eyebrow'),
           title: document.getElementById('openclaw-home-title'),
           subtitle: document.getElementById('openclaw-home-subtitle'),
+          mood: document.getElementById('openclaw-home-mood'),
+          moodNote: document.getElementById('openclaw-home-mood-note'),
           gateway: document.getElementById('openclaw-home-gateway'),
           gatewayCaption: document.getElementById('openclaw-home-gateway-caption'),
-          activeBadge: document.getElementById('openclaw-home-active-badge'),
           activeName: document.getElementById('openclaw-home-active-name'),
           activeCaption: document.getElementById('openclaw-home-active-caption'),
+          talk: document.getElementById('openclaw-home-talk'),
+          talkCaption: document.getElementById('openclaw-home-talk-caption'),
+          next: document.getElementById('openclaw-home-next'),
+          nextCaption: document.getElementById('openclaw-home-next-caption'),
+          planCount: document.getElementById('openclaw-home-plan-count'),
+          planList: document.getElementById('openclaw-home-plan-list'),
+          actionCount: document.getElementById('openclaw-home-action-count'),
+          actionList: document.getElementById('openclaw-home-action-list'),
+          deviceCount: document.getElementById('openclaw-home-device-count'),
+          deviceList: document.getElementById('openclaw-home-device-list'),
           agentCount: document.getElementById('openclaw-home-agent-count'),
           agentGrid: document.getElementById('openclaw-home-agent-grid'),
-          footer: document.getElementById('openclaw-home-footer')
+          notionCount: document.getElementById('openclaw-home-notion-count'),
+          notionList: document.getElementById('openclaw-home-notion-list'),
+          cronCount: document.getElementById('openclaw-home-cron-count'),
+          cronList: document.getElementById('openclaw-home-cron-list'),
+          suggestionList: document.getElementById('openclaw-home-suggestion-list'),
+          attentionCount: document.getElementById('openclaw-home-attention-count'),
+          attentionList: document.getElementById('openclaw-home-attention-list'),
+          memoryCount: document.getElementById('openclaw-home-memory-count'),
+          memoryList: document.getElementById('openclaw-home-memory-list'),
+          liveCard: document.getElementById('openclaw-live-thomas-card'),
+          liveProvider: document.getElementById('openclaw-live-thomas-provider'),
+          liveTitle: document.getElementById('openclaw-live-thomas-title'),
+          liveState: document.getElementById('openclaw-live-thomas-state'),
+          liveCaption: document.getElementById('openclaw-live-thomas-caption'),
+          liveToggle: document.getElementById('openclaw-live-thomas-toggle'),
+          liveBridge: document.getElementById('openclaw-live-thomas-bridge'),
+          thomas: document.getElementById('openclaw-home-thomas'),
+          thomasStage: document.getElementById('openclaw-home-thomas-stage'),
+          insightLayer: document.getElementById('openclaw-home-insight-layer'),
+          sections: {
+            notion: document.getElementById('openclaw-home-notion'),
+            cron: document.getElementById('openclaw-home-cron'),
+            plan: document.getElementById('openclaw-home-plan'),
+            actions: document.getElementById('openclaw-home-actions'),
+            devices: document.getElementById('openclaw-home-devices'),
+            agents: document.getElementById('openclaw-home-agents'),
+            attention: document.getElementById('openclaw-home-attention'),
+            memory: document.getElementById('openclaw-home-memory'),
+            liveThomas: document.getElementById('openclaw-live-thomas-card'),
+            suggestions: document.getElementById('openclaw-home-suggestions'),
+            gateway: document.getElementById('openclaw-home-gateway-stat'),
+            active: document.getElementById('openclaw-home-active-stat'),
+            talk: document.getElementById('openclaw-home-talk-stat'),
+            next: document.getElementById('openclaw-home-next-stat')
+          }
         };
+
+        const defaults = {
+          gatewayState: 'offline',
+          eyebrow: 'Thomas Workbench',
+          title: 'Good. The desk is awake.',
+          subtitle: 'Your assistant surface for active work, connected devices, useful shortcuts, and the little bits Thomas should remember.',
+          mood: 'Ready',
+          moodNote: 'Connected enough to be helpful, caffeinated enough to be dangerous.',
+          gatewayLabel: 'Gateway',
+          gatewayCaption: 'Waiting for live status',
+          activeAgentName: 'Main',
+          activeAgentCaption: 'Thomas is on standby',
+          talkLabel: 'Standby',
+          talkCaption: 'Voice is ready when configured',
+          nextLabel: 'Choose task',
+          nextCaption: 'No urgent item reported',
+          plan: [
+            { title: 'Connect the useful surfaces', caption: 'Mac, iPhone, voice, and gateway status in one place.', status: 'ready' },
+            { title: 'Keep the next move visible', caption: 'Thomas should make the current plan impossible to lose.', status: 'next' },
+            { title: 'Turn chat into action', caption: 'Use this space for previews, checklists, generated pages, and device handoff.', status: 'soon' }
+          ],
+          actions: [
+            { kicker: 'Setup', title: 'Pair iPhone', caption: 'Show gateway connection details and QR flow.' },
+            { kicker: 'Voice', title: 'Check Talk', caption: 'Surface provider, key, voice, and latency state.' },
+            { kicker: 'Work', title: 'Open plan', caption: 'Keep the active plan visible while Thomas works.' },
+            { kicker: 'Files', title: 'Preview output', caption: 'Render generated pages, docs, and screenshots here.' }
+          ],
+          devices: [
+            { badge: 'Mac', name: 'Mac gateway', caption: 'Local control center' },
+            { badge: 'iOS', name: 'iPhone', caption: 'Ready for paired assistant mode' }
+          ],
+          memories: [
+            { name: 'Tone', caption: 'Personal, direct, funny when it helps.' },
+            { name: 'Preference', caption: 'Fast voice first, cloud deluxe when available.' },
+            { name: 'Focus', caption: 'Make the next useful action obvious.' }
+          ],
+          agents: [],
+          notion: [
+            { kicker: 'Notion', title: 'Connect a source', caption: 'Important pages, projects, and reminders will sit here once Thomas has a Notion source.' }
+          ],
+          cronRuns: [
+            { kicker: 'Cron', title: 'No recent run yet', caption: 'Completed automation runs will appear here with compact summaries.' }
+          ],
+          attention: [
+            { kicker: 'Ready', title: 'Choose the next useful thing', caption: 'Thomas is watching for follow-ups, failures, approvals, and handoffs.' }
+          ],
+          liveThomas: {
+            state: 'idle',
+            provider: 'OpenAI Realtime',
+            title: 'Conversation cockpit',
+            caption: 'Dedicated realtime bridge only. This control will not wake fallback Talk Mode.',
+            toggleLabel: 'Start realtime',
+            bridge: 'Bridge: dedicated realtime bridge pending.'
+          },
+          seriousSuggestion: {
+            kicker: 'Serious suggestion',
+            title: 'Draft a useful BlueBubbles message',
+            caption: 'Summarize a news article, make it personal, and queue the message for approval before sending.',
+            actionLabel: 'Prepare draft'
+          },
+          funSuggestion: {
+            kicker: 'Fun suggestion',
+            title: 'Teach Thomas image generation',
+            caption: 'Add a playful image mode with prompt templates, style memory, and Canvas previews.',
+            actionLabel: 'Explore image mode'
+          }
+        };
+
+        const THOMAS_ANCHORS = [
+          { key: 'gateway', x: 0.18, y: 0.14 },
+          { key: 'suggestions', x: 0.58, y: 0.32 },
+          { key: 'plan', x: 0.34, y: 0.56 },
+          { key: 'devices', x: 0.84, y: 0.42 },
+          { key: 'talk', x: 0.78, y: 0.28 },
+          { key: 'attention', x: 0.81, y: 0.68 }
+        ];
+
+        const INSIGHTS = {
+          gateway: {
+            title: 'Creative control room online',
+            caption: 'Thomas keeps the whole desk connected, but only the live signal should steal your focus.'
+          },
+          suggestions: {
+            title: 'Go where the energy already is',
+            caption: 'Thomas nudges the suggestions first when momentum is waiting to be turned into action.'
+          },
+          plan: {
+            title: 'The hidden blocker is behind the next step',
+            caption: 'A good plan stays visible, but Thomas keeps a backup note ready when the sequence gets stuck.'
+          },
+          devices: {
+            title: 'Backstage status is still part of the performance',
+            caption: 'When Thomas hovers near devices, he is checking freshness, connection confidence, and handoff readiness.'
+          },
+          attention: {
+            title: 'This is what should interrupt the room',
+            caption: 'Thomas only pulls this overlay forward when something deserves real attention instead of background glow.'
+          },
+          talk: {
+            title: 'Realtime belongs in the room',
+            caption: 'This card is wired to native Talk mode now and is shaped for direct Realtime audio next.'
+          }
+        };
+
+        const SECTION_INSIGHT_KEYS = {
+          'openclaw-home-notion': 'suggestions',
+          'openclaw-home-cron': 'gateway',
+          'openclaw-home-plan': 'plan',
+          'openclaw-home-actions': 'plan',
+          'openclaw-home-devices': 'devices',
+          'openclaw-home-agents': 'gateway',
+          'openclaw-home-attention': 'attention',
+          'openclaw-home-memory': 'plan',
+          'openclaw-live-thomas-card': 'talk',
+          'openclaw-home-suggestions': 'suggestions'
+        };
+
         const debugStatusEnabledByQuery = (() => {
           try {
             const params = new URLSearchParams(window.location.search);
@@ -574,7 +1806,26 @@
             return false;
           }
         })();
+
         let debugStatusEnabled = debugStatusEnabledByQuery;
+        let frame = 0;
+        let lastInsightTimeout = 0;
+
+        const thomasState = {
+          anchorIndex: 0,
+          burstUntil: 0,
+          x: THOMAS_ANCHORS[0].x,
+          y: THOMAS_ANCHORS[0].y,
+          nextHopAt: performance.now() + 2600,
+          insightKey: THOMAS_ANCHORS[0].key
+        };
+
+        const liveThomasState = {
+          active: false,
+          pendingActionId: null,
+          pendingDesiredEnabled: null,
+          state: 'idle'
+        };
 
         function resize() {
           const dpr = window.devicePixelRatio || 1;
@@ -583,6 +1834,59 @@
           canvas.width = width;
           canvas.height = height;
           ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+
+        function drawBackdrop(now) {
+          frame = now;
+          const width = window.innerWidth;
+          const height = window.innerHeight;
+          ctx.clearRect(0, 0, width, height);
+
+          const gradient = ctx.createLinearGradient(0, 0, width, height);
+          gradient.addColorStop(0, 'rgba(82, 200, 255, 0.14)');
+          gradient.addColorStop(0.42, 'rgba(255, 201, 65, 0.07)');
+          gradient.addColorStop(0.7, 'rgba(255, 79, 163, 0.08)');
+          gradient.addColorStop(1, 'rgba(88, 230, 167, 0.1)');
+          ctx.fillStyle = gradient;
+          ctx.fillRect(0, 0, width, height);
+
+          for (let index = 0; index < 18; index += 1) {
+            const t = now / 1200 + index * 0.7;
+            const x = ((index * 173) % (width + 120)) - 60 + Math.sin(t) * 34;
+            const y = ((index * 101) % (height + 120)) - 60 + Math.cos(t * 0.8) * 28;
+            const size = 22 + ((index * 11) % 46);
+            ctx.save();
+            ctx.translate(x, y);
+            ctx.rotate(t * 0.14);
+            ctx.globalAlpha = 0.1 + (index % 4) * 0.035;
+            ctx.fillStyle = ['#52c8ff', '#ff4fa3', '#ffc941', '#58e6a7'][index % 4];
+            ctx.beginPath();
+            if (index % 3 === 0) {
+              ctx.rect(-size / 2, -size / 2, size, size * 0.68);
+            } else {
+              ctx.moveTo(0, -size / 2);
+              ctx.lineTo(size / 2, size / 2);
+              ctx.lineTo(-size / 2, size / 2);
+              ctx.closePath();
+            }
+            ctx.fill();
+            ctx.restore();
+          }
+
+          for (let index = 0; index < 58; index += 1) {
+            const t = now / 1000 + index * 0.18;
+            const x = ((index * 91) % width) + Math.sin(t) * 28;
+            const y = ((index * 57) % height) + Math.cos(t * 1.2) * 22;
+            ctx.fillStyle = index % 4 === 0 ? 'rgba(82, 200, 255, 0.72)' : (index % 4 === 1 ? 'rgba(88, 230, 167, 0.6)' : (index % 4 === 2 ? 'rgba(255, 201, 65, 0.64)' : 'rgba(255, 79, 163, 0.58)'));
+            ctx.beginPath();
+            ctx.arc(x, y, 1.8 + ((index + Math.sin(t)) % 2.4), 0, Math.PI * 2);
+            ctx.fill();
+          }
+
+          renderThomas(now);
+          if (!prefersReducedMotion) {
+            window.requestAnimationFrame(drawBackdrop);
+          }
         }
 
         function setDebugStatusEnabled(enabled) {
@@ -607,75 +1911,494 @@
           while (node.firstChild) node.removeChild(node.firstChild);
         }
 
-        function createAgentCard(agent) {
+        function safeArray(value, fallback) {
+          return Array.isArray(value) ? value : fallback;
+        }
+
+        function text(value, fallback) {
+          if (typeof value !== 'string') return fallback;
+          const trimmed = value.trim();
+          return trimmed || fallback;
+        }
+
+        function countLabel(count, singular, plural) {
+          return `${count} ${count === 1 ? singular : plural}`;
+        }
+
+        function escapeHtml(value) {
+          return String(value)
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;');
+        }
+
+        function animateSlotValue(node, nextValue, format) {
+          if (!node) return;
+          const value = typeof format === 'function' ? format(nextValue) : String(nextValue);
+          node.dataset.slotValue = value;
+          node.textContent = value;
+          node.classList.remove('is-spinning');
+          void node.offsetWidth;
+          node.classList.add('is-spinning');
+        }
+
+        function burstNode(node) {
+          if (!node) return;
+          node.style.setProperty('--burst-tilt', `${Math.random() > 0.5 ? 0.55 : -0.55}deg`);
+          node.classList.remove('is-bursting');
+          void node.offsetWidth;
+          node.classList.add('is-bursting');
+          window.setTimeout(() => node.classList.remove('is-bursting'), 520);
+        }
+
+        function createRipple(anchorElement) {
+          if (!anchorElement || prefersReducedMotion) return;
+          const stageRect = home.thomasStage.getBoundingClientRect();
+          const rect = anchorElement.getBoundingClientRect();
+          const ripple = document.createElement('div');
+          ripple.className = 'burst-ripple';
+          ripple.style.left = `${rect.left - stageRect.left + rect.width / 2}px`;
+          ripple.style.top = `${rect.top - stageRect.top + rect.height / 2}px`;
+          home.thomasStage.appendChild(ripple);
+          window.setTimeout(() => ripple.remove(), 820);
+        }
+
+        function normalizeLiveState(rawState) {
+          const state = text(rawState, 'idle').toLowerCase();
+          if (state === 'enabled') return 'active';
+          if (state === 'disabled') return 'idle';
+          if (['idle', 'active', 'listening', 'thinking', 'speaking', 'pending', 'setup', 'error'].includes(state)) return state;
+          return 'idle';
+        }
+
+        function applyLiveThomasState(next) {
+          const state = normalizeLiveState(next?.state);
+          liveThomasState.state = state;
+          liveThomasState.active = ['active', 'listening', 'thinking', 'speaking'].includes(state);
+          home.liveCard.dataset.liveState = state;
+          home.liveProvider.textContent = text(next?.provider, defaults.liveThomas.provider);
+          home.liveTitle.textContent = text(next?.title, defaults.liveThomas.title);
+          home.liveCaption.textContent = text(next?.caption, defaults.liveThomas.caption);
+          home.liveState.textContent = state;
+          home.liveToggle.textContent = text(
+            next?.toggleLabel,
+            liveThomasState.active ? 'Stop realtime' : 'Start realtime'
+          );
+          home.liveBridge.textContent = text(next?.bridge, defaults.liveThomas.bridge);
+          body.style.setProperty('--live-level', liveThomasState.active ? '78%' : (state === 'pending' ? '54%' : '28%'));
+        }
+
+        function postCanvasAction(name, context) {
+          const id = `live-thomas-${Date.now()}-${Math.floor(Math.random() * 10000)}`;
+          const userAction = {
+            id,
+            name,
+            surfaceId: 'home',
+            sourceComponentId: 'openclaw-live-thomas-card',
+            timestamp: new Date().toISOString(),
+            context: [context || {}]
+          };
+          const handler = globalThis.webkit?.messageHandlers?.openclawCanvasA2UIAction;
+          if (!handler?.postMessage) {
+            window.dispatchEvent(new CustomEvent('openclaw:live-thomas-status', {
+              detail: { state: 'error', message: 'Native bridge unavailable in this canvas.' }
+            }));
+            return null;
+          }
+          handler.postMessage({ userAction });
+          return id;
+        }
+
+        function kickLiveCard(message) {
+          home.liveCard.classList.remove('is-kicked');
+          void home.liveCard.offsetWidth;
+          home.liveCard.classList.add('is-kicked');
+          if (message) {
+            home.liveBridge.textContent = message;
+          }
+          burstNode(home.liveCard);
+          createRipple(home.liveCard);
+          window.setTimeout(() => home.liveCard.classList.remove('is-kicked'), 560);
+        }
+
+        function toggleLiveThomas() {
+          const desiredEnabled = !liveThomasState.active;
+          const actionId = postCanvasAction('talk.realtime.toggle', {
+            desiredEnabled,
+            source: 'canvas-live-thomas-card'
+          });
+          if (!actionId) return;
+          liveThomasState.pendingActionId = actionId;
+          liveThomasState.pendingDesiredEnabled = desiredEnabled;
+          applyLiveThomasState({
+            ...defaults.liveThomas,
+            state: 'pending',
+            toggleLabel: desiredEnabled ? 'Starting realtime...' : 'Stopping realtime...',
+            bridge: desiredEnabled ? 'Checking dedicated realtime bridge.' : 'Stopping dedicated realtime bridge.'
+          });
+          kickLiveCard(desiredEnabled ? 'Realtime signal sent without waking fallback Talk.' : 'Realtime stop signal sent.');
+        }
+
+        function createTask(item, index) {
+          const task = document.createElement('div');
+          task.className = 'task';
+          const mark = document.createElement('div');
+          mark.className = 'task-mark';
+          mark.textContent = item.status === 'done' ? 'ok' : String(index + 1);
+          const body = document.createElement('div');
+          const title = document.createElement('div');
+          title.className = 'task-title';
+          title.textContent = text(item.title, 'Untitled step');
+          const caption = document.createElement('div');
+          caption.className = 'task-caption';
+          caption.textContent = text(item.caption, 'No detail yet');
+          body.appendChild(title);
+          body.appendChild(caption);
+          const pill = document.createElement('div');
+          pill.className = 'pill';
+          pill.textContent = text(item.status, 'ready');
+          task.appendChild(mark);
+          task.appendChild(body);
+          task.appendChild(pill);
+          return task;
+        }
+
+        function createAction(item) {
+          const action = document.createElement('div');
+          action.className = 'action';
+          const kicker = document.createElement('div');
+          kicker.className = 'action-kicker';
+          kicker.textContent = text(item.kicker, 'Action');
+          const title = document.createElement('div');
+          title.className = 'action-title';
+          title.textContent = text(item.title, 'Open');
+          const caption = document.createElement('div');
+          caption.className = 'action-caption';
+          caption.textContent = text(item.caption, 'Ready');
+          action.appendChild(kicker);
+          action.appendChild(title);
+          action.appendChild(caption);
+          return action;
+        }
+
+        function createMetricCard(item) {
           const card = document.createElement('div');
-          card.className = `agent-card${agent.isActive ? ' active' : ''}`;
+          card.className = 'line-card';
+          const kicker = document.createElement('div');
+          kicker.className = 'action-kicker';
+          kicker.textContent = text(item.kicker || item.badge || item.status, 'Signal');
+          const title = document.createElement('div');
+          title.className = 'line-card-title';
+          title.textContent = text(item.title || item.name, 'Untitled');
+          const caption = document.createElement('div');
+          caption.className = 'action-caption';
+          caption.textContent = text(item.caption || item.summary, 'Ready');
+          card.appendChild(kicker);
+          card.appendChild(title);
+          card.appendChild(caption);
+          return card;
+        }
+
+        function createSuggestion(item, kind) {
+          const card = document.createElement('div');
+          card.className = `suggestion ${kind}`;
+          const kicker = document.createElement('div');
+          kicker.className = 'action-kicker';
+          kicker.textContent = text(item?.kicker, kind === 'work' ? 'Serious suggestion' : 'Fun suggestion');
+          const title = document.createElement('div');
+          title.className = 'suggestion-title';
+          title.textContent = text(item?.title, 'Try something useful');
+          const caption = document.createElement('div');
+          caption.className = 'action-caption';
+          caption.textContent = text(item?.caption, 'Thomas can prepare this when you ask.');
+          const action = document.createElement('div');
+          action.className = 'suggestion-action';
+          action.textContent = text(item?.actionLabel, 'Ask Thomas');
+          card.appendChild(kicker);
+          card.appendChild(title);
+          card.appendChild(caption);
+          card.appendChild(action);
+          return card;
+        }
+
+        function createLineCard(item, kind) {
+          const card = document.createElement('div');
+          card.className = kind;
+          if (item.isActive) card.classList.add('active');
 
           const row = document.createElement('div');
-          row.className = 'agent-row';
-
+          row.className = 'row';
           const badge = document.createElement('div');
           badge.className = 'badge';
-          badge.textContent = agent.badge || 'OC';
-
-          const text = document.createElement('div');
-
+          badge.textContent = text(item.badge, kind === 'agent-card' ? 'OC' : '--').slice(0, 4);
+          const body = document.createElement('div');
           const name = document.createElement('div');
           name.className = 'name';
-          name.textContent = agent.name || agent.id || 'Agent';
-
+          name.textContent = text(item.name || item.id, 'Item');
           const caption = document.createElement('div');
           caption.className = 'caption';
-          caption.textContent = agent.caption || 'Ready';
-
-          text.appendChild(name);
-          text.appendChild(caption);
+          caption.textContent = text(item.caption, 'Ready');
+          body.appendChild(name);
+          body.appendChild(caption);
           row.appendChild(badge);
-          row.appendChild(text);
+          row.appendChild(body);
           card.appendChild(row);
           return card;
         }
 
-        function renderHome(state) {
-          if (!state || typeof state !== 'object') return;
-
-          document.body.dataset.state = state.gatewayState || 'offline';
-          home.root.style.display = 'flex';
-          home.eyebrow.textContent = state.eyebrow || 'Welcome to OpenClaw';
-          home.title.textContent = state.title || 'OpenClaw';
-          home.subtitle.textContent = state.subtitle || '';
-          home.gateway.textContent = state.gatewayLabel || 'Gateway';
-          home.gatewayCaption.textContent = state.gatewayState === 'connected'
-            ? `${state.agentCount || 0} agent${state.agentCount === 1 ? '' : 's'} available`
-            : (state.activeAgentCaption || 'Connect to load your agents');
-          home.activeBadge.textContent = state.activeAgentBadge || 'OC';
-          home.activeName.textContent = state.activeAgentName || 'Main';
-          home.activeCaption.textContent = state.activeAgentCaption || '';
-          home.agentCount.textContent = `${state.agentCount || 0} agent${state.agentCount === 1 ? '' : 's'}`;
-          home.footer.textContent = state.footer || '';
-
-          clearChildren(home.agentGrid);
-          const agents = Array.isArray(state.agents) ? state.agents : [];
-          if (!agents.length) {
+        function renderList(node, items, emptyText, factory) {
+          clearChildren(node);
+          if (!items.length) {
             const empty = document.createElement('div');
             empty.className = 'empty-state';
-            empty.textContent = state.gatewayState === 'connected'
-              ? 'Your gateway is online. Agents will appear here as soon as the current scope reports them.'
-              : 'Connect this phone to your gateway and the live agent overview will appear here.';
-            home.agentGrid.appendChild(empty);
+            empty.textContent = emptyText;
+            node.appendChild(empty);
             return;
           }
 
-          agents.forEach((agent) => {
-            home.agentGrid.appendChild(createAgentCard(agent));
+          items.forEach((item, index) => node.appendChild(factory(item, index)));
+        }
+
+        function normalizeState(state) {
+          const merged = { ...defaults, ...(state || {}) };
+          merged.plan = safeArray(state?.plan, defaults.plan);
+          merged.actions = safeArray(state?.actions, defaults.actions);
+          merged.devices = safeArray(state?.devices, defaults.devices);
+          merged.memories = safeArray(state?.memories || state?.memory, defaults.memories);
+          merged.agents = safeArray(state?.agents, defaults.agents);
+          merged.notion = safeArray(state?.notion, defaults.notion);
+          merged.cronRuns = safeArray(state?.cronRuns, defaults.cronRuns);
+          merged.attention = safeArray(state?.attention, defaults.attention);
+          merged.liveThomas = { ...defaults.liveThomas, ...(state?.liveThomas || {}) };
+          merged.seriousSuggestion = state?.seriousSuggestion || defaults.seriousSuggestion;
+          merged.funSuggestion = state?.funSuggestion || defaults.funSuggestion;
+          return merged;
+        }
+
+        function renderInsight(key, anchorElement) {
+          const insight = INSIGHTS[key] || INSIGHTS.plan;
+          const card = document.createElement('article');
+          card.className = 'insight-card';
+          const kicker = document.createElement('div');
+          kicker.className = 'insight-kicker';
+          kicker.textContent = 'Thomas found';
+          const title = document.createElement('h2');
+          title.innerHTML = escapeHtml(insight.title);
+          const caption = document.createElement('p');
+          caption.innerHTML = escapeHtml(insight.caption);
+          card.appendChild(kicker);
+          card.appendChild(title);
+          card.appendChild(caption);
+
+          clearChildren(home.insightLayer);
+          home.insightLayer.appendChild(card);
+
+          const stageRect = home.thomasStage.getBoundingClientRect();
+          const anchorRect = (anchorElement || home.sections.plan).getBoundingClientRect();
+          const left = Math.max(10, Math.min(anchorRect.left - stageRect.left + 8, stageRect.width - 320));
+          const top = Math.max(10, Math.min(anchorRect.top - stageRect.top + 8, stageRect.height - 160));
+          card.style.left = `${left}px`;
+          card.style.top = `${top}px`;
+
+          requestAnimationFrame(() => card.classList.add('is-visible'));
+
+          if (lastInsightTimeout) {
+            clearTimeout(lastInsightTimeout);
+          }
+
+          lastInsightTimeout = window.setTimeout(() => {
+            card.classList.remove('is-visible');
+          }, 3400);
+        }
+
+        function revealInsight(key) {
+          const anchor = THOMAS_ANCHORS.find((entry) => entry.key === key) || THOMAS_ANCHORS[0];
+          thomasState.insightKey = key;
+          thomasState.anchorIndex = THOMAS_ANCHORS.indexOf(anchor);
+          thomasState.nextHopAt = performance.now() + 2800;
+          const section = home.sections[key] || home.sections.plan;
+          renderInsight(key, section);
+          burstNode(section);
+          burstNode(home.thomas);
+          createRipple(section);
+        }
+
+        function renderThomas(now) {
+          if (!home.thomas) return;
+          if (!prefersReducedMotion && now > thomasState.nextHopAt && now > thomasState.burstUntil + 1800) {
+            thomasState.anchorIndex = (thomasState.anchorIndex + 1) % THOMAS_ANCHORS.length;
+            thomasState.insightKey = THOMAS_ANCHORS[thomasState.anchorIndex].key;
+            thomasState.nextHopAt = now + 2600 + (thomasState.anchorIndex * 220);
+          }
+
+          const target = THOMAS_ANCHORS[thomasState.anchorIndex];
+          const drift = prefersReducedMotion ? 0 : Math.sin(now / 1200 + thomasState.anchorIndex) * 0.012;
+          const sway = prefersReducedMotion ? 0 : Math.cos(now / 1600 + thomasState.anchorIndex) * 0.008;
+          const tilt = prefersReducedMotion ? 0 : Math.sin(now / 760 + thomasState.anchorIndex) * 5.5;
+          const spin = prefersReducedMotion ? 0 : (now / 36) % 360;
+          thomasState.x += ((target.x + sway) - thomasState.x) * 0.08;
+          thomasState.y += ((target.y + drift) - thomasState.y) * 0.08;
+          body.style.setProperty('--thomas-x', `${(thomasState.x * 100).toFixed(2)}%`);
+          body.style.setProperty('--thomas-y', `${(thomasState.y * 100).toFixed(2)}%`);
+          body.style.setProperty('--thomas-tilt', `${tilt.toFixed(2)}deg`);
+          body.style.setProperty('--thomas-spin', `${spin.toFixed(2)}deg`);
+        }
+
+        function bindThomas() {
+          home.thomas.addEventListener('click', () => {
+            const nextIndex = (thomasState.anchorIndex + 1) % THOMAS_ANCHORS.length;
+            thomasState.anchorIndex = nextIndex;
+            thomasState.insightKey = THOMAS_ANCHORS[nextIndex].key;
+            thomasState.burstUntil = performance.now() + 800;
+            revealInsight(thomasState.insightKey);
+          });
+
+          Object.entries(SECTION_INSIGHT_KEYS).forEach(([id, key]) => {
+            const node = document.getElementById(id);
+            if (!node) return;
+            node.addEventListener('click', () => revealInsight(key));
+          });
+
+          home.liveToggle.addEventListener('click', (event) => {
+            event.stopPropagation();
+            toggleLiveThomas();
+          });
+
+          home.liveCard.addEventListener('click', (event) => {
+            if (event.target === home.liveToggle) return;
+            revealInsight('talk');
           });
         }
 
+        function renderHome(state) {
+          const next = normalizeState(state);
+          body.dataset.state = text(next.gatewayState, 'offline');
+          home.root.style.display = 'block';
+          home.eyebrow.textContent = text(next.eyebrow, defaults.eyebrow);
+          home.title.textContent = text(next.title, defaults.title);
+          home.subtitle.textContent = text(next.subtitle, defaults.subtitle);
+          home.mood.textContent = text(next.mood, defaults.mood);
+          home.moodNote.textContent = text(next.moodNote, defaults.moodNote);
+          home.gateway.textContent = text(next.gatewayLabel, defaults.gatewayLabel);
+          home.gatewayCaption.textContent = text(next.gatewayCaption, defaults.gatewayCaption);
+          home.activeName.textContent = text(next.activeAgentName, defaults.activeAgentName);
+          home.activeCaption.textContent = text(next.activeAgentCaption, defaults.activeAgentCaption);
+          home.talk.textContent = text(next.talkLabel, defaults.talkLabel);
+          home.talkCaption.textContent = text(next.talkCaption, defaults.talkCaption);
+          applyLiveThomasState(next.liveThomas);
+          home.next.textContent = text(next.nextLabel, defaults.nextLabel);
+          home.nextCaption.textContent = text(next.nextCaption, defaults.nextCaption);
+
+          home.planCount.textContent = countLabel(next.plan.length, 'step', 'steps');
+          animateSlotValue(home.actionCount, next.actions.length);
+          animateSlotValue(home.deviceCount, next.devices.length);
+          animateSlotValue(home.agentCount, countLabel(next.agents.length, 'agent', 'agents'));
+          animateSlotValue(home.notionCount, next.notion.length);
+          animateSlotValue(home.cronCount, next.cronRuns.length);
+          animateSlotValue(home.attentionCount, next.attention.length);
+          animateSlotValue(home.memoryCount, next.memories.length);
+
+          renderList(home.planList, next.plan, 'No plan loaded yet.', createTask);
+          renderList(home.actionList, next.actions, 'No quick actions published yet.', createAction);
+          renderList(home.deviceList, next.devices, 'No devices reported yet.', (item) => createLineCard(item, 'device'));
+          renderList(home.agentGrid, next.agents, 'Agents will appear here when the gateway reports them.', (item) => createLineCard(item, 'agent-card'));
+          renderList(home.notionList, next.notion, 'No Notion cards loaded yet.', createMetricCard);
+          renderList(home.cronList, next.cronRuns, 'No recent automation runs yet.', createMetricCard);
+          renderList(home.attentionList, next.attention, 'No urgent attention items.', createMetricCard);
+          renderList(home.memoryList, next.memories, 'No memory cards yet.', (item) => createLineCard(item, 'memory'));
+
+          clearChildren(home.suggestionList);
+          home.suggestionList.appendChild(createSuggestion(next.seriousSuggestion, 'work'));
+          home.suggestionList.appendChild(createSuggestion(next.funSuggestion, 'fun'));
+
+          if (next.attention.length) {
+            thomasState.insightKey = 'attention';
+          } else if (next.devices.length > 1) {
+            thomasState.insightKey = 'devices';
+          } else {
+            thomasState.insightKey = 'plan';
+          }
+        }
+
         window.addEventListener('resize', resize);
+        window.addEventListener('openclaw:live-thomas-status', (event) => {
+          const detail = event?.detail || {};
+          const nextState = normalizeLiveState(detail.state);
+          const nextActive = ['active', 'listening', 'thinking', 'speaking'].includes(nextState);
+          const provider = text(detail.provider, defaults.liveThomas.provider);
+          const model = text(detail.model, '');
+          const voice = text(detail.voice, '');
+          const bridgeMessage = text(
+            detail.message || detail.error,
+            nextState === 'setup'
+              ? 'Dedicated realtime bridge is ready to be connected.'
+              : defaults.liveThomas.bridge
+          );
+          const providerLabel = [provider, model, voice].filter(Boolean).join(' · ') || provider;
+          applyLiveThomasState({
+            ...defaults.liveThomas,
+            provider: providerLabel,
+            state: nextState,
+            toggleLabel: nextState === 'setup'
+              ? 'Set up realtime'
+              : (nextActive ? 'Stop realtime' : 'Start realtime'),
+            bridge: bridgeMessage
+          });
+        });
+        window.addEventListener('openclaw:a2ui-action-status', (event) => {
+          const detail = event?.detail || {};
+          if (!String(detail.id || '').startsWith('live-thomas-')) return;
+          const ok = detail.ok === true;
+          const enabled = typeof liveThomasState.pendingDesiredEnabled === 'boolean'
+            ? liveThomasState.pendingDesiredEnabled
+            : !liveThomasState.active;
+          liveThomasState.pendingActionId = null;
+          liveThomasState.pendingDesiredEnabled = null;
+          const nextState = String(detail.state || '').toLowerCase() === 'setup'
+            ? 'setup'
+            : (ok ? (enabled ? 'active' : 'idle') : 'error');
+          const statusMessage = text(
+            detail.message || detail.error,
+            nextState === 'setup'
+              ? 'Dedicated realtime bridge is being prepared. Fallback Talk Mode stayed off.'
+              : 'Dedicated realtime bridge is not ready.'
+          );
+          applyLiveThomasState({
+            ...defaults.liveThomas,
+            state: nextState,
+            toggleLabel: nextState === 'setup'
+              ? 'Set up realtime'
+              : (ok ? (enabled ? 'Stop realtime' : 'Start realtime') : 'Start realtime'),
+            bridge: ok
+              ? (enabled ? 'Dedicated realtime bridge is active.' : 'Dedicated realtime bridge is idle.')
+              : statusMessage
+          });
+          kickLiveCard(nextState === 'setup'
+            ? 'Realtime bridge is separate from fallback Talk.'
+            : (ok ? 'Realtime action confirmed.' : 'Realtime bridge stayed idle.'));
+          window.dispatchEvent(new CustomEvent('openclaw:live-thomas-status', {
+            detail: {
+              state: nextState,
+              ok,
+              error: detail.error || '',
+              message: detail.message || '',
+              provider: home.liveProvider.textContent || defaults.liveThomas.provider
+            }
+          }));
+        });
         resize();
+        bindThomas();
+        renderHome(defaults);
 
         if (!debugStatusEnabled) {
           statusEl.style.display = 'none';
+        }
+
+        if (!prefersReducedMotion) {
+          window.requestAnimationFrame(drawBackdrop);
+        } else {
+          renderThomas(performance.now());
         }
 
         window.__openclaw = {
@@ -683,7 +2406,12 @@
           ctx,
           setDebugStatusEnabled,
           setStatus,
-          renderHome
+          renderHome,
+          renderThomas,
+          renderInsight,
+          animateSlotValue,
+          applyLiveThomasState,
+          toggleLiveThomas
         };
       })();
     </script>

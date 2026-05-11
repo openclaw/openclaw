@@ -23,7 +23,9 @@ actor MacNodeRuntime {
         canvasSurfaceUrl: @escaping @Sendable () async -> String? = {
             await GatewayConnection.shared.canvasPluginSurfaceUrl()
         },
-        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = { nil })
+        refreshCanvasSurfaceUrl: @escaping @Sendable () async -> String? = {
+            await GatewayConnection.shared.refreshCanvasPluginSurfaceUrl(timeoutMs: 5000)
+        })
     {
         self.makeMainActorServices = makeMainActorServices
         self.browserProxyRequest = browserProxyRequest
