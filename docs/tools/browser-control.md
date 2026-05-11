@@ -285,14 +285,14 @@ You can wait on more than just time/text:
 
 - Wait for URL (globs supported by Playwright):
   - `openclaw browser wait --url "**/dash"`
-- Wait for load state:
+- Wait for load state (managed `openclaw` profile only):
   - `openclaw browser wait --load networkidle`
 - Wait for a JS predicate:
   - `openclaw browser wait --fn "window.ready===true"`
 - Wait for a selector to become visible:
   - `openclaw browser wait "#main"`
 
-These can be combined:
+These can be combined (requires a managed `openclaw` profile — `--load networkidle` is not supported for existing-session profiles):
 
 ```bash
 openclaw browser wait "#main" \
