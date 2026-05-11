@@ -742,12 +742,12 @@ describe("codex command", () => {
     });
 
     expect(result.text).toContain("Subscription  personal-email@gmail.com");
-    expect(result.text).toContain("Weekly 63% \u00b7 Short-term 12%");
+    expect(result.text).toContain("\n  Weekly 63% \u00b7 Short-term 12%");
     expect(result.text).toContain("Auth order");
     expect(result.text).toContain(
-      "1. personal-email@gmail.com   ChatGPT subscription   — active now",
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
     );
-    expect(result.text).toContain("2. API key backup   API key   — available if needed");
+    expect(result.text).toContain("\n  2. API key backup   API key   — available if needed");
     expect(result.text).not.toContain("Now using:");
     expect(result.text).not.toContain("openai:api-key-backup");
     expect(result.text).not.toContain("primary");
@@ -833,17 +833,17 @@ describe("codex command", () => {
     expect(result.text).toContain("Now using: API key backup");
     expect(result.text).toContain("subscription rate-limited \u00b7 switches back in");
     expect(result.text).toContain("Subscription  personal-email@gmail.com");
-    expect(result.text).toContain("Weekly 100% \u00b7 Short-term 0% \u00b7 Resets in");
+    expect(result.text).toContain("\n  Weekly 100% \u00b7 Short-term 0% \u00b7 Resets in");
     expect(result.text).toContain(
-      "1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
     );
     expect(result.text).toContain(
-      "2. API key backup   API key   — active now \u00b7 billed per token",
+      "\n  2. API key backup   API key   — active now \u00b7 billed per token",
     );
     expect(result.text).toContain(
-      "3. work-email@gmail.com   ChatGPT subscription   — available if needed",
+      "\n  3. work-email@gmail.com   ChatGPT subscription   — available if needed",
     );
-    expect(result.text).toContain("4. Work API key backup   API key   — available if needed");
+    expect(result.text).toContain("\n  4. Work API key backup   API key   — available if needed");
     expect(result.text).not.toContain("Reason:");
     expect(result.text).not.toContain("fallback active");
     expect(result.text).not.toContain("not tracked");

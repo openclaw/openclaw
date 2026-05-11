@@ -220,13 +220,17 @@ function formatCodexAccountSummary(value: JsonValue | undefined): string {
 }
 
 function formatCodexTextForDisplay(value: string): string {
+  const safe = sanitizeCodexTextForDisplay(value).trim();
+  return safe || "<unknown>";
+}
+
+function sanitizeCodexTextForDisplay(value: string): string {
   let safe = "";
   for (const character of value) {
     const codePoint = character.codePointAt(0);
     safe += codePoint != null && isUnsafeDisplayCodePoint(codePoint) ? "?" : character;
   }
-  safe = safe.trim();
-  return safe || "<unknown>";
+  return safe;
 }
 
 function escapeCodexChatText(value: string): string {
@@ -254,7 +258,10 @@ function formatCodexAccountLine(value: string): string {
   if (value === "") {
     return "";
   }
-  const safe = formatCodexTextForDisplay(value);
+  const safe = sanitizeCodexTextForDisplay(value).trimEnd();
+  if (!safe.trim()) {
+    return "";
+  }
   const emailPattern = /[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+/gu;
   let formatted = "";
   let lastIndex = 0;
