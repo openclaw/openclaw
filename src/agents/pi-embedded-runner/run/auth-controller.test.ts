@@ -494,9 +494,7 @@ describe("createEmbeddedRunAuthController", () => {
       expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
       expect(harness.runtimeAuthState).toBeNull();
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
-        ),
+        "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
       );
     });
   });

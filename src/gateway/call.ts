@@ -41,7 +41,7 @@ import {
   resolveLeastPrivilegeOperatorScopesForMethod,
   type OperatorScope,
 } from "./method-scopes.js";
-import { PROTOCOL_VERSION } from "./protocol/index.js";
+import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 export type { GatewayConnectionDetails };
 
 type CallGatewayBaseOptions = {
@@ -654,7 +654,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
         opts.deviceIdentity === undefined
           ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
-      minProtocol: opts.minProtocol ?? PROTOCOL_VERSION,
+      minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
       onHelloOk: async (hello) => {
         try {

@@ -388,11 +388,13 @@ describe("line runtime api", () => {
 });
 
 function createRuntime() {
-  const monitorLineProvider = vi.fn(async () => ({
-    account: { accountId: "default" },
-    handleWebhook: async () => {},
-    stop: () => {},
-  }));
+  const monitorLineProvider = vi.fn(
+    async (_opts: { accountId?: string; channelAccessToken: string; channelSecret: string }) => ({
+      account: { accountId: "default" },
+      handleWebhook: async () => {},
+      stop: () => {},
+    }),
+  );
 
   const runtime = {
     channel: {

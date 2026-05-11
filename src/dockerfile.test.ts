@@ -3,10 +3,11 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { BUNDLED_PLUGIN_ROOT_DIR } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
+import YAML from "yaml";
 
 const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 const dockerfilePath = join(repoRoot, "Dockerfile");
-const packageJsonPath = join(repoRoot, "package.json");
+const pnpmWorkspacePath = join(repoRoot, "pnpm-workspace.yaml");
 
 function collapseDockerContinuations(dockerfile: string): string {
   return dockerfile.replace(/\\\r?\n[ \t]*/g, " ");
@@ -122,7 +123,7 @@ describe("Dockerfile", () => {
     expect(dockerfile.split(normalizedExtensionLoop).length - 1).toBe(2);
     expect(dockerfile).toContain("pnpm-workspace.runtime.yaml");
     expect(dockerfile).toContain("  - ui\\n");
-    expect(dockerfile).toContain("CI=true NPM_CONFIG_FROZEN_LOCKFILE=false pnpm prune --prod");
+    expect(dockerfile).toContain("CI=true pnpm_config_frozen_lockfile=false pnpm prune --prod");
     expect(dockerfile).toContain(
       'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" node scripts/prune-docker-plugin-dist.mjs',
     );
@@ -134,17 +135,38 @@ describe("Dockerfile", () => {
       "COPY --from=runtime-assets --chown=node:node /app/node_modules ./node_modules",
     );
     expect(dockerfile).toContain(
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .",
+    );
+    expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );
   });
 
   it("keeps package manager patch files in runtime images", async () => {
-    const dockerfile = await readFile(dockerfilePath, "utf8");
-    const packageJson = JSON.parse(await readFile(packageJsonPath, "utf8")) as {
-      pnpm?: { patchedDependencies?: Record<string, string> };
+    const dockerfile = collapseDockerContinuations(await readFile(dockerfilePath, "utf8"));
+    const pnpmWorkspace = YAML.parse(await readFile(pnpmWorkspacePath, "utf8")) as {
+      patchedDependencies?: Record<string, string>;
     };
+    const saveSourceWorkspace = "cp pnpm-workspace.yaml /tmp/pnpm-workspace.source.yaml";
+    const usePruneWorkspace = "cp /tmp/pnpm-workspace.runtime.yaml pnpm-workspace.yaml";
+    const pruneProd = "CI=true pnpm_config_frozen_lockfile=false pnpm prune --prod";
+    const restoreSourceWorkspace = "cp /tmp/pnpm-workspace.source.yaml pnpm-workspace.yaml";
+    const finalWorkspaceCopy =
+      "COPY --from=runtime-assets --chown=node:node /app/pnpm-workspace.yaml .";
 
-    expect(Object.keys(packageJson.pnpm?.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(Object.keys(pnpmWorkspace.patchedDependencies ?? {})).not.toHaveLength(0);
+    expect(dockerfile).toContain(saveSourceWorkspace);
+    expect(dockerfile).toContain(usePruneWorkspace);
+    expect(dockerfile).toContain(restoreSourceWorkspace);
+    expect(dockerfile).toContain(finalWorkspaceCopy);
+    expect(dockerfile.indexOf(saveSourceWorkspace)).toBeLessThan(
+      dockerfile.indexOf(usePruneWorkspace),
+    );
+    expect(dockerfile.indexOf(usePruneWorkspace)).toBeLessThan(dockerfile.indexOf(pruneProd));
+    expect(dockerfile.indexOf(pruneProd)).toBeLessThan(dockerfile.indexOf(restoreSourceWorkspace));
+    expect(dockerfile.indexOf(restoreSourceWorkspace)).toBeLessThan(
+      dockerfile.indexOf(finalWorkspaceCopy),
+    );
     expect(dockerfile).toContain(
       "COPY --from=runtime-assets --chown=node:node /app/patches ./patches",
     );

@@ -613,7 +613,7 @@ describe("sendMessageMatrix threads", () => {
       accountId: "ops",
     });
 
-    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(expect.anything(), "matrix", "ops");
+    expect(resolveTextChunkLimitMock).toHaveBeenCalledWith({}, "matrix", "ops");
   });
 
   it("returns ordered event ids for chunked text sends", async () => {

@@ -16,7 +16,9 @@ import {
 
 describe("Zalo reply-once lifecycle", () => {
   const finalizeInboundContextMock = vi.fn((ctx: Record<string, unknown>) => ctx);
-  const recordInboundSessionMock = vi.fn(async () => undefined);
+  const recordInboundSessionMock = vi.fn(
+    async (_input: { sessionKey?: string; ctx?: Record<string, unknown> }) => undefined,
+  );
   const resolveAgentRouteMock = vi.fn(() => ({
     agentId: "main",
     channel: "zalo",
@@ -101,14 +103,15 @@ describe("Zalo reply-once lifecycle", () => {
       expect(recordArgs?.ctx?.To).toBe("zalo:dm-chat-1");
       expect(recordArgs?.ctx?.MessageSid).toContain("zalo-replay-");
       expect(sendMessageMock).toHaveBeenCalledTimes(1);
-      expect(sendMessageMock).toHaveBeenCalledWith(
-        "zalo-token",
-        {
-          chat_id: "dm-chat-1",
-          text: "zalo reply once",
-        },
-        undefined,
-      );
+      const [sendToken, sendPayload, sendOptions] = sendMessageMock.mock.calls[0] as [
+        string,
+        { chat_id?: string; text?: string },
+        unknown,
+      ];
+      expect(sendToken).toBe("zalo-token");
+      expect(sendPayload.chat_id).toBe("dm-chat-1");
+      expect(sendPayload.text).toBe("zalo reply once");
+      expect(sendOptions).toBeUndefined();
     } finally {
       await monitor.stop();
     }

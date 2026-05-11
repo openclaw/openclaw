@@ -125,8 +125,8 @@ describe("Codex plugin inventory", () => {
       appOwnership: "proven",
       ownedAppIds: ["github-app"],
     });
-    expect(inventory.diagnostics).not.toContainEqual(
-      expect.objectContaining({ code: "plugin_missing" }),
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).not.toContain(
+      "plugin_missing",
     );
   });
 
@@ -229,9 +229,9 @@ describe("Codex plugin inventory", () => {
 
     expect(inventory.records[0]?.appOwnership).toBe("ambiguous");
     expect(inventory.records[0]?.ownedAppIds).toStrictEqual([]);
-    expect(inventory.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "app_ownership_ambiguous" }),
-    );
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
+      "app_ownership_ambiguous",
+    ]);
   });
 
   it("fails closed when the app inventory cache is missing", async () => {
@@ -267,9 +267,9 @@ describe("Codex plugin inventory", () => {
     expect(inventory.appInventory?.state).toBe("missing");
     expect(inventory.records[0]?.ownedAppIds).toEqual(["google-calendar-app"]);
     expect(inventory.records[0]?.apps).toStrictEqual([]);
-    expect(inventory.diagnostics).toContainEqual(
-      expect.objectContaining({ code: "app_inventory_missing" }),
-    );
+    expect(inventory.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
+      "app_inventory_missing",
+    ]);
   });
 });
 

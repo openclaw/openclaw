@@ -77,7 +77,10 @@ function requireCandidateKeyByPath(
 }
 
 function mockStringMessages(mock: { mock: { calls: unknown[][] } }): string[] {
-  return mock.mock.calls.map((call) => (typeof call[0] === "string" ? call[0] : ""));
+  return mock.mock.calls.map((call) => {
+    const message = call[0];
+    return typeof message === "string" ? message : "";
+  });
 }
 
 function expectIncludesSubstring(values: readonly string[], expected: string): void {

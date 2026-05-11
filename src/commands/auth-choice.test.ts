@@ -638,10 +638,10 @@ describe("applyAuthChoice", () => {
   function expectPromptMessage(mock: { mock: { calls: unknown[][] } }, expected: string) {
     expect(promptMessages(mock)).toContain(expected);
   }
-  function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+  function firstCallArg(mock: { mock: { calls: unknown[][] } }): unknown {
     const call = mock.mock.calls[0];
     expect(call).toBeDefined();
-    return call?.[0] as T;
+    return call?.[0];
   }
 
   let defaultProviderPlugins: ProviderPlugin[] = [];
@@ -1160,9 +1160,10 @@ describe("applyAuthChoice", () => {
       setDefaultModel: false,
     });
 
-    const providerResolveInput = firstCallArg<{ env?: NodeJS.ProcessEnv; mode?: string }>(
-      resolvePluginProviders,
-    );
+    const providerResolveInput = firstCallArg(resolvePluginProviders) as {
+      env?: NodeJS.ProcessEnv;
+      mode?: string;
+    };
     expect(providerResolveInput.env).toBe(env);
     expect(providerResolveInput.mode).toBe("setup");
     expectPromptMessageContaining(confirm, "OPENAI_API_KEY");

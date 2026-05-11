@@ -170,17 +170,12 @@ describe("deepseek provider plugin", () => {
       "deepseek-chat",
       "deepseek-reasoner",
     ]);
-    expect(catalogProvider.models?.find((model) => model.id === "deepseek-v4-flash")).toMatchObject(
-      {
-        reasoning: true,
-        contextWindow: 1_000_000,
-        maxTokens: 384_000,
-        compat: expect.objectContaining({
-          supportsReasoningEffort: true,
-          maxTokensField: "max_tokens",
-        }),
-      },
-    );
+    const flashModel = catalogProvider.models?.find((model) => model.id === "deepseek-v4-flash");
+    expect(flashModel?.reasoning).toBe(true);
+    expect(flashModel?.contextWindow).toBe(1_000_000);
+    expect(flashModel?.maxTokens).toBe(384_000);
+    expect(flashModel?.compat?.supportsReasoningEffort).toBe(true);
+    expect(flashModel?.compat?.maxTokensField).toBe("max_tokens");
     expect(
       catalogProvider.models?.find((model) => model.id === "deepseek-reasoner")?.reasoning,
     ).toBe(true);
