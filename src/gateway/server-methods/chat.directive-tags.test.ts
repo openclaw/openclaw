@@ -3263,6 +3263,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await waitForAssertion(() => {
       expect(mockState.maxActiveSaveMediaCalls).toBe(1);
       expect(mockState.savedMediaCalls).toHaveLength(2);
+      const userUpdate = findUserUpdate();
+      expect(userUpdateMessage(userUpdate)?.content).toBe("serial please");
+      expect(context.dedupe.has("chat:idem-image-serial-save")).toBe(true);
     });
   });
 
