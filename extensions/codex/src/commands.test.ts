@@ -817,7 +817,14 @@ describe("codex command", () => {
   });
 
   it("shows Codex auth order before OpenAI fallback order", async () => {
-    const config = {};
+    const config = {
+      auth: {
+        order: {
+          openai: ["openai:api-key"],
+          "openai-codex": ["openai-codex:personal-email@gmail.com"],
+        },
+      },
+    };
     const now = Date.now();
     installAuthProfileStore(
       {
@@ -836,10 +843,6 @@ describe("codex command", () => {
             expires: now + 60 * 60 * 1000,
             email: "personal-email@gmail.com",
           },
-        },
-        order: {
-          openai: ["openai:api-key"],
-          "openai-codex": ["openai-codex:personal-email@gmail.com"],
         },
         lastGood: {
           "openai-codex": "openai-codex:personal-email@gmail.com",
@@ -1057,13 +1060,13 @@ describe("codex command", () => {
     expect(result.text).toContain("Now using: api-key-backup");
     expect(result.text).toContain("subscription rate-limited");
     expect(result.text).toContain(
-      "\n  1. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
+      "\n  1. api-key-backup   API key   — active now \u00b7 billed per token",
     );
     expect(result.text).toContain(
-      "\n  2. api-key-backup   API key   — active now \u00b7 billed per token",
+      "\n  2. personal-email@gmail.com   ChatGPT subscription   — rate-limited",
     );
     expect(result.text).not.toContain(
-      "\n  1. personal-email@gmail.com   ChatGPT subscription   — active now",
+      "personal-email@gmail.com   ChatGPT subscription   — active now",
     );
   });
 

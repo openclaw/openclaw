@@ -296,6 +296,41 @@ describe("resolveAuthProfileOrder", () => {
     expect(order).toEqual(["openai-codex:personal", "openai:backup"]);
   });
 
+  it("preserves native Codex profiles before OpenAI alias API-key order", async () => {
+    const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "sk-platform",
+        },
+        "openai-codex:personal": {
+          type: "oauth",
+          provider: "openai-codex",
+          access: "access",
+          refresh: "refresh",
+          expires: Date.now() + 60_000,
+        },
+      },
+    };
+
+    const order = resolveAuthProfileOrder({
+      cfg: {
+        auth: {
+          order: {
+            openai: ["openai:default"],
+          },
+        },
+      },
+      store,
+      provider: "openai-codex",
+    });
+
+    expect(order).toEqual(["openai-codex:personal", "openai:default"]);
+  });
+
   it("keeps direct OpenAI Codex auth order ahead of the friendly OpenAI alias", async () => {
     const { resolveAuthProfileOrder } = await importAuthProfileModulesWithAliasRegistry();
     const store: AuthProfileStore = {
