@@ -3,9 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 describe("zca-client runtime loading", () => {
   it("does not import zca-js until a session is created", async () => {
     vi.clearAllMocks();
+    let capturedOptions: { logging?: boolean; selfListen?: boolean } | undefined;
     const runtimeFactory = vi.fn(() => ({
       Zalo: class MockZalo {
-        constructor(public readonly options?: { logging?: boolean; selfListen?: boolean }) {}
+        constructor(options?: { logging?: boolean; selfListen?: boolean }) {
+          capturedOptions = options;
+        }
       },
     }));
 
@@ -14,11 +17,9 @@ describe("zca-client runtime loading", () => {
     const zcaClient = await import("./zca-client.js");
     expect(runtimeFactory).not.toHaveBeenCalled();
 
-    const client = await zcaClient.createZalo({ logging: false, selfListen: true });
+    await zcaClient.createZalo({ logging: false, selfListen: true });
 
     expect(runtimeFactory).toHaveBeenCalledTimes(1);
-    expect(
-      (client as unknown as { options?: { logging?: boolean; selfListen?: boolean } }).options,
-    ).toEqual({ logging: false, selfListen: true });
+    expect(capturedOptions).toEqual({ logging: false, selfListen: true });
   });
 });
