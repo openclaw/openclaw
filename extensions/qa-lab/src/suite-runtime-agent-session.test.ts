@@ -34,7 +34,7 @@ describe("qa suite runtime agent session helpers", () => {
     const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
     expect(method).toBe("sessions.create");
     expect(params).toEqual({ label: "Test Session" });
-    expect(options?.timeoutMs).toEqual(expect.any(Number));
+    expect(options?.timeoutMs).toBe(60_000);
   });
 
   it("reads effective tool ids once and drops blanks", async () => {
@@ -57,7 +57,7 @@ describe("qa suite runtime agent session helpers", () => {
     const [method, params, options] = gatewayCall.mock.calls[0] ?? [];
     expect(method).toBe("skills.status");
     expect(params).toEqual({ agentId: "qa" });
-    expect(options?.timeoutMs).toEqual(expect.any(Number));
+    expect(options?.timeoutMs).toBe(45_000);
   });
 
   it("reads the raw qa session entries through the gateway", async () => {
