@@ -300,8 +300,7 @@ export async function resolveSlackThreadContextData(params: {
         const role = isAssistantRole ? "assistant" : "user";
         const msgSenderName = isCurrentBot
           ? "Bot (this assistant)"
-          : (msgUser?.name ??
-            (Boolean(historyMsg.botId) ? `Bot (${historyMsg.botId})` : "Unknown"));
+          : (msgUser?.name ?? (historyMsg.botId ? `Bot (${historyMsg.botId})` : "Unknown"));
         const msgWithId = `${historyMsg.text}\n[slack message id: ${historyMsg.ts ?? "unknown"} channel: ${params.message.channel}]`;
         historyParts.push(
           formatInboundEnvelope({

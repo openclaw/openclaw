@@ -5,6 +5,7 @@ import {
   formatSlackBotStarterThreadLabel,
   isSlackThreadAuthorCurrentBot,
   resolveSlackThreadHistoryFilterPolicy,
+  type SlackThreadRootCandidate,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
 
@@ -180,9 +181,10 @@ describe("ensureSlackThreadHistoryHasBotRoot", () => {
   });
 
   it("prepends the starter root when fetched history omitted it", () => {
+    const history: SlackThreadRootCandidate[] = [{ ts: "2", userId: "U1", text: "user reply" }];
     expect(
       ensureSlackThreadHistoryHasBotRoot({
-        history: [{ ts: "2", userId: "U1", text: "user reply" }],
+        history,
         includeBotStarterAsRootContext: true,
         threadStarter: { ts: "1", botId: "B1", text: "bot root" },
       }).map((entry) => entry.text),
@@ -190,9 +192,10 @@ describe("ensureSlackThreadHistoryHasBotRoot", () => {
   });
 
   it("does not inject when bot starter root context is disabled", () => {
+    const history: SlackThreadRootCandidate[] = [{ ts: "2", userId: "U1", text: "user reply" }];
     expect(
       ensureSlackThreadHistoryHasBotRoot({
-        history: [{ ts: "2", userId: "U1", text: "user reply" }],
+        history,
         includeBotStarterAsRootContext: false,
         threadStarter: { ts: "1", botId: "B1", text: "bot root" },
       }).map((entry) => entry.text),
