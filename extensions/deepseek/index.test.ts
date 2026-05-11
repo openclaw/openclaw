@@ -16,6 +16,19 @@ type PayloadCapture = {
   payload?: Record<string, unknown>;
 };
 
+type ThinkingPayload = {
+  type?: unknown;
+};
+
+type ReplayToolCall = {
+  id?: unknown;
+  type?: unknown;
+  function?: {
+    name?: unknown;
+    arguments?: unknown;
+  };
+};
+
 type RegisteredProvider = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 const emptyUsage = {
@@ -140,6 +153,23 @@ function requireThinkingWrapper(
   return wrapper;
 }
 
+function readThinking(payload: Record<string, unknown> | undefined): ThinkingPayload | undefined {
+  return payload?.thinking as ThinkingPayload | undefined;
+}
+
+function readPayloadMessage(
+  capture: PayloadCapture,
+  index: number,
+): Record<string, unknown> | undefined {
+  return (capture.payload?.messages as Array<Record<string, unknown>> | undefined)?.[index];
+}
+
+function readFirstToolCall(
+  message: Record<string, unknown> | undefined,
+): ReplayToolCall | undefined {
+  return (message?.tool_calls as ReplayToolCall[] | undefined)?.[0];
+}
+
 describe("deepseek provider plugin", () => {
   it("registers DeepSeek with api-key auth wizard metadata", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
@@ -152,10 +182,11 @@ describe("deepseek provider plugin", () => {
     expect(provider.label).toBe("DeepSeek");
     expect(provider.envVars).toEqual(["DEEPSEEK_API_KEY"]);
     expect(provider.auth).toHaveLength(1);
-    expect(resolved).toMatchObject({
-      provider: { id: "deepseek" },
-      method: { id: "api-key" },
-    });
+    if (!resolved) {
+      throw new Error("expected DeepSeek api-key auth choice");
+    }
+    expect(resolved.provider.id).toBe("deepseek");
+    expect(resolved.method.id).toBe("api-key");
   });
 
   it("builds the static DeepSeek model catalog", async () => {
@@ -184,14 +215,11 @@ describe("deepseek provider plugin", () => {
   it("owns OpenAI-compatible replay policy", async () => {
     const provider = await registerSingleProviderPlugin(deepseekPlugin);
 
-    expect(provider.buildReplayPolicy?.({ modelApi: "openai-completions" } as never)).toMatchObject(
-      {
-        sanitizeToolCallIds: true,
-        toolCallIdMode: "strict",
-        validateGeminiTurns: true,
-        validateAnthropicTurns: true,
-      },
-    );
+    const replayPolicy = provider.buildReplayPolicy?.({ modelApi: "openai-completions" } as never);
+    expect(replayPolicy?.sanitizeToolCallIds).toBe(true);
+    expect(replayPolicy?.toolCallIdMode).toBe("strict");
+    expect(replayPolicy?.validateGeminiTurns).toBe(true);
+    expect(replayPolicy?.validateAnthropicTurns).toBe(true);
   });
 
   it("advertises max thinking levels for DeepSeek V4 models only", async () => {
@@ -256,7 +284,7 @@ describe("deepseek provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(readThinking(capturedPayload)?.type).toBe("disabled");
     expect(capturedPayload).not.toHaveProperty("reasoning_effort");
 
     const wrapThinkingXhigh = requireThinkingWrapper(
@@ -273,10 +301,8 @@ describe("deepseek provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
-      thinking: { type: "enabled" },
-      reasoning_effort: "max",
-    });
+    expect(readThinking(capturedPayload)?.type).toBe("enabled");
+    expect(capturedPayload?.reasoning_effort).toBe("max");
   });
 
   it("preserves replayed reasoning_content when DeepSeek V4 thinking is enabled", async () => {
@@ -291,24 +317,16 @@ describe("deepseek provider plugin", () => {
     );
     await wrapThinkingHigh(model, context, {});
 
-    expect(capture.payload).toMatchObject({
-      thinking: { type: "enabled" },
-      reasoning_effort: "high",
-    });
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      reasoning_content: "call reasoning",
-      tool_calls: [
-        {
-          id: "call_1",
-          type: "function",
-          function: {
-            name: "read",
-            arguments: "{}",
-          },
-        },
-      ],
-    });
+    expect(readThinking(capture.payload)?.type).toBe("enabled");
+    expect(capture.payload?.reasoning_effort).toBe("high");
+    const assistantMessage = readPayloadMessage(capture, 1);
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.reasoning_content).toBe("call reasoning");
+    const toolCall = readFirstToolCall(assistantMessage);
+    expect(toolCall?.id).toBe("call_1");
+    expect(toolCall?.type).toBe("function");
+    expect(toolCall?.function?.name).toBe("read");
+    expect(toolCall?.function?.arguments).toBe("{}");
   });
 
   it("adds blank reasoning_content for replayed tool calls from non-DeepSeek turns", async () => {
@@ -330,20 +348,14 @@ describe("deepseek provider plugin", () => {
     );
     await wrapThinkingHigh(model, context, {});
 
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      reasoning_content: "",
-      tool_calls: [
-        {
-          id: "call_1",
-          type: "function",
-          function: {
-            name: "read",
-            arguments: "{}",
-          },
-        },
-      ],
-    });
+    const assistantMessage = readPayloadMessage(capture, 1);
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.reasoning_content).toBe("");
+    const toolCall = readFirstToolCall(assistantMessage);
+    expect(toolCall?.id).toBe("call_1");
+    expect(toolCall?.type).toBe("function");
+    expect(toolCall?.function?.name).toBe("read");
+    expect(toolCall?.function?.arguments).toBe("{}");
   });
 
   it("adds blank reasoning_content for replayed plain assistant messages", async () => {
@@ -369,11 +381,10 @@ describe("deepseek provider plugin", () => {
     );
     await wrapThinkingHigh(model, context, {});
 
-    expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).toMatchObject({
-      role: "assistant",
-      content: "Hello.",
-      reasoning_content: "",
-    });
+    const assistantMessage = readPayloadMessage(capture, 1);
+    expect(assistantMessage?.role).toBe("assistant");
+    expect(assistantMessage?.content).toBe("Hello.");
+    expect(assistantMessage?.reasoning_content).toBe("");
   });
 
   it("strips replayed reasoning_content when DeepSeek V4 thinking is disabled", async () => {
@@ -388,7 +399,7 @@ describe("deepseek provider plugin", () => {
     );
     await wrapThinkingNone(model, context, {});
 
-    expect(capture.payload).toMatchObject({ thinking: { type: "disabled" } });
+    expect(readThinking(capture.payload)?.type).toBe("disabled");
     expect(capture.payload).not.toHaveProperty("reasoning_effort");
     expect((capture.payload?.messages as Array<Record<string, unknown>>)[1]).not.toHaveProperty(
       "reasoning_content",

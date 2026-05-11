@@ -6,6 +6,9 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Build: enable stricter Vitest safety lint rules for focused, disabled, conditional, and standalone expectations.
+- Build: pin explicit oxfmt defaults in the shared formatter config to keep formatting behavior stable across upgrades.
+- TypeScript: enable stricter compiler checks for implicit returns, side-effect imports, overrides, and unused production code.
 - Build: upgrade workspace package management to pnpm 11 and keep Docker, install, update, and release workflows on the pnpm 11 config surface. (#79414) Thanks @altaywtf.
 - Models: add provider-level `localService` startup for on-demand local model servers before OpenAI-compatible requests, including one-shot model probes.
 - Agents: trim default system prompt guidance and send-only message tool schemas to reduce prompt tokens while preserving GPT-5 personality guidance.
@@ -39,6 +42,7 @@ Docs: https://docs.openclaw.ai
 
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids while converting manifest catalog rows into emitted provider config, so `google/gemini-3.1-pro-preview` is used for testing instead of `google/gemini-3-pro-preview`.
 - Native apps: advertise the Gateway protocol compatibility range so chat and node sessions can connect to v3 gateways after additive v4 client updates.
+- Gateway/agents: keep stale `sessions_send` ACP manager and `web_fetch` runtime chunks importable after package updates, preventing live gateways from breaking before restart. Fixes #78804. Thanks @Gomesy72.
 - Gateway: avoid synchronous restart-sentinel state probes during post-attach startup, preventing slow Windows or redirected state directories from blocking channel turns. Fixes #79264. Thanks @liyi58.
 - Agents/auth: update successful model auth profile status with one locked store write, reducing post-model reply latency from duplicate `auth-profiles.json` saves. Thanks @mcaxtr.
 - Agents/image: honor explicit `image` tool model overrides even when `agents.defaults.imageModel` is unset, restoring one-off vision calls for configured multimodal providers. Fixes #79341. Thanks @haumanto.
@@ -141,6 +145,7 @@ Docs: https://docs.openclaw.ai
 - Plugins/doctor: drop stale managed npm install records when `openclaw doctor --fix` removes npm packages that shadow bundled plugins, so the rebuilt registry no longer resurrects the removed package metadata.
 - Discord/voice: reuse or suppress late realtime consult tool calls without stealing newer speaker context or speaking forced fallback answers twice.
 - Discord/voice: skip likely incomplete realtime forced-consult transcript fragments and non-actionable closings so stale partial speech does not queue delayed answers over the next turn.
+- Discord/voice: keep realtime forced consults from clearing active exact-speech playback, so back-to-back voice answers queue instead of cutting each other off.
 - Discord/voice: synthesize realtime playback timestamps from emitted Discord PCM so OpenAI realtime barge-in truncation no longer sees `audioEndMs=0` and skips legitimate interruptions.
 - Plugin SDK: keep activated linked plugin runtime facades loadable when bundled plugin fallback is disabled. Thanks @shakkernerd.
 - Feishu: auto-thread `message(action="send")` replies inside the topic when the active session is group_topic or group_topic_sender, and propagate `replyInThread` through text, card, and media outbound adapters so topic-scoped sessions no longer post at the group root. Fixes #74903. (#77151) Thanks @ai-hpc.

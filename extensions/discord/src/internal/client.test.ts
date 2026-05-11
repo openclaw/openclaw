@@ -34,9 +34,9 @@ function createTestCommand(params: {
 }): BaseCommand {
   return new (class extends BaseCommand {
     name = params.name;
-    description = `${params.name} command`;
+    override description = `${params.name} command`;
     type = ApplicationCommandType.ChatInput;
-    guildIds = params.guildIds;
+    override guildIds = params.guildIds;
     serializeOptions() {
       return params.options;
     }
@@ -57,7 +57,7 @@ describe("ComponentRegistry", () => {
     class WildcardButton extends Button {
       label = "button";
       customId = "__button_wildcard__";
-      customIdParser = (id: string) =>
+      override customIdParser = (id: string) =>
         id === this.customId || id.startsWith("occomp:")
           ? { key: "*", data: {} }
           : parseCustomId(id);
@@ -65,7 +65,7 @@ describe("ComponentRegistry", () => {
     class WildcardSelect extends StringSelectMenu {
       customId = "__select_wildcard__";
       options = [];
-      customIdParser = (id: string) =>
+      override customIdParser = (id: string) =>
         id === this.customId || id.startsWith("occomp:")
           ? { key: "*", data: {} }
           : parseCustomId(id);
@@ -89,7 +89,7 @@ describe("ComponentRegistry", () => {
     class EncodedButton extends Button {
       label = "button";
       customId = "encoded:seed=one";
-      customIdParser = (id: string) => ({
+      override customIdParser = (id: string) => ({
         key: id.startsWith("encoded:") ? "encoded" : parseCustomId(id).key,
         data: {},
       });

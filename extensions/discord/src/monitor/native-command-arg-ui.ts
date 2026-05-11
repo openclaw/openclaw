@@ -155,7 +155,7 @@ async function runDiscordCommandArgButton(
 class DiscordCommandArgButton extends Button {
   label: string;
   customId: string;
-  style = ButtonStyle.Secondary;
+  override style = ButtonStyle.Secondary;
 
   constructor(
     params: {
@@ -171,7 +171,7 @@ class DiscordCommandArgButton extends Button {
 
   private params: DiscordCommandArgButtonParams;
 
-  async run(interaction: ButtonInteraction, data: ComponentData) {
+  override async run(interaction: ButtonInteraction, data: ComponentData) {
     await runDiscordCommandArgButton({ ...this.params, interaction, data });
   }
 }
@@ -221,7 +221,7 @@ class DiscordCommandArgFallbackButton extends Button {
     super();
   }
 
-  async run(interaction: ButtonInteraction, data: ComponentData) {
+  override async run(interaction: ButtonInteraction, data: ComponentData) {
     await runDiscordCommandArgButton({ ...this.params, interaction, data });
   }
 }

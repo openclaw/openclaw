@@ -773,7 +773,7 @@ describe("runBtwSideQuestion", () => {
     expect(buildSessionContextMock).toHaveBeenCalledWith([userEntry, assistantEntry]);
     expect(result).toEqual({ text: MATH_ANSWER });
     expect(diagDebugMock).toHaveBeenCalledWith(
-      expect.stringContaining("btw snapshot leaf unavailable: sessionId=session-1"),
+      "btw snapshot leaf unavailable: sessionId=session-1 leaf=assistant-gone",
     );
   });
 
@@ -792,9 +792,7 @@ describe("runBtwSideQuestion", () => {
     const result = await runMathSideQuestion();
 
     expect(result).toEqual({ text: MATH_ANSWER });
-    expect(diagDebugMock).not.toHaveBeenCalledWith(
-      expect.stringContaining("btw transcript persistence skipped"),
-    );
+    expect(diagDebugMock).not.toHaveBeenCalled();
   });
 
   it("excludes tool results from BTW context to avoid replaying raw tool output", async () => {

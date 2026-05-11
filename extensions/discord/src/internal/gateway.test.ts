@@ -53,12 +53,12 @@ class TestGatewayPlugin extends GatewayPlugin {
   sockets: FakeSocket[] = [];
   connectCalls: boolean[] = [];
 
-  connect(resume = false): void {
+  override connect(resume = false): void {
     this.connectCalls.push(resume);
     super.connect(resume);
   }
 
-  protected createWebSocket(): never {
+  protected override createWebSocket(): never {
     const socket = new FakeSocket();
     this.sockets.push(socket);
     return socket as never;
