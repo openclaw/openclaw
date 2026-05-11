@@ -2029,9 +2029,17 @@ export async function runAgentTurnWithFallback(params: {
 
       // Some embedded runs surface context overflow as an error payload instead of throwing.
       // Treat those as a session-level failure and auto-recover by starting a fresh session.
+      // However, "context_overflow_exhausted" means the inner runner already attempted
+      // MAX_OVERFLOW_COMPACTION_ATTEMPTS of compaction and none resolved the overflow, and
+      // "irreducible_overflow" means the system prompt alone exceeds the context budget.
+      // In both cases, resetting the session would reload the same overflowed state from
+      // the persistence layer, creating an infinite restart loop (see #76806). Skip the
+      // reset and surface the error directly.
       const embeddedError = runResult.meta?.error;
       if (
         embeddedError &&
+        embeddedError.kind !== "context_overflow_exhausted" &&
+        embeddedError.kind !== "irreducible_overflow" &&
         isContextOverflowError(embeddedError.message) &&
         !didResetAfterCompactionFailure &&
         (await params.resetSessionAfterCompactionFailure(embeddedError.message))
