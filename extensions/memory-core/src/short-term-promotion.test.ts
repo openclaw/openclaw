@@ -1301,6 +1301,86 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("blocks fuzzy-window straddle leaks when the recorded range no longer matches the daily note (#80613)", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      // Daily note: human bullet, then a managed Light Sleep dreaming block that follows it
+      // directly. Lines 1-11 below; the dreaming block is lines 4-11 (heading + start..end markers
+      // + four staged scaffolding lines).
+      await writeDailyMemoryNote(workspaceDir, "2026-04-13", [
+        "## Plan toggle field",
+        "- Plan switches use exRule, not abConfig",
+        "",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: Plan toggle field summary",
+        "  - confidence: 0.00",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-13.txt:1-3",
+        "  - recalls: 0",
+        "  - status: staged",
+        "<!-- openclaw:dreaming:light:end -->",
+      ]);
+
+      // Stored snippet captures the same multi-line straddle a stale recall would have held
+      // (human bullet immediately followed by the managed-block heading and dreaming bullets).
+      // It starts with the human bullet, so isContaminatedDreamingSnippet does not flag it
+      // (no leading `Candidate:` after the leading-prefix consumer), and we deliberately point
+      // startLine/endLine at a stale range past the file's tail so relocateCandidateRange must
+      // skip the exact-match path and fall through to the fuzzy window search that originally
+      // latched onto the straddle window in #80613.
+      const straddleSnippet = [
+        "- Plan switches use exRule, not abConfig",
+        "## Light Sleep",
+        "<!-- openclaw:dreaming:light:start -->",
+        "- Candidate: Plan toggle field summary",
+        "  - confidence: 0.00",
+        "  - evidence: memory/.dreams/session-corpus/2026-04-13.txt:1-3",
+        "  - recalls: 0",
+        "  - status: staged",
+        "<!-- openclaw:dreaming:light:end -->",
+      ].join("\n");
+
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "plan toggle field straddle",
+        results: [
+          {
+            path: "memory/2026-04-13.md",
+            startLine: 20,
+            endLine: 30,
+            score: 0.94,
+            snippet: straddleSnippet,
+            source: "memory",
+          },
+        ],
+      });
+
+      const ranked = await rankShortTermPromotionCandidates({
+        workspaceDir,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+      await applyShortTermPromotions({
+        workspaceDir,
+        candidates: ranked,
+        minScore: 0,
+        minRecallCount: 0,
+        minUniqueQueries: 0,
+      });
+
+      const memoryText = await fs
+        .readFile(path.join(workspaceDir, "MEMORY.md"), "utf-8")
+        .catch(() => "");
+      // The fuzzy window must never relocate to a snippet that re-introduces managed
+      // dreaming markers, candidate scaffolding, or status: staged from the straddle window.
+      expect(memoryText).not.toMatch(/Candidate:/i);
+      expect(memoryText).not.toMatch(/confidence:\s*0\.00/i);
+      expect(memoryText).not.toMatch(/status:\s*staged/i);
+      expect(memoryText).not.toMatch(/openclaw:dreaming:light/i);
+      expect(memoryText).not.toMatch(/<!--\s*openclaw:dreaming/i);
+    });
+  });
+
   it("applies promotion candidates to MEMORY.md and marks them promoted", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await writeDailyMemoryNote(workspaceDir, "2026-04-01", [
