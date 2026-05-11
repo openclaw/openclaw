@@ -42,6 +42,18 @@ function requireRecord(value: unknown): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return requireRecord(arg);
+}
+
 function expectLogMessageWith(logFn: ReturnType<typeof vi.fn>, text: string): void {
   expect(logFn.mock.calls.some(([message]) => String(message).includes(text))).toBe(true);
 }
@@ -124,7 +136,7 @@ describe("drainPendingDeliveries for reconnect", () => {
     await drainAcct1DirectChatReconnect({ deliver, log, stateDir: tmpDir });
 
     expect(deliver).toHaveBeenCalledTimes(1);
-    const delivery = requireRecord(deliver.mock.calls[0]?.[0]);
+    const delivery = firstMockArg(deliver, "delivery");
     expect(delivery.channel).toBe("directchat");
     expect(delivery.to).toBe("+1555");
     expect(delivery.skipQueue).toBe(true);

@@ -66,6 +66,18 @@ const workspaceConfig = {
   },
 } as OpenClawConfig;
 
+function firstMockArg(
+  mock: { mock: { calls: readonly unknown[][] } },
+  label: string,
+): Record<string, unknown> {
+  const [call] = mock.mock.calls;
+  if (!call) {
+    throw new Error(`expected ${label} call`);
+  }
+  const [arg] = call;
+  return requireRecord(arg);
+}
+
 async function withSandbox(test: (sandboxDir: string) => Promise<void>) {
   const sandboxDir = await fs.mkdtemp(path.join(os.tmpdir(), "msg-sandbox-"));
   try {
@@ -277,7 +289,7 @@ describe("runMessageAction media behavior", () => {
     });
 
     expect(result.kind).toBe("send");
-    const sendArgs = requireRecord(channelResolutionMocks.executeSendAction.mock.calls[0]?.[0]);
+    const sendArgs = firstMockArg(channelResolutionMocks.executeSendAction, "executeSendAction");
     expect(sendArgs.asVoice).toBe(true);
   });
 
@@ -645,7 +657,7 @@ describe("runMessageAction media behavior", () => {
 
       expect(result.kind).toBe("action");
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.buffer).toBe(Buffer.from("hello").toString("base64"));
       expect(handlerParams.filename).toBe("pic.png");
       expect(handlerParams.contentType).toBe("image/png");
@@ -702,7 +714,7 @@ describe("runMessageAction media behavior", () => {
       });
 
       expect(handleActionMock).toHaveBeenCalledTimes(1);
-      const handlerParams = handleActionMock.mock.calls[0]?.[0] as Record<string, unknown>;
+      const handlerParams = firstMockArg(handleActionMock, "handleAction");
       expect(handlerParams.caption).toBeUndefined();
       expect(handlerParams.message).toBe("look at this");
     });

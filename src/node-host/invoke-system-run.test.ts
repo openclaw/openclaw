@@ -133,33 +133,35 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     payloadJSON?: string;
     error?: { message?: string };
   } {
-    const result = sendInvokeResult.mock.calls[0]?.[0];
-    if (!result) {
-      throw new Error("expected sendInvokeResult payload");
-    }
+    const result = firstMockCallArg(sendInvokeResult, "sendInvokeResult", 0);
     return result as { ok?: boolean; payloadJSON?: string; error?: { message?: string } };
   }
 
   function requireFirstRunCommandArgs(runCommand: MockedRunCommand): string[] {
-    const args = vi.mocked(runCommand).mock.calls[0]?.[0] as string[] | undefined;
-    if (!args) {
-      throw new Error("expected runCommand args");
-    }
-    return args;
+    return firstMockCallArg(vi.mocked(runCommand), "runCommand", 0) as string[];
   }
 
   function requireMacExecHostCall(runViaMacAppExecHost: MockedRunViaMacAppExecHost): {
     approvals?: { agent?: { security?: string; ask?: string } };
     request?: { command?: string[]; rawCommand?: string; cwd?: string };
   } {
-    const call = runViaMacAppExecHost.mock.calls[0]?.[0];
-    if (!call) {
-      throw new Error("expected runViaMacAppExecHost call");
-    }
+    const call = firstMockCallArg(runViaMacAppExecHost, "runViaMacAppExecHost", 0);
     return call as {
       approvals?: { agent?: { security?: string; ask?: string } };
       request?: { command?: string[]; rawCommand?: string; cwd?: string };
     };
+  }
+
+  function firstMockCallArg(
+    mock: { mock: { calls: readonly unknown[][] } },
+    label: string,
+    argIndex: number,
+  ): unknown {
+    const [call] = mock.mock.calls;
+    if (!call) {
+      throw new Error(`expected ${label} call`);
+    }
+    return call[argIndex];
   }
 
   function expectExecDeniedEvent(sendNodeEvent: MockedSendNodeEvent): void {
@@ -1183,7 +1185,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     });
 
     expect(runCommand).toHaveBeenCalledTimes(1);
-    const passedEnv = runCommand.mock.calls[0]?.[2];
+    const passedEnv = firstMockCallArg(runCommand, "runCommand", 2);
     expect(passedEnv).toEqual({
       LANG: "C",
       LC_TIME: "C",

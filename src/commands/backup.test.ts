@@ -107,17 +107,32 @@ describe("backup commands", () => {
   function expectWorkspaceCoveredByState(
     plan: Awaited<ReturnType<typeof resolveBackupPlanFromDisk>>,
   ) {
-    expect(plan.included).toStrictEqual([expect.objectContaining({ kind: "state" })]);
-    const [included] = plan.included;
+    const included = plan.included[0];
     if (!included) {
       throw new Error("Expected state asset to be included");
     }
+    const stateSourcePath = included.sourcePath;
+    expect(plan.included).toStrictEqual([
+      {
+        kind: "state",
+        sourcePath: stateSourcePath,
+        displayPath: included.displayPath,
+        archivePath: path.posix.join(
+          buildBackupArchiveRoot(123),
+          "payload",
+          encodeAbsolutePathForBackupArchive(stateSourcePath),
+        ),
+      },
+    ]);
+    const workspaceSourcePath = path.join(included.sourcePath, "workspace");
     expect(plan.skipped).toStrictEqual([
-      expect.objectContaining({
+      {
         kind: "workspace",
+        sourcePath: workspaceSourcePath,
+        displayPath: path.join(included.displayPath, "workspace"),
         reason: "covered",
         coveredBy: included.displayPath,
-      }),
+      },
     ]);
     const [skipped] = plan.skipped;
     if (!skipped) {
@@ -126,8 +141,15 @@ describe("backup commands", () => {
     expect(path.relative(included.sourcePath, skipped.sourcePath).startsWith("..")).toBe(false);
   }
 
-  function expectOnlyAssetKind(assets: Array<{ kind: string }>, kind: string) {
-    expect(assets).toStrictEqual([expect.objectContaining({ kind })]);
+  function expectOnlyAssetKind(assets: BackupAsset[], kind: BackupAsset["kind"]) {
+    expect(assets).toStrictEqual([
+      {
+        kind,
+        sourcePath: expect.any(String),
+        displayPath: expect.any(String),
+        archivePath: expect.stringContaining("/payload/"),
+      },
+    ]);
   }
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
