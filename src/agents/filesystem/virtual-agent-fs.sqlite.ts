@@ -50,6 +50,14 @@ function isDescendantPath(candidatePath: string, parentPath: string): boolean {
   return parentPath === "/" ? candidatePath !== "/" : candidatePath.startsWith(`${parentPath}/`);
 }
 
+function descendantPrefix(parentPath: string): string {
+  return parentPath === "/" ? "/" : `${parentPath}/`;
+}
+
+function prefixUpperBound(prefix: string): string {
+  return prefix === "/" ? "0" : `${prefix.slice(0, -1)}0`;
+}
+
 function parentPathsFor(filePath: string): string[] {
   const normalized = normalizeVfsPath(filePath);
   const parents: string[] = [];
@@ -131,7 +139,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     return row ?? null;
   }
 
-  #allRows(): VirtualAgentFsRow[] {
+  #rowsWithPrefix(prefix: string): VirtualAgentFsRow[] {
     const database = openOpenClawAgentDatabase(this.#options);
     const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
     return executeSqliteQuerySync(
@@ -140,13 +148,23 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
         .selectFrom("vfs_entries")
         .select(["namespace", "path", "kind", "content_blob", "metadata_json", "updated_at"])
         .where("namespace", "=", this.#options.namespace)
+        .where("path", ">=", prefix)
+        .where("path", "<", prefixUpperBound(prefix))
         .orderBy("path", "asc"),
     ).rows;
   }
 
-  #descendantRows(filePath: string): VirtualAgentFsRow[] {
+  #rowsAtOrUnder(filePath: string): VirtualAgentFsRow[] {
     const normalized = normalizeVfsPath(filePath);
-    return this.#allRows().filter((row) => isDescendantPath(row.path, normalized));
+    if (normalized === "/") {
+      return this.#rowsWithPrefix("/");
+    }
+    const row = this.#selectRow(normalized);
+    return [...(row ? [row] : []), ...this.#rowsWithPrefix(descendantPrefix(normalized))];
+  }
+
+  #descendantRows(filePath: string): VirtualAgentFsRow[] {
+    return this.#rowsWithPrefix(descendantPrefix(normalizeVfsPath(filePath)));
   }
 
   #upsert(params: {
@@ -263,9 +281,8 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   readdir(dirPath: string): VirtualAgentFsEntry[] {
     const normalized = normalizeVfsPath(dirPath);
-    const prefix = normalized === "/" ? "/" : `${normalized}/`;
-    return this.#allRows()
-      .filter((row) => row.path !== normalized && row.path.startsWith(prefix))
+    const prefix = descendantPrefix(normalized);
+    return this.#rowsWithPrefix(prefix)
       .filter((row) => {
         const rest = row.path.slice(prefix.length);
         return rest.length > 0 && !rest.includes("/");
@@ -275,9 +292,8 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   list(rootPath = "/", options: VirtualAgentFsListOptions = {}): VirtualAgentFsEntry[] {
     const normalized = normalizeVfsPath(rootPath);
-    const prefix = normalized === "/" ? "/" : `${normalized}/`;
-    return this.#allRows()
-      .filter((row) => row.path === normalized || row.path.startsWith(prefix))
+    const prefix = descendantPrefix(normalized);
+    return this.#rowsAtOrUnder(normalized)
       .filter((row) => {
         if (options.recursive) {
           return true;
@@ -293,9 +309,8 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
 
   export(rootPath = "/", options: VirtualAgentFsListOptions = {}): VirtualAgentFsExportEntry[] {
     const normalized = normalizeVfsPath(rootPath);
-    const prefix = normalized === "/" ? "/" : `${normalized}/`;
-    return this.#allRows()
-      .filter((row) => row.path === normalized || row.path.startsWith(prefix))
+    const prefix = descendantPrefix(normalized);
+    return this.#rowsAtOrUnder(normalized)
       .filter((row) => {
         if (options.recursive) {
           return true;
@@ -323,6 +338,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
     }
     runOpenClawAgentWriteTransaction((database) => {
       const db = getNodeSqliteKysely<VirtualAgentFsDatabase>(database.db);
+      const prefix = descendantPrefix(normalized);
       const query =
         normalized === "/"
           ? db.deleteFrom("vfs_entries").where("namespace", "=", this.#options.namespace)
@@ -330,7 +346,10 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
               .deleteFrom("vfs_entries")
               .where("namespace", "=", this.#options.namespace)
               .where((eb) =>
-                eb.or([eb("path", "=", normalized), eb("path", "like", `${normalized}/%`)]),
+                eb.or([
+                  eb("path", "=", normalized),
+                  eb.and([eb("path", ">=", prefix), eb("path", "<", prefixUpperBound(prefix))]),
+                ]),
               );
       executeSqliteQuerySync(database.db, query);
     }, this.#options);
@@ -352,9 +371,7 @@ export class SqliteVirtualAgentFs implements VirtualAgentFs {
       throw new Error(`VFS cannot move a path into itself: ${from} -> ${to}`);
     }
     const updatedAt = this.#now();
-    const rows = this.#allRows().filter(
-      (row) => row.path === from || row.path.startsWith(`${from}/`),
-    );
+    const rows = this.#rowsAtOrUnder(from);
     if (rows.length === 0) {
       throw new Error(`VFS path not found: ${from}`);
     }
