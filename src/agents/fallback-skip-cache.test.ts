@@ -1,0 +1,266 @@
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import {
+  DEFAULT_FALLBACK_SKIP_TTL_MS,
+  __resetFallbackSkipCacheForTest,
+  clearFallbackSkipCacheForSession,
+  getFallbackCandidateSkipReason,
+  isFallbackCandidateSkipped,
+  markFallbackCandidateSkipped,
+} from "./fallback-skip-cache.js";
+
+describe("fallback-skip-cache", () => {
+  beforeEach(() => {
+    __resetFallbackSkipCacheForTest();
+  });
+
+  afterEach(() => {
+    __resetFallbackSkipCacheForTest();
+  });
+
+  it("returns false for an unknown (session, provider, model) triple", () => {
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("treats falsy sessionId as a no-op for both mark and check", () => {
+    markFallbackCandidateSkipped({
+      sessionId: undefined,
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: undefined,
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 1_000,
+      }),
+    ).toBe(false);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 1_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("marks then sees a candidate as skipped within the TTL", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 60_000,
+    });
+
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(true);
+    expect(
+      getFallbackCandidateSkipReason({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe("auth");
+  });
+
+  it("expires entries after the TTL elapses", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth_permanent",
+      now: 1_000,
+      ttlMs: 10_000,
+    });
+
+    // Just before expiry, still skipped.
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 10_000,
+      }),
+    ).toBe(true);
+    // At and after expiry, no longer skipped.
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 11_001,
+      }),
+    ).toBe(false);
+    expect(
+      getFallbackCandidateSkipReason({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 11_001,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("isolates entries across sessions", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s2",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("isolates entries across (provider, model) pairs", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        now: 30_000,
+      }),
+    ).toBe(false);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "google",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("clearFallbackSkipCacheForSession drops every marker for that session", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      reason: "auth",
+      now: 1_000,
+    });
+    clearFallbackSkipCacheForSession("s1");
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 30_000,
+      }),
+    ).toBe(false);
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "google",
+        model: "gemini-3.1-pro-preview",
+        now: 30_000,
+      }),
+    ).toBe(false);
+  });
+
+  it("re-marking the same triple refreshes the TTL", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+      ttlMs: 10_000,
+    });
+    // Re-mark just before the original entry would expire.
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth_permanent",
+      now: 10_000,
+      ttlMs: 10_000,
+    });
+    // Without refresh, this point would be past expiry. With refresh it lives.
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 19_000,
+      }),
+    ).toBe(true);
+    // The most recent reason wins.
+    expect(
+      getFallbackCandidateSkipReason({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 19_000,
+      }),
+    ).toBe("auth_permanent");
+  });
+
+  it("defaults to DEFAULT_FALLBACK_SKIP_TTL_MS when ttlMs is omitted", () => {
+    markFallbackCandidateSkipped({
+      sessionId: "s1",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+      reason: "auth",
+      now: 1_000,
+    });
+    // Just before default TTL: still skipped.
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 1_000 + DEFAULT_FALLBACK_SKIP_TTL_MS - 1,
+      }),
+    ).toBe(true);
+    // Past default TTL: cleared.
+    expect(
+      isFallbackCandidateSkipped({
+        sessionId: "s1",
+        provider: "anthropic",
+        model: "claude-opus-4-7",
+        now: 1_000 + DEFAULT_FALLBACK_SKIP_TTL_MS + 1,
+      }),
+    ).toBe(false);
+  });
+});

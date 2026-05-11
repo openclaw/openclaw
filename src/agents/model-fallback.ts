@@ -28,6 +28,7 @@ import { isLikelyContextOverflowError } from "./embedded-agent-helpers/errors.js
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 import {
   FailoverError,
+  buildFailoverRemediationHint,
   coerceToFailoverError,
   describeFailoverError,
   isFailoverError,
@@ -42,6 +43,11 @@ import {
 import { MissingAgentHarnessError, isMissingAgentHarnessError } from "./harness/errors.js";
 import { resolveAgentHarnessPolicy } from "./harness/policy.js";
 import { getRegisteredAgentHarness } from "./harness/registry.js";
+import {
+  getFallbackCandidateSkipReason,
+  isFallbackCandidateSkipped,
+  markFallbackCandidateSkipped,
+} from "./fallback-skip-cache.js";
 import { LiveSessionModelSwitchError } from "./live-model-switch-error.js";
 import {
   isModelFallbackDecisionLogEnabled,
@@ -562,8 +568,12 @@ function throwFallbackFailureSummary(params: {
 
   const summary =
     params.attempts.length > 0 ? params.attempts.map(params.formatAttempt).join(" | ") : "unknown";
+  const remediation = buildFailoverRemediationHint(params.lastError);
+  const message = remediation
+    ? `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}. ${remediation}`
+    : `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`;
   throw new FallbackSummaryError(
-    `All ${params.label} failed (${params.attempts.length || params.candidates.length}): ${summary}`,
+    message,
     params.attempts,
     params.soonestCooldownExpiry ?? null,
     params.lastError instanceof Error ? params.lastError : undefined,
@@ -1203,6 +1213,54 @@ export async function runWithModelFallback<T>(
     const requestedModel = requestedCandidate
       ? sameModelCandidate(candidate, requestedCandidate)
       : false;
+
+    // Skip-known-bad cache: when a previous turn in this session failed this
+    // candidate with `auth` / `auth_permanent` (e.g. missing or expired
+    // credentials), suppress repeat attempts for the cache TTL so we do not
+    // burn latency on the same broken candidate every turn. Primary is never
+    // skipped — if the user explicitly requested it we should still surface
+    // the auth error rather than silently jumping past it.
+    if (!isPrimary && params.sessionId) {
+      const skipped = isFallbackCandidateSkipped({
+        sessionId: params.sessionId,
+        provider: candidate.provider,
+        model: candidate.model,
+      });
+      if (skipped) {
+        const skipReason =
+          getFallbackCandidateSkipReason({
+            sessionId: params.sessionId,
+            provider: candidate.provider,
+            model: candidate.model,
+          }) ?? "auth";
+        const error = `Skipping ${candidate.provider}/${candidate.model}: recent ${skipReason} failure in this session (run \`openclaw models auth login --provider ${candidate.provider} --force\` to re-authenticate)`;
+        attempts.push({
+          provider: candidate.provider,
+          model: candidate.model,
+          error,
+          reason: skipReason as FailoverReason,
+        });
+        await observeDecision({
+          decision: "skip_candidate",
+          runId: params.runId,
+          sessionId: params.sessionId,
+          lane: params.lane,
+          requestedProvider: params.provider,
+          requestedModel: params.model,
+          candidate,
+          attempt: i + 1,
+          total: candidates.length,
+          reason: skipReason as FailoverReason,
+          error,
+          nextCandidate: candidates[i + 1],
+          isPrimary,
+          requestedModelMatched: requestedModel,
+          fallbackConfigured: hasFallbackCandidates,
+        });
+        continue;
+      }
+    }
+
     let runOptions: ModelFallbackRunOptions | undefined;
     let attemptedDuringCooldown = false;
     let transientProbeProviderForAttempt: string | null = null;
@@ -1496,6 +1554,23 @@ export async function runWithModelFallback<T>(
       const isKnownFailover = isFailoverError(normalized);
       if (!isKnownFailover && i === candidates.length - 1) {
         throw err;
+      }
+
+      // Record auth-class failures in the session-scoped skip cache so the
+      // next turn does not re-attempt the same broken candidate. Only mark
+      // for non-primary candidates — see the skip-check above for rationale.
+      if (
+        isKnownFailover &&
+        !isPrimary &&
+        params.sessionId &&
+        (normalized.reason === "auth" || normalized.reason === "auth_permanent")
+      ) {
+        markFallbackCandidateSkipped({
+          sessionId: params.sessionId,
+          provider: candidate.provider,
+          model: candidate.model,
+          reason: normalized.reason,
+        });
       }
 
       lastError = isKnownFailover ? normalized : err;

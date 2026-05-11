@@ -535,6 +535,30 @@ export function resolveFailoverReasonFromError(
   );
 }
 
+/**
+ * Build an actionable remediation hint for a failover error when the failure
+ * reason is `auth` / `auth_permanent` and we have enough provider attribution
+ * to suggest a re-authentication command. Returns `undefined` for any other
+ * failure shape so callers can opportunistically append the hint without
+ * branching on every reason themselves.
+ *
+ * Keep the string short and copy-pasteable — operators see it in fallback
+ * summary errors and TUI status lines.
+ */
+export function buildFailoverRemediationHint(err: unknown): string | undefined {
+  if (!isFailoverError(err)) {
+    return undefined;
+  }
+  if (err.reason !== "auth" && err.reason !== "auth_permanent") {
+    return undefined;
+  }
+  const provider = err.provider?.trim();
+  if (!provider) {
+    return undefined;
+  }
+  return `Re-authenticate with: openclaw models auth login --provider ${provider} --force`;
+}
+
 export function describeFailoverError(err: unknown): {
   message: string;
   rawError?: string;

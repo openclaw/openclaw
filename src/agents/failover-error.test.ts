@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { classifyFailoverSignal } from "./embedded-agent-helpers/errors.js";
 import {
+  buildFailoverRemediationHint,
   coerceToFailoverError,
   describeFailoverError,
   FailoverError,
@@ -1238,5 +1239,52 @@ describe("failover-error", () => {
       expect(isNonProviderRuntimeCoordinationError(null)).toBe(false);
       expect(isNonProviderRuntimeCoordinationError(undefined)).toBe(false);
     });
+  });
+});
+
+describe("buildFailoverRemediationHint", () => {
+  it("returns a copy-pasteable login command for auth failures", () => {
+    const err = new FailoverError("missing token", {
+      reason: "auth",
+      provider: "anthropic",
+      model: "claude-opus-4-7",
+    });
+    expect(buildFailoverRemediationHint(err)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider anthropic --force",
+    );
+  });
+
+  it("returns a hint for auth_permanent as well", () => {
+    const err = new FailoverError("revoked", {
+      reason: "auth_permanent",
+      provider: "google-gemini-cli",
+      model: "gemini-3.1-pro-preview",
+    });
+    expect(buildFailoverRemediationHint(err)).toBe(
+      "Re-authenticate with: openclaw models auth login --provider google-gemini-cli --force",
+    );
+  });
+
+  it("returns undefined for non-auth reasons", () => {
+    const err = new FailoverError("429", {
+      reason: "rate_limit",
+      provider: "openai",
+      model: "gpt-5",
+    });
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
+  });
+
+  it("returns undefined when provider is not attributed", () => {
+    const err = new FailoverError("no token", {
+      reason: "auth",
+      model: "claude-opus-4-7",
+    });
+    expect(buildFailoverRemediationHint(err)).toBeUndefined();
+  });
+
+  it("returns undefined for non-FailoverError inputs", () => {
+    expect(buildFailoverRemediationHint(new Error("oops"))).toBeUndefined();
+    expect(buildFailoverRemediationHint(undefined)).toBeUndefined();
+    expect(buildFailoverRemediationHint("just a string")).toBeUndefined();
   });
 });
