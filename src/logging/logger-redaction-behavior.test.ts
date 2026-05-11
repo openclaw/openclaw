@@ -9,6 +9,7 @@ import {
 import { getChildLogger, getLogger, resetLogger, setLoggerOverride } from "../logging.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
 import { __test__ as loggerTest } from "./logger.js";
+import { createDiagnosticLogRecordCapture } from "./test-helpers/diagnostic-log-capture.js";
 
 const secret = "sk-testsecret1234567890abcd";
 const TRACE_ID = "4bf92f3577b34da6a3ce929d0e0e4736";
@@ -69,6 +70,58 @@ describe("file log redaction", () => {
     const content = fs.readFileSync(logPath, "utf8");
     expect(content).toContain("Authorization: Bearer");
     expect(content).not.toContain(secret);
+  });
+
+  it("redacts sensitive structured fields before emitting diagnostic log records", async () => {
+    const logPath = logPathTracker.nextPath();
+    setLoggerOverride({ level: "info", file: logPath });
+    const capture = createDiagnosticLogRecordCapture();
+    try {
+      getLogger().info(
+        {
+          password: "hunter2",
+          token: "token-value-1234567890",
+        },
+        "credential diagnostic",
+      );
+      await capture.flush();
+
+      const serialized = JSON.stringify(capture.records);
+      expect(serialized).toContain("credential diagnostic");
+      expect(serialized).not.toContain("hunter2");
+      expect(serialized).not.toContain("token-value-1234567890");
+      expect(capture.records.at(-1)?.attributes?.password).toBe("***");
+    } finally {
+      capture.cleanup();
+    }
+  });
+
+  it("honors logging redaction opt-out for structured file log fields", () => {
+    const logPath = logPathTracker.nextPath();
+    const configPath = logPathTracker.nextPath();
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        logging: {
+          redactSensitive: "off",
+        },
+      }),
+    );
+    process.env.OPENCLAW_CONFIG_PATH = configPath;
+    setLoggerOverride({ level: "info", file: logPath });
+
+    getLogger().info({
+      token: "token-value-1234567890",
+      access: "ya29.fake-access-token-with-enough-length",
+      password: "abcd-efgh-ijkl-mnop",
+      message: `Authorization: Bearer ${secret}`,
+    });
+
+    const content = fs.readFileSync(logPath, "utf8");
+    expect(content).toContain("token-value-1234567890");
+    expect(content).toContain("ya29.fake-access-token-with-enough-length");
+    expect(content).toContain("abcd-efgh-ijkl-mnop");
+    expect(content).toContain(secret);
   });
 
   it("uses logging.file from the active config path", () => {

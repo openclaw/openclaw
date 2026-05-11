@@ -45,7 +45,8 @@ describe("kilocode provider plugin", () => {
       {},
     );
 
-    expect(capturedPayload).toMatchObject({
+    expect(capturedPayload).toEqual({
+      config: { thinkingConfig: { thinkingBudget: -1 } },
       reasoning: { effort: "high" },
     });
 

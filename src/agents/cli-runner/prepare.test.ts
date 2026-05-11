@@ -339,6 +339,55 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
+  it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({
+          prependContext: "trusted hook context",
+          appendContext: "trusted hook tail",
+        })),
+        runBeforeAgentStart: vi.fn(),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
+        transcriptPrompt: "latest ask",
+        currentTurnContext: {
+          text: "Sender (untrusted metadata):\nsender_id=U123",
+          promptJoiner: " ",
+        },
+        provider: "test-cli",
+        model: "test-model",
+        timeoutMs: 1_000,
+        runId: "run-test-context",
+        config: createCliBackendConfig(),
+      });
+
+      expect(context.params.prompt).toBe(
+        "Sender (untrusted metadata):\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
+      );
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      expect(beforePromptBuildCalls[0]?.[0]).toMatchObject({
+        prompt: "latest ask",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("marks inter-session prompts after CLI prompt-build hook context is applied", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {

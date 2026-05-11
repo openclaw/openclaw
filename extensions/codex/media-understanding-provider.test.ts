@@ -197,23 +197,30 @@ describe("codex media understanding provider", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(requests[1]?.params).toMatchObject({
+    expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
       modelProvider: "openai",
+      cwd: "/tmp/openclaw-agent",
       approvalPolicy: "on-request",
       sandbox: "read-only",
+      serviceName: "OpenClaw",
+      developerInstructions:
+        "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
       dynamicTools: [],
+      experimentalRawEvents: true,
       ephemeral: true,
       persistExtendedHistory: false,
     });
-    expect(requests[2]?.params).toMatchObject({
+    expect(requests[2]?.params).toEqual({
       threadId: "thread-1",
-      approvalPolicy: "on-request",
-      model: "gpt-5.4",
       input: [
         { type: "text", text: "Describe briefly.", text_elements: [] },
         { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
       ],
+      cwd: "/tmp/openclaw-agent",
+      approvalPolicy: "on-request",
+      model: "gpt-5.4",
+      effort: "low",
     });
   });
 
@@ -347,27 +354,47 @@ describe("codex media understanding provider", () => {
       "thread/start",
       "turn/start",
     ]);
-    expect(requests[1]?.params).toMatchObject({
+    expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
       modelProvider: "openai",
+      cwd: "/tmp/openclaw-agent",
       approvalPolicy: "on-request",
       sandbox: "read-only",
+      serviceName: "OpenClaw",
+      developerInstructions:
+        "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
       dynamicTools: [],
+      experimentalRawEvents: true,
       ephemeral: true,
       persistExtendedHistory: false,
     });
-    expect(requests[2]?.params).toMatchObject({
-      threadId: "thread-1",
-      approvalPolicy: "on-request",
-      model: "gpt-5.4",
-      input: [
-        expect.objectContaining({
-          type: "text",
-          text: expect.stringContaining("Return valid JSON only"),
-        }),
-        { type: "text", text: "Extract searchable evidence.", text_elements: [] },
-        { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" },
-      ],
+    const turnParams = requests[2]?.params as
+      | {
+          threadId?: unknown;
+          approvalPolicy?: unknown;
+          model?: unknown;
+          input?: Array<{ type?: unknown; text?: unknown; text_elements?: unknown; url?: unknown }>;
+          cwd?: unknown;
+          effort?: unknown;
+        }
+      | undefined;
+    expect(turnParams?.threadId).toBe("thread-1");
+    expect(turnParams?.approvalPolicy).toBe("on-request");
+    expect(turnParams?.model).toBe("gpt-5.4");
+    expect(turnParams?.cwd).toBe("/tmp/openclaw-agent");
+    expect(turnParams?.effort).toBe("low");
+    expect(turnParams?.input).toHaveLength(3);
+    expect(turnParams?.input?.[0]?.type).toBe("text");
+    expect(turnParams?.input?.[0]?.text).toContain("Return valid JSON only");
+    expect(turnParams?.input?.[0]?.text_elements).toStrictEqual([]);
+    expect(turnParams?.input?.[1]).toStrictEqual({
+      type: "text",
+      text: "Extract searchable evidence.",
+      text_elements: [],
+    });
+    expect(turnParams?.input?.[2]).toStrictEqual({
+      type: "image",
+      url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=",
     });
   });
 

@@ -538,7 +538,9 @@ describe("plugin scheduled turns", () => {
     const { name, schedule, ...stableCronAddBody } = getCronAddBody();
     expect(typeof name).toBe("string");
     expect(name.startsWith("plugin:loader-scheduler:agent:main:main:")).toBe(true);
-    expect(schedule.kind).toBe("at");
+    if (schedule.kind !== "at") {
+      throw new Error(`Expected one-shot scheduled turn, got ${schedule.kind}`);
+    }
     expect(typeof schedule.at).toBe("string");
     expect(stableCronAddBody).toEqual({
       enabled: true,

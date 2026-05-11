@@ -110,7 +110,7 @@ describe("anthropic stream wrappers", () => {
   it("composes the anthropic provider stream chain from extra params", () => {
     const captured = runComposedAnthropicProviderStream("sk-ant-api-123");
     expect(captured.headers?.["anthropic-beta"]).toContain(CONTEXT_1M_BETA);
-    expect(captured.payload).toMatchObject({ service_tier: "auto" });
+    expect(captured.payload).toEqual({ service_tier: "auto" });
   });
 });
 

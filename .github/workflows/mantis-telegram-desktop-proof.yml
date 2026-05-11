@@ -331,6 +331,24 @@ jobs:
           crabbox --version
           crabbox media preview --help >/dev/null
 
+      - name: Install local proof tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f scripts/e2e/telegram-user-driver.py
+          media_tools="${RUNNER_TEMP}/mantis-media-tools"
+          install -d "$media_tools"
+          curl --fail --location --retry 3 --retry-delay 2 \
+            --connect-timeout 15 --max-time 180 \
+            https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-master-latest-linux64-gpl.tar.xz \
+            --output "$media_tools/ffmpeg.tar.xz"
+          tar -xJf "$media_tools/ffmpeg.tar.xz" -C "$media_tools"
+          bin_dir="$(find "$media_tools" -type d -path '*/bin' | head -n 1)"
+          sudo install -m 0755 "$bin_dir/ffmpeg" /usr/local/bin/ffmpeg
+          sudo install -m 0755 "$bin_dir/ffprobe" /usr/local/bin/ffprobe
+          ffmpeg -version >/dev/null
+          ffprobe -version >/dev/null
+
       - name: Ensure agent key exists
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
@@ -352,6 +370,7 @@ jobs:
             printf '%s\n' 'Defaults env_keep += "CRABBOX_ACCESS_CLIENT_ID CRABBOX_ACCESS_CLIENT_SECRET CRABBOX_COORDINATOR CRABBOX_COORDINATOR_TOKEN CRABBOX_LEASE_ID CRABBOX_PROVIDER"'
             printf '%s\n' 'Defaults env_keep += "GH_TOKEN MANTIS_INSTRUCTIONS MANTIS_OUTPUT_DIR MANTIS_PR_NUMBER"'
             printf '%s\n' 'Defaults env_keep += "OPENCLAW_BUILD_PRIVATE_QA OPENCLAW_ENABLE_PRIVATE_QA_CLI OPENCLAW_QA_CONVEX_SECRET_CI OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN"'
+            printf '%s\n' 'Defaults env_keep += "OPENCLAW_TELEGRAM_USER_CRABBOX_BIN OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT"'
           } | sudo tee /etc/sudoers.d/mantis-codex-env >/dev/null
           sudo chmod 0440 /etc/sudoers.d/mantis-codex-env
           codex_home="/tmp/mantis-codex-home-${GITHUB_RUN_ID}"
@@ -375,8 +394,8 @@ jobs:
           CANDIDATE_SHA: ${{ needs.validate_refs.outputs.candidate_revision }}
           CRABBOX_ACCESS_CLIENT_ID: ${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}
           CRABBOX_ACCESS_CLIENT_SECRET: ${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}
-          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR }}
-          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN }}
+          CRABBOX_COORDINATOR: ${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
+          CRABBOX_COORDINATOR_TOKEN: ${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
           CRABBOX_LEASE_ID: ${{ needs.resolve_request.outputs.lease_id }}
           CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
           GH_TOKEN: ${{ github.token }}
@@ -387,6 +406,9 @@ jobs:
           OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}
           OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN: ${{ secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}
+          OPENCLAW_TELEGRAM_USER_CRABBOX_BIN: /usr/local/bin/crabbox
+          OPENCLAW_TELEGRAM_USER_CRABBOX_PROVIDER: ${{ needs.resolve_request.outputs.crabbox_provider }}
+          OPENCLAW_TELEGRAM_USER_DRIVER_SCRIPT: scripts/e2e/telegram-user-driver.py
         with:
           openai-api-key: ${{ secrets.OPENCLAW_MANTIS_AGENT_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           prompt-file: .github/codex/prompts/mantis-telegram-desktop-proof.md

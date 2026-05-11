@@ -6,6 +6,8 @@ Docs: https://docs.openclaw.ai
 
 ### Changes
 
+- Providers/fal: route GPT Image 2 and Nano Banana 2 reference-image edit requests to `/edit` with `image_urls` array, enforce NB2 edit geometry using `aspect_ratio` and `resolution` params, lift Fal edit mode input-image caps to 10 for GPT Image 2 and 14 for Nano Banana 2, and allow aspect-ratio hints in edit mode. (#77295) Thanks @leoge007.
+
 - Build: enable additional low-churn oxlint rules for promise, TypeScript, and runtime footgun checks.
 - Build: enable stricter Vitest lint rules for focused, disabled, conditional, hook, matcher, and expectation hazards.
 - Build: pin explicit oxfmt defaults in the shared formatter config to keep formatting behavior stable across upgrades.
@@ -48,11 +50,18 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Redact persisted secret-shaped payloads [AI]. (#79006) Thanks @pgondhi987.
+- OpenAI Codex: surface browser OAuth and device-code login failures instead of treating failed logins as empty successful auth results. Refs #80363.
+- CLI agents: carry runtime-only current-turn sender/reply context into CLI model prompts while keeping prompt-build hook input and transcript text clean.
+- Control UI: keep workspace file presence checks from treating `fs-safe` stat helper failures as missing files, restoring Agents file status for existing Windows workspace files. Fixes #79953. Thanks @lovelefeng-glitch.
 - fix(matrix): gate name-based allowlist resolution [AI]. (#79007) Thanks @pgondhi987.
 - Slack: include the bot's own root/parent message in new thread sessions so in-thread replies reach the agent with the parent text the user is responding to, instead of only `reply_to_id` metadata. Fixes #79338. Thanks @sxxtony.
 - Docker: keep image builds on the source pnpm workspace policy so pnpm 11 can prune production dependencies without a Docker-only workspace rewrite.
 - Agents/compaction: restore info-level gateway logs for embedded compaction start, completion, and incomplete outcomes. (#71961) Thanks @rubencu.
 - Telegram: build reply-aware inbound turns through the shared channel context path so agents see the current reply target inline with the current message.
+- Telegram: recover legacy message cache files that mixed JSON-array and line-delimited entries so restarted gateways preserve reply-window context. (#80567)
+- Telegram: update the reply-context cache when messages are edited, so streamed bot replies appear in later agent context with their final text instead of the first draft.
+- Skills/Windows: normalize compacted skill prompt locations to forward slashes after home-prefix compaction so Windows skill paths remain readable by model file tools. (#52200) Thanks @chienchandler.
 - Memory: skip managed dreaming cron reconciliation warnings for ordinary cron and heartbeat hook contexts that cannot manage Gateway cron. (#77027) Thanks @rubencu.
 - Cron: treat Codex app-server turn acceptance, CLI process spawn, and tool starts as execution milestones, preventing isolated runs from tripping the early startup watchdog after work has begun.
 - Yuanbao: bump `openclaw-plugin-yuanbao` to 2.13.1 to support `sourceReplyDeliveryMode: "automatic"` for group chat. (#79814) Thanks @loongfay.
@@ -60,6 +69,8 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: default native plugin app tool approvals to automatic so non-destructive read tools run when destructive actions are disabled.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids while converting manifest catalog rows into emitted provider config, so `google/gemini-3.1-pro-preview` is used for testing instead of `google/gemini-3-pro-preview`.
 - Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids in configured proxy/provider-auth model catalogs, so regenerated config keeps testing `google/gemini-3.1-pro-preview` instead of `google/gemini-3-pro-preview`.
+- Google/Gemini: normalize retired nested Gemini 3 Pro Preview ids while onboarding provider catalog presets, so setup-emitted proxy configs test `google/gemini-3.1-pro-preview` instead of `google/gemini-3-pro-preview`.
+- Models: keep configured fallback chains ahead of configured primary models for override selections with duplicate model ids, preventing fallback jumps to the wrong provider. Fixes #80562.
 - Native apps: advertise the Gateway protocol compatibility range so chat and node sessions can connect to v3 gateways after additive v4 client updates.
 - Gateway/agents: keep stale `sessions_send` ACP manager and `web_fetch` runtime chunks importable after package updates, preventing live gateways from breaking before restart. Fixes #78804. Thanks @Gomesy72.
 - Gateway/install: preserve service environment value-source metadata in `openclaw gateway install`, so systemd reinstall paths keep env-file-backed secrets out of inline unit metadata. Refs #77406, #77427. Thanks @stainlu and @brokemac79.
@@ -73,6 +84,7 @@ Docs: https://docs.openclaw.ai
 - Codex app-server: preserve prompt-local current-turn context through context-engine prompt projection, so replied-to Telegram messages stay visible to the Codex model input.
 - Telegram: pass agent-scoped media roots through gateway message actions so workspace-local media from the active agent is not rejected as cross-agent access. Thanks @frankekn.
 - CLI/gateway: keep `gateway status --deep` plugin-aware so configured plugin manifest warnings, including missing channel config metadata, stay visible during install and update smoke checks.
+- Doctor/status: clarify gateway token source conflict warnings and suppress them inside the managed Gateway service credential context.
 - Feishu: accept Schema 2 card callbacks whose operator identity is nested under `operator.user_id`, so card buttons dispatch instead of being dropped as malformed. Fixes #71670. (#71787) Thanks @rubencu.
 - Feishu: fall back to a top-level group send when normal group quoted replies target a withdrawn or missing message, preventing replies from disappearing silently while preserving native topic safety. Fixes #79349. Thanks @arlen8411.
 - Doctor: stop flagging the live compatibility agent directory as orphaned when the configured default agent is not `main`. Fixes #74313. (#74438) Thanks @carlos4s.

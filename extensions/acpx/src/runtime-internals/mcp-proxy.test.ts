@@ -35,7 +35,11 @@ describe("mcp-proxy", () => {
       createTargetSpawnOptions: (platform?: NodeJS.Platform) => Record<string, unknown>;
     };
 
-    expect(createTargetSpawnOptions("win32")).toMatchObject({ windowsHide: true });
+    expect(createTargetSpawnOptions("win32")).toEqual({
+      env: process.env,
+      stdio: ["pipe", "pipe", "inherit"],
+      windowsHide: true,
+    });
     expect(createTargetSpawnOptions("darwin")).not.toHaveProperty("windowsHide");
     expect(createTargetSpawnOptions("linux")).not.toHaveProperty("windowsHide");
   });

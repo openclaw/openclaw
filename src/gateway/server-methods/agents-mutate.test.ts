@@ -1153,6 +1153,33 @@ describe("agents.files.list", () => {
     });
     expect(rootOpen).not.toHaveBeenCalled();
   });
+
+  it("falls back to fixed-path lstat when safe stat is unavailable", async () => {
+    const rootStat = vi.fn(async () => {
+      throw createErrnoError("helper-unavailable");
+    });
+    agentsTesting.setDepsForTests({ root: makeRootForTest({ stat: rootStat }) });
+    mocks.fsLstat.mockImplementation(async (filePath: unknown) => {
+      if (filePath === "/workspace/main/AGENTS.md") {
+        return makeFileStat({ size: 23, mtimeMs: 6789 });
+      }
+      throw createEnoentError();
+    });
+
+    const { respond, promise } = makeCall("agents.files.list", { agentId: "main" });
+    await promise;
+
+    const [, result] = respond.mock.calls[0] ?? [];
+    const files = (result as { files: Array<{ name: string; missing: boolean; size?: number }> })
+      .files;
+    const file = files.find((entry) => entry.name === "AGENTS.md");
+    expectRecordFields(file, {
+      name: "AGENTS.md",
+      missing: false,
+      size: 23,
+    });
+    expect(rootStat).toHaveBeenCalled();
+  });
 });
 
 describe("agents.files.get/set symlink safety", () => {

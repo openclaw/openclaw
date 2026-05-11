@@ -2,7 +2,7 @@ import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
 } from "openclaw/plugin-sdk/channel-message";
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../api.js";
 import { linePlugin } from "./channel.js";
 import { lineConfigAdapter } from "./config-adapter.js";
@@ -40,11 +40,16 @@ type LineRuntimeMocks = {
 };
 
 beforeEach(() => {
+  vi.setSystemTime(1_800_000_000_000);
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockReset();
   ssrfMocks.resolvePinnedHostnameWithPolicy.mockResolvedValue({
     hostname: "example.com",
     addresses: ["93.184.216.34"],
   });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 function lineResult(messageId: string, chatId = "c1") {
@@ -259,8 +264,41 @@ describe("line outbound sendPayload", () => {
       ["One", "Two"],
       { verbose: false, accountId: "default", cfg },
     );
-    expect(result).toMatchObject({ channel: "line", messageId: "m-quick", chatId: "c1" });
-    expect(result.receipt?.primaryPlatformMessageId).toBe("m-quick");
+    expect(result).toEqual({
+      channel: "line",
+      chatId: "c1",
+      messageId: "m-quick",
+      receipt: {
+        parts: [
+          {
+            index: 0,
+            kind: "text",
+            platformMessageId: "m-quick",
+            raw: {
+              channel: "line",
+              chatId: "c1",
+              conversationId: "c1",
+              messageId: "m-quick",
+              meta: { messageCount: 1 },
+            },
+            threadId: "c1",
+          },
+        ],
+        platformMessageIds: ["m-quick"],
+        primaryPlatformMessageId: "m-quick",
+        raw: [
+          {
+            channel: "line",
+            chatId: "c1",
+            conversationId: "c1",
+            messageId: "m-quick",
+            meta: { messageCount: 1 },
+          },
+        ],
+        sentAt: 1_800_000_000_000,
+        threadId: "c1",
+      },
+    });
   });
 
   it("sends media before quick-reply text so buttons stay visible", async () => {

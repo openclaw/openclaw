@@ -339,11 +339,10 @@ describe("TwitchClientManager", () => {
 
     it("should send message successfully", async () => {
       const result = await manager.sendMessage(testAccount, "testchannel", "Hello, world!");
+      const { messageId, ...resultRest } = result;
 
-      expect(result).toMatchObject({ ok: true });
-      expect(result.messageId).toMatch(
-        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
-      );
+      expect(resultRest).toEqual({ ok: true });
+      expect(messageId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i);
       expect(mockSay).toHaveBeenCalledWith("testchannel", "Hello, world!");
     });
 

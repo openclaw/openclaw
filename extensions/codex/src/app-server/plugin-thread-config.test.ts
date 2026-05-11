@@ -96,10 +96,11 @@ describe("Codex plugin thread config", () => {
     const disabledApps = pluginOverrideDisabled.configPatch?.apps as
       | Record<string, unknown>
       | undefined;
-    expect(disabledApps?.["google-calendar-app"]).toMatchObject({
+    expect(disabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
       destructive_enabled: false,
       open_world_enabled: true,
+      default_tools_approval_mode: "auto",
     });
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("default_tools_enabled");
     expect(disabledApps?.["google-calendar-app"]).not.toHaveProperty("tools");
@@ -124,9 +125,11 @@ describe("Codex plugin thread config", () => {
     const enabledApps = pluginOverrideEnabled.configPatch?.apps as
       | Record<string, unknown>
       | undefined;
-    expect(enabledApps?.["google-calendar-app"]).toMatchObject({
+    expect(enabledApps?.["google-calendar-app"]).toEqual({
       enabled: true,
       destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
     });
     expect(
       pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
@@ -257,8 +260,12 @@ describe("Codex plugin thread config", () => {
         },
       },
     });
-    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+      configKey: "google-calendar",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
+      allowDestructiveActions: false,
+      mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(
@@ -388,15 +395,25 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
-    expect(config.configPatch?.apps).toMatchObject({
+    expect(config.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
       "google-calendar-app": {
         enabled: true,
         destructive_enabled: false,
         open_world_enabled: true,
+        default_tools_approval_mode: "auto",
       },
     });
-    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+      configKey: "google-calendar",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
+      allowDestructiveActions: false,
+      mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(request.mock.calls.map(([method]) => method)).toContain("plugin/install");

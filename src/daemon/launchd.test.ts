@@ -614,6 +614,7 @@ describe("launchd install", () => {
     const plist = state.files.get(plistPath) ?? "";
     expect(plist).toContain("<key>StandardOutPath</key>");
     expect(plist).toContain("<key>StandardErrorPath</key>");
+    expect(plist).toContain("<string>/dev/null</string>");
     expect(plist).toContain("<key>KeepAlive</key>");
     expect(plist).toContain("<string>node</string>");
     const rewriteIndex = state.fileWrites.findIndex((write) => write.path === plistPath);
