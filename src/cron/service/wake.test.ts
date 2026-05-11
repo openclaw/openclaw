@@ -96,4 +96,17 @@ describe("wake (cron timer)", () => {
       reason: "wake",
     });
   });
+
+  it("rejects subagent sessionKey targets without enqueueing or waking", () => {
+    const { state, enqueueSystemEvent, requestHeartbeat } = createState();
+    expect(
+      wake(state, {
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:subagent:worker",
+      }),
+    ).toEqual({ ok: false, reason: "unwakeable-session-key" });
+    expect(enqueueSystemEvent).not.toHaveBeenCalled();
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+  });
 });

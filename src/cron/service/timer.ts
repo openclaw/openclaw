@@ -5,7 +5,7 @@ import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   isRetryableHeartbeatBusySkipReason,
 } from "../../infra/heartbeat-wake.js";
-import { DEFAULT_AGENT_ID } from "../../routing/session-key.js";
+import { DEFAULT_AGENT_ID, isSubagentSessionKey } from "../../routing/session-key.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import {
   completeTaskRunByRunId,
@@ -1788,6 +1788,9 @@ export function wake(
     return { ok: false } as const;
   }
   const sessionKey = opts.sessionKey?.trim() || undefined;
+  if (sessionKey && isSubagentSessionKey(sessionKey)) {
+    return { ok: false, reason: "unwakeable-session-key" } as const;
+  }
   state.deps.enqueueSystemEvent(text, sessionKey ? { sessionKey } : undefined);
   if (opts.mode === "now") {
     state.deps.requestHeartbeat({

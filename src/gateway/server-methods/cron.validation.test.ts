@@ -722,5 +722,15 @@ describe("cron method validation", () => {
       expect(context.cron.wake).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
     });
+
+    it("rejects subagent sessionKey targets before enqueueing", async () => {
+      const { context, respond } = await invokeWake({
+        mode: "now",
+        text: "ping",
+        sessionKey: "agent:main:subagent:worker",
+      });
+      expect(context.cron.wake).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+    });
   });
 });

@@ -13,7 +13,7 @@ import type {
 } from "./service/state.js";
 import type { CronJob } from "./types.js";
 
-type CronWakeResult = { ok: true } | { ok: false };
+type CronWakeResult = { ok: true } | { ok: false; reason?: "unwakeable-session-key" };
 
 export type CronServiceRunResult = CronRunResult | { ok: true; ran: false; reason: "invalid-spec" };
 
