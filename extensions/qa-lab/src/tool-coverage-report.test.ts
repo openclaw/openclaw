@@ -43,6 +43,7 @@ describe("qa tool coverage report", () => {
           toolCoverage: {
             bucket: "codex-native-workspace",
             expectedLayer: "codex-native-workspace",
+            capabilityLayer: "codex-native-workspace",
             required: true,
           },
         }),
@@ -56,6 +57,7 @@ describe("qa tool coverage report", () => {
         tool: "read",
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
+        capabilityLayer: "codex-native-workspace",
         required: true,
         fixtureCount: 1,
         pi: "not-run",
@@ -64,7 +66,7 @@ describe("qa tool coverage report", () => {
       }),
     ]);
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
-      "| read | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
+      "| read | codex-native-workspace | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
     );
   });
 
@@ -233,6 +235,21 @@ describe("qa tool coverage report", () => {
         ],
       }),
     ).toThrow("unknown runtime tool coverage bucket");
+  });
+
+  it("rejects unknown runtime capability layers", () => {
+    expect(() =>
+      buildQaToolCoverageReport({
+        scenarios: [
+          makeScenario("tool-bad-layer", "bad", {
+            toolCoverage: {
+              bucket: "openclaw-dynamic-integration",
+              capabilityLayer: "everything-everywhere",
+            },
+          }),
+        ],
+      }),
+    ).toThrow("unknown runtime tool capabilityLayer");
   });
 
   it("discovers the runtime tool fixture catalog", () => {

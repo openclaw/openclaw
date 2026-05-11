@@ -51,6 +51,7 @@ async function runQaSuite(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  codexToolLoading?: string;
 }) {
   const runtime = await loadQaLabCliRuntime();
   await runtime.runQaSuiteCommand(opts);
@@ -326,6 +327,10 @@ export function registerQaLabCli(program: Command) {
     .option("--memory <size>", "Multipass memory size")
     .option("--disk <size>", "Multipass disk size")
     .option("--runtime-pair <pair>", "Run each scenario under both runtimes, e.g. pi,codex")
+    .option(
+      "--codex-tool-loading <mode>",
+      "QA-only Codex dynamic tool loading mode for runtime-pair suites: direct or searchable",
+    )
     .action(
       async (opts: {
         repoRoot?: string;
@@ -350,6 +355,7 @@ export function registerQaLabCli(program: Command) {
         disk?: string;
         preflight?: boolean;
         runtimePair?: string;
+        codexToolLoading?: string;
       }) => {
         await runQaSuite({
           repoRoot: opts.repoRoot,
@@ -374,6 +380,7 @@ export function registerQaLabCli(program: Command) {
           disk: opts.disk,
           preflight: opts.preflight,
           runtimePair: opts.runtimePair,
+          codexToolLoading: opts.codexToolLoading,
         });
       },
     );

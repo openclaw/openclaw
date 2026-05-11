@@ -1,5 +1,6 @@
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaCodexToolLoading } from "./runtime-tool-metadata.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
@@ -38,6 +39,7 @@ export type QaSuiteSummaryJson = {
     concurrency: number;
     scenarioIds: string[] | null;
     runtimePair?: [RuntimeId, RuntimeId] | null;
+    codexToolLoading?: QaCodexToolLoading | null;
   };
 };
 

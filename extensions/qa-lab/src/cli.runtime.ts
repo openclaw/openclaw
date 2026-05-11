@@ -60,6 +60,7 @@ import {
   assertQaRuntimeSuiteScenarioMembership,
   resolveQaRuntimeSuiteScenarioIds,
 } from "./runtime-suite.js";
+import { QA_CODEX_TOOL_LOADING_MODES, type QaCodexToolLoading } from "./runtime-tool-metadata.js";
 import { readQaScenarioPack } from "./scenario-catalog.js";
 import { runQaSuiteFromRuntime } from "./suite-launch.runtime.js";
 import { readQaSuiteFailedScenarioCountFromSummary } from "./suite-summary.js";
@@ -183,6 +184,17 @@ function parseQaRuntimePair(value: string | undefined): [RuntimeId, RuntimeId] |
     throw new Error("--runtime-pair must compare two different runtimes.");
   }
   return ["pi", "codex"];
+}
+
+function parseQaCodexToolLoading(value: string | undefined): QaCodexToolLoading | undefined {
+  const normalized = value?.trim().toLowerCase();
+  if (!normalized) {
+    return undefined;
+  }
+  if (QA_CODEX_TOOL_LOADING_MODES.includes(normalized as QaCodexToolLoading)) {
+    return normalized as QaCodexToolLoading;
+  }
+  throw new Error('--codex-tool-loading must be one of "direct" or "searchable"');
 }
 
 function parseHarnessProfile(profile: string, fallbackRuntime: RuntimeId = "pi"): HarnessVariant {
@@ -604,6 +616,7 @@ export async function runQaSuiteCommand(opts: {
   disk?: string;
   preflight?: boolean;
   runtimePair?: string;
+  codexToolLoading?: string;
 }) {
   const repoRoot = path.resolve(opts.repoRoot ?? process.cwd());
   const transportId = normalizeQaTransportId(opts.transportId);
@@ -628,6 +641,7 @@ export async function runQaSuiteCommand(opts: {
   }
   const providerMode = normalizeQaProviderMode(opts.providerMode);
   const runtimePair = parseQaRuntimePair(opts.runtimePair);
+  const codexToolLoading = parseQaCodexToolLoading(opts.codexToolLoading);
   const claudeCliAuthMode = parseQaCliBackendAuthMode(opts.cliAuthMode);
   const primaryModel = normalizeQaOptionalModelRef(opts.primaryModel);
   const alternateModel = normalizeQaOptionalModelRef(opts.alternateModel);
@@ -645,6 +659,9 @@ export async function runQaSuiteCommand(opts: {
   }
   if (runner === "multipass" && opts.cliAuthMode !== undefined) {
     throw new Error("--cli-auth-mode requires --runner host.");
+  }
+  if (runner === "multipass" && codexToolLoading !== undefined) {
+    throw new Error("--codex-tool-loading requires --runner host.");
   }
   if (runner === "multipass") {
     const thinkingDefault = parseQaThinkingLevel("--thinking", opts.thinking);
@@ -709,6 +726,7 @@ export async function runQaSuiteCommand(opts: {
       ? { concurrency: parseQaPositiveIntegerOption("--concurrency", opts.concurrency) }
       : {}),
     ...(runtimePair ? { runtimePair } : {}),
+    ...(codexToolLoading ? { codexToolLoading } : {}),
   });
   process.stdout.write(`QA suite watch: ${result.watchUrl}\n`);
   process.stdout.write(`QA suite report: ${result.reportPath}\n`);

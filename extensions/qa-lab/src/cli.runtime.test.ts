@@ -289,6 +289,40 @@ describe("qa cli runtime", () => {
     });
   });
 
+  it("passes QA-only Codex dynamic tool loading through to the host runner", async () => {
+    await runQaSuiteCommand({
+      repoRoot: "/tmp/openclaw-repo",
+      providerMode: "mock-openai",
+      scenarioIds: ["runtime-tool-web-search"],
+      runtimePair: "pi,codex",
+      codexToolLoading: "direct",
+    });
+
+    expect(runQaSuiteFromRuntime).toHaveBeenCalledWith({
+      repoRoot: path.resolve("/tmp/openclaw-repo"),
+      outputDir: undefined,
+      transportId: "qa-channel",
+      providerMode: "mock-openai",
+      primaryModel: undefined,
+      alternateModel: undefined,
+      fastMode: undefined,
+      scenarioIds: ["runtime-tool-web-search"],
+      runtimePair: ["pi", "codex"],
+      codexToolLoading: "direct",
+    });
+  });
+
+  it("rejects invalid Codex dynamic tool loading modes", async () => {
+    await expect(
+      runQaSuiteCommand({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        runtimePair: "pi,codex",
+        codexToolLoading: "eager",
+      }),
+    ).rejects.toThrow('--codex-tool-loading must be one of "direct" or "searchable"');
+  });
+
   it("expands named runtime suites before dispatching to the host runner", async () => {
     await runQaSuiteCommand({
       repoRoot: "/tmp/openclaw-repo",

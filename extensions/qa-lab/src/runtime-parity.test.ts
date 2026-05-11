@@ -181,6 +181,42 @@ describe("runtime parity", () => {
     expect(result.drift).toBe("tool-result-shape");
   });
 
+  it("compares matching tool-result errors by failure mode instead of volatile text", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-result-error-mode",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          toolCalls: [
+            makeToolCall({
+              tool: "web_search",
+              resultHash: runtime === "pi" ? "structured-error" : "plain-error",
+              errorClass: "tool-result-error",
+            }),
+          ],
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
+  it("compares tool calls as a multiset so separate session capture order is stable", async () => {
+    const first = makeToolCall({ tool: "sessions_spawn", argsHash: "args-a" });
+    const second = makeToolCall({ tool: "sessions_spawn", argsHash: "args-b" });
+    const result = await runRuntimeParityScenario({
+      scenarioId: "tool-call-multiset",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          toolCalls: runtime === "pi" ? [first, second] : [second, first],
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
   it("classifies transcript-structure drift", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "structural",
@@ -392,6 +428,66 @@ describe("runtime parity", () => {
         tool: "web_search",
         argsHash: stableHashForTest({ query: "openclaw" }),
         resultHash: stableHashForTest({ status: "ok", results: [] }),
+      },
+    ]);
+  });
+
+  it("normalizes Codex toolResult blocks before hashing runtime results", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "web_search",
+                input: { query: "openclaw" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "web_search",
+            isError: true,
+            content: [
+              {
+                type: "toolResult",
+                toolCallId: "call-1",
+                toolName: "web_search",
+                content: "web_search is disabled or no provider is available.",
+              },
+            ],
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: {
+        tempRoot,
+      },
+      scenarioResult: {
+        status: "pass",
+      },
+      wallClockMs: 42,
+    });
+
+    expect(cell.toolCalls).toEqual([
+      {
+        tool: "web_search",
+        argsHash: stableHashForTest({ query: "openclaw" }),
+        resultHash: stableHashForTest({
+          status: "error",
+          tool: "web_search",
+          error: "provider-disabled",
+        }),
+        errorClass: "tool-result-error",
       },
     ]);
   });

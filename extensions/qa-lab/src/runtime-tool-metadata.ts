@@ -10,11 +10,21 @@ export type QaRuntimeToolExpectedLayer =
   | "openclaw-dynamic"
   | "profile-or-plugin";
 
+export type QaRuntimeCapabilityLayer =
+  | "codex-native-workspace"
+  | "openclaw-dynamic-direct"
+  | "openclaw-dynamic-searchable"
+  | "optional-profile-or-plugin"
+  | "structural-text";
+
+export type QaCodexToolLoading = "direct" | "searchable";
+
 export type RuntimeParityComparisonMode = "default" | "codex-native-workspace";
 
 export type QaRuntimeToolCoverageMetadata = {
   bucket: QaRuntimeToolBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;
+  capabilityLayer: QaRuntimeCapabilityLayer;
   required: boolean;
   tracking?: string;
   reason?: string;
@@ -35,10 +45,29 @@ export const QA_RUNTIME_TOOL_EXPECTED_LAYERS: readonly QaRuntimeToolExpectedLaye
   "profile-or-plugin",
 ] as const;
 
+export const QA_RUNTIME_CAPABILITY_LAYERS: readonly QaRuntimeCapabilityLayer[] = [
+  "codex-native-workspace",
+  "openclaw-dynamic-direct",
+  "openclaw-dynamic-searchable",
+  "optional-profile-or-plugin",
+  "structural-text",
+] as const;
+
+export const QA_CODEX_TOOL_LOADING_MODES: readonly QaCodexToolLoading[] = [
+  "direct",
+  "searchable",
+] as const;
+
 const DEFAULT_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeToolExpectedLayer> = {
   "codex-native-workspace": "codex-native-workspace",
   "openclaw-dynamic-integration": "openclaw-dynamic",
   "optional-profile-or-plugin": "profile-or-plugin",
+};
+
+const DEFAULT_CAPABILITY_LAYER_BY_BUCKET: Record<QaRuntimeToolBucket, QaRuntimeCapabilityLayer> = {
+  "codex-native-workspace": "codex-native-workspace",
+  "openclaw-dynamic-integration": "openclaw-dynamic-searchable",
+  "optional-profile-or-plugin": "optional-profile-or-plugin",
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -59,6 +88,10 @@ function isQaRuntimeToolBucket(value: string): value is QaRuntimeToolBucket {
 
 function isQaRuntimeToolExpectedLayer(value: string): value is QaRuntimeToolExpectedLayer {
   return QA_RUNTIME_TOOL_EXPECTED_LAYERS.includes(value as QaRuntimeToolExpectedLayer);
+}
+
+function isQaRuntimeCapabilityLayer(value: string): value is QaRuntimeCapabilityLayer {
+  return QA_RUNTIME_CAPABILITY_LAYERS.includes(value as QaRuntimeCapabilityLayer);
 }
 
 export function readRuntimeToolCoverageConfig(
@@ -106,10 +139,22 @@ export function readRuntimeToolCoverageMetadata(params: {
   const expectedLayer = expectedLayerInput
     ? (expectedLayerInput as QaRuntimeToolExpectedLayer)
     : DEFAULT_LAYER_BY_BUCKET[bucket];
+  const capabilityLayerInput = readString(toolCoverage?.capabilityLayer);
+  if (capabilityLayerInput && !isQaRuntimeCapabilityLayer(capabilityLayerInput)) {
+    throw new Error(
+      `unknown runtime tool capabilityLayer: ${capabilityLayerInput}; expected ${QA_RUNTIME_CAPABILITY_LAYERS.join(
+        ", ",
+      )}`,
+    );
+  }
+  const capabilityLayer = capabilityLayerInput
+    ? (capabilityLayerInput as QaRuntimeCapabilityLayer)
+    : DEFAULT_CAPABILITY_LAYER_BY_BUCKET[bucket];
   const required = readBoolean(toolCoverage?.required) ?? bucket !== "optional-profile-or-plugin";
   return {
     bucket,
     expectedLayer,
+    capabilityLayer,
     required,
     ...((readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue))
       ? { tracking: readString(toolCoverage?.tracking) ?? readString(toolCoverage?.issue) }

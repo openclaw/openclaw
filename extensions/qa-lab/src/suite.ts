@@ -36,7 +36,11 @@ import {
   type RuntimeParityCell,
   type RuntimeParityResult,
 } from "./runtime-parity.js";
-import { runtimeToolComparisonModeForScenario } from "./runtime-tool-metadata.js";
+import {
+  readScenarioRuntimeToolCoverageMetadata,
+  runtimeToolComparisonModeForScenario,
+  type QaCodexToolLoading,
+} from "./runtime-tool-metadata.js";
 import { readQaBootstrapScenarioCatalog } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import {
@@ -98,6 +102,7 @@ export type QaSuiteRunParams = {
   transportReadyTimeoutMs?: number;
   forcedRuntime?: RuntimeId;
   runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
   captureRuntimeParityCell?: boolean;
 };
 
@@ -287,6 +292,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readRuntimeParityReportOnlyReason(
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number],
+  codexToolLoading?: QaCodexToolLoading,
 ): string | undefined {
   const config = scenario.execution.config;
   const toolCoverage = isRecord(config?.toolCoverage) ? config.toolCoverage : undefined;
@@ -294,10 +300,27 @@ function readRuntimeParityReportOnlyReason(
   const knownBroken = isRecord(config?.knownBroken) ? config.knownBroken : undefined;
   const readReason = (value: unknown) =>
     typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  const metadata = readScenarioRuntimeToolCoverageMetadata(scenario);
+  const isSearchableDynamicIntegration =
+    scenario.sourcePath.startsWith("qa/scenarios/runtime/tools/") &&
+    metadata.bucket === "openclaw-dynamic-integration" &&
+    metadata.capabilityLayer === "openclaw-dynamic-searchable";
+  if (isSearchableDynamicIntegration && codexToolLoading === "direct") {
+    return undefined;
+  }
   if (knownHarnessGap) {
-    return (
+    const reason =
       readReason(knownHarnessGap.reason) ??
-      "tracked QA harness limitation; do not treat as a product runtime regression"
+      "tracked QA harness limitation; do not treat as a product runtime regression";
+    if (isSearchableDynamicIntegration && codexToolLoading === "searchable") {
+      return `searchable/deferred Codex dynamic loading report lane: ${reason}`;
+    }
+    return reason;
+  }
+  if (isSearchableDynamicIntegration && codexToolLoading === "searchable") {
+    return (
+      readReason(toolCoverage?.reason) ??
+      "searchable/deferred Codex dynamic loading report lane; direct loading is the deterministic CI gate"
     );
   }
   if (knownBroken) {
@@ -323,11 +346,12 @@ function hasRuntimeParityCellFailure(result: RuntimeParityResult) {
 function runtimeParityReportOnlyReason(params: {
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
   result: RuntimeParityResult;
+  codexToolLoading?: QaCodexToolLoading;
 }) {
   if (isRuntimeParityPass(params.result) || hasRuntimeParityCellFailure(params.result)) {
     return undefined;
   }
-  return readRuntimeParityReportOnlyReason(params.scenario);
+  return readRuntimeParityReportOnlyReason(params.scenario, params.codexToolLoading);
 }
 
 function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {
@@ -346,10 +370,12 @@ function buildRuntimeParityScenarioResult(params: {
   scenarioName: string;
   scenario: ReturnType<typeof readQaBootstrapScenarioCatalog>["scenarios"][number];
   result: RuntimeParityResult;
+  codexToolLoading?: QaCodexToolLoading;
 }): QaSuiteScenarioResult {
   const reportOnlyReason = runtimeParityReportOnlyReason({
     scenario: params.scenario,
     result: params.result,
+    codexToolLoading: params.codexToolLoading,
   });
   const driftStepStatus = isRuntimeParityPass(params.result)
     ? "pass"
@@ -424,6 +450,38 @@ function remapModelRefForForcedRuntime(params: {
   return `openai/${split.model}`;
 }
 
+function mergeQaGatewayConfigPatches(
+  ...patches: Array<Record<string, unknown> | undefined>
+): Record<string, unknown> | undefined {
+  let merged: Record<string, unknown> | undefined;
+  for (const patch of patches) {
+    if (!patch) {
+      continue;
+    }
+    merged = merged ? (applyQaMergePatch(merged, patch) as Record<string, unknown>) : patch;
+  }
+  return merged;
+}
+
+function buildQaCodexToolLoadingConfigPatch(
+  codexToolLoading: QaCodexToolLoading | undefined,
+): Record<string, unknown> | undefined {
+  if (!codexToolLoading) {
+    return undefined;
+  }
+  return {
+    plugins: {
+      entries: {
+        codex: {
+          config: {
+            codexDynamicToolsLoading: codexToolLoading,
+          },
+        },
+      },
+    },
+  };
+}
+
 function buildQaRuntimeEnvPatch(params: {
   providerMode: QaProviderMode;
   forcedRuntime?: RuntimeId;
@@ -462,6 +520,7 @@ export type QaSuiteSummaryJsonParams = {
   concurrency: number;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
 };
 
 /**
@@ -512,6 +571,7 @@ export function buildQaSuiteSummaryJson(params: QaSuiteSummaryJsonParams): QaSui
       scenarioIds:
         params.scenarioIds && params.scenarioIds.length > 0 ? [...params.scenarioIds] : null,
       runtimePair: params.runtimePair ?? null,
+      codexToolLoading: params.codexToolLoading ?? null,
     },
   };
 }
@@ -535,6 +595,7 @@ async function runQaRuntimeParitySuite(params: {
   progressEnabled: boolean;
   scenarioIds?: readonly string[];
   runtimePair: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
 }) {
   const ownsLab = !params.lab;
   const startLab = requireQaSuiteStartLab(params.startLab);
@@ -619,6 +680,7 @@ async function runQaRuntimeParitySuite(params: {
               scenarioIds: [scenario.id],
               concurrency: 1,
               enabledPluginIds: params.enabledPluginIds,
+              codexToolLoading: params.codexToolLoading,
               startLab,
               controlUiEnabled: scenarioRequiresControlUi(scenario),
               forcedRuntime: runtime,
@@ -664,6 +726,7 @@ async function runQaRuntimeParitySuite(params: {
           scenarioName: scenario.title,
           scenario,
           result: parity,
+          codexToolLoading: params.codexToolLoading,
         });
         liveScenarioOutcomes[index] = {
           id: scenario.id,
@@ -708,6 +771,7 @@ async function runQaRuntimeParitySuite(params: {
           ? params.selectedCatalogScenarios.map((scenario) => scenario.id)
           : undefined,
       runtimePair: params.runtimePair,
+      codexToolLoading: params.codexToolLoading,
     });
     lab.setLatestReport({
       outputPath: reportPath,
@@ -754,6 +818,7 @@ async function writeQaSuiteArtifacts(params: {
   concurrency: number;
   scenarioIds?: readonly string[];
   runtimePair?: [RuntimeId, RuntimeId];
+  codexToolLoading?: QaCodexToolLoading;
 }) {
   const report = renderQaMarkdownReport({
     title: "OpenClaw QA Scenario Suite",
@@ -848,13 +913,21 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
     ]),
   ];
   const scenarioGatewayConfigPatch = collectQaSuiteGatewayConfigPatch(selectedCatalogScenarios);
+  const qaCodexToolLoadingConfigPatch =
+    params?.forcedRuntime === "codex"
+      ? buildQaCodexToolLoadingConfigPatch(params.codexToolLoading)
+      : undefined;
+  const requestedGatewayConfigPatch = mergeQaGatewayConfigPatches(
+    params?.gatewayConfigPatch,
+    qaCodexToolLoadingConfigPatch,
+  );
   const gatewayConfigPatch =
-    params?.gatewayConfigPatch && scenarioGatewayConfigPatch
-      ? (applyQaMergePatch(scenarioGatewayConfigPatch, params.gatewayConfigPatch) as Record<
+    requestedGatewayConfigPatch && scenarioGatewayConfigPatch
+      ? (applyQaMergePatch(scenarioGatewayConfigPatch, requestedGatewayConfigPatch) as Record<
           string,
           unknown
         >)
-      : (params?.gatewayConfigPatch ?? scenarioGatewayConfigPatch);
+      : (requestedGatewayConfigPatch ?? scenarioGatewayConfigPatch);
   const gatewayRuntimeOptions = collectQaSuiteGatewayRuntimeOptions(selectedCatalogScenarios);
   const concurrency = normalizeQaSuiteConcurrency(
     params?.concurrency,
@@ -887,6 +960,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
       progressEnabled,
       scenarioIds: params.scenarioIds,
       runtimePair: params.runtimePair,
+      codexToolLoading: params.codexToolLoading,
     });
   }
 
@@ -1321,6 +1395,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
         params?.scenarioIds && params.scenarioIds.length > 0
           ? selectedCatalogScenarios.map((scenario) => scenario.id)
           : undefined,
+      codexToolLoading: params?.codexToolLoading,
     });
     const latestReport = {
       outputPath: reportPath,
@@ -1367,6 +1442,7 @@ export async function runQaSuite(params?: QaSuiteRunParams): Promise<QaSuiteResu
 }
 
 export const qaSuiteProgressTesting = {
+  buildQaCodexToolLoadingConfigPatch,
   buildQaRuntimeEnvPatch,
   parseQaSuiteBooleanEnv,
   remapModelRefForForcedRuntime,

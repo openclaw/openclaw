@@ -55,6 +55,16 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.runtimePair).toEqual(["pi", "codex"]);
   });
 
+  it("records Codex dynamic tool loading mode for runtime-axis suites", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      runtimePair: ["pi", "codex"],
+      codexToolLoading: "direct",
+    });
+
+    expect(json.run.codexToolLoading).toBe("direct");
+  });
+
   it("treats an empty scenarioIds array as unspecified (no filter)", () => {
     // A CLI path that omits --scenario passes an empty array to runQaSuite.
     // The summary must encode that as null so downstream parity/report

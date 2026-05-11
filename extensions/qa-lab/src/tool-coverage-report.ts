@@ -6,6 +6,7 @@ import type {
 } from "./runtime-parity.js";
 import {
   readScenarioRuntimeToolCoverageMetadata,
+  type QaRuntimeCapabilityLayer,
   type QaRuntimeToolBucket,
   type QaRuntimeToolExpectedLayer,
 } from "./runtime-tool-metadata.js";
@@ -32,6 +33,7 @@ export type QaToolCoverageRow = {
   tool: string;
   bucket: QaToolCoverageBucket;
   expectedLayer: QaRuntimeToolExpectedLayer;
+  capabilityLayer: QaRuntimeCapabilityLayer;
   required: boolean;
   fixtureCount: number;
   scenarios: string[];
@@ -186,6 +188,7 @@ function buildRow(params: {
     tool: params.group.tool,
     bucket: rowMetadata.bucket,
     expectedLayer: rowMetadata.expectedLayer,
+    capabilityLayer: rowMetadata.capabilityLayer,
     required: rowMetadata.required,
     fixtureCount: params.group.scenarios.length,
     scenarios: params.group.scenarios.map((scenario) => scenario.id),
@@ -259,13 +262,13 @@ export function renderQaToolCoverageMarkdownReport(report: QaToolCoverageReport)
     `- Failing tools: ${report.failingTools}`,
     `- Verdict: ${report.pass ? "pass" : "fail"}`,
     "",
-    "| Tool | Bucket | Expected layer | Required | Fixtures | Pi | Codex | Drift | Codex default impact | QA impact | Action | Tracking |",
-    "| --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
+    "| Tool | Bucket | Expected layer | Capability layer | Required | Fixtures | Pi | Codex | Drift | Codex default impact | QA impact | Action | Tracking |",
+    "| --- | --- | --- | --- | --- | ---: | --- | --- | --- | --- | --- | --- | --- |",
   ];
 
   for (const row of report.rows) {
     lines.push(
-      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
+      `| ${row.tool} | ${row.bucket} | ${row.expectedLayer} | ${row.capabilityLayer} | ${row.required ? "yes" : "no"} | ${row.fixtureCount} | ${row.pi} | ${row.codex} | ${row.drift} | ${row.codexDefaultImpact ?? ""} | ${row.qaImpact ?? ""} | ${row.action ?? ""} | ${row.tracking ?? ""} |`,
     );
   }
 

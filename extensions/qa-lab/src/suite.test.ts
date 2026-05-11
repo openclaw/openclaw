@@ -135,6 +135,21 @@ describe("qa suite", () => {
     ).toBe("openai/gpt-5.5");
   });
 
+  it("builds a private QA Codex direct dynamic tool loading config patch", () => {
+    expect(qaSuiteProgressTesting.buildQaCodexToolLoadingConfigPatch("direct")).toEqual({
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              codexDynamicToolsLoading: "direct",
+            },
+          },
+        },
+      },
+    });
+    expect(qaSuiteProgressTesting.buildQaCodexToolLoadingConfigPatch(undefined)).toBeUndefined();
+  });
+
   it("treats tracked fixture drift as report-only unless a runtime cell failed", () => {
     const scenario = readQaScenarioById("runtime-tool-fs-read");
     const result: RuntimeParityResult = {
@@ -182,6 +197,50 @@ describe("qa suite", () => {
             },
           },
         },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("hard-gates OpenClaw dynamic integration drift in direct loading mode", () => {
+    const scenario = readQaScenarioById("runtime-tool-web-search");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "tool-call-shape",
+      driftDetails: "Pi recorded web_search while Codex recorded none",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "web_search", argsHash: "a", resultHash: "r" }],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+        codexToolLoading: "searchable",
+      }),
+    ).toContain("searchable/deferred");
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+        codexToolLoading: "direct",
       }),
     ).toBeUndefined();
   });
