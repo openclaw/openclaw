@@ -13,6 +13,7 @@ type RepairReport = {
   rewrittenAssistantMessages?: number;
   droppedBlankUserMessages?: number;
   rewrittenUserMessages?: number;
+  droppedOrphanForkEntries?: number;
   backupPath?: string;
   reason?: string;
 };
@@ -166,6 +167,7 @@ function buildRepairSummaryParts(params: {
   rewrittenAssistantMessages: number;
   droppedBlankUserMessages: number;
   rewrittenUserMessages: number;
+  droppedOrphanForkEntries: number;
 }): string {
   const parts: string[] = [];
   if (params.droppedLines > 0) {
@@ -180,7 +182,184 @@ function buildRepairSummaryParts(params: {
   if (params.rewrittenUserMessages > 0) {
     parts.push(`rewrote ${params.rewrittenUserMessages} user message(s)`);
   }
+  if (params.droppedOrphanForkEntries > 0) {
+    parts.push(`dropped ${params.droppedOrphanForkEntries} orphan fork entry/entries`);
+  }
   return parts.length > 0 ? parts.join(", ") : "no changes";
+}
+
+type ParentLinkedEntry = {
+  id: string;
+  parentId: string | null;
+  type: string | null;
+};
+
+/**
+ * Compaction-retry losers always carry the canonical `type: "compaction"`
+ * discriminator (the same one `manual-compaction-boundary.ts` and
+ * `pi-embedded-runner-extraparams.ts` write at the source site). Restricting
+ * the orphan-fork repair to entries with this discriminator is what keeps a
+ * legitimate non-compaction leaf branch — a normal message that happens to
+ * be a tree leaf next to a continued sibling — out of the drop set.
+ */
+const COMPACTION_RETRY_LOSER_TYPE = "compaction";
+
+function readParentLinkedEntry(entry: unknown): ParentLinkedEntry | null {
+  if (!entry || typeof entry !== "object") {
+    return null;
+  }
+  const record = entry as { type?: unknown; id?: unknown; parentId?: unknown };
+  if (record.type === "session") {
+    return null;
+  }
+  if (typeof record.id !== "string" || record.id.length === 0) {
+    return null;
+  }
+  if (!Object.hasOwn(record, "parentId")) {
+    return null;
+  }
+  const parentId = record.parentId;
+  const type = typeof record.type === "string" && record.type.length > 0 ? record.type : null;
+  if (parentId === null) {
+    return { id: record.id, parentId: null, type };
+  }
+  if (typeof parentId !== "string" || parentId.length === 0) {
+    return null;
+  }
+  return { id: record.id, parentId, type };
+}
+
+/**
+ * Detect parentId forks created by the compaction retry path: same parentId,
+ * one `type: "compaction"` event becomes a dead-end with no descendants while
+ * another `type: "compaction"` event is adopted as the continuation. Drop the
+ * dead-end loser(s) so downstream causal-order walkers don't break at the
+ * fork. (#48810)
+ *
+ * Conservative rules — only drop an entry when ALL of the following hold:
+ * 1. the entry is `type: "compaction"`, AND
+ * 2. it shares parentId with at least one other compaction sibling, AND
+ * 3. the entry itself has zero descendants in the parent-linked graph, AND
+ * 4. exactly one of its compaction siblings under the same parentId has
+ *    descendants (the retry winner).
+ *
+ * Generic non-compaction entries are NEVER dropped here — a valid side
+ * branch can naturally be a leaf next to a continued branch (per
+ * clawsweeper-bot review on #79635), and only the compaction-retry path is
+ * known to produce the duplicate-sibling-with-shared-parentId shape this
+ * repair targets. If multiple compaction siblings have descendants, treat
+ * the group as a deliberate fork and keep every entry. If no compaction
+ * sibling has descendants, also keep every entry; we can't safely pick.
+ */
+function detectAndDropOrphanForkEntries(entries: unknown[]): {
+  entries: unknown[];
+  droppedCount: number;
+} {
+  if (entries.length === 0) {
+    return { entries, droppedCount: 0 };
+  }
+  const parentLinked = new Map<number, ParentLinkedEntry>();
+  for (let i = 0; i < entries.length; i += 1) {
+    const linked = readParentLinkedEntry(entries[i]);
+    if (linked) {
+      parentLinked.set(i, linked);
+    }
+  }
+  if (parentLinked.size === 0) {
+    return { entries, droppedCount: 0 };
+  }
+
+  const childrenByParentId = new Map<string, number[]>();
+  const idToIndex = new Map<string, number>();
+  for (const [index, linked] of parentLinked) {
+    if (linked.parentId !== null) {
+      const bucket = childrenByParentId.get(linked.parentId) ?? [];
+      bucket.push(index);
+      childrenByParentId.set(linked.parentId, bucket);
+    }
+    idToIndex.set(linked.id, index);
+  }
+
+  const subtreeSize = new Map<string, number>();
+  for (const id of idToIndex.keys()) {
+    subtreeSize.set(id, 0);
+  }
+  const seen = new Set<string>();
+  function computeSubtreeSize(id: string): number {
+    const cached = subtreeSize.get(id);
+    if (cached === undefined || seen.has(id)) {
+      return cached ?? 0;
+    }
+    seen.add(id);
+    const kids = childrenByParentId.get(id) ?? [];
+    let total = 0;
+    for (const childIndex of kids) {
+      const child = parentLinked.get(childIndex);
+      if (!child) {
+        continue;
+      }
+      total += 1 + computeSubtreeSize(child.id);
+    }
+    subtreeSize.set(id, total);
+    return total;
+  }
+  for (const id of idToIndex.keys()) {
+    computeSubtreeSize(id);
+  }
+
+  const indicesToDrop = new Set<number>();
+  for (const [, siblingIndices] of childrenByParentId) {
+    if (siblingIndices.length < 2) {
+      continue;
+    }
+
+    // Collect compaction-typed siblings only — a generic leaf next to a
+    // continued generic branch is a legitimate side branch and must not be
+    // touched. The drop is restricted to compaction-vs-compaction same-
+    // parentId forks, which is the exact shape #48810 reports.
+    const compactionSiblings: number[] = [];
+    let compactionWinners = 0;
+    for (const idx of siblingIndices) {
+      const linked = parentLinked.get(idx);
+      if (!linked || linked.type !== COMPACTION_RETRY_LOSER_TYPE) {
+        continue;
+      }
+      compactionSiblings.push(idx);
+      if ((subtreeSize.get(linked.id) ?? 0) > 0) {
+        compactionWinners += 1;
+      }
+    }
+
+    if (compactionSiblings.length < 2 || compactionWinners !== 1) {
+      // Need at least 2 compaction siblings AND exactly one with descendants
+      // to identify the loser unambiguously. Anything else is either a
+      // single compaction event (no fork at all), a deliberate compaction
+      // fan-out (multiple winners), or a not-yet-resolved candidate group
+      // (no winner). All are kept untouched.
+      continue;
+    }
+
+    for (const idx of compactionSiblings) {
+      const linked = parentLinked.get(idx);
+      if (!linked) {
+        continue;
+      }
+      if ((subtreeSize.get(linked.id) ?? 0) === 0) {
+        indicesToDrop.add(idx);
+      }
+    }
+  }
+
+  if (indicesToDrop.size === 0) {
+    return { entries, droppedCount: 0 };
+  }
+  const next: unknown[] = [];
+  for (let i = 0; i < entries.length; i += 1) {
+    if (!indicesToDrop.has(i)) {
+      next.push(entries[i]);
+    }
+  }
+  return { entries: next, droppedCount: indicesToDrop.size };
 }
 
 export async function repairSessionFileIfNeeded(params: {
@@ -207,11 +386,12 @@ export async function repairSessionFileIfNeeded(params: {
   }
 
   const lines = content.split(/\r?\n/);
-  const entries: unknown[] = [];
+  let entries: unknown[] = [];
   let droppedLines = 0;
   let rewrittenAssistantMessages = 0;
   let droppedBlankUserMessages = 0;
   let rewrittenUserMessages = 0;
+  let droppedOrphanForkEntries = 0;
 
   for (const line of lines) {
     if (!line.trim()) {
@@ -268,11 +448,18 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
+  const forkRepair = detectAndDropOrphanForkEntries(entries);
+  if (forkRepair.droppedCount > 0) {
+    entries = forkRepair.entries;
+    droppedOrphanForkEntries = forkRepair.droppedCount;
+  }
+
   if (
     droppedLines === 0 &&
     rewrittenAssistantMessages === 0 &&
     droppedBlankUserMessages === 0 &&
-    rewrittenUserMessages === 0
+    rewrittenUserMessages === 0 &&
+    droppedOrphanForkEntries === 0
   ) {
     return { repaired: false, droppedLines: 0 };
   }
@@ -298,6 +485,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedOrphanForkEntries,
       reason: `repair failed: ${err instanceof Error ? err.message : "unknown error"}`,
     };
   }
@@ -308,6 +496,7 @@ export async function repairSessionFileIfNeeded(params: {
       rewrittenAssistantMessages,
       droppedBlankUserMessages,
       rewrittenUserMessages,
+      droppedOrphanForkEntries,
     })} (${path.basename(sessionFile)})`,
   );
   return {
@@ -316,6 +505,7 @@ export async function repairSessionFileIfNeeded(params: {
     rewrittenAssistantMessages,
     droppedBlankUserMessages,
     rewrittenUserMessages,
+    droppedOrphanForkEntries,
     backupPath,
   };
 }
