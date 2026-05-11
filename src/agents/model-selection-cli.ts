@@ -3,34 +3,62 @@ import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { resolvePluginSetupCliBackendRuntime } from "../plugins/setup-registry.runtime.js";
 import { normalizeProviderId } from "./model-selection-normalize.js";
 
-// Per-config memoization for isCliProvider lookups. The third branch below
-// (`resolvePluginSetupCliBackendRuntime`) executes the owning plugin's setup
-// register callback to discover declared CLI backends; that work scales the
-// `openclaw status` / `openclaw doctor` session-summary loop linearly with
-// session count and dominates command runtime past ~30 sessions (the
-// `buildSessionRows` hot path in `commands/status.summary.ts` resolves the
-// runtime label for every row).
+// `isCliProvider` checks three sources in order:
+//   1. `cfg.agents.defaults.cliBackends` — declared on the live config.
+//   2. `resolveRuntimeCliBackends()`     — the *active* plugin runtime registry.
+//   3. `resolvePluginSetupCliBackendRuntime` — setup-manifest lookup, which
+//      executes the owning plugin's `setup` register callback on every call
+//      to discover declared CLI backends. ~29 ms / call on a clean install
+//      with the bundled plugin set.
 //
-// The result of `isCliProvider(provider, cfg)` depends only on the normalized
-// provider id and the live config object. Config objects are passed by
-// reference and treated as immutable for the lifetime of a command, so a
-// WeakMap keyed by the config and a Map keyed by the normalized provider id
-// gives correct memoization without retaining configs that the runtime has
-// already released. A null/undefined config is keyed separately on a sentinel
-// because WeakMap requires object keys.
+// `openclaw status` / `openclaw doctor` resolve a runtime label for every
+// session row in `commands/status.summary.ts`'s `buildSessionRows`, which
+// turns the third branch into an O(N × 29 ms) cost and pushes the command
+// past `--timeout` once the session store grows past ~30 entries.
+//
+// Only the third branch is memoizable: (1) reads the live config directly
+// and is microsecond-cheap; (2) reads the active runtime plugin registry
+// which can change as plugins finish loading mid-process — caching its
+// answer per `(cfg, provider)` would lock in a stale `false` once a CLI
+// backend becomes available later. (3) depends on the on-disk setup
+// manifest set, which is stable for the lifetime of a process unless the
+// caller installs/updates plugins. New plugin installs typically reload
+// the active config, producing a new config reference; the `WeakMap` key
+// boundary naturally invalidates the cache then.
+//
+// A null/undefined `cfg` is keyed on a frozen sentinel because `WeakMap`
+// requires object keys.
 const NULL_CONFIG_KEY: object = Object.freeze({});
 
 function configCacheKey(cfg: OpenClawConfig | undefined): object {
   return cfg ?? NULL_CONFIG_KEY;
 }
 
-const isCliProviderCache = new WeakMap<object, Map<string, boolean>>();
+const setupCliBackendCache = new WeakMap<object, Map<string, boolean>>();
 
 export function __resetIsCliProviderCacheForTest(): void {
-  isCliProviderCache.delete(NULL_CONFIG_KEY);
+  setupCliBackendCache.delete(NULL_CONFIG_KEY);
 }
 
-function computeIsCliProvider(normalized: string, cfg: OpenClawConfig | undefined): boolean {
+function isMemoizedSetupCliBackend(normalized: string, cfg: OpenClawConfig | undefined): boolean {
+  const key = configCacheKey(cfg);
+  let perConfig = setupCliBackendCache.get(key);
+  if (perConfig) {
+    const cached = perConfig.get(normalized);
+    if (cached !== undefined) {
+      return cached;
+    }
+  } else {
+    perConfig = new Map();
+    setupCliBackendCache.set(key, perConfig);
+  }
+  const result = Boolean(resolvePluginSetupCliBackendRuntime({ backend: normalized, config: cfg }));
+  perConfig.set(normalized, result);
+  return result;
+}
+
+export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
+  const normalized = normalizeProviderId(provider);
   const backends = cfg?.agents?.defaults?.cliBackends ?? {};
   if (Object.keys(backends).some((key) => normalizeProviderId(key) === normalized)) {
     return true;
@@ -39,26 +67,5 @@ function computeIsCliProvider(normalized: string, cfg: OpenClawConfig | undefine
   if (cliBackends.some((backend) => normalizeProviderId(backend.id) === normalized)) {
     return true;
   }
-  if (resolvePluginSetupCliBackendRuntime({ backend: normalized, config: cfg })) {
-    return true;
-  }
-  return false;
-}
-
-export function isCliProvider(provider: string, cfg?: OpenClawConfig): boolean {
-  const normalized = normalizeProviderId(provider);
-  const key = configCacheKey(cfg);
-  let perConfig = isCliProviderCache.get(key);
-  if (perConfig) {
-    const cached = perConfig.get(normalized);
-    if (cached !== undefined) {
-      return cached;
-    }
-  } else {
-    perConfig = new Map();
-    isCliProviderCache.set(key, perConfig);
-  }
-  const result = computeIsCliProvider(normalized, cfg);
-  perConfig.set(normalized, result);
-  return result;
+  return isMemoizedSetupCliBackend(normalized, cfg);
 }

@@ -3,8 +3,15 @@ import type { OpenClawConfig } from "../config/types.js";
 import { __testing as setupRegistryRuntimeTesting } from "../plugins/setup-registry.runtime.js";
 import { isCliProvider } from "./model-selection-cli.js";
 
+const resolveRuntimeCliBackendsMock = vi.hoisted(() => vi.fn(() => []));
+vi.mock("../plugins/cli-backends.runtime.js", () => ({
+  resolveRuntimeCliBackends: resolveRuntimeCliBackendsMock,
+}));
+
 describe("isCliProvider", () => {
   beforeEach(() => {
+    resolveRuntimeCliBackendsMock.mockReset();
+    resolveRuntimeCliBackendsMock.mockReturnValue([]);
     setupRegistryRuntimeTesting.resetRuntimeState();
     setupRegistryRuntimeTesting.setRuntimeModuleForTest({
       resolvePluginSetupCliBackend: ({ backend }) =>
@@ -33,7 +40,7 @@ describe("isCliProvider", () => {
     expect(isCliProvider("example-cli", {} as OpenClawConfig)).toBe(false);
   });
 
-  it("memoizes lookups by (config reference, normalized provider id)", () => {
+  it("memoizes the setup-manifest branch by (config reference, normalized provider id)", () => {
     const resolveSpy = vi.fn(({ backend }: { backend: string }) =>
       backend === "claude-cli"
         ? {
@@ -67,5 +74,58 @@ describe("isCliProvider", () => {
     const cfgB = {} as OpenClawConfig;
     expect(isCliProvider("claude-cli", cfgB)).toBe(true);
     expect(resolveSpy.mock.calls.length).toBeGreaterThan(firstCalls);
+  });
+
+  it("re-reads the active runtime registry on every call so late-loaded backends are picked up", () => {
+    // Codex review feedback (openclaw/openclaw#80717) flagged that caching the
+    // whole `isCliProvider` result would lock in a stale `false` once a
+    // runtime plugin registers a CLI backend mid-process. The memoization is
+    // narrowed to the setup-manifest branch; the runtime-registry branch
+    // (`resolveRuntimeCliBackends`) must be re-evaluated on every call.
+    setupRegistryRuntimeTesting.setRuntimeModuleForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    const cfg = {} as OpenClawConfig;
+
+    // First call: runtime registry empty, setup lookup misses. Result: false.
+    resolveRuntimeCliBackendsMock.mockReturnValue([]);
+    expect(isCliProvider("claude-cli", cfg)).toBe(false);
+    const callsAfterFirst = resolveRuntimeCliBackendsMock.mock.calls.length;
+    expect(callsAfterFirst).toBeGreaterThan(0);
+
+    // Runtime registry now exposes the backend (e.g. a plugin finished
+    // loading). The next call must observe the new state, not a cached
+    // `false`, even though `(cfg, "claude-cli")` is the same cache key.
+    resolveRuntimeCliBackendsMock.mockReturnValue([
+      {
+        id: "claude-cli",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ]);
+    expect(isCliProvider("claude-cli", cfg)).toBe(true);
+    expect(resolveRuntimeCliBackendsMock.mock.calls.length).toBeGreaterThan(callsAfterFirst);
+  });
+
+  it("re-reads config-declared backends on every call so config mutations are picked up", () => {
+    setupRegistryRuntimeTesting.setRuntimeModuleForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { cliBackends: {} } },
+    } as unknown as OpenClawConfig;
+
+    // Branch 1 currently empty, branches 2+3 also miss → false.
+    expect(isCliProvider("claude-cli", cfg)).toBe(false);
+
+    // Config-declared backends mutate (e.g. user edits live config in place).
+    // Even though the cache holds a `false` for the setup-manifest branch,
+    // branch 1 must still flip the answer to `true`.
+    (
+      cfg as { agents: { defaults: { cliBackends: Record<string, unknown> } } }
+    ).agents.defaults.cliBackends = {
+      "claude-cli": {},
+    };
+    expect(isCliProvider("claude-cli", cfg)).toBe(true);
   });
 });
