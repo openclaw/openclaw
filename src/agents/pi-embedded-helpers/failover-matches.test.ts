@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isAuthErrorMessage,
+  isAuthPermanentErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isRateLimitErrorMessage,
@@ -89,6 +90,55 @@ describe("Z.ai vendor error codes (#48988)", () => {
 
     it("auth still classified correctly", () => {
       expect(isAuthErrorMessage("invalid api key provided")).toBe(true);
+    });
+  });
+
+  describe("refresh_token_reused / OAuth degrade patterns", () => {
+    const testCases: { label: string; message: string; expectAuthPermanent: boolean }[] = [
+      {
+        label: "refresh_token_reused code",
+        message: "refresh_token_reused",
+        expectAuthPermanent: true,
+      },
+      {
+        label: "refresh token has already been used",
+        message: "refresh token has already been used",
+        expectAuthPermanent: true,
+      },
+      { label: "sign in again", message: "sign in again", expectAuthPermanent: true },
+      {
+        label: "signing in again",
+        message: "signing in again",
+        expectAuthPermanent: true,
+      },
+      {
+        label: "invalid refresh token",
+        message: "invalid refresh token",
+        expectAuthPermanent: true,
+      },
+      {
+        label: "expired or revoked refresh token",
+        message: "Your refresh token has expired or been revoked",
+        expectAuthPermanent: true,
+      },
+      {
+        label: "would you like to sign in again",
+        message: "Would you like to sign in again?",
+        expectAuthPermanent: true,
+      },
+    ];
+
+    for (const { label, message, expectAuthPermanent } of testCases) {
+      it(`classifies ${label} as auth_permanent=${expectAuthPermanent}`, () => {
+        if (expectAuthPermanent) {
+          expect(isAuthPermanentErrorMessage(message)).toBe(true);
+        }
+      });
+    }
+
+    it("does NOT misclassify invalid_api_key as auth_permanent (stays auth)", () => {
+      expect(isAuthPermanentErrorMessage("invalid api key")).toBe(false);
+      expect(isAuthErrorMessage("invalid api key")).toBe(true);
     });
   });
 });

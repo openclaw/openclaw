@@ -11,6 +11,10 @@ const HIGH_CONFIDENCE_AUTH_PERMANENT_PATTERNS = [
   "key has been revoked",
   "account has been deactivated",
   "not allowed for this organization",
+  /refresh.to?ken.reused|refresh token has already been used/i,
+  /sign(?:ing)? in again|please.*sign.*in/i,
+  /invalid.*refresh.to?ken/i,
+  /refresh.*(?:expired|revoked)|(?:expired|revoked).*refresh/i,
 ] as const satisfies readonly ErrorPattern[];
 
 const AMBIGUOUS_AUTH_ERROR_PATTERNS = [
