@@ -1,19 +1,34 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
+  resolveAgentDir,
+  resolveAttemptSpawnWorkspaceDir,
+  resolveModelAuthMode,
+  resolveSandboxContext,
+  resolveSessionAgentIds,
+  supportsModelTools,
+  type AnyAgentTool,
   type AgentHarnessSideQuestionParams,
   type AgentHarnessSideQuestionResult,
+  type EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
 import { refreshCodexAppServerAuthTokens } from "./auth-bridge.js";
-import { type CodexAppServerClient } from "./client.js";
+import { isCodexAppServerApprovalRequest, type CodexAppServerClient } from "./client.js";
 import { readCodexPluginConfig, resolveCodexAppServerRuntimeOptions } from "./config.js";
+import { filterCodexDynamicTools } from "./dynamic-tool-profile.js";
+import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
+import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import {
   assertCodexThreadForkResponse,
   assertCodexTurnStartResponse,
+  readCodexDynamicToolCallParams,
   readCodexTurnCompletedNotification,
 } from "./protocol-validators.js";
 import {
   isJsonObject,
+  type CodexDynamicToolCallParams,
+  type CodexDynamicToolCallResponse,
   type CodexServerNotification,
   type CodexThreadForkParams,
   type CodexTurn,
@@ -29,7 +44,11 @@ import {
   resolveCodexAppServerModelProvider,
   resolveReasoningEffort,
 } from "./thread-lifecycle.js";
+import { filterToolsForVisionInputs } from "./vision-tools.js";
 
+const CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
+const CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
+const CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
 const SIDE_QUESTION_COMPLETION_TIMEOUT_MS = 600_000;
 const SIDE_BOUNDARY_PROMPT = `Side conversation boundary.
 
@@ -84,21 +103,86 @@ export async function runCodexAppServerSideQuestion(
   const removeNotificationHandler = client.addNotificationHandler((notification) =>
     collector.handleNotification(notification),
   );
-  const removeRequestHandler = client.addRequestHandler(async (request) => {
-    if (request.method !== "account/chatgptAuthTokens/refresh") {
-      return undefined;
-    }
-    return (await refreshCodexAppServerAuthTokens({
-      agentDir: params.agentDir,
-      authProfileId,
-      config: params.cfg,
-    })) as unknown as JsonValue;
-  });
-
+  const runAbortController = new AbortController();
+  const abortFromUpstream = () =>
+    runAbortController.abort(params.opts?.abortSignal?.reason ?? "codex_side_question_abort");
+  if (params.opts?.abortSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    params.opts?.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+  }
   let childThreadId: string | undefined;
   let turnId: string | undefined;
+  let removeRequestHandler: (() => void) | undefined;
+
   try {
     const cwd = binding.cwd || params.workspaceDir || process.cwd();
+    const sideRunParams = buildSideRunAttemptParams(params, { cwd, authProfileId });
+    const { sessionAgentId } = resolveSessionAgentIds({
+      sessionKey: params.sessionKey,
+      config: params.cfg,
+      agentId: params.agentId,
+    });
+    const toolBridge = await createCodexSideToolBridge({
+      params,
+      cwd,
+      pluginConfig,
+      sessionAgentId,
+      signal: runAbortController.signal,
+    });
+    removeRequestHandler = client.addRequestHandler(async (request) => {
+      if (request.method === "account/chatgptAuthTokens/refresh") {
+        return (await refreshCodexAppServerAuthTokens({
+          agentDir: params.agentDir,
+          authProfileId,
+          config: params.cfg,
+        })) as unknown as JsonValue;
+      }
+      if (!childThreadId || !turnId) {
+        return undefined;
+      }
+      if (request.method === "mcpServer/elicitation/request") {
+        return handleCodexAppServerElicitationRequest({
+          requestParams: request.params,
+          paramsForRun: sideRunParams,
+          threadId: childThreadId,
+          turnId,
+          pluginAppPolicyContext: binding.pluginAppPolicyContext,
+          signal: runAbortController.signal,
+        });
+      }
+      if (request.method === "item/tool/requestUserInput") {
+        return emptySideUserInputResponse();
+      }
+      if (isCodexAppServerApprovalRequest(request.method)) {
+        return handleCodexAppServerApprovalRequest({
+          method: request.method,
+          requestParams: request.params,
+          paramsForRun: sideRunParams,
+          threadId: childThreadId,
+          turnId,
+          signal: runAbortController.signal,
+        });
+      }
+      if (request.method !== "item/tool/call") {
+        return undefined;
+      }
+      const call = readCodexDynamicToolCallParams(request.params);
+      if (!call || call.threadId !== childThreadId || call.turnId !== turnId) {
+        return undefined;
+      }
+      const timeoutMs = resolveSideDynamicToolCallTimeoutMs({
+        call,
+        config: params.cfg,
+      });
+      return (await handleSideDynamicToolCallWithTimeout({
+        call,
+        toolBridge,
+        signal: runAbortController.signal,
+        timeoutMs,
+      })) as unknown as JsonValue;
+    });
+
     const approvalPolicy = binding.approvalPolicy ?? appServer.approvalPolicy;
     const sandbox = binding.sandbox ?? appServer.sandbox;
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
@@ -124,7 +208,6 @@ export async function runCodexAppServerSideQuestion(
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
           ephemeral: true,
           threadSource: "user",
-          persistExtendedHistory: false,
         },
         { timeoutMs: appServer.requestTimeoutMs, signal: params.opts?.abortSignal },
       ),
@@ -179,8 +262,12 @@ export async function runCodexAppServerSideQuestion(
     }
     return { text: trimmed };
   } finally {
+    params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    if (!runAbortController.signal.aborted) {
+      runAbortController.abort("codex_side_question_finished");
+    }
     removeNotificationHandler();
-    removeRequestHandler();
+    removeRequestHandler?.();
     await cleanupCodexSideThread(client, {
       threadId: childThreadId,
       turnId,
@@ -189,6 +276,235 @@ export async function runCodexAppServerSideQuestion(
     });
   }
 }
+
+function buildSideRunAttemptParams(
+  params: AgentHarnessSideQuestionParams,
+  options: { cwd: string; authProfileId?: string },
+): EmbeddedRunAttemptParams {
+  const sideParams = {
+    params,
+    config: params.cfg,
+    agentDir: params.agentDir,
+    provider: params.provider,
+    modelId: params.model,
+    model: params.runtimeModel ?? ({ id: params.model, provider: params.provider } as never),
+    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+    workspaceDir: options.cwd,
+    authProfileId: options.authProfileId,
+    authProfileIdSource: params.authProfileIdSource,
+    thinkLevel: params.resolvedThinkLevel ?? "off",
+    resolvedReasoningLevel: params.resolvedReasoningLevel,
+    authStorage: undefined as never,
+    authProfileStore: undefined as never,
+    modelRegistry: undefined as never,
+    runId: params.opts?.runId ?? `codex-btw:${params.sessionId}`,
+    abortSignal: params.opts?.abortSignal,
+    onAgentEvent: (event: { stream: string; data: Record<string, unknown> }) => {
+      if (event.stream === "approval") {
+        void params.opts?.onApprovalEvent?.(event.data as never);
+      }
+    },
+    onBlockReply: params.opts?.onBlockReply,
+    onPartialReply: params.opts?.onPartialReply,
+  };
+  return sideParams as unknown as EmbeddedRunAttemptParams;
+}
+
+async function createCodexSideToolBridge(input: {
+  params: AgentHarnessSideQuestionParams;
+  cwd: string;
+  pluginConfig: ReturnType<typeof readCodexPluginConfig>;
+  sessionAgentId: string;
+  signal: AbortSignal;
+}): Promise<CodexDynamicToolBridge> {
+  const runtimeModel =
+    input.params.runtimeModel ??
+    ({ id: input.params.model, provider: input.params.provider } as never);
+  let tools: AnyAgentTool[] = [];
+  if (supportsModelTools(runtimeModel)) {
+    const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
+      .createOpenClawCodingTools;
+    const sandboxSessionKey =
+      input.params.sessionKey?.trim() || input.params.sessionId || input.sessionAgentId;
+    const sandbox = await resolveSandboxContext({
+      config: input.params.cfg,
+      sessionKey: sandboxSessionKey,
+      workspaceDir: input.cwd,
+    });
+    const allTools = createOpenClawCodingTools({
+      agentId: input.sessionAgentId,
+      sessionKey: sandboxSessionKey,
+      runSessionKey:
+        input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey
+          ? input.params.sessionKey
+          : undefined,
+      sessionId: input.params.sessionId,
+      runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+      agentDir:
+        input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
+      workspaceDir: input.cwd,
+      spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
+        sandbox,
+        resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
+      }),
+      config: input.params.cfg,
+      abortSignal: input.signal,
+      modelProvider: runtimeModel.provider,
+      modelId: input.params.model,
+      modelCompat:
+        runtimeModel.compat && typeof runtimeModel.compat === "object"
+          ? (runtimeModel.compat as never)
+          : undefined,
+      modelApi: runtimeModel.api,
+      modelContextWindowTokens: runtimeModel.contextWindow,
+      modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
+        workspaceDir: input.cwd,
+      }),
+      sandbox,
+      modelHasVision: runtimeModel.input?.includes("image") ?? false,
+      requireExplicitMessageTarget: true,
+    });
+    const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
+    tools = filterToolsForVisionInputs(codexFilteredTools, {
+      modelHasVision: runtimeModel.input?.includes("image") ?? false,
+      hasInboundImages: false,
+    });
+  }
+  return createCodexDynamicToolBridge({
+    tools,
+    signal: input.signal,
+    loading: input.pluginConfig.codexDynamicToolsLoading ?? "searchable",
+    hookContext: {
+      agentId: input.sessionAgentId,
+      config: input.params.cfg,
+      sessionId: input.params.sessionId,
+      sessionKey: input.params.sessionKey,
+      runId: input.params.opts?.runId ?? `codex-btw:${input.params.sessionId}`,
+    },
+  });
+}
+
+async function handleSideDynamicToolCallWithTimeout(params: {
+  call: CodexDynamicToolCallParams;
+  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
+  signal: AbortSignal;
+  timeoutMs: number;
+}): Promise<CodexDynamicToolCallResponse> {
+  if (params.signal.aborted) {
+    return failedSideDynamicToolResponse("OpenClaw dynamic tool call aborted before execution.");
+  }
+
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
+  const abortFromRun = () => {
+    const message = "OpenClaw dynamic tool call aborted.";
+    controller.abort(params.signal.reason ?? new Error(message));
+    resolveAbort?.(failedSideDynamicToolResponse(message));
+  };
+  const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+    resolveAbort = resolve;
+  });
+  const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
+    const timeoutMs = clampSideDynamicToolTimeoutMs(params.timeoutMs);
+    timeout = setTimeout(() => {
+      controller.abort(new Error(`OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`));
+      resolve(
+        failedSideDynamicToolResponse(`OpenClaw dynamic tool call timed out after ${timeoutMs}ms.`),
+      );
+    }, timeoutMs);
+    timeout.unref?.();
+  });
+
+  try {
+    params.signal.addEventListener("abort", abortFromRun, { once: true });
+    if (params.signal.aborted) {
+      abortFromRun();
+    }
+    return await Promise.race([
+      params.toolBridge.handleToolCall(params.call, { signal: controller.signal }),
+      abortPromise,
+      timeoutPromise,
+    ]);
+  } catch (error) {
+    return failedSideDynamicToolResponse(error instanceof Error ? error.message : String(error));
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+    params.signal.removeEventListener("abort", abortFromRun);
+    resolveAbort = undefined;
+    if (!controller.signal.aborted) {
+      controller.abort(new Error("OpenClaw dynamic tool call finished."));
+    }
+  }
+}
+
+function failedSideDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
+  return {
+    success: false,
+    contentItems: [{ type: "inputText", text: message }],
+  };
+}
+
+function emptySideUserInputResponse(): JsonObject {
+  return { answers: {} };
+}
+
+function resolveSideDynamicToolCallTimeoutMs(params: {
+  call: CodexDynamicToolCallParams;
+  config: AgentHarnessSideQuestionParams["cfg"];
+}): number {
+  const configured =
+    readSideDynamicToolCallTimeoutMs(params.call.arguments) ??
+    (params.call.tool === "image_generate"
+      ? readSideImageGenerationModelTimeoutMs(params.config)
+      : undefined) ??
+    (params.call.tool === "image"
+      ? (readSideTimeoutSecondsAsMs(params.config?.tools?.media?.image?.timeoutSeconds) ??
+        CODEX_SIDE_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS)
+      : undefined);
+  return clampSideDynamicToolTimeoutMs(configured ?? CODEX_SIDE_DYNAMIC_TOOL_TIMEOUT_MS);
+}
+
+function readSideDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
+  if (!isJsonObject(value)) {
+    return undefined;
+  }
+  return readSidePositiveFiniteTimeoutMs(value.timeoutMs);
+}
+
+function readSideImageGenerationModelTimeoutMs(
+  config: AgentHarnessSideQuestionParams["cfg"],
+): number | undefined {
+  const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
+  if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
+    return undefined;
+  }
+  return readSidePositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
+}
+
+function readSideTimeoutSecondsAsMs(value: unknown): number | undefined {
+  const seconds = readSidePositiveFiniteTimeoutMs(value);
+  return seconds === undefined ? undefined : seconds * 1000;
+}
+
+function readSidePositiveFiniteTimeoutMs(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function clampSideDynamicToolTimeoutMs(timeoutMs: number): number {
+  return Math.max(1, Math.min(CODEX_SIDE_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
+}
+
+export const __testing = {
+  resolveSideDynamicToolCallTimeoutMs,
+} as const;
 
 async function forkCodexSideThread(
   client: CodexAppServerClient,
