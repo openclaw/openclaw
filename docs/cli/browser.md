@@ -276,7 +276,7 @@ Current existing-session limits:
 - `hover`, `scrollintoview`, `drag`, `select`, `fill`, and `evaluate` reject
   per-call timeout overrides
 - `select` supports one value only
-- `wait --load networkidle` is not supported
+- `wait --load networkidle` is not supported (for existing-session profiles only — the managed `openclaw` profile supports it)
 - file uploads require `--ref` / `--input-ref`, do not support CSS
   `--element`, and currently support one file at a time
 - dialog hooks do not support `--timeout`
