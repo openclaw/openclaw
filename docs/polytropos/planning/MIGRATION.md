@@ -1,14 +1,19 @@
 # Migration (Cutover to Polytropos core)
 
-This document covers the **one-time** migration to run the gateway from the Polytropos release tree:
+This document covers the **one-time** migration to enable the Polytropos release workflow on the host.
 
-- `~/polytropos/releases/current/index.js`
+After this migration, core updates/releases are performed by running the release script, which:
 
-After this migration, core updates/releases are performed by running the release script and flipping the `current/previous` symlinks (see `docs/polytropos/CORE-RELEASES.md`).
+- produces a `.tgz` via `npm pack`
+- updates `current.tgz` / `previous.tgz`
+- installs `current.tgz` globally
+- restarts the gateway
+
+See: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 
 ## Current state (reference)
 
-On this host, the gateway service currently runs the installed npm package:
+On this host, the gateway service runs the installed npm package:
 
 - `ExecStart=/usr/bin/node /home/ec2-user/.npm-global/lib/node_modules/openclaw/dist/index.js gateway --port 18789`
 
@@ -18,79 +23,57 @@ Service file:
 
 ## Target state
 
-Update `ExecStart` to:
+No change to `ExecStart` is required for the tarball-based release workflow.
 
-- `ExecStart=/usr/bin/node /home/ec2-user/polytropos/releases/current/index.js gateway --port 18789`
+The service continues to run the globally installed `openclaw` package; releases work by installing `current.tgz` into that global prefix.
 
 ## Migration setup (part of the task)
 
-Before changing `ExecStart`, complete the release tree setup:
+Set up the tarball release tree:
 
-1) Create `~/polytropos/releases/` and ensure these entries exist:
-   - `current` (symlink)
-   - `previous` (symlink)
-   - `dev` (symlink)
+1. Create `~/polytropos/releases/`.
 
-2) Ensure `current` points to a runnable release directory containing `index.js`.
+2. Ensure these symlinks exist:
 
-3) Ensure `previous` points to a known-good runnable release directory (rollback target).
+- `~/polytropos/releases/current.tgz`
+- `~/polytropos/releases/previous.tgz`
 
-4) Verify the entrypoint exists:
+3. Place at least one release tarball in the directory (we can start by creating a first fork release once tags are in place).
 
-   - `test -f ~/polytropos/releases/current/index.js`
+4. Ensure the global npm prefix is known (this host uses `~/.npm-global`).
 
-For the canonical definition of a release directory and symlink semantics, see:
+See: [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
 
-- [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
+## Procedure (one-time migration)
 
-## Procedure (one-time cutover)
-
-0) Snapshot current unit contents for rollback:
-
+1. Snapshot current unit contents (for reference/rollback):
    - `systemctl --user cat openclaw-gateway.service > ~/polytropos/gateway.service.before.txt`
 
-1) Stop gateway (brief downtime):
-
-   - `systemctl --user stop openclaw-gateway`
-
-2) Edit service file in place (single change to `ExecStart`).
-
-   Change from:
-
-   - `/usr/bin/node /home/ec2-user/.npm-global/lib/node_modules/openclaw/dist/index.js gateway --port 18789`
-
-   To:
-
-   - `/usr/bin/node /home/ec2-user/polytropos/releases/current/index.js gateway --port 18789`
-
-3) Reload systemd user units:
-
-   - `systemctl --user daemon-reload`
-
-4) Start gateway:
-
-   - `systemctl --user start openclaw-gateway`
-
-5) Verify health:
-
+2. Verify the service is healthy before proceeding:
    - `openclaw gateway status`
    - `openclaw doctor --non-interactive`
 
-6) Verify the gateway is actually running the new entrypoint:
+3. Create/choose an initial tarball and point `current.tgz` at it.
 
-   - `systemctl --user show openclaw-gateway -p ExecStart`
+4. Install it globally into the same prefix the service uses:
+   - `npm install -g --prefix /home/ec2-user/.npm-global ~/polytropos/releases/current.tgz`
 
-7) (Optional) If restart-resume is configured, confirm it still runs (it uses ExecStartPre).
+5. Restart the gateway:
+   - `systemctl --user restart openclaw-gateway`
+
+6. Verify health:
+   - `openclaw gateway status`
+   - `openclaw doctor --non-interactive`
 
 ## Rollback
 
 If there is a failure:
 
-1) Preferred rollback (symlink flip):
-   - point `current` back to `previous`
+1. Preferred rollback (tarball flip):
+   - point `current.tgz` back to `previous.tgz`
+   - reinstall globally
    - restart gateway
 
-2) Hard rollback (unit revert):
-   - restore `ExecStart` to the prior installed-package path
-   - or restore from `~/polytropos/gateway.service.before.txt`
-   - restart gateway
+2. Hard rollback: restore the previously installed OpenClaw version via npm (if needed).
+
+(No unit-file rollback is required because `ExecStart` is unchanged.)

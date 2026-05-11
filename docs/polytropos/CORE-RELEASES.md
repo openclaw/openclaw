@@ -1,10 +1,10 @@
 # Polytropos Core Releases (Single-Gateway Strategy)
 
-This document defines the **release** mechanism for Polytropos core (openclaw-polytropos): how we build, install, and switch runnable `dist/` release directories on a single machine **without** running a parallel dev gateway.
+This document defines the **release** mechanism for Polytropos core (openclaw-polytropos): how we build, install, and switch runnable **release tarballs** (`.tgz`) on a single machine **without** running a parallel dev gateway.
 
 ## Terms
 
-- **Release**: creating a versioned runnable directory under `~/polytropos/releases/<tag>/` and (optionally) switching `current`.
+- **Release**: producing a versioned `.tgz` under `~/polytropos/releases/` and switching `current.tgz`/`previous.tgz`.
 - **Update**: merging a newer upstream OpenClaw tag into our fork, then performing the standard **release** procedure (see [`docs/polytropos/UPDATE-PROCEDURE.md`](./UPDATE-PROCEDURE.md)).
 
 ## Goal
@@ -14,9 +14,9 @@ This document defines the **release** mechanism for Polytropos core (openclaw-po
 
 ## Assumption (critical)
 
-> **For OpenClaw specifically: a release is a byte-for-byte copy of the installed package’s `dist/` directory.**
+> **For OpenClaw specifically: a core release is an npm package tarball produced by `npm pack` (a `.tgz`).**
 
-Rationale: the gateway is started by executing `dist/index.js`, and that file imports/reads other files within `dist/` at runtime. The safest release artifact is therefore a complete copy of `dist/`.
+Rationale: OpenClaw runtime depends on third-party dependencies resolved via `node_modules`. A `dist/`-only directory is not runnable because it does not include the dependency tree. Installing the `.tgz` via npm ensures dependencies are installed and runtime resolution matches how the gateway runs today.
 
 ## Directory layout
 
@@ -27,36 +27,30 @@ We standardize on a single top-level directory:
 Inside it:
 
 - `~/polytropos/releases/`
-  - `~/polytropos/releases/v<ver>+poly.<N>/` — a **release directory**, equivalent to `dist/`
-  - `~/polytropos/releases/dev` — symlink to `~/polytropos/openclaw-polytropos/dist` (the core repo build output)
-  - `~/polytropos/releases/current` — symlink to the release currently running (typically a versioned release, sometimes `dev`)
+  - `~/polytropos/releases/v<ver>+poly.<N>.tgz` — versioned release tarballs (output of `npm pack`)  
+    (tag format matches the filename)
+  - `~/polytropos/releases/current.tgz` — symlink to the tarball we want installed
+  - `~/polytropos/releases/previous.tgz` — symlink to the prior tarball (rollback)
 
-Optional:
-
-- `~/polytropos/worktrees/` — optional git worktrees for core development (only if needed)
-
-Note: the default dev target is the main core checkout at `~/polytropos/openclaw-polytropos/`.
+We keep the gateway systemd unit unchanged (it continues to run the globally installed `openclaw` package).
 
 ## What a "release" contains
 
-A release directory **is the `dist/` tree**. At minimum it must include:
+A release is a `.tgz` produced by `npm pack` from this repo.
 
-- `index.js` (the gateway entrypoint)
-- every file imported (transitively) by `index.js`
-- any non-JS runtime assets that are copied into `dist/` by the build (templates, metadata, bundles)
-
-Practically: copy the entire `dist/` directory from the installed package or from a fork build.
+It contains a subset of the repo as defined by `package.json.files`, including `dist/` and bundled assets. Dependencies are installed by npm when the tarball is installed globally.
 
 ## Switching versions
 
-Switching is done by updating the `current` symlink atomically:
+Switching is done by:
 
-```bash
-ln -sfn ~/polytropos/releases/<version> ~/polytropos/releases/current
-systemctl --user restart openclaw-gateway
-```
+1. updating symlinks:
+   - `previous.tgz` → old `current.tgz`
+   - `current.tgz` → new `<tag>.tgz`
+2. installing the tarball globally into the prefix the service uses (`/home/ec2-user/.npm-global`)
+3. restarting the gateway
 
-Rollback is the same operation, pointing `current` back to the prior release.
+Rollback is the same operation, pointing `current.tgz` back to `previous.tgz`.
 
 ## Release procedure (scripted)
 
@@ -72,22 +66,22 @@ node scripts/polytropos-release.mjs release
 
 What it does (high level):
 
-- finds nearest reachable `upstream/<ver>` tag to determine `<ver>`
+- finds nearest reachable upstream tag `v<ver>` to determine the base version
 - computes next global build number `poly.N` (always increments)
 - creates tag `v<ver>+poly.<N>`
-- builds `dist/` (`pnpm install`, `pnpm ui:build`, `pnpm build`)
-- copies `dist/` → `~/polytropos/releases/v<ver>+poly.<N>/`
-- updates symlinks (mandatory): `previous` then `current`
+- builds prepared artifacts (`pnpm install`, `pnpm build`, `pnpm ui:build` via the pack workflow)
+- runs `npm pack` to produce `v<ver>+poly.<N>.tgz`
+- updates symlinks (mandatory): `previous.tgz` then `current.tgz`
+- installs `current.tgz` globally into `/home/ec2-user/.npm-global`
 - restarts the gateway
-
 
 ## Dev mode (without a second gateway)
 
 Dev mode is simply:
 
-- `~/polytropos/releases/current` points at `~/polytropos/releases/dev`.
+- `current.tgz` points at a "dev" tarball you built/packed from your working tree (if you want to run dev builds).
 
-(`dev` is defined in the directory layout above.)
+(We can add a `dev.tgz` convention later; for now dev is just "point current.tgz at the tarball you want installed".)
 
 ---
 

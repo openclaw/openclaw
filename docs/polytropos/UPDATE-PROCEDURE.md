@@ -27,9 +27,9 @@ Output of this step: `openclaw-polytropos` `main` contains upstream `<upstreamTa
 
 ### 3) Release
 
-After the merge is successfully completed, run the standard release script/procedure (this step includes tagging, building, publishing, switching `previous/current`, restarting, and verification):
+After the merge is successfully completed, run the standard release script (this includes tagging, building prepared artifacts, producing a `.tgz` via `npm pack`, updating `current.tgz`/`previous.tgz`, installing globally, restarting, and verification):
 
-- [`docs/polytropos/CORE-RELEASES.md`](../CORE-RELEASES.md)
+- [`docs/polytropos/CORE-RELEASES.md`](./CORE-RELEASES.md)
 
 ## Notes
 
