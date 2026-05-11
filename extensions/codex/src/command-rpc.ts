@@ -20,6 +20,11 @@ type AuthProfileOrderConfig = Parameters<
   typeof resolveCodexAppServerAuthProfileIdForAgent
 >[0]["config"];
 
+export type CodexControlRequestOptions = {
+  config?: AuthProfileOrderConfig;
+  authProfileId?: string;
+};
+
 export function requestOptions(
   pluginConfig: unknown,
   limit: number,
@@ -40,19 +45,19 @@ export function codexControlRequest<M extends CodexControlRequestMethod>(
   pluginConfig: unknown,
   method: M,
   requestParams: CodexAppServerRequestParams<M>,
-  options?: { config?: AuthProfileOrderConfig },
+  options?: CodexControlRequestOptions,
 ): Promise<CodexAppServerRequestResult<M>>;
 export function codexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: JsonValue,
-  options?: { config?: AuthProfileOrderConfig },
+  options?: CodexControlRequestOptions,
 ): Promise<JsonValue | undefined>;
 export async function codexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: unknown,
-  options: { config?: AuthProfileOrderConfig } = {},
+  options: CodexControlRequestOptions = {},
 ) {
   const runtime = resolveCodexAppServerRuntimeOptions({ pluginConfig });
   return await requestCodexAppServerJson({
@@ -61,6 +66,7 @@ export async function codexControlRequest(
     timeoutMs: runtime.requestTimeoutMs,
     startOptions: runtime.start,
     config: options.config,
+    authProfileId: options.authProfileId,
   });
 }
 
@@ -68,19 +74,19 @@ export function safeCodexControlRequest<M extends CodexControlRequestMethod>(
   pluginConfig: unknown,
   method: M,
   requestParams: CodexAppServerRequestParams<M>,
-  options?: { config?: AuthProfileOrderConfig },
+  options?: CodexControlRequestOptions,
 ): Promise<SafeValue<CodexAppServerRequestResult<M>>>;
 export function safeCodexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: JsonValue,
-  options?: { config?: AuthProfileOrderConfig },
+  options?: CodexControlRequestOptions,
 ): Promise<SafeValue<JsonValue | undefined>>;
 export async function safeCodexControlRequest(
   pluginConfig: unknown,
   method: CodexControlMethod,
   requestParams?: unknown,
-  options: { config?: AuthProfileOrderConfig } = {},
+  options: CodexControlRequestOptions = {},
 ) {
   return await safeValue(
     async () =>

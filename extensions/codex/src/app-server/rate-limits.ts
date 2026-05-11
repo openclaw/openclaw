@@ -19,6 +19,16 @@ type RateLimitWindowEntry = {
   window: RateLimitReset;
 };
 
+export type CodexAccountUsageSummary = {
+  usageLine?: string;
+  blocked: boolean;
+  blockedUntilMs?: number;
+  blockedUntilText?: string;
+  blockedResetRelative?: string;
+  blockingPeriod?: string;
+  blockingReason?: string;
+};
+
 export function formatCodexUsageLimitErrorMessage(params: {
   message?: string | null;
   codexErrorInfo?: JsonValue | null;
@@ -74,22 +84,20 @@ export function summarizeCodexAccountRateLimits(
   value: JsonValue | undefined,
   nowMs = Date.now(),
 ): string[] | undefined {
-  const snapshots = collectCodexRateLimitSnapshots(value);
-  if (snapshots.length === 0) {
+  const summary = summarizeCodexAccountUsage(value, nowMs);
+  if (!summary) {
     return undefined;
   }
-  const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
-  const blockingSnapshot =
-    blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
-  if (!blockingSnapshot) {
+  if (!summary.blocked) {
     return ["Codex is available."];
   }
-  const blockingReset = selectSnapshotBlockingReset(blockingSnapshot, nowMs);
   return [
-    blockingReset
-      ? `Codex is paused until ${formatAccountResetTime(blockingReset.resetsAtMs, nowMs)}.`
+    summary.blockedUntilText
+      ? `Codex is paused until ${summary.blockedUntilText}.`
       : "Codex is paused by a usage limit.",
-    formatBlockingLimitReason(blockingReset),
+    summary.blockingReason
+      ? `Your ${summary.blockingReason}.`
+      : "Your Codex usage limit is reached.",
   ];
 }
 
@@ -98,6 +106,44 @@ export function resolveCodexUsageLimitResetAtMs(
   nowMs = Date.now(),
 ): number | undefined {
   return selectNextRateLimitReset(value, nowMs)?.resetsAtMs;
+}
+
+export function summarizeCodexAccountUsage(
+  value: JsonValue | undefined,
+  nowMs = Date.now(),
+): CodexAccountUsageSummary | undefined {
+  const snapshots = collectCodexRateLimitSnapshots(value);
+  if (snapshots.length === 0) {
+    return undefined;
+  }
+  const usageSnapshot = snapshots.find(isCodexLimitSnapshot) ?? snapshots[0];
+  const blockedSnapshots = snapshots.filter(snapshotHasLimitBlock);
+  const blockingSnapshot =
+    blockedSnapshots.find(isCodexLimitSnapshot) ?? blockedSnapshots[0] ?? undefined;
+  const blockingReset = blockingSnapshot
+    ? selectSnapshotBlockingReset(blockingSnapshot, nowMs)
+    : undefined;
+  const blockingPeriod = formatBlockingLimitPeriod(blockingReset?.windowDurationMins);
+  const blockedUntilText = blockingReset
+    ? formatAccountResetTime(blockingReset.resetsAtMs, nowMs)
+    : undefined;
+  const blockedResetRelative = blockingReset
+    ? `in ${formatRelativeDuration(blockingReset.resetsAtMs - nowMs)}`
+    : undefined;
+  const blockingReason = blockingPeriod
+    ? `${blockingPeriod} Codex usage limit is reached`
+    : blockingSnapshot
+      ? "Codex usage limit is reached"
+      : undefined;
+  return {
+    usageLine: formatUsageLine(usageSnapshot),
+    blocked: Boolean(blockingSnapshot),
+    ...(blockingReset ? { blockedUntilMs: blockingReset.resetsAtMs } : {}),
+    ...(blockedUntilText ? { blockedUntilText } : {}),
+    ...(blockedResetRelative ? { blockedResetRelative } : {}),
+    ...(blockingPeriod ? { blockingPeriod } : {}),
+    ...(blockingReason ? { blockingReason } : {}),
+  };
 }
 
 function isCodexUsageLimitError(
@@ -348,13 +394,6 @@ function readWindowEntries(snapshot: JsonObject): RateLimitWindowEntry[] {
   });
 }
 
-function formatBlockingLimitReason(window: RateLimitReset | undefined): string {
-  const period = formatBlockingLimitPeriod(window?.windowDurationMins);
-  return period
-    ? `Your ${period} Codex usage limit is reached.`
-    : "Your Codex usage limit is reached.";
-}
-
 function formatBlockingLimitPeriod(minutes: number | undefined): string | undefined {
   if (minutes === 7 * 24 * 60) {
     return "weekly";
@@ -366,6 +405,41 @@ function formatBlockingLimitPeriod(minutes: number | undefined): string | undefi
     return "short-term";
   }
   return undefined;
+}
+
+function formatUsageLine(snapshot: JsonObject): string | undefined {
+  const windows = readWindowEntries(snapshot)
+    .filter((entry) => entry.window.usedPercent !== undefined)
+    .toSorted(
+      (left, right) =>
+        (right.window.windowDurationMins ?? 0) - (left.window.windowDurationMins ?? 0),
+    )
+    .map((entry) => {
+      const label = formatUsageWindowLabel(entry.window.windowDurationMins);
+      return `${label} ${Math.round(entry.window.usedPercent ?? 0)}%`;
+    });
+  return windows.length > 0 ? windows.join(" \u00b7 ") : undefined;
+}
+
+function formatUsageWindowLabel(minutes: number | undefined): string {
+  if (minutes === 7 * 24 * 60) {
+    return "weekly";
+  }
+  if (minutes === 24 * 60) {
+    return "daily";
+  }
+  if (minutes !== undefined && minutes > 0 && minutes < 24 * 60) {
+    return "short-term";
+  }
+  if (minutes !== undefined && minutes > 0 && minutes % (24 * 60) === 0) {
+    const days = minutes / (24 * 60);
+    return `${days}-day`;
+  }
+  if (minutes !== undefined && minutes > 0 && minutes % 60 === 0) {
+    const hours = minutes / 60;
+    return `${hours}-hour`;
+  }
+  return "usage";
 }
 
 function formatCalendarResetTime(resetsAtMs: number, nowMs: number): string {
