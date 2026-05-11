@@ -479,8 +479,9 @@ export function buildGuardedModelFetch(
       // Only operator-configured custom/local endpoints get exact-origin trust;
       // known public/native providers keep the default rebinding checks.
       trustConfiguredBaseUrlOrigin:
-        requestConfig.policy?.endpointClass === "custom" ||
-        requestConfig.policy?.endpointClass === "local",
+        !requestConfig.privateNetworkExplicitlyDenied &&
+        (requestConfig.policy?.endpointClass === "custom" ||
+          requestConfig.policy?.endpointClass === "local"),
     });
     const requestInit =
       request &&

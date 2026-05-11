@@ -265,6 +265,33 @@ describe("buildGuardedModelFetch", () => {
     expect(policy?.dangerouslyAllowPrivateNetwork).toBeUndefined();
   });
 
+  it("keeps explicit private-network denial ahead of configured custom origin trust", async () => {
+    resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
+      allowPrivateNetwork: false,
+      privateNetworkExplicitlyDenied: true,
+      policy: { endpointClass: "custom" },
+    });
+    const model = {
+      id: "qwen3:32b",
+      provider: "lmstudio",
+      api: "openai-completions",
+      baseUrl: "http://10.0.0.5:1234/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const fetcher = buildGuardedModelFetch(model);
+    await fetcher("http://10.0.0.5:1234/v1/chat/completions", { method: "POST" });
+
+    const policy = fetchWithSsrFGuardMock.mock.calls[0]?.[0]?.policy;
+    expect(policy).toEqual({
+      allowRfc2544BenchmarkRange: true,
+      allowIpv6UniqueLocalRange: true,
+      hostnameAllowlist: ["10.0.0.5"],
+    });
+    expect(policy?.allowedOrigins).toBeUndefined();
+    expect(policy?.allowedHostnames).toBeUndefined();
+    expect(policy?.allowPrivateNetwork).toBeUndefined();
+  });
+
   it("trusts exact configured local provider origins", async () => {
     resolveProviderRequestPolicyConfigMock.mockReturnValueOnce({
       allowPrivateNetwork: false,

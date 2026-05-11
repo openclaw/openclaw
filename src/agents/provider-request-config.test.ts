@@ -522,6 +522,7 @@ describe("provider request config", () => {
 
     expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
     expect(resolved.policy.endpointClass).toBe("openai-public");
     expect(resolved.capabilities.allowsResponsesStore).toBe(true);
     expect(resolved.headers?.authorization).toBe("Bearer test-key");
@@ -541,6 +542,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(true);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 
   it("keeps explicit private-network denial for loopback model requests", () => {
@@ -554,6 +556,7 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(true);
   });
 
   it("does not auto-allow non-loopback private model-provider hosts", () => {
@@ -566,5 +569,6 @@ describe("provider request config", () => {
     });
 
     expect(resolved.allowPrivateNetwork).toBe(false);
+    expect(resolved.privateNetworkExplicitlyDenied).toBe(false);
   });
 });

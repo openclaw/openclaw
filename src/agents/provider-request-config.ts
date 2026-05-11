@@ -139,6 +139,7 @@ type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
 
 type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
   allowPrivateNetwork: boolean;
+  privateNetworkExplicitlyDenied: boolean;
   capabilities: ProviderRequestCapabilities;
 };
 
@@ -189,6 +190,24 @@ function shouldAutoAllowLoopbackModelRequest(
     params.request?.allowPrivateNetwork === undefined &&
     isLoopbackProviderBaseUrl(params.baseUrl)
   );
+}
+
+function resolvePrivateNetworkAccess(params: ResolveProviderRequestPolicyConfigParams): {
+  allowPrivateNetwork: boolean;
+  explicitlyDenied: boolean;
+} {
+  const configuredAllowPrivateNetwork =
+    params.allowPrivateNetwork ?? params.request?.allowPrivateNetwork;
+  if (configuredAllowPrivateNetwork !== undefined) {
+    return {
+      allowPrivateNetwork: configuredAllowPrivateNetwork,
+      explicitlyDenied: configuredAllowPrivateNetwork === false,
+    };
+  }
+  return {
+    allowPrivateNetwork: shouldAutoAllowLoopbackModelRequest(params),
+    explicitlyDenied: false,
+  };
 }
 
 function sanitizeConfiguredRequestString(value: unknown, path: string): string | undefined {
@@ -670,6 +689,7 @@ export function resolveProviderRequestPolicyConfig(
     params.precedence === "caller-wins"
       ? mergeProviderRequestHeaders(mergedDefaults, unprotectedCallerHeaders)
       : mergeProviderRequestHeaders(unprotectedCallerHeaders, mergedDefaults);
+  const privateNetworkAccess = resolvePrivateNetworkAccess(params);
 
   return {
     api: params.api,
@@ -684,10 +704,8 @@ export function resolveProviderRequestPolicyConfig(
     tls: resolveTlsOverride(params.request?.tls),
     policy,
     capabilities,
-    allowPrivateNetwork:
-      params.allowPrivateNetwork ??
-      params.request?.allowPrivateNetwork ??
-      shouldAutoAllowLoopbackModelRequest(params),
+    allowPrivateNetwork: privateNetworkAccess.allowPrivateNetwork,
+    privateNetworkExplicitlyDenied: privateNetworkAccess.explicitlyDenied,
   };
 }
 
