@@ -1026,6 +1026,8 @@ export async function dispatchCronDelivery(
           sessionKey: deliverySessionKey,
           agentId: params.agentId,
           text: mirrorText,
+          // Keep cron delivery mirrors text-first: non-audio attachment names
+          // are folded into mirrorText so media does not replace delivered text.
           mediaUrls: undefined,
           storePath: resolveStorePath(params.cfgWithAgentDefaults.session?.store, {
             agentId: resolveAgentIdFromSessionKey(deliverySessionKey),

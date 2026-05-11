@@ -50,7 +50,44 @@ function stripProviderPrefix(raw: string, channel: string): string {
 }
 
 function stripKindPrefix(raw: string): string {
-  return raw.replace(/^(user|channel|group|conversation|room|dm):/i, "").trim();
+  return raw.replace(/^(user|channel|group|conversation|room|dm|thread):/i, "").trim();
+}
+
+const FALLBACK_TARGET_KIND_PREFIXES: Array<{ kind: ChatType; pattern: RegExp }> = [
+  { kind: "direct", pattern: /^(user:|dm:)/i },
+  { kind: "channel", pattern: /^(channel:|conversation:|thread:)/i },
+  { kind: "group", pattern: /^(group:|room:)/i },
+];
+
+function normalizeInferredPeerKind(value: ChatType | undefined): ChatType | undefined {
+  return value === "direct" || value === "group" || value === "channel" ? value : undefined;
+}
+
+function inferPeerKindFromPlugin(params: {
+  plugin: ReturnType<typeof resolveOutboundChannelPlugin>;
+  targets: readonly string[];
+}): ChatType | undefined {
+  for (const target of params.targets) {
+    const inferred = normalizeInferredPeerKind(
+      params.plugin?.messaging?.parseExplicitTarget?.({ raw: target })?.chatType ??
+        params.plugin?.messaging?.inferTargetChatType?.({ to: target }),
+    );
+    if (inferred) {
+      return inferred;
+    }
+  }
+  return undefined;
+}
+
+function inferPeerKindFromFallbackPrefixes(targets: readonly string[]): ChatType | undefined {
+  for (const target of targets) {
+    for (const fallback of FALLBACK_TARGET_KIND_PREFIXES) {
+      if (fallback.pattern.test(target)) {
+        return fallback.kind;
+      }
+    }
+  }
+  return undefined;
 }
 
 function inferPeerKind(params: {
@@ -81,22 +118,11 @@ function inferPeerKind(params: {
     (target, index, values): target is string =>
       Boolean(target) && values.indexOf(target) === index,
   );
-  for (const target of targets) {
-    const inferred = plugin?.messaging?.inferTargetChatType?.({ to: target });
-    if (inferred === "direct" || inferred === "group" || inferred === "channel") {
-      return inferred;
-    }
-  }
-  if (targets.some((target) => /^(@|<@!?|user:|dm:|c2c:|users\/)/i.test(target))) {
-    return "direct";
-  }
-  if (targets.some((target) => /^(channel:|conversation:|thread:|channels\/)/i.test(target))) {
-    return "channel";
-  }
-  if (targets.some((target) => /^(#|group:|room:|spaces\/|groups\/|rooms\/)/i.test(target))) {
-    return "group";
-  }
-  return "direct";
+  return (
+    inferPeerKindFromPlugin({ plugin, targets }) ??
+    inferPeerKindFromFallbackPrefixes(targets) ??
+    "direct"
+  );
 }
 
 function resolveFallbackSession(

@@ -585,6 +585,8 @@ export function setMinimalOutboundSessionPluginRegistryForTests(): void {
         capabilities: { chatTypes: ["direct", "group", "channel"] },
       }),
       messaging: {
+        parseExplicitTarget: ({ raw }) =>
+          raw.startsWith("spaces/") ? { to: raw, chatType: "group" } : null,
         targetPrefixes: ["fallbackchat"],
       },
     },

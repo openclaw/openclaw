@@ -363,7 +363,7 @@ describe("resolveOutboundSessionRoute", () => {
       },
     },
     {
-      name: "FallbackChat space-style target",
+      name: "FallbackChat plugin parser classifies space-style target",
       cfg: baseConfig,
       channel: "fallbackchat",
       target: "spaces/AAA",
@@ -384,6 +384,18 @@ describe("resolveOutboundSessionRoute", () => {
         from: "fallbackchat:U123",
         to: "user:U123",
         chatType: "direct",
+      },
+    },
+    {
+      name: "FallbackChat explicit thread prefix",
+      cfg: baseConfig,
+      channel: "fallbackchat",
+      target: "thread:abc",
+      expected: {
+        sessionKey: "agent:main:fallbackchat:channel:abc",
+        from: "fallbackchat:channel:abc",
+        to: "channel:abc",
+        chatType: "channel",
       },
     },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
