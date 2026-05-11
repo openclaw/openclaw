@@ -893,6 +893,68 @@ export function registerControlUiAndPairingSuite(): void {
     restoreGatewayToken(prevToken);
   });
 
+  test("reissues paired TUI device token when the local device-auth cache is missing", async () => {
+    const { getPairedDevice, listDevicePairing } = await import("../infra/device-pairing.js");
+    const tuiClient = {
+      id: GATEWAY_CLIENT_NAMES.TUI,
+      displayName: "openclaw-tui",
+      version: "1.0.0",
+      platform: "linux",
+      mode: GATEWAY_CLIENT_MODES.UI,
+    };
+    const { identity, identityPath } = await seedApprovedOperatorReadPairing({
+      identityPrefix: "openclaw-tui-cache-missing-",
+      clientId: tuiClient.id,
+      clientMode: tuiClient.mode,
+      displayName: tuiClient.displayName,
+      platform: tuiClient.platform,
+      scopes: ["operator.admin", "operator.pairing"],
+    });
+    const pairedBefore = await getPairedDevice(identity.deviceId);
+    const pairedToken = pairedBefore?.tokens?.operator?.token;
+    expect(pairedToken).toBeTypeOf("string");
+
+    const { server, port, prevToken } = await startControlUiServer("secret");
+    const ws = await openWs(port);
+    try {
+      const nonce = await readConnectChallengeNonce(ws);
+      const reconnect = await connectReq(ws, {
+        token: "secret",
+        scopes: ["operator.admin"],
+        client: tuiClient,
+        device: await buildSignedDeviceForIdentity({
+          identityPath,
+          client: tuiClient,
+          scopes: ["operator.admin"],
+          nonce,
+        }),
+      });
+      expect(reconnect.ok, JSON.stringify(reconnect)).toBe(true);
+      const helloOk = reconnect.payload as
+        | {
+            auth?: {
+              deviceToken?: unknown;
+              scopes?: unknown;
+            };
+          }
+        | undefined;
+      expect(helloOk?.auth?.deviceToken).toBe(pairedToken);
+      expectArrayIncludes(helloOk?.auth?.scopes, [
+        "operator.admin",
+        "operator.pairing",
+        "operator.read",
+        "operator.write",
+      ]);
+
+      const pairing = await listDevicePairing();
+      expect(pairing.pending.filter((entry) => entry.deviceId === identity.deviceId)).toEqual([]);
+    } finally {
+      ws.close();
+      await server.close();
+      restoreGatewayToken(prevToken);
+    }
+  });
+
   test("does not expose approved access when a paired device id reconnects with a different key", async () => {
     const { identity, identityPath } = await seedApprovedOperatorReadPairing({
       identityPrefix: "openclaw-device-key-mismatch-",

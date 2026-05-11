@@ -1,7 +1,10 @@
 import { Buffer } from "node:buffer";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { captureEnv } from "../test-utils/env.js";
+import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "./protocol/client-info.js";
 import { MIN_CLIENT_PROTOCOL_VERSION, PROTOCOL_VERSION } from "./protocol/index.js";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
@@ -817,7 +820,15 @@ describe("GatewayClient connect auth payload", () => {
     );
   }
 
-  function emitHelloOk(ws: MockWebSocket, connectId: string | undefined) {
+  function emitHelloOk(
+    ws: MockWebSocket,
+    connectId: string | undefined,
+    auth: {
+      role?: string;
+      scopes?: string[];
+      deviceToken?: string;
+    } = { role: "operator", scopes: ["operator.admin"] },
+  ) {
     ws.emitMessage(
       JSON.stringify({
         type: "res",
@@ -825,7 +836,7 @@ describe("GatewayClient connect auth payload", () => {
         ok: true,
         payload: {
           type: "hello-ok",
-          auth: { role: "operator", scopes: ["operator.admin"] },
+          auth,
         },
       }),
     );
@@ -875,6 +886,49 @@ describe("GatewayClient connect auth payload", () => {
 
     expectConnectAuthFields(ws, { token: "shared-token" });
     expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+    client.stop();
+  });
+
+  it("stores a reissued device token after shared-token TUI reconnect", async () => {
+    loadDeviceAuthTokenMock.mockReturnValue(undefined);
+    const env = {
+      ...process.env,
+      OPENCLAW_STATE_DIR: path.join(os.tmpdir(), "openclaw-tui-cache-missing-state"),
+    } as NodeJS.ProcessEnv;
+    const client = new GatewayClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-token",
+      clientName: GATEWAY_CLIENT_NAMES.TUI,
+      clientDisplayName: "openclaw-tui",
+      mode: GATEWAY_CLIENT_MODES.UI,
+      env,
+    });
+    const deviceId = (client as unknown as { opts: { deviceIdentity?: { deviceId?: unknown } } })
+      .opts.deviceIdentity?.deviceId;
+    expect(deviceId).toBeTypeOf("string");
+
+    const { ws, connect } = startClientAndConnect({ client });
+    expectConnectAuthFields(ws, { token: "shared-token" });
+    expect(connectFrameFrom(ws).deviceToken).toBeUndefined();
+
+    emitHelloOk(ws, connect.id, {
+      role: "operator",
+      scopes: ["operator.admin", "operator.read", "operator.write"],
+      deviceToken: "reissued-device-token",
+    });
+
+    await vi.waitFor(() => expect(storeDeviceAuthTokenMock).toHaveBeenCalledOnce());
+    const storeParams = expectRecordFields(
+      storeDeviceAuthTokenMock.mock.calls[0]?.[0],
+      {
+        role: "operator",
+        token: "reissued-device-token",
+        scopes: ["operator.admin", "operator.read", "operator.write"],
+        env,
+      },
+      "store device token params",
+    );
+    expect(storeParams.deviceId).toBe(deviceId);
     client.stop();
   });
 
