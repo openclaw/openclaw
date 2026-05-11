@@ -323,6 +323,7 @@ export async function runBtwSideQuestion(
       ...params,
       provider: model.provider,
       model: model.id,
+      runtimeModel: model,
       sessionId,
       agentId: sessionAgentId,
       workspaceDir,
