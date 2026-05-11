@@ -167,6 +167,18 @@ jobs:
               repo,
               pull_number: issue.number,
             });
+            let mergedBaseline = "";
+            let mergedCandidate = "";
+            if (pr.merged) {
+              const { data: commits } = await github.rest.pulls.listCommits({
+                owner,
+                repo,
+                pull_number: issue.number,
+                per_page: 100,
+              });
+              mergedCandidate = pr.merge_commit_sha || commits.at(-1)?.sha || "";
+              mergedBaseline = mergedCandidate && commits.length > 0 ? `${mergedCandidate}~${commits.length}` : "";
+            }
             const baselineMatch = body.match(/(?:baseline|base)[\s:=]+([^\s`]+)/i);
             const candidateMatch = body.match(/(?:candidate|head)[\s:=]+([^\s`]+)/i);
             const providerMatch = body.match(/(?:provider|crabbox_provider)[\s:=]+([^\s`]+)/i);
@@ -180,10 +192,10 @@ jobs:
             const candidate =
               rawCandidate && !["head", "pr", "pr-head"].includes(rawCandidate.toLowerCase())
                 ? rawCandidate
-                : pr.head.sha;
+                : mergedCandidate || pr.head.sha;
 
             setOutput("should_run", "true");
-            setOutput("baseline_ref", baselineMatch?.[1] || "main");
+            setOutput("baseline_ref", baselineMatch?.[1] || mergedBaseline || "main");
             setOutput("candidate_ref", candidate);
             setOutput("pr_number", String(issue.number));
             setOutput("instructions", body);
@@ -219,11 +231,15 @@ jobs:
           BASELINE_REF: ${{ needs.resolve_request.outputs.baseline_ref }}
           CANDIDATE_REF: ${{ needs.resolve_request.outputs.candidate_ref }}
           GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ needs.resolve_request.outputs.pr_number }}
         shell: bash
         run: |
           set -euo pipefail
 
           git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if [[ -n "${PR_NUMBER:-}" ]]; then
+            git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/remotes/origin/pr/${PR_NUMBER}" || true
+          fi
 
           validate_ref() {
             local label="$1"
@@ -231,7 +247,10 @@ jobs:
             local revision=""
             local reason=""
 
-            revision="$(git rev-parse "${input_ref}^{commit}")"
+            if ! revision="$(git rev-parse --verify "${input_ref}^{commit}" 2>/dev/null)"; then
+              echo "${label} ref '${input_ref}' is not available in the workflow checkout." >&2
+              exit 1
+            fi
             if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
               reason="main-ancestor"
             elif git tag --points-at "$revision" | grep -Eq '^v'; then
