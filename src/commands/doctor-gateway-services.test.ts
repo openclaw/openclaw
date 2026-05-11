@@ -755,7 +755,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).not.toHaveBeenCalled();
   });
 
-  it("stages service config repairs during non-interactive update repairs", async () => {
+  it("defers systemd service config rewrites during non-interactive update repairs", async () => {
     setupGatewayEntrypointRepairScenario({
       currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
       installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
@@ -771,6 +771,29 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "Gateway service entrypoint does not match the current install.",
       "Gateway service config",
     );
+    expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+    expect(mocks.stage).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
+
+  it("keeps staging non-systemd service config repairs during non-interactive update repairs", async () => {
+    mockProcessPlatform("darwin");
+    setupGatewayEntrypointRepairScenario({
+      currentEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/entry.js",
+      installEntrypoint: "/Users/test/Library/npm/node_modules/openclaw/dist/index.js",
+      installWorkingDirectory: "/tmp",
+    });
+
+    await runNonInteractiveRepair({
+      cfg: { gateway: {} },
+      updateInProgress: true,
+    });
+
+    expectNoteContaining(
+      "Gateway service entrypoint does not match the current install.",
+      "Gateway service config",
+    );
+    expectNoNoteContaining("left the live systemd unit unchanged", "Gateway service config");
     expect(mocks.stage).toHaveBeenCalledTimes(1);
     expect(mocks.install).not.toHaveBeenCalled();
   });
@@ -842,7 +865,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     );
   });
 
-  it("does not persist embedded service tokens during non-interactive update repairs", async () => {
+  it("does not persist or stage embedded service tokens during systemd update repairs", async () => {
     Object.defineProperty(process.stdin, "isTTY", {
       value: false,
       configurable: true,
@@ -874,7 +897,8 @@ describe("maybeRepairGatewayServiceConfig", () => {
         );
 
         expect(mocks.replaceConfigFile).not.toHaveBeenCalled();
-        expect(mocks.stage).toHaveBeenCalledTimes(1);
+        expectNoteContaining("left the live systemd unit unchanged", "Gateway service config");
+        expect(mocks.stage).not.toHaveBeenCalled();
         expect(mocks.install).not.toHaveBeenCalled();
       },
     );
