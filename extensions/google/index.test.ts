@@ -82,7 +82,7 @@ describe("google provider plugin hooks", () => {
       } as ProviderSanitizeReplayHistoryContext),
     );
 
-    expect(sanitized).toEqual(
+    expect(sanitized as unknown[]).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           role: "user",
