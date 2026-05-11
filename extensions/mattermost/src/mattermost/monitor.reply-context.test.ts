@@ -49,6 +49,25 @@ describe("resolveMattermostReplyContext", () => {
     });
   });
 
+  it("logs and returns empty context when the reply target cannot be resolved", async () => {
+    const logVerboseMessage = vi.fn();
+
+    const result = await resolveMattermostReplyContext({
+      effectiveReplyToId: "post-404",
+      currentPostId: "post-456",
+      resolvePostInfo: async () => null,
+      resolveUserInfo: async () => null,
+      botUserId: "bot-1",
+      botUsername: "joe_nas",
+      logVerboseMessage,
+    });
+
+    expect(result).toEqual({});
+    expect(logVerboseMessage).toHaveBeenCalledWith(
+      "mattermost: reply target lookup failed or returned no post post=post-404",
+    );
+  });
+
   it("skips hydration when the reply target is the current post", async () => {
     const resolvePostInfo = vi.fn();
 

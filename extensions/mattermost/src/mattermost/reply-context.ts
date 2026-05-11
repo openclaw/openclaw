@@ -21,9 +21,16 @@ export async function resolveMattermostReplyContext(params: {
   }
 
   const replyPost = await params.resolvePostInfo(effectiveReplyToId);
-  const replyToBody = normalizeOptionalString(replyPost?.message);
+  if (!replyPost) {
+    params.logVerboseMessage(
+      `mattermost: reply target lookup failed or returned no post post=${effectiveReplyToId}`,
+    );
+    return {};
+  }
+
+  const replyToBody = normalizeOptionalString(replyPost.message);
   let replyToSender: string | undefined;
-  const replySenderId = normalizeOptionalString(replyPost?.user_id);
+  const replySenderId = normalizeOptionalString(replyPost.user_id);
   if (replySenderId) {
     if (replySenderId === params.botUserId && params.botUsername) {
       replyToSender = `@${params.botUsername}`;

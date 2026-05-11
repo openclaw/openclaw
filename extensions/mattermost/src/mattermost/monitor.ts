@@ -144,6 +144,7 @@ type MattermostReaction = {
 const RECENT_MATTERMOST_MESSAGE_TTL_MS = 5 * 60_000;
 const RECENT_MATTERMOST_MESSAGE_MAX = 2000;
 const POST_CACHE_TTL_MS = 5 * 60_000;
+const POST_CACHE_MAX = 1000;
 
 function normalizeInteractionSourceIps(values?: string[]): string[] {
   return (values ?? [])
@@ -833,24 +834,40 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
     mediaKindFromMime: (contentType) => core.media.mediaKindFromMime(contentType) as MediaKind,
   });
 
+  const setCachedPostInfo = (postId: string, value: MattermostPost | null) => {
+    const now = Date.now();
+    for (const [cachedPostId, entry] of postCache) {
+      if (entry.expiresAt <= now) {
+        postCache.delete(cachedPostId);
+      }
+    }
+    if (postCache.size >= POST_CACHE_MAX) {
+      const oldestKey = postCache.keys().next().value;
+      if (oldestKey) {
+        postCache.delete(oldestKey);
+      }
+    }
+    postCache.set(postId, {
+      value,
+      expiresAt: now + POST_CACHE_TTL_MS,
+    });
+  };
+
   const resolvePostInfo = async (postId: string): Promise<MattermostPost | null> => {
     const cached = postCache.get(postId);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.value;
     }
+    if (cached) {
+      postCache.delete(postId);
+    }
     try {
       const info = await fetchMattermostPost(client, postId);
-      postCache.set(postId, {
-        value: info,
-        expiresAt: Date.now() + POST_CACHE_TTL_MS,
-      });
+      setCachedPostInfo(postId, info);
       return info;
     } catch (err) {
       logger.debug?.(`mattermost: post lookup failed: ${String(err)}`);
-      postCache.set(postId, {
-        value: null,
-        expiresAt: Date.now() + POST_CACHE_TTL_MS,
-      });
+      setCachedPostInfo(postId, null);
       return null;
     }
   };
