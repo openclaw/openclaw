@@ -6,19 +6,12 @@ let createSlackSystemEventTestHarness: typeof import("./system-event-test-harnes
 type SlackSystemEventTestOverrides =
   import("./system-event-test-harness.js").SlackSystemEventTestOverrides;
 
-async function createChannelRuntimeMock(
-  importOriginal: () => Promise<typeof import("openclaw/plugin-sdk/channel-runtime")>,
-) {
-  const actual = await importOriginal();
-  return {
-    ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
-  };
-}
-
-vi.mock("openclaw/plugin-sdk/channel-runtime", createChannelRuntimeMock);
-vi.mock("openclaw/plugin-sdk/channel-runtime.js", createChannelRuntimeMock);
-
+vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
+}));
+vi.mock("openclaw/plugin-sdk/system-event-runtime.js", () => ({
+  enqueueSystemEvent: (...args: unknown[]) => reactionQueueMock(...args),
+}));
 type ReactionHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 
 type ReactionRunInput = {
@@ -60,6 +53,13 @@ function createReactionHandlers(params: {
   };
 }
 
+function requireReactionHandler(handler: ReactionHandler | null, name: string): ReactionHandler {
+  if (!handler) {
+    throw new Error(`expected Slack ${name} reaction handler`);
+  }
+  return handler;
+}
+
 async function executeReactionCase(input: ReactionRunInput = {}) {
   reactionQueueMock.mockClear();
   const handlers = createReactionHandlers({
@@ -67,9 +67,9 @@ async function executeReactionCase(input: ReactionRunInput = {}) {
     trackEvent: input.trackEvent,
     shouldDropMismatchedSlackEvent: input.shouldDropMismatchedSlackEvent,
   });
-  const handler = handlers[input.handler ?? "added"];
-  expect(handler).toBeTruthy();
-  await handler!({
+  const handlerName = input.handler ?? "added";
+  const handler = requireReactionHandler(handlers[handlerName], handlerName);
+  await handler({
     event: (input.event ?? buildReactionEvent()) as Record<string, unknown>,
     body: input.body ?? {},
   });
@@ -167,10 +167,12 @@ describe("registerSlackReactionEvents", () => {
     const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:main");
     harness.ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
     registerSlackReactionEvents({ ctx: harness.ctx });
-    const handler = harness.getHandler("reaction_added");
-    expect(handler).toBeTruthy();
+    const handler = requireReactionHandler(
+      harness.getHandler("reaction_added") as ReactionHandler | null,
+      "added",
+    );
 
-    await handler!({
+    await handler({
       event: buildReactionEvent({ user: "U777", channel: "D123" }),
       body: {},
     });

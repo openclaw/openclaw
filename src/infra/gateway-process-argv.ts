@@ -1,5 +1,7 @@
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+
 function normalizeProcArg(arg: string): string {
-  return arg.replaceAll("\\", "/").toLowerCase();
+  return normalizeLowercaseStringOrEmpty(arg.replaceAll("\\", "/"));
 }
 
 export function parseProcCmdline(raw: string): string[] {

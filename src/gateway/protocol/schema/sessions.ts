@@ -1,12 +1,56 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
+import { PluginJsonValueSchema } from "./plugins.js";
 import { NonEmptyString, SessionLabelString } from "./primitives.js";
+
+export const SessionCompactionCheckpointReasonSchema = Type.Union([
+  Type.Literal("manual"),
+  Type.Literal("auto-threshold"),
+  Type.Literal("overflow-retry"),
+  Type.Literal("timeout-retry"),
+]);
+
+export const SessionCompactionTranscriptReferenceSchema = Type.Object(
+  {
+    sessionId: NonEmptyString,
+    sessionFile: Type.Optional(NonEmptyString),
+    leafId: Type.Optional(NonEmptyString),
+    entryId: Type.Optional(NonEmptyString),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionCompactionCheckpointSchema = Type.Object(
+  {
+    checkpointId: NonEmptyString,
+    sessionKey: NonEmptyString,
+    sessionId: NonEmptyString,
+    createdAt: Type.Integer({ minimum: 0 }),
+    reason: SessionCompactionCheckpointReasonSchema,
+    tokensBefore: Type.Optional(Type.Integer({ minimum: 0 })),
+    tokensAfter: Type.Optional(Type.Integer({ minimum: 0 })),
+    summary: Type.Optional(Type.String()),
+    firstKeptEntryId: Type.Optional(NonEmptyString),
+    preCompaction: SessionCompactionTranscriptReferenceSchema,
+    postCompaction: SessionCompactionTranscriptReferenceSchema,
+  },
+  { additionalProperties: false },
+);
 
 export const SessionsListParamsSchema = Type.Object(
   {
+    /**
+     * Maximum rows to return. Omitted Gateway RPC calls use a bounded default
+     * to keep large session stores from monopolizing the event loop.
+     */
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     activeMinutes: Type.Optional(Type.Integer({ minimum: 1 })),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    /**
+     * Limit returned agent-scoped rows to agents currently present in config.
+     * Broad disk discovery remains the default for recovery/ACP consumers.
+     */
+    configuredAgentsOnly: Type.Optional(Type.Boolean()),
     /**
      * Read first 8KB of each session transcript to derive title from first user message.
      * Performs a file read per session - use `limit` to bound result set on large stores.
@@ -25,11 +69,32 @@ export const SessionsListParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCleanupParamsSchema = Type.Object(
+  {
+    agent: Type.Optional(NonEmptyString),
+    allAgents: Type.Optional(Type.Boolean()),
+    enforce: Type.Optional(Type.Boolean()),
+    activeKey: Type.Optional(NonEmptyString),
+    fixMissing: Type.Optional(Type.Boolean()),
+    fixDmScope: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsPreviewParamsSchema = Type.Object(
   {
     keys: Type.Array(NonEmptyString, { minItems: 1 }),
     limit: Type.Optional(Type.Integer({ minimum: 1 })),
     maxChars: Type.Optional(Type.Integer({ minimum: 20 })),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsDescribeParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    includeDerivedTitles: Type.Optional(Type.Boolean()),
+    includeLastMessage: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -54,6 +119,7 @@ export const SessionsCreateParamsSchema = Type.Object(
     label: Type.Optional(SessionLabelString),
     model: Type.Optional(NonEmptyString),
     parentSessionKey: Type.Optional(NonEmptyString),
+    emitCommandHooks: Type.Optional(Type.Boolean()),
     task: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
   },
@@ -88,7 +154,7 @@ export const SessionsMessagesUnsubscribeParamsSchema = Type.Object(
 
 export const SessionsAbortParamsSchema = Type.Object(
   {
-    key: NonEmptyString,
+    key: Type.Optional(NonEmptyString),
     runId: Type.Optional(NonEmptyString),
   },
   { additionalProperties: false },
@@ -101,6 +167,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     responseUsage: Type.Optional(
       Type.Union([
@@ -137,6 +204,26 @@ export const SessionsPatchParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsPluginPatchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    pluginId: NonEmptyString,
+    namespace: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
+    unset: Type.Optional(Type.Boolean()),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsPluginPatchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    value: Type.Optional(PluginJsonValueSchema),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsResetParamsSchema = Type.Object(
   {
     key: NonEmptyString,
@@ -163,6 +250,90 @@ export const SessionsCompactParamsSchema = Type.Object(
   { additionalProperties: false },
 );
 
+export const SessionsCompactionListParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionGetParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionBranchParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionRestoreParamsSchema = Type.Object(
+  {
+    key: NonEmptyString,
+    checkpointId: NonEmptyString,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionListResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    checkpoints: Type.Array(SessionCompactionCheckpointSchema),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionGetResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionBranchResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    sourceKey: NonEmptyString,
+    key: NonEmptyString,
+    sessionId: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+    entry: Type.Object(
+      {
+        sessionId: NonEmptyString,
+        updatedAt: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: true },
+    ),
+  },
+  { additionalProperties: false },
+);
+
+export const SessionsCompactionRestoreResultSchema = Type.Object(
+  {
+    ok: Type.Literal(true),
+    key: NonEmptyString,
+    sessionId: NonEmptyString,
+    checkpoint: SessionCompactionCheckpointSchema,
+    entry: Type.Object(
+      {
+        sessionId: NonEmptyString,
+        updatedAt: Type.Integer({ minimum: 0 }),
+      },
+      { additionalProperties: true },
+    ),
+  },
+  { additionalProperties: false },
+);
+
 export const SessionsUsageParamsSchema = Type.Object(
   {
     /** Specific session key to analyze; if omitted returns all sessions. */
@@ -175,6 +346,20 @@ export const SessionsUsageParamsSchema = Type.Object(
     mode: Type.Optional(
       Type.Union([Type.Literal("utc"), Type.Literal("gateway"), Type.Literal("specific")]),
     ),
+    /** Preset range for usage queries when explicit start/end dates are omitted. */
+    range: Type.Optional(
+      Type.Union([
+        Type.Literal("7d"),
+        Type.Literal("30d"),
+        Type.Literal("90d"),
+        Type.Literal("1y"),
+        Type.Literal("all"),
+      ]),
+    ),
+    /** Usage row grouping. `family` rolls up known rotated session ids for a logical key. */
+    groupBy: Type.Optional(Type.Union([Type.Literal("instance"), Type.Literal("family")])),
+    /** Backward-compatible alias for requesting family grouping. */
+    includeHistorical: Type.Optional(Type.Boolean()),
     /** UTC offset to use when mode is `specific` (for example, UTC-4 or UTC+5:30). */
     utcOffset: Type.Optional(Type.String({ pattern: "^UTC[+-]\\d{1,2}(?::[0-5]\\d)?$" })),
     /** Maximum sessions to return (default 50). */

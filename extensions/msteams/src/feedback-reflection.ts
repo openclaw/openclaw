@@ -1,15 +1,4 @@
-/**
- * Background reflection triggered by negative user feedback (thumbs-down).
- *
- * Flow:
- * 1. User thumbs-down -> invoke handler acks immediately
- * 2. This module runs in the background (fire-and-forget)
- * 3. Reads recent session context
- * 4. Sends a synthetic reflection prompt to the agent
- * 5. Stores the derived learning in session
- * 6. Optionally sends a proactive follow-up to the user
- */
-
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
@@ -30,7 +19,7 @@ import { buildConversationReference } from "./messenger.js";
 import type { MSTeamsMonitorLogger } from "./monitor-types.js";
 import { getMSTeamsRuntime } from "./runtime.js";
 
-export type FeedbackEvent = {
+type FeedbackEvent = {
   type: "custom";
   event: "feedback";
   ts: number;
@@ -64,7 +53,7 @@ export function buildFeedbackEvent(params: {
   };
 }
 
-export type RunFeedbackReflectionParams = {
+type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   adapter: MSTeamsAdapter;
   appId: string;
@@ -241,7 +230,9 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("failed to store reflection learning", { error: formatUnknownError(err) });
   }
 
-  const conversationType = params.conversationRef.conversation?.conversationType?.toLowerCase();
+  const conversationType = normalizeOptionalLowercaseString(
+    params.conversationRef.conversation?.conversationType,
+  );
   const shouldNotify =
     conversationType === "personal" &&
     parsedReflection.followUp &&

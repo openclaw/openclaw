@@ -22,12 +22,10 @@ const mockQuit = vi.fn();
 const mockUnbind = vi.fn();
 
 // Event handler storage for testing
-// oxlint-disable-next-line typescript/no-explicit-any
 const messageHandlers: Array<(channel: string, user: string, message: string, msg: any) => void> =
   [];
 
 // Mock functions that track handlers and return unbind objects
-// oxlint-disable-next-line typescript/no-explicit-any
 const mockOnMessage = vi.fn((handler: any) => {
   messageHandlers.push(handler);
   return { unbind: mockUnbind };
@@ -60,10 +58,8 @@ const mockAuthProvider = {
 };
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: class {
-    constructor(...args: unknown[]) {
-      mockAuthProvider.constructor(...args);
-    }
+  StaticAuthProvider: function StaticAuthProvider(...args: unknown[]) {
+    mockAuthProvider.constructor(...args);
   },
   RefreshingAuthProvider: class {
     addUserForToken = mockAddUserForToken;
@@ -236,7 +232,7 @@ describe("TwitchClientManager", () => {
       await manager.getClient(testAccount);
 
       expect(mockOnMessage).toHaveBeenCalled();
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Set up handlers for"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Set up handlers for testbot:testchannel");
     });
 
     it("should create separate clients for same account with different channels", async () => {
@@ -273,7 +269,6 @@ describe("TwitchClientManager", () => {
 
       // Check the stored handler is handler2
       const key = manager.getAccountKey(testAccount);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.get(key)).toBe(handler2);
     });
   });
@@ -284,7 +279,7 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       expect(mockQuit).toHaveBeenCalledTimes(1);
-      expect(mockLogger.info).toHaveBeenCalledWith(expect.stringContaining("Disconnected"));
+      expect(mockLogger.info).toHaveBeenCalledWith("Disconnected testbot:testchannel");
     });
 
     it("should clear client and message handler", async () => {
@@ -295,14 +290,12 @@ describe("TwitchClientManager", () => {
       await manager.disconnect(testAccount);
 
       const key = manager.getAccountKey(testAccount);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key)).toBe(false);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.has(key)).toBe(false);
     });
 
     it("should handle disconnecting non-existent client gracefully", async () => {
-      // disconnect doesn't throw, just does nothing
+      // Missing clients are ignored.
       await manager.disconnect(testAccount);
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -316,7 +309,6 @@ describe("TwitchClientManager", () => {
       expect(mockQuit).toHaveBeenCalledTimes(1);
 
       const key2 = manager.getAccountKey(testAccount2);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.has(key2)).toBe(true);
     });
   });
@@ -329,14 +321,12 @@ describe("TwitchClientManager", () => {
       await manager.disconnectAll();
 
       expect(mockQuit).toHaveBeenCalledTimes(2);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).clients.size).toBe(0);
-      // oxlint-disable-next-line typescript/no-explicit-any
       expect((manager as any).messageHandlers.size).toBe(0);
     });
 
     it("should handle empty client list gracefully", async () => {
-      // disconnectAll doesn't throw, just does nothing
+      // Empty client sets are ignored.
       await manager.disconnectAll();
       expect(mockQuit).not.toHaveBeenCalled();
     });
@@ -399,7 +389,6 @@ describe("TwitchClientManager", () => {
 
     it("should create client if not already connected", async () => {
       // Clear the existing client
-      // oxlint-disable-next-line typescript/no-explicit-any
       (manager as any).clients.clear();
 
       // Reset connect call count for this specific test
@@ -447,7 +436,6 @@ describe("TwitchClientManager", () => {
         id: "msg123",
       });
 
-      expect(capturedMessage).not.toBeNull();
       expect(capturedMessage?.username).toBe("testuser");
       expect(capturedMessage?.displayName).toBe("TestUser");
       expect(capturedMessage?.userId).toBe("12345");

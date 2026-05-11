@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import { basename, join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { slugifySessionKey } from "../agents/sandbox/shared.js";
+import { CONFIG_DIR } from "../utils.js";
 import {
   createSandboxMediaContexts,
   createSandboxMediaStageConfig,
@@ -13,10 +15,14 @@ const sandboxMocks = vi.hoisted(() => ({
 const childProcessMocks = vi.hoisted(() => ({
   spawn: vi.fn(),
 }));
+const mediaRootMocks = vi.hoisted(() => ({
+  resolveChannelRemoteInboundAttachmentRoots: vi.fn(),
+}));
 
 vi.mock("../agents/sandbox.js", () => sandboxMocks);
-vi.mock("node:child_process", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:child_process")>();
+vi.mock("../media/channel-inbound-roots.js", () => mediaRootMocks);
+vi.mock("node:child_process", async () => {
+  const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
     spawn: childProcessMocks.spawn,
@@ -28,6 +34,7 @@ import { stageSandboxMedia } from "./reply/stage-sandbox-media.js";
 afterEach(() => {
   vi.restoreAllMocks();
   childProcessMocks.spawn.mockClear();
+  mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots.mockReset();
 });
 
 function createRemoteStageParams(home: string): {
@@ -38,11 +45,14 @@ function createRemoteStageParams(home: string): {
 } {
   const sessionKey = "agent:main:main";
   vi.mocked(sandboxMocks.ensureSandboxWorkspaceForSession).mockResolvedValue(null);
+  mediaRootMocks.resolveChannelRemoteInboundAttachmentRoots.mockReturnValue([
+    "/Users/demo/Library/Messages/Attachments",
+  ]);
   return {
     cfg: createSandboxMediaStageConfig(home),
     workspaceDir: join(home, "openclaw"),
     sessionKey,
-    remoteCacheDir: join(home, ".openclaw", "media", "remote-cache", sessionKey),
+    remoteCacheDir: join(home, ".openclaw", "media", "remote-cache", slugifySessionKey(sessionKey)),
   };
 }
 
@@ -53,6 +63,16 @@ function createRemoteContexts(remotePath: string) {
   sessionCtx.Provider = "imessage";
   sessionCtx.MediaRemoteHost = "user@gateway-host";
   return { ctx, sessionCtx };
+}
+
+async function expectPathMissing(targetPath: string): Promise<void> {
+  let statError: unknown;
+  try {
+    await fs.stat(targetPath);
+  } catch (error) {
+    statError = error;
+  }
+  expect((statError as NodeJS.ErrnoException | undefined)?.code).toBe("ENOENT");
 }
 
 describe("stageSandboxMedia scp remote paths", () => {
@@ -71,11 +91,42 @@ describe("stageSandboxMedia scp remote paths", () => {
       });
 
       expect(childProcessMocks.spawn).not.toHaveBeenCalled();
-      await expect(fs.stat(join(remoteCacheDir, basename(remotePath)))).rejects.toThrow();
+      await expectPathMissing(join(remoteCacheDir, basename(remotePath)));
       expect(ctx.MediaPath).toBe(remotePath);
       expect(sessionCtx.MediaPath).toBe(remotePath);
       expect(ctx.MediaUrl).toBe(remotePath);
       expect(sessionCtx.MediaUrl).toBe(remotePath);
+    });
+  });
+
+  it("uses a slugged remote cache directory for session keys with path separators", async () => {
+    await withSandboxMediaTempHome("openclaw-triggers-", async (home) => {
+      const { cfg, workspaceDir } = createRemoteStageParams(home);
+      const sessionKey = "agent:main:explicit:../../escape";
+      const remotePath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+      const { ctx, sessionCtx } = createRemoteContexts(remotePath);
+      childProcessMocks.spawn.mockImplementation(() => {
+        throw new Error("stop before scp");
+      });
+
+      await stageSandboxMedia({
+        ctx,
+        sessionCtx,
+        cfg,
+        sessionKey,
+        workspaceDir,
+      });
+
+      expect(childProcessMocks.spawn.mock.calls[0]?.[0]).toBe("scp");
+      const remoteCacheRoot = join(CONFIG_DIR, "media", "remote-cache");
+      const expectedSafeDir = join(remoteCacheRoot, slugifySessionKey(sessionKey));
+      try {
+        const safeDirStats = await fs.stat(expectedSafeDir);
+        expect(safeDirStats.isDirectory()).toBe(true);
+        await expectPathMissing(join(CONFIG_DIR, "escape"));
+      } finally {
+        await fs.rm(expectedSafeDir, { recursive: true, force: true });
+      }
     });
   });
 });

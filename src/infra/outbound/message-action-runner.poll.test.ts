@@ -1,35 +1,58 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-
-let runMessageAction: typeof import("./message-action-runner.js").runMessageAction;
+import { runMessageAction } from "./message-action-runner.js";
 
 const mocks = vi.hoisted(() => ({
   executePollAction: vi.fn(),
+  resolveOutboundChannelPlugin: vi.fn(),
 }));
-const telegramConfig = {
+
+vi.mock("./channel-resolution.js", () => ({
+  resolveOutboundChannelPlugin: mocks.resolveOutboundChannelPlugin,
+  resetOutboundChannelResolutionStateForTest: vi.fn(),
+}));
+
+vi.mock("./outbound-send-service.js", () => ({
+  executeSendAction: vi.fn(async () => {
+    throw new Error("executeSendAction should not run in poll tests");
+  }),
+  executePollAction: mocks.executePollAction,
+}));
+
+vi.mock("./outbound-session.js", () => ({
+  ensureOutboundSessionEntry: vi.fn(async () => undefined),
+  resolveOutboundSessionRoute: vi.fn(async () => null),
+}));
+
+vi.mock("./message-action-threading.js", async () => {
+  const { createOutboundThreadingMock } =
+    await import("./message-action-threading.test-helpers.js");
+  return createOutboundThreadingMock();
+});
+const pollerConfig = {
   channels: {
-    telegram: {
-      botToken: "telegram-test",
+    poller: {
+      botToken: "poller-test",
     },
   },
 } as OpenClawConfig;
 
-const telegramPollTestPlugin: ChannelPlugin = {
-  id: "telegram",
+const pollerTestPlugin: ChannelPlugin = {
+  id: "poller",
   meta: {
-    id: "telegram",
-    label: "Telegram",
-    selectionLabel: "Telegram",
-    docsPath: "/channels/telegram",
-    blurb: "Telegram poll test plugin.",
+    id: "poller",
+    label: "Poller",
+    selectionLabel: "Poller",
+    docsPath: "/channels/poller",
+    blurb: "Poller test plugin.",
   },
   capabilities: { chatTypes: ["direct", "group"] },
   config: {
     listAccountIds: () => ["default"],
-    resolveAccount: () => ({ botToken: "telegram-test" }),
+    resolveAccount: () => ({ botToken: "poller-test" }),
     isConfigured: () => true,
   },
   outbound: {
@@ -92,25 +115,20 @@ async function runPollAction(params: {
 }
 
 describe("runMessageAction poll handling", () => {
-  beforeEach(async () => {
-    vi.resetModules();
-    vi.doMock("./outbound-send-service.js", async () => {
-      const actual = await vi.importActual<typeof import("./outbound-send-service.js")>(
-        "./outbound-send-service.js",
-      );
-      return {
-        ...actual,
-        executePollAction: mocks.executePollAction,
-      };
-    });
+  beforeEach(() => {
     setActivePluginRegistry(
       createTestRegistry([
         {
-          pluginId: "telegram",
+          pluginId: "poller",
           source: "test",
-          plugin: telegramPollTestPlugin,
+          plugin: pollerTestPlugin,
         },
       ]),
+    );
+    mocks.resolveOutboundChannelPlugin.mockReset();
+    mocks.resolveOutboundChannelPlugin.mockImplementation(
+      ({ channel }: { channel: string }) =>
+        getActivePluginRegistry()?.channels.find((entry) => entry?.plugin?.id === channel)?.plugin,
     );
     mocks.executePollAction.mockReset();
     mocks.executePollAction.mockImplementation(async (input) => ({
@@ -118,7 +136,6 @@ describe("runMessageAction poll handling", () => {
       payload: { ok: true, corePoll: input.resolveCorePoll() },
       pollResult: { ok: true },
     }));
-    ({ runMessageAction } = await import("./message-action-runner.js"));
   });
 
   afterEach(() => {
@@ -129,10 +146,10 @@ describe("runMessageAction poll handling", () => {
   it("requires at least two poll options", async () => {
     await expect(
       runPollAction({
-        cfg: telegramConfig,
+        cfg: pollerConfig,
         actionParams: {
-          channel: "telegram",
-          target: "telegram:123",
+          channel: "poller",
+          target: "poller:123",
           pollQuestion: "Lunch?",
           pollOption: ["Pizza"],
         },
@@ -143,16 +160,16 @@ describe("runMessageAction poll handling", () => {
 
   it("passes shared poll fields and auto threadId to executePollAction", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi"],
         pollDurationHours: 2,
       },
       toolContext: {
-        currentChannelId: "telegram:123",
+        currentChannelId: "poller:123",
         currentThreadTs: "42",
       },
     });
@@ -164,10 +181,10 @@ describe("runMessageAction poll handling", () => {
 
   it("expands maxSelections when pollMulti is enabled", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
         pollMulti: true,
@@ -179,10 +196,10 @@ describe("runMessageAction poll handling", () => {
 
   it("defaults maxSelections to one choice when pollMulti is omitted", async () => {
     const call = await runPollAction({
-      cfg: telegramConfig,
+      cfg: pollerConfig,
       actionParams: {
-        channel: "telegram",
-        target: "telegram:123",
+        channel: "poller",
+        target: "poller:123",
         pollQuestion: "Lunch?",
         pollOption: ["Pizza", "Sushi", "Soup"],
       },

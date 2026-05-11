@@ -1,5 +1,6 @@
 import { getMatrixRuntime } from "../../runtime.js";
 import {
+  markdownToMatrixHtml,
   resolveMatrixMentionsInMarkdown,
   renderMarkdownToMatrixHtmlWithMentions,
   type MatrixMentions,
@@ -13,20 +14,45 @@ import {
   type MatrixRelation,
   type MatrixReplyRelation,
   type MatrixTextContent,
+  type MatrixTextMsgType,
   type MatrixThreadRelation,
 } from "./types.js";
 
 const getCore = () => getMatrixRuntime();
 
-export function buildTextContent(body: string, relation?: MatrixRelation): MatrixTextContent {
+async function renderMatrixFormattedContent(params: {
+  client: MatrixClient;
+  markdown?: string | null;
+  includeMentions?: boolean;
+}): Promise<{ html?: string; mentions?: MatrixMentions }> {
+  const markdown = params.markdown ?? "";
+  if (params.includeMentions === false) {
+    const html = markdownToMatrixHtml(markdown).trimEnd();
+    return { html: html || undefined };
+  }
+  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
+    markdown,
+    client: params.client,
+  });
+  return { html, mentions };
+}
+
+export function buildTextContent(
+  body: string,
+  relation?: MatrixRelation,
+  opts: {
+    msgtype?: MatrixTextMsgType;
+  } = {},
+): MatrixTextContent {
+  const msgtype = opts.msgtype ?? MsgType.Text;
   return relation
     ? {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
         "m.relates_to": relation,
       }
     : {
-        msgtype: MsgType.Text,
+        msgtype,
         body,
       };
 }
@@ -35,12 +61,18 @@ export async function enrichMatrixFormattedContent(params: {
   client: MatrixClient;
   content: MatrixFormattedContent;
   markdown?: string | null;
+  includeMentions?: boolean;
 }): Promise<void> {
-  const { html, mentions } = await renderMarkdownToMatrixHtmlWithMentions({
-    markdown: params.markdown ?? "",
+  const { html, mentions } = await renderMatrixFormattedContent({
     client: params.client,
+    markdown: params.markdown,
+    includeMentions: params.includeMentions,
   });
-  params.content["m.mentions"] = mentions;
+  if (mentions) {
+    params.content["m.mentions"] = mentions;
+  } else {
+    delete params.content["m.mentions"];
+  }
   if (!html) {
     delete params.content.format;
     delete params.content.formatted_body;

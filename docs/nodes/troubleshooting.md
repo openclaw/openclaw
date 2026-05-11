@@ -3,10 +3,8 @@ summary: "Troubleshoot node pairing, foreground requirements, permissions, and t
 read_when:
   - Node is connected but camera/canvas/screen/exec tools fail
   - You need the node pairing versus approvals mental model
-title: "Node Troubleshooting"
+title: "Node troubleshooting"
 ---
-
-# Node troubleshooting
 
 Use this page when a node is visible in status but node tools fail.
 
@@ -80,6 +78,11 @@ If pairing is fine but `system.run` fails, fix exec approvals/allowlist on that 
 
 Node pairing is an identity/trust gate, not a per-command approval surface. For `system.run`, the per-node policy lives in that node's exec approvals file (`openclaw approvals get --node ...`), not in the gateway pairing record.
 
+For approval-backed `host=node` runs, the gateway also binds execution to the
+prepared canonical `systemRunPlan`. If a later caller mutates command/cwd or
+session metadata before the approved run is forwarded, the gateway rejects the
+run as an approval mismatch instead of trusting the edited payload.
+
 ## Common node error codes
 
 - `NODE_BACKGROUND_UNAVAILABLE` → app is backgrounded; bring it foreground.
@@ -109,10 +112,12 @@ If still stuck:
 - Re-grant OS permissions.
 - Recreate/adjust exec approval policy.
 
-Related:
+## Related
 
-- [/nodes/index](/nodes/index)
-- [/nodes/camera](/nodes/camera)
-- [/nodes/location-command](/nodes/location-command)
-- [/tools/exec-approvals](/tools/exec-approvals)
-- [/gateway/pairing](/gateway/pairing)
+- [Nodes overview](/nodes)
+- [Camera nodes](/nodes/camera)
+- [Location command](/nodes/location-command)
+- [Exec approvals](/tools/exec-approvals)
+- [Gateway pairing](/gateway/pairing)
+- [Gateway troubleshooting](/gateway/troubleshooting)
+- [Channel troubleshooting](/channels/troubleshooting)

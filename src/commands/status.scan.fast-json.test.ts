@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   applyStatusScanDefaults,
   createStatusMemorySearchConfig,
@@ -19,8 +19,7 @@ let originalForceStderr: boolean;
 let loggingStateRef: typeof import("../logging/state.js").loggingState;
 let scanStatusJsonFast: typeof import("./status.scan.fast-json.js").scanStatusJsonFast;
 
-beforeEach(async () => {
-  vi.clearAllMocks();
+function configureFastJsonStatus() {
   applyStatusScanDefaults(mocks, {
     sourceConfig: createStatusMemorySearchConfig(),
     resolvedConfig: createStatusMemorySearchConfig(),
@@ -31,8 +30,17 @@ beforeEach(async () => {
   mocks.resolveMemorySearchConfig.mockReturnValue({
     store: { path: "/tmp/main.sqlite" },
   });
+}
+
+beforeAll(async () => {
+  configureFastJsonStatus();
   ({ scanStatusJsonFast } = await loadStatusScanModuleForTest(mocks, { fastJson: true }));
   ({ loggingState: loggingStateRef } = await import("../logging/state.js"));
+});
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  configureFastJsonStatus();
   originalForceStderr = loggingStateRef.forceConsoleToStderr;
   loggingStateRef.forceConsoleToStderr = false;
 });
@@ -42,19 +50,45 @@ afterEach(() => {
 });
 
 describe("scanStatusJsonFast", () => {
-  it("routes plugin logs to stderr during deferred plugin loading", async () => {
+  it("does not preload configured channel plugins for the lean JSON path", async () => {
     mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
 
-    let stderrDuringLoad = false;
-    mocks.ensurePluginRegistryLoaded.mockImplementation(() => {
-      stderrDuringLoad = loggingStateRef.forceConsoleToStderr;
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
+  });
+
+  it("keeps resolved and source channel configs available without loading runtime plugins", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+    applyStatusScanDefaults(mocks, {
+      hasConfiguredChannels: true,
+      sourceConfig: {
+        channels: {
+          telegram: {
+            botToken: {
+              source: "file",
+              provider: "vault",
+              id: "/telegram/bot-token",
+            },
+          },
+        },
+      } as never,
+      resolvedConfig: {
+        marker: "resolved-snapshot",
+        channels: {
+          telegram: {
+            botToken: "resolved-token",
+          },
+        },
+      } as never,
     });
 
     await scanStatusJsonFast({}, {} as never);
 
-    expect(mocks.ensurePluginRegistryLoaded).toHaveBeenCalled();
-    expect(stderrDuringLoad).toBe(true);
-    expect(loggingStateRef.forceConsoleToStderr).toBe(false);
+    expect(mocks.ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalled();
   });
 
   it("skips plugin compatibility loading even when configured channels are present", async () => {
@@ -65,10 +99,27 @@ describe("scanStatusJsonFast", () => {
     expect(mocks.buildPluginCompatibilityNotices).not.toHaveBeenCalled();
   });
 
+  it("keeps the fast JSON summary off the channel plugin summary path", async () => {
+    mocks.hasPotentialConfiguredChannels.mockReturnValue(true);
+
+    await scanStatusJsonFast({}, {} as never);
+
+    expect(mocks.getStatusSummary).toHaveBeenCalledOnce();
+    const summaryOptions = mocks.getStatusSummary.mock.calls[0]?.[0] as
+      | { includeChannelSummary?: unknown }
+      | undefined;
+    expect(summaryOptions?.includeChannelSummary).toBe(false);
+  });
+
   it("skips memory inspection for the lean status --json fast path", async () => {
     const result = await scanStatusJsonFast({}, {} as never);
 
     expect(result.memory).toBeNull();
+    expect(mocks.hasPotentialConfiguredChannels).toHaveBeenCalledWith(
+      createStatusMemorySearchConfig(),
+      process.env,
+      { includePersistedAuthState: false },
+    );
     expect(mocks.resolveMemorySearchConfig).not.toHaveBeenCalled();
     expect(mocks.getMemorySearchManager).not.toHaveBeenCalled();
   });
@@ -76,16 +127,16 @@ describe("scanStatusJsonFast", () => {
   it("restores memory inspection when --all is requested", async () => {
     const result = await scanStatusJsonFast({ all: true }, {} as never);
 
-    expect(result.memory).toEqual(expect.objectContaining({ agentId: "main" }));
+    expect(result.memory).toStrictEqual({
+      agentId: "main",
+      files: 0,
+      chunks: 0,
+      dirty: false,
+    });
     expect(mocks.resolveMemorySearchConfig).toHaveBeenCalled();
-    expect(mocks.getMemorySearchManager).toHaveBeenCalledWith({
-      cfg: expect.objectContaining({
-        agents: expect.objectContaining({
-          defaults: expect.objectContaining({
-            memorySearch: expect.any(Object),
-          }),
-        }),
-      }),
+    expect(mocks.getMemorySearchManager).toHaveBeenCalledOnce();
+    expect(mocks.getMemorySearchManager.mock.calls[0]?.[0]).toStrictEqual({
+      cfg: createStatusMemorySearchConfig(),
       agentId: "main",
       purpose: "status",
     });

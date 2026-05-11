@@ -10,8 +10,6 @@ import {
 } from "./accounts.js";
 import type { FeishuConfig } from "./types.js";
 
-const asConfig = (value: Partial<FeishuConfig>) => value as FeishuConfig;
-
 function makeDefaultAndRouterAccounts() {
   return {
     default: { appId: "cli_default", appSecret: "secret_default" }, // pragma: allowlist secret
@@ -45,6 +43,10 @@ function withEnvVar(key: string, value: string | undefined, run: () => void) {
       process.env[key] = prev;
     }
   }
+}
+
+function asConfig(config: Partial<FeishuConfig>): FeishuConfig {
+  return config as unknown as FeishuConfig;
 }
 
 function expectUnresolvedEnvSecretRefError(key: string) {
@@ -434,8 +436,8 @@ describe("resolveFeishuAccount", () => {
     expect((caught as Error).message).toMatch(/channels\.feishu\.appSecret: unresolved SecretRef/i);
   });
 
-  it("does not throw when account name is non-string", () => {
-    expect(() =>
+  it("ignores non-string account names", () => {
+    expect(
       resolveFeishuAccount({
         cfg: {
           channels: {
@@ -452,6 +454,11 @@ describe("resolveFeishuAccount", () => {
         } as never,
         accountId: "main",
       }),
-    ).not.toThrow();
+    ).toMatchObject({
+      accountId: "main",
+      appId: "cli_123",
+      appSecret: "secret_456",
+      name: undefined,
+    });
   });
 });

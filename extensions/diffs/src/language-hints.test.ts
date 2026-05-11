@@ -43,7 +43,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "wrap",
           unsafeCSS: "",
         },
-        langs: ["not-a-real-language"],
+        langs: ["not-a-real-language" as never],
         fileDiff: {
           name: "foo.txt",
           lang: "not-a-real-language" as never,
@@ -75,7 +75,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "scroll",
           unsafeCSS: "",
         },
-        langs: ["typescript", "not-a-real-language"],
+        langs: ["typescript", "not-a-real-language" as never],
         oldFile: {
           name: "before.unknown",
           contents: "before",
@@ -116,7 +116,7 @@ describe("normalizeDiffViewerPayloadLanguages", () => {
           overflow: "wrap",
           unsafeCSS: "",
         },
-        langs: ["   "],
+        langs: ["   " as never],
         oldFile: {
           name: "before.unknown",
           contents: "before",

@@ -7,10 +7,8 @@ const mockState = vi.hoisted(() => ({
   fetchGraphJson: vi.fn(),
 }));
 
-vi.mock("./graph.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./graph.js")>();
+vi.mock("./graph.js", () => {
   return {
-    ...actual,
     resolveGraphToken: mockState.resolveGraphToken,
     fetchGraphJson: mockState.fetchGraphJson,
   };

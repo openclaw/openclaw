@@ -1,5 +1,13 @@
-import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { z } from "openclaw/plugin-sdk/zod";
+import { sleep } from "openclaw/plugin-sdk/runtime-env";
+import {
+  fetchWithSsrFGuard,
+  ssrfPolicyFromPrivateNetworkOptIn,
+} from "openclaw/plugin-sdk/ssrf-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { z } from "zod";
 
 export type MattermostFetch = (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
 
@@ -107,16 +115,12 @@ export function createMattermostClient(params: {
 
   const guardedFetchImpl: MattermostFetch = async (input, init) => {
     const url =
-      typeof input === "string"
-        ? input
-        : input instanceof URL
-          ? input.toString()
-          : (input as Request).url;
+      typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
     const { response, release } = await fetchWithSsrFGuard({
       url,
       init,
       auditContext: "mattermost-api",
-      policy: params.allowPrivateNetwork ? { allowPrivateNetwork: true } : undefined,
+      policy: ssrfPolicyFromPrivateNetworkOptIn(params.allowPrivateNetwork),
     });
     try {
       const bodyBytes = NULL_BODY_STATUSES.has(response.status)
@@ -326,7 +330,7 @@ export async function createMattermostDirectChannelWithRetry(
       // Calculate exponential backoff delay with full-jitter
       // Jitter is proportional to the exponential delay, not a fixed 1000ms
       // This ensures backoff behaves correctly for small delay configurations
-      const exponentialDelay = initialDelayMs * Math.pow(2, attempt);
+      const exponentialDelay = initialDelayMs * 2 ** attempt;
       const jitter = Math.random() * exponentialDelay;
       const delayMs = Math.min(exponentialDelay + jitter, maxDelayMs);
 
@@ -345,7 +349,7 @@ export async function createMattermostDirectChannelWithRetry(
 function isRetryableError(error: Error): boolean {
   const candidates = collectErrorCandidates(error);
   const messages = candidates
-    .map((candidate) => readErrorMessage(candidate)?.toLowerCase())
+    .map((candidate) => normalizeLowercaseStringOrEmpty(readErrorMessage(candidate)))
     .filter((message): message is string => Boolean(message));
 
   // Retry on 5xx server errors FIRST (before checking 4xx)
@@ -374,7 +378,7 @@ function isRetryableError(error: Error): boolean {
     if (!clientErrorMatch) {
       continue;
     }
-    const statusCode = parseInt(clientErrorMatch[1], 10);
+    const statusCode = Number.parseInt(clientErrorMatch[1], 10);
     if (statusCode >= 400 && statusCode < 500) {
       return false;
     }
@@ -391,16 +395,24 @@ function isRetryableError(error: Error): boolean {
     return false;
   }
 
-  const codes = candidates
-    .map((candidate) => readErrorCode(candidate))
-    .filter((code): code is string => Boolean(code));
+  const codes: string[] = [];
+  for (const candidate of candidates) {
+    const code = readErrorCode(candidate);
+    if (code) {
+      codes.push(code);
+    }
+  }
   if (codes.some((code) => RETRYABLE_NETWORK_ERROR_CODES.has(code))) {
     return true;
   }
 
-  const names = candidates
-    .map((candidate) => readErrorName(candidate))
-    .filter((name): name is string => Boolean(name));
+  const names: string[] = [];
+  for (const candidate of candidates) {
+    const name = readErrorName(candidate);
+    if (name) {
+      names.push(name);
+    }
+  }
   if (names.some((name) => RETRYABLE_NETWORK_ERROR_NAMES.has(name))) {
     return true;
   }
@@ -412,11 +424,13 @@ function isRetryableError(error: Error): boolean {
 
 function collectErrorCandidates(error: unknown): unknown[] {
   const queue: unknown[] = [error];
+  let queueIndex = 0;
   const seen = new Set<unknown>();
   const candidates: unknown[] = [];
 
-  while (queue.length > 0) {
-    const current = queue.shift();
+  while (queueIndex < queue.length) {
+    const current = queue[queueIndex];
+    queueIndex += 1;
     if (!current || seen.has(current)) {
       continue;
     }
@@ -473,10 +487,6 @@ function readErrorCode(error: unknown): string | undefined {
     return String(raw);
   }
   return undefined;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 export async function createMattermostPost(
@@ -542,6 +552,15 @@ export async function updateMattermostPost(
   });
 }
 
+export async function deleteMattermostPost(
+  client: MattermostClient,
+  postId: string,
+): Promise<void> {
+  await client.request<void>(`/posts/${postId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function uploadMattermostFile(
   client: MattermostClient,
   params: {
@@ -552,7 +571,7 @@ export async function uploadMattermostFile(
   },
 ): Promise<MattermostFileInfo> {
   const form = new FormData();
-  const fileName = params.fileName?.trim() || "upload";
+  const fileName = normalizeOptionalString(params.fileName) ?? "upload";
   const bytes = Uint8Array.from(params.buffer);
   const blob = params.contentType
     ? new Blob([bytes], { type: params.contentType })

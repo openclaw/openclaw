@@ -1,7 +1,12 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import { normalizeOptionalLowercaseString, readStringValue } from "../../shared/string-coerce.js";
+import { resolveProviderRequestPolicy } from "../provider-attribution.js";
 import { resolveProviderRequestPolicyConfig } from "../provider-request-config.js";
+import { applyAnthropicEphemeralCacheControlMarkers } from "./anthropic-cache-control-payload.js";
+import { isAnthropicModelRef } from "./anthropic-family-cache-semantics.js";
+import { mapThinkingLevelToReasoningEffort } from "./reasoning-effort-utils.js";
 import { streamWithPayloadPatch } from "./stream-payload-utils.js";
 const KILOCODE_FEATURE_HEADER = "X-KILOCODE-FEATURE";
 const KILOCODE_FEATURE_DEFAULT = "openclaw";
@@ -12,20 +17,109 @@ function resolveKilocodeAppHeaders(): Record<string, string> {
   return { [KILOCODE_FEATURE_HEADER]: feature };
 }
 
-function isOpenRouterAnthropicModel(provider: string, modelId: string): boolean {
-  return provider.toLowerCase() === "openrouter" && modelId.toLowerCase().startsWith("anthropic/");
+function readExtraParam(
+  extraParams: Record<string, unknown> | undefined,
+  keys: readonly string[],
+): unknown {
+  if (!extraParams) {
+    return undefined;
+  }
+  for (const key of keys) {
+    if (Object.hasOwn(extraParams, key)) {
+      return extraParams[key];
+    }
+  }
+  return undefined;
 }
 
-function mapThinkingLevelToOpenRouterReasoningEffort(
-  thinkingLevel: ThinkLevel,
-): "none" | "minimal" | "low" | "medium" | "high" | "xhigh" {
-  if (thinkingLevel === "off") {
-    return "none";
+function resolveBooleanParam(value: unknown): boolean | undefined {
+  if (typeof value === "boolean") {
+    return value;
   }
-  if (thinkingLevel === "adaptive") {
-    return "medium";
+  if (typeof value !== "string") {
+    return undefined;
   }
-  return thinkingLevel;
+  const normalized = normalizeOptionalLowercaseString(value);
+  if (!normalized) {
+    return undefined;
+  }
+  if (["1", "true", "yes", "on", "enable", "enabled"].includes(normalized)) {
+    return true;
+  }
+  if (["0", "false", "no", "off", "disable", "disabled"].includes(normalized)) {
+    return false;
+  }
+  return undefined;
+}
+
+function resolveOpenRouterResponseCacheTtlSeconds(value: unknown): string | undefined {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : typeof value === "string"
+        ? Number.parseFloat(value.trim())
+        : Number.NaN;
+  if (!Number.isFinite(parsed)) {
+    return undefined;
+  }
+  return String(Math.max(1, Math.min(86400, Math.trunc(parsed))));
+}
+
+function shouldApplyOpenRouterResponseCacheHeaders(model: Parameters<StreamFn>[0]): boolean {
+  const provider = readStringValue(model.provider);
+  const endpointClass = resolveProviderRequestPolicy({
+    provider,
+    api: readStringValue(model.api),
+    baseUrl: readStringValue(model.baseUrl),
+    capability: "llm",
+    transport: "stream",
+  }).endpointClass;
+  return (
+    endpointClass === "openrouter" ||
+    (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
+  );
+}
+
+function resolveOpenRouterResponseCacheHeaders(
+  model: Parameters<StreamFn>[0],
+  extraParams: Record<string, unknown> | undefined,
+): Record<string, string> | undefined {
+  if (!shouldApplyOpenRouterResponseCacheHeaders(model)) {
+    return undefined;
+  }
+  const configuredCache = resolveBooleanParam(
+    readExtraParam(extraParams, ["responseCache", "response_cache"]),
+  );
+  const clearCache = resolveBooleanParam(
+    readExtraParam(extraParams, ["responseCacheClear", "response_cache_clear"]),
+  );
+  const cacheEnabled = configuredCache ?? (clearCache ? true : undefined);
+  if (cacheEnabled === undefined) {
+    return undefined;
+  }
+
+  const headers: Record<string, string> = {
+    "X-OpenRouter-Cache": cacheEnabled ? "true" : "false",
+  };
+  if (!cacheEnabled) {
+    return headers;
+  }
+
+  const ttl = resolveOpenRouterResponseCacheTtlSeconds(
+    readExtraParam(extraParams, [
+      "responseCacheTtlSeconds",
+      "response_cache_ttl_seconds",
+      "responseCacheTtl",
+      "response_cache_ttl",
+    ]),
+  );
+  if (ttl) {
+    headers["X-OpenRouter-Cache-TTL"] = ttl;
+  }
+  if (clearCache) {
+    headers["X-OpenRouter-Cache-Clear"] = "true";
+  }
+  return headers;
 }
 
 function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkLevel): void {
@@ -47,77 +141,64 @@ function normalizeProxyReasoningPayload(payload: unknown, thinkingLevel?: ThinkL
   ) {
     const reasoningObj = existingReasoning as Record<string, unknown>;
     if (!("max_tokens" in reasoningObj) && !("effort" in reasoningObj)) {
-      reasoningObj.effort = mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel);
+      reasoningObj.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
     }
   } else if (!existingReasoning) {
     payloadObj.reasoning = {
-      effort: mapThinkingLevelToOpenRouterReasoningEffort(thinkingLevel),
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
     };
   }
 }
 
+/** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterSystemCacheWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const provider = readStringValue(model.provider);
+    const modelId = readStringValue(model.id);
+    // Keep OpenRouter-specific cache markers on verified OpenRouter routes
+    // (or the provider's default route), but not on arbitrary OpenAI proxies.
+    const endpointClass = resolveProviderRequestPolicy({
+      provider,
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
+      capability: "llm",
+      transport: "stream",
+    }).endpointClass;
     if (
-      typeof model.provider !== "string" ||
-      typeof model.id !== "string" ||
-      !isOpenRouterAnthropicModel(model.provider, model.id)
+      !modelId ||
+      !isAnthropicModelRef(modelId) ||
+      !(
+        endpointClass === "openrouter" ||
+        (endpointClass === "default" && normalizeOptionalLowercaseString(provider) === "openrouter")
+      )
     ) {
       return underlying(model, context, options);
     }
 
     return streamWithPayloadPatch(underlying, model, context, options, (payloadObj) => {
-      const messages = payloadObj.messages;
-      if (Array.isArray(messages)) {
-        for (const msg of messages as Array<{ role?: string; content?: unknown }>) {
-          if (msg.role === "system" || msg.role === "developer") {
-            if (typeof msg.content === "string") {
-              msg.content = [
-                { type: "text", text: msg.content, cache_control: { type: "ephemeral" } },
-              ];
-            } else if (Array.isArray(msg.content) && msg.content.length > 0) {
-              const last = msg.content[msg.content.length - 1];
-              if (last && typeof last === "object") {
-                const record = last as Record<string, unknown>;
-                if (record.type !== "thinking" && record.type !== "redacted_thinking") {
-                  record.cache_control = { type: "ephemeral" };
-                }
-              }
-            }
-            continue;
-          }
-
-          if (msg.role === "assistant" && Array.isArray(msg.content)) {
-            for (const block of msg.content) {
-              if (!block || typeof block !== "object") {
-                continue;
-              }
-              const record = block as Record<string, unknown>;
-              if (record.type === "thinking" || record.type === "redacted_thinking") {
-                delete record.cache_control;
-              }
-            }
-          }
-        }
-      }
+      applyAnthropicEphemeralCacheControlMarkers(payloadObj);
     });
   };
 }
 
+/** @deprecated OpenRouter provider-owned stream helper; do not use from third-party plugins. */
 export function createOpenRouterWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
+  extraParams?: Record<string, unknown>,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
+    const providerHeaders = resolveOpenRouterResponseCacheHeaders(model, extraParams);
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "openrouter",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "openrouter",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,
+      providerHeaders,
       precedence: "caller-wins",
     }).headers;
     return streamWithPayloadPatch(
@@ -135,10 +216,14 @@ export function createOpenRouterWrapper(
   };
 }
 
+/** @deprecated Proxy provider-owned stream helper; do not use from third-party plugins. */
 export function isProxyReasoningUnsupported(modelId: string): boolean {
-  return modelId.toLowerCase().startsWith("x-ai/");
+  const trimmed = normalizeOptionalLowercaseString(modelId);
+  const slashIndex = trimmed?.indexOf("/") ?? -1;
+  return slashIndex > 0 && trimmed?.slice(0, slashIndex) === "x-ai";
 }
 
+/** @deprecated Kilocode provider-owned stream helper; do not use from third-party plugins. */
 export function createKilocodeWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel?: ThinkLevel,
@@ -146,9 +231,9 @@ export function createKilocodeWrapper(
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const headers = resolveProviderRequestPolicyConfig({
-      provider: typeof model.provider === "string" ? model.provider : "kilocode",
-      api: typeof model.api === "string" ? model.api : undefined,
-      baseUrl: typeof model.baseUrl === "string" ? model.baseUrl : undefined,
+      provider: readStringValue(model.provider) ?? "kilocode",
+      api: readStringValue(model.api),
+      baseUrl: readStringValue(model.baseUrl),
       capability: "llm",
       transport: "stream",
       callerHeaders: options?.headers,

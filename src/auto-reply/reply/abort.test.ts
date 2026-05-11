@@ -20,7 +20,6 @@ import {
 } from "./abort.js";
 import { enqueueFollowupRun, getFollowupQueueDepth, type FollowupRun } from "./queue.js";
 import { __testing as queueCleanupTesting } from "./queue/cleanup.js";
-import { initSessionState } from "./session.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 vi.mock("../../agents/pi-embedded.js", () => ({
@@ -153,7 +152,7 @@ describe("abort detection", () => {
         workspaceDir: path.join(params.root, "workspace"),
         config: params.cfg,
         provider: "anthropic",
-        model: "claude-opus-4-5",
+        model: "claude-opus-4-6",
         timeoutMs: 1000,
         blockReplyBreak: "text_end",
       },
@@ -198,28 +197,6 @@ describe("abort detection", () => {
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
     acpManagerMocks.cancelSession.mockReset().mockResolvedValue(undefined);
     subagentRegistryMocks.getLatestSubagentRunByChildSessionKey.mockReset().mockReturnValue(null);
-  });
-
-  it("triggerBodyNormalized extracts /stop from RawBody for abort detection", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-abort-"));
-    const storePath = path.join(root, "sessions.json");
-    const cfg = { session: { store: storePath } } as OpenClawConfig;
-
-    const groupMessageCtx = {
-      Body: `[Context]\nJake: /stop\n[from: Jake]`,
-      RawBody: "/stop",
-      ChatType: "group",
-      SessionKey: "agent:main:whatsapp:group:g1",
-    };
-
-    const result = await initSessionState({
-      ctx: groupMessageCtx,
-      cfg,
-      commandAuthorized: true,
-    });
-
-    // /stop is detected via exact match in handleAbort, not isAbortTrigger
-    expect(result.triggerBodyNormalized).toBe("/stop");
   });
 
   it("isAbortTrigger matches standalone abort trigger phrases", () => {
@@ -385,8 +362,8 @@ describe("abort detection", () => {
       entry: store["session-1"],
       key: "session-1",
     });
-    expect(resolveSessionEntryForKey(store, "session-2")).toEqual({});
-    expect(resolveSessionEntryForKey(undefined, "session-1")).toEqual({});
+    expect(resolveSessionEntryForKey(store, "session-2")).toStrictEqual({});
+    expect(resolveSessionEntryForKey(undefined, "session-1")).toStrictEqual({});
   });
 
   it("resolves Telegram forum topic session when lookup key has different casing than store", () => {
@@ -800,7 +777,7 @@ describe("abort detection", () => {
     );
   });
 
-  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", async () => {
+  it("stopSubagentsForRequester does not traverse a child that moved to a newer parent", () => {
     subagentRegistryMocks.listSubagentRunsForRequester.mockClear();
     subagentRegistryMocks.markSubagentRunTerminated.mockClear();
     const oldParentKey = "agent:main:subagent:old-parent";

@@ -5,6 +5,7 @@ import {
   patchCodexNativeWebSearchPayload,
   resolveCodexNativeSearchActivation,
   resolveCodexNativeWebSearchConfig,
+  isCodexNativeWebSearchRelevant,
   shouldSuppressManagedWebSearchTool,
 } from "./codex-native-web-search.js";
 
@@ -147,17 +148,13 @@ describe("Codex native web-search payload helpers", () => {
       },
     });
 
-    expect(result).toMatchObject({
-      enabled: true,
-      mode: "cached",
-      allowedDomains: ["example.com"],
-      contextSize: "high",
-      userLocation: {
-        country: "US",
-        city: "New York",
-        timezone: "America/New_York",
-      },
-    });
+    expect(result.enabled).toBe(true);
+    expect(result.mode).toBe("cached");
+    expect(result.allowedDomains).toEqual(["example.com"]);
+    expect(result.contextSize).toBe("high");
+    expect(result.userLocation?.country).toBe("US");
+    expect(result.userLocation?.city).toBe("New York");
+    expect(result.userLocation?.timezone).toBe("America/New_York");
   });
 
   it("builds the native Responses web_search tool", () => {
@@ -230,9 +227,7 @@ describe("shouldSuppressManagedWebSearchTool", () => {
 });
 
 describe("isCodexNativeWebSearchRelevant", () => {
-  it("treats a default model with model-level openai-codex-responses api as relevant", async () => {
-    const { isCodexNativeWebSearchRelevant } = await import("./codex-native-web-search.js");
-
+  it("treats a default model with model-level openai-codex-responses api as relevant", () => {
     expect(
       isCodexNativeWebSearchRelevant({
         config: {

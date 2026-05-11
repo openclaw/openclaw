@@ -1,7 +1,13 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("../channels/config-presence.js", () => ({
-  hasPotentialConfiguredChannels: vi.fn(() => true),
+const statusSummaryMocks = vi.hoisted(() => ({
+  hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
+  buildChannelSummary: vi.fn(async () => ["ok"]),
+  readSessionStoreReadOnly: vi.fn(() => ({})),
+}));
+
+vi.mock("../plugins/channel-plugin-ids.js", () => ({
+  hasConfiguredChannelsForReadOnlyScope: statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope,
 }));
 
 vi.mock("./status.summary.runtime.js", () => ({
@@ -9,19 +15,20 @@ vi.mock("./status.summary.runtime.js", () => ({
     classifySessionKey: vi.fn(() => "direct"),
     resolveConfiguredStatusModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.5",
     })),
     resolveSessionModelRef: vi.fn(() => ({
       provider: "openai",
-      model: "gpt-5.2",
+      model: "gpt-5.5",
     })),
+    resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Pi Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
   },
 }));
 
 vi.mock("../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 200_000,
-  DEFAULT_MODEL: "gpt-5.2",
+  DEFAULT_MODEL: "gpt-5.5",
   DEFAULT_PROVIDER: "openai",
 }));
 
@@ -29,16 +36,17 @@ vi.mock("../config/io.js", () => ({
   loadConfig: vi.fn(() => ({})),
 }));
 
-vi.mock("../config/sessions.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/sessions.js")>();
-  return {
-    ...actual,
-    loadSessionStore: vi.fn(() => ({})),
-    resolveFreshSessionTotalTokens: vi.fn(() => undefined),
-    resolveMainSessionKey: vi.fn(() => "main"),
-    resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+}));
+
+vi.mock("../config/sessions/paths.js", () => ({
+  resolveStorePath: vi.fn(() => "/tmp/sessions.json"),
+}));
+
+vi.mock("../config/sessions/store-read.js", () => ({
+  readSessionStoreReadOnly: statusSummaryMocks.readSessionStoreReadOnly,
+}));
 
 vi.mock("../gateway/agent-list.js", () => ({
   listGatewayAgentsBasic: vi.fn(() => ({
@@ -48,7 +56,7 @@ vi.mock("../gateway/agent-list.js", () => ({
 }));
 
 vi.mock("../infra/channel-summary.js", () => ({
-  buildChannelSummary: vi.fn(async () => ["ok"]),
+  buildChannelSummary: statusSummaryMocks.buildChannelSummary,
 }));
 
 vi.mock("../infra/heartbeat-summary.js", () => ({
@@ -64,6 +72,7 @@ vi.mock("../infra/system-events.js", () => ({
 }));
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
+  configureTaskRegistryMaintenance: vi.fn(),
   getInspectableTaskRegistrySummary: vi.fn(() => ({
     total: 0,
     active: 0,
@@ -106,15 +115,18 @@ vi.mock("../routing/session-key.js", () => ({
   parseAgentSessionKey: vi.fn(() => null),
 }));
 
-vi.mock("../version.js", () => ({
-  resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
-}));
+vi.mock("../version.js", async () => {
+  const actual = await vi.importActual<typeof import("../version.js")>("../version.js");
+  return {
+    ...actual,
+    resolveRuntimeServiceVersion: vi.fn(() => "2026.3.8"),
+  };
+});
 
 vi.mock("./status.link-channel.js", () => ({
   resolveLinkChannelContext: vi.fn(async () => undefined),
 }));
 
-const { hasPotentialConfiguredChannels } = await import("../channels/config-presence.js");
 const { buildChannelSummary } = await import("../infra/channel-summary.js");
 const { resolveLinkChannelContext } = await import("./status.link-channel.js");
 let getStatusSummary: typeof import("./status.summary.js").getStatusSummary;
@@ -128,6 +140,9 @@ describe("getStatusSummary", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(true);
+    statusSummaryMocks.buildChannelSummary.mockResolvedValue(["ok"]);
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({});
   });
 
   it("includes runtimeVersion in the status payload", async () => {
@@ -141,12 +156,25 @@ describe("getStatusSummary", () => {
   });
 
   it("skips channel summary imports when no channels are configured", async () => {
-    vi.mocked(hasPotentialConfiguredChannels).mockReturnValue(false);
+    statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope.mockReturnValue(false);
 
     const summary = await getStatusSummary();
 
-    expect(summary.channelSummary).toEqual([]);
+    expect(summary.channelSummary).toStrictEqual([]);
     expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).toHaveBeenCalledWith({
+      config: {},
+    });
+    expect(buildChannelSummary).not.toHaveBeenCalled();
+    expect(resolveLinkChannelContext).not.toHaveBeenCalled();
+  });
+
+  it("skips channel summary imports when explicitly disabled", async () => {
+    const summary = await getStatusSummary({ includeChannelSummary: false });
+
+    expect(summary.channelSummary).toStrictEqual([]);
+    expect(summary.linkChannel).toBeUndefined();
+    expect(statusSummaryMocks.hasConfiguredChannelsForReadOnlyScope).not.toHaveBeenCalled();
     expect(buildChannelSummary).not.toHaveBeenCalled();
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
@@ -154,8 +182,22 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
-    expect(vi.mocked(statusSummaryRuntime.resolveContextTokensForModel)).toHaveBeenCalledWith(
-      expect.objectContaining({ allowAsyncLoad: false }),
-    );
+    const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
+      .calls[0]?.[0];
+    expect(contextCall?.allowAsyncLoad).toBe(false);
+  });
+
+  it("includes the selected agent runtime on recent sessions", async () => {
+    vi.mocked(statusSummaryRuntime.resolveSessionRuntimeLabel).mockReturnValue("OpenAI Codex");
+    statusSummaryMocks.readSessionStoreReadOnly.mockReturnValue({
+      "agent:main:main": {
+        sessionId: "session-1",
+        updatedAt: Date.now(),
+      },
+    });
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent[0]?.runtime).toBe("OpenAI Codex");
   });
 });

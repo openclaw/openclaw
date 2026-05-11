@@ -1,4 +1,4 @@
-import { Type } from "@sinclair/typebox";
+import { Type } from "typebox";
 import { NonEmptyString } from "./primitives.js";
 
 const WizardRunStatusSchema = Type.Union([
@@ -66,6 +66,7 @@ export const WizardStepSchema = Type.Object(
     ]),
     title: Type.Optional(Type.String()),
     message: Type.Optional(Type.String()),
+    format: Type.Optional(Type.Union([Type.Literal("plain")])),
     options: Type.Optional(Type.Array(WizardStepOptionSchema)),
     initialValue: Type.Optional(Type.Unknown()),
     placeholder: Type.Optional(Type.String()),

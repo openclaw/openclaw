@@ -1,6 +1,5 @@
-import { createSubsystemLogger } from "../../../../src/logging/subsystem.js";
-
-const log = createSubsystemLogger("memory");
+import { formatErrorMessage } from "./error-utils.js";
+import { normalizeLowercaseStringOrEmpty } from "./string-utils.js";
 
 export type QmdQueryResult = {
   docid?: string;
@@ -24,7 +23,7 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
   if (!trimmedStdout) {
     const context = trimmedStderr ? ` (stderr: ${summarizeQmdStderr(trimmedStderr)})` : "";
     const message = `stdout empty${context}`;
-    log.warn(`qmd query returned invalid JSON: ${message}`);
+    warnQmdQueryParseError(message);
     throw new Error(`qmd query returned invalid JSON: ${message}`);
   }
   try {
@@ -42,16 +41,23 @@ export function parseQmdQueryJson(stdout: string, stderr: string): QmdQueryResul
     }
     throw new Error("qmd query JSON response was not an array");
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    log.warn(`qmd query returned invalid JSON: ${message}`);
+    const message = formatErrorMessage(err);
+    warnQmdQueryParseError(message);
     throw new Error(`qmd query returned invalid JSON: ${message}`, { cause: err });
   }
+}
+
+function warnQmdQueryParseError(message: string): void {
+  if (process.env.VITEST || process.env.NODE_ENV === "test") {
+    return;
+  }
+  process.stderr.write(`qmd query returned invalid JSON: ${message}\n`);
 }
 
 function isQmdNoResultsOutput(raw: string): boolean {
   const lines = raw
     .split(/\r?\n/)
-    .map((line) => line.trim().toLowerCase().replace(/\s+/g, " "))
+    .map((line) => normalizeLowercaseStringOrEmpty(line).replace(/\s+/g, " "))
     .filter((line) => line.length > 0);
   return lines.some((line) => isQmdNoResultsLine(line));
 }

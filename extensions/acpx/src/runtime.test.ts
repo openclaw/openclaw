@@ -1,1044 +1,1344 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { pathToFileURL } from "node:url";
-import { runAcpRuntimeAdapterContract } from "openclaw/plugin-sdk/testing";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { resolveAcpxPluginConfig } from "./config.js";
-import { AcpxRuntime, decodeAcpxRuntimeHandleState } from "./runtime.js";
-import {
-  cleanupMockRuntimeFixtures,
-  createMockRuntimeFixture,
-  NOOP_LOGGER,
-  readMockRuntimeLogEntries,
-} from "./test-utils/runtime-fixtures.js";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { AcpRuntimeError, type AcpRuntime } from "../runtime-api.js";
+import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import { AcpxRuntime, __testing } from "./runtime.js";
 
-let sharedFixture: Awaited<ReturnType<typeof createMockRuntimeFixture>> | null = null;
-let missingCommandRuntime: AcpxRuntime | null = null;
+type TestSessionStore = {
+  load(sessionId: string): Promise<Record<string, unknown> | undefined>;
+  save(record: Record<string, unknown>): Promise<void>;
+};
 
-beforeAll(async () => {
-  sharedFixture = await createMockRuntimeFixture();
-  missingCommandRuntime = new AcpxRuntime(
+const DOCUMENTED_OPENCLAW_BRIDGE_COMMAND =
+  "env OPENCLAW_HIDE_BANNER=1 OPENCLAW_SUPPRESS_NOTES=1 openclaw acp --url ws://127.0.0.1:18789 --token-file ~/.openclaw/gateway.token --session agent:main:main";
+const CODEX_ACP_COMMAND = "npx @zed-industries/codex-acp@0.13.0";
+const CODEX_ACP_WRAPPER_COMMAND = `node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"`;
+const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-close ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`;
+
+function makeRuntime(
+  baseStore: TestSessionStore,
+  options: Partial<ConstructorParameters<typeof AcpxRuntime>[0]> = {},
+  testOptions?: ConstructorParameters<typeof AcpxRuntime>[1],
+): {
+  runtime: AcpxRuntime;
+  wrappedStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+  delegate: {
+    cancel: AcpRuntime["cancel"];
+    close: AcpRuntime["close"];
+    ensureSession: AcpRuntime["ensureSession"];
+    getStatus: NonNullable<AcpRuntime["getStatus"]>;
+    setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+    isHealthy(): boolean;
+    probeAvailability(): Promise<void>;
+  };
+  bridgeSafeDelegate: {
+    close: AcpRuntime["close"];
+    ensureSession: AcpRuntime["ensureSession"];
+    getStatus: NonNullable<AcpRuntime["getStatus"]>;
+    setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+    isHealthy(): boolean;
+    probeAvailability(): Promise<void>;
+  };
+} {
+  const runtime = new AcpxRuntime(
     {
-      command: "/definitely/missing/acpx",
-      allowPluginLocalInstall: false,
-      stripProviderAuthEnvVars: false,
-      installCommand: "n/a",
-      cwd: process.cwd(),
+      cwd: "/tmp",
+      sessionStore: baseStore,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "openclaw" ? "openclaw acp" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
       permissionMode: "approve-reads",
-      nonInteractivePermissions: "fail",
-      pluginToolsMcpBridge: false,
-      strictWindowsCmdWrapper: true,
-      queueOwnerTtlSeconds: 0.1,
-      mcpServers: {},
+      ...options,
     },
-    { logger: NOOP_LOGGER },
+    testOptions,
   );
-});
 
-afterAll(async () => {
-  sharedFixture = null;
-  missingCommandRuntime = null;
-  await cleanupMockRuntimeFixtures();
-});
-
-async function expectSessionEnsureFallback(params: {
-  sessionKey: string;
-  env?: Record<string, string>;
-  expectNewAfterStatus: boolean;
-  expectedRecordId?: string;
-  expectedResumeSessionId?: string | null;
-}) {
-  const previousEnv = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(params.env ?? {})) {
-    previousEnv.set(key, process.env[key]);
-    process.env[key] = value;
-  }
-
-  try {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-    const handle = await runtime.ensureSession({
-      sessionKey: params.sessionKey,
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    expect(handle.backend).toBe("acpx");
-    if (params.expectedRecordId) {
-      expect(handle.acpxRecordId).toBe(params.expectedRecordId);
-    }
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const ensureIndex = logs.findIndex((entry) => entry.kind === "ensure");
-    const statusIndex = logs.findIndex((entry) => entry.kind === "status");
-    const newEntries = logs.filter((entry) => entry.kind === "new");
-    const newEntry = newEntries[0] ?? null;
-    const newIndex = newEntry ? logs.indexOf(newEntry) : -1;
-    expect(ensureIndex).toBeGreaterThanOrEqual(0);
-    expect(statusIndex).toBeGreaterThan(ensureIndex);
-    if (params.expectNewAfterStatus) {
-      expect(newEntries).toHaveLength(1);
-      expect(newIndex).toBeGreaterThan(statusIndex);
-    } else {
-      expect(newEntries).toHaveLength(0);
-    }
-    const newArgs = ((newEntry?.args as string[]) ?? []).slice();
-    const resumeFlagIndex = newArgs.indexOf("--resume-session");
-    if (params.expectedResumeSessionId === undefined) {
-      // No assertion requested for resume behavior.
-    } else if (params.expectedResumeSessionId === null) {
-      expect(resumeFlagIndex).toBe(-1);
-    } else {
-      expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
-      expect(newArgs[resumeFlagIndex + 1]).toBe(params.expectedResumeSessionId);
-    }
-  } finally {
-    for (const [key, value] of previousEnv.entries()) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
+  return {
+    runtime,
+    wrappedStore: (
+      runtime as unknown as {
+        sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
       }
-    }
-  }
+    ).sessionStore,
+    delegate: (
+      runtime as unknown as {
+        delegate: {
+          cancel: AcpRuntime["cancel"];
+          close: AcpRuntime["close"];
+          ensureSession: AcpRuntime["ensureSession"];
+          getStatus: NonNullable<AcpRuntime["getStatus"]>;
+          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+          isHealthy(): boolean;
+          probeAvailability(): Promise<void>;
+        };
+      }
+    ).delegate,
+    bridgeSafeDelegate: (
+      runtime as unknown as {
+        bridgeSafeDelegate: {
+          close: AcpRuntime["close"];
+          ensureSession: AcpRuntime["ensureSession"];
+          getStatus: NonNullable<AcpRuntime["getStatus"]>;
+          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
+          isHealthy(): boolean;
+          probeAvailability(): Promise<void>;
+        };
+      }
+    ).bridgeSafeDelegate,
+  };
 }
 
-describe("AcpxRuntime", () => {
-  it("passes the shared ACP adapter contract suite", async () => {
-    const fixture = await createMockRuntimeFixture();
-    await runAcpRuntimeAdapterContract({
-      createRuntime: async () => fixture.runtime,
-      agentId: "codex",
-      successPrompt: "contract-pass",
-      includeControlChecks: false,
-      assertSuccessEvents: (events) => {
-        expect(events.some((event) => event.type === "done")).toBe(true);
-      },
-    });
-
-    const logs = await readMockRuntimeLogEntries(fixture.logPath);
-    expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-    expect(logs.some((entry) => entry.kind === "cancel")).toBe(true);
-    expect(logs.some((entry) => entry.kind === "close")).toBe(true);
-  });
-
-  it("ensures sessions and streams prompt events", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture({ queueOwnerTtlSeconds: 180 });
-
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:123",
-      agent: "codex",
-      mode: "persistent",
-    });
-    expect(handle.backend).toBe("acpx");
-    expect(handle.acpxRecordId).toBe("rec-agent:codex:acp:123");
-    expect(handle.agentSessionId).toBe("inner-agent:codex:acp:123");
-    expect(handle.backendSessionId).toBe("sid-agent:codex:acp:123");
-    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
-    expect(decoded?.acpxRecordId).toBe("rec-agent:codex:acp:123");
-    expect(decoded?.agentSessionId).toBe("inner-agent:codex:acp:123");
-    expect(decoded?.backendSessionId).toBe("sid-agent:codex:acp:123");
-
-    const events = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "hello world",
-      mode: "prompt",
-      requestId: "req-test",
-    })) {
-      events.push(event);
-    }
-
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "text_delta",
-          text: "thinking",
-          stream: "thought",
-        }),
-      ]),
-    );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "tool_call",
-          text: "run-tests (in_progress)",
-        }),
-      ]),
-    );
-    expect(events).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          type: "text_delta",
-          text: "echo:hello world",
-          stream: "output",
-        }),
-      ]),
-    );
-    expect(events).toContainEqual({
-      type: "done",
-      stopReason: "end_turn",
-    });
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const ensure = logs.find((entry) => entry.kind === "ensure");
-    const prompt = logs.find((entry) => entry.kind === "prompt");
-    expect(ensure).toBeDefined();
-    expect(prompt).toBeDefined();
-    expect(prompt?.openclawShell).toBe("acp");
-    expect(Array.isArray(prompt?.args)).toBe(true);
-    const promptArgs = (prompt?.args as string[]) ?? [];
-    expect(promptArgs).toContain("--ttl");
-    expect(promptArgs).toContain("180");
-    expect(promptArgs).toContain("--approve-all");
-  });
-
-  it("surfaces signal-only prompt exits as runtime errors", async () => {
-    const previousSignal = process.env.MOCK_ACPX_PROMPT_SIGNAL;
-    process.env.MOCK_ACPX_PROMPT_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:signal-exit",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      const events = [];
-      for await (const event of runtime.runTurn({
-        handle,
-        text: "signal-only-exit",
-        mode: "prompt",
-        requestId: "req-signal",
-      })) {
-        events.push(event);
-      }
-
-      expect(events).toContainEqual({
-        type: "error",
-        message: "acpx exited with signal SIGTERM",
-      });
-      expect(events.some((event) => event.type === "done")).toBe(false);
-    } finally {
-      if (previousSignal === undefined) {
-        delete process.env.MOCK_ACPX_PROMPT_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_PROMPT_SIGNAL = previousSignal;
-      }
-    }
-  });
-
-  it("uses sessions new with --resume-session when resumeSessionId is provided", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-    const resumeSessionId = "sid-resume-123";
-    const sessionKey = "agent:codex:acp:resume";
-    const handle = await runtime.ensureSession({
-      sessionKey,
-      agent: "codex",
-      mode: "persistent",
-      resumeSessionId,
-    });
-
-    expect(handle.backend).toBe("acpx");
-    expect(handle.acpxRecordId).toBe("rec-" + sessionKey);
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    expect(logs.some((entry) => entry.kind === "ensure")).toBe(false);
-    const resumeEntry = logs.find(
-      (entry) => entry.kind === "new" && String(entry.sessionName ?? "") === sessionKey,
-    );
-    expect(resumeEntry).toBeDefined();
-    const resumeArgs = (resumeEntry?.args as string[]) ?? [];
-    const resumeFlagIndex = resumeArgs.indexOf("--resume-session");
-    expect(resumeFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(resumeArgs[resumeFlagIndex + 1]).toBe(resumeSessionId);
-  });
-
-  it("repairs dead named sessions when status only reports queue owner unavailable", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: true,
-      expectedResumeSessionId: "sid-agent:codex:acp:dead-session",
-    });
-  });
-
-  it("replaces dead named sessions when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session-unrecoverable",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
-      },
-      expectNewAfterStatus: true,
-    });
-  });
-
-  it("reuses a live named session when sessions ensure exits before returning identifiers", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-alive",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "alive",
-      },
-      expectNewAfterStatus: false,
-      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-alive",
-    });
-  });
-
-  it("repairs the named session after ensure failure when status only reports queue owner unavailable", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-dead",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-      },
-      expectNewAfterStatus: true,
-      expectedRecordId: "rec-agent:codex:acp:ensure-fallback-dead",
-      expectedResumeSessionId: "sid-agent:codex:acp:ensure-fallback-dead",
-    });
-  });
-
-  it("falls back to a fresh named session when queue owner recovery has no resumable id", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:dead-session-no-ids",
-      env: {
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "queue owner unavailable",
-        MOCK_ACPX_STATUS_NO_IDS: "1",
-      },
-      expectNewAfterStatus: true,
-      expectedResumeSessionId: null,
-    });
-  });
-
-  it("falls back to a fresh named session when queue owner resume repair uses a stale session id", async () => {
-    const previousResumeFailure = process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
-    const previousStatus = process.env.MOCK_ACPX_STATUS_STATUS;
-    const previousSummary = process.env.MOCK_ACPX_STATUS_SUMMARY;
-    process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = "1";
-    process.env.MOCK_ACPX_STATUS_STATUS = "dead";
-    process.env.MOCK_ACPX_STATUS_SUMMARY = "queue owner unavailable";
-
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:dead-session-stale-resume",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      expect(handle.backend).toBe("acpx");
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const newEntries = logs.filter((entry) => entry.kind === "new");
-      expect(newEntries).toHaveLength(2);
-      const firstArgs = ((newEntries[0]?.args as string[]) ?? []).slice();
-      const secondArgs = ((newEntries[1]?.args as string[]) ?? []).slice();
-      const firstResumeFlagIndex = firstArgs.indexOf("--resume-session");
-      expect(firstResumeFlagIndex).toBeGreaterThanOrEqual(0);
-      expect(firstArgs[firstResumeFlagIndex + 1]).toBe(
-        "sid-agent:codex:acp:dead-session-stale-resume",
-      );
-      expect(secondArgs.indexOf("--resume-session")).toBe(-1);
-    } finally {
-      if (previousResumeFailure === undefined) {
-        delete process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME;
-      } else {
-        process.env.MOCK_ACPX_NEW_FAIL_ON_RESUME = previousResumeFailure;
-      }
-      if (previousStatus === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_STATUS;
-      } else {
-        process.env.MOCK_ACPX_STATUS_STATUS = previousStatus;
-      }
-      if (previousSummary === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SUMMARY;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SUMMARY = previousSummary;
-      }
-    }
-  });
-
-  it("creates a fresh named session after ensure failure when status indicates an unrecoverable failure", async () => {
-    await expectSessionEnsureFallback({
-      sessionKey: "agent:codex:acp:ensure-fallback-dead-unrecoverable",
-      env: {
-        MOCK_ACPX_ENSURE_EXIT_1: "1",
-        MOCK_ACPX_STATUS_STATUS: "dead",
-        MOCK_ACPX_STATUS_SUMMARY: "agent process exited",
-      },
-      expectNewAfterStatus: true,
-    });
-  });
-
-  it("surfaces structured control-command errors from sessions ensure", async () => {
-    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
-    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:codex:acp:ensure-structured-error",
-          agent: "codex",
-          mode: "persistent",
-        }),
-      ).rejects.toMatchObject({
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "-32603: mock ensure failure",
-      });
-    } finally {
-      if (previousEnsureExit === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
-      }
-      if (previousStatusSignal === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
-      }
-    }
-  });
-
-  it("appends stderr details when control-command errors are generic", async () => {
-    const previousEnsureExit = process.env.MOCK_ACPX_ENSURE_EXIT_1;
-    const previousEnsureMessage = process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
-    const previousEnsureStderr = process.env.MOCK_ACPX_ENSURE_STDERR;
-    const previousStatusSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
-    process.env.MOCK_ACPX_ENSURE_EXIT_1 = "1";
-    process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = "Internal error";
-    process.env.MOCK_ACPX_ENSURE_STDERR = "usage limit exceeded";
-    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:codex:acp:ensure-generic-error",
-          agent: "codex",
-          mode: "persistent",
-        }),
-      ).rejects.toMatchObject({
-        code: "ACP_SESSION_INIT_FAILED",
-        message: "-32603: Internal error | usage limit exceeded",
-      });
-    } finally {
-      if (previousEnsureExit === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_EXIT_1;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_EXIT_1 = previousEnsureExit;
-      }
-      if (previousEnsureMessage === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_ERROR_MESSAGE = previousEnsureMessage;
-      }
-      if (previousEnsureStderr === undefined) {
-        delete process.env.MOCK_ACPX_ENSURE_STDERR;
-      } else {
-        process.env.MOCK_ACPX_ENSURE_STDERR = previousEnsureStderr;
-      }
-      if (previousStatusSignal === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SIGNAL = previousStatusSignal;
-      }
-    }
-  });
-
-  it("serializes text plus image attachments into ACP prompt blocks", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:with-image",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    for await (const _event of runtime.runTurn({
-      handle,
-      text: "describe this image",
-      attachments: [{ mediaType: "image/png", data: "aW1hZ2UtYnl0ZXM=" }], // pragma: allowlist secret
-      mode: "prompt",
-      requestId: "req-image",
-    })) {
-      // Consume stream to completion so prompt logging is finalized.
-    }
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const prompt = logs.find(
-      (entry) =>
-        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:with-image",
-    );
-    expect(prompt).toBeDefined();
-
-    const stdinBlocks = JSON.parse(String(prompt?.stdinText ?? ""));
-    expect(stdinBlocks).toEqual([
-      { type: "text", text: "describe this image" },
-      { type: "image", mimeType: "image/png", data: "aW1hZ2UtYnl0ZXM=" },
-    ]);
-  });
-
-  it("preserves provider auth env vars when runtime uses a custom acpx command", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "openai-secret"); // pragma: allowlist secret
-    vi.stubEnv("GITHUB_TOKEN", "gh-secret"); // pragma: allowlist secret
-
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:custom-env",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      for await (const _event of runtime.runTurn({
-        handle,
-        text: "custom-env",
-        mode: "prompt",
-        requestId: "req-custom-env",
-      })) {
-        // Drain events; assertions inspect the mock runtime log.
-      }
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const prompt = logs.find(
-        (entry) =>
-          entry.kind === "prompt" &&
-          String(entry.sessionName ?? "") === "agent:codex:acp:custom-env",
-      );
-      expect(prompt?.openaiApiKey).toBe("openai-secret");
-      expect(prompt?.githubToken).toBe("gh-secret");
-    } finally {
-      vi.unstubAllEnvs();
-    }
-  });
-
-  it("preserves leading spaces across streamed text deltas", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:space",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    const textDeltas: string[] = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "split-spacing",
-      mode: "prompt",
-      requestId: "req-space",
-    })) {
-      if (event.type === "text_delta" && event.stream === "output") {
-        textDeltas.push(event.text);
-      }
-    }
-
-    expect(textDeltas).toEqual(["alpha", " beta", " gamma"]);
-    expect(textDeltas.join("")).toBe("alpha beta gamma");
-
-    // Keep the default queue-owner TTL assertion on a runTurn that already exists.
-    const activeLogPath = process.env.MOCK_ACPX_LOG;
-    expect(activeLogPath).toBeDefined();
-    const logs = await readMockRuntimeLogEntries(String(activeLogPath));
-    const prompt = logs.find(
-      (entry) =>
-        entry.kind === "prompt" && String(entry.sessionName ?? "") === "agent:codex:acp:space",
-    );
-    expect(prompt).toBeDefined();
-    const promptArgs = (prompt?.args as string[]) ?? [];
-    const ttlFlagIndex = promptArgs.indexOf("--ttl");
-    expect(ttlFlagIndex).toBeGreaterThanOrEqual(0);
-    expect(promptArgs[ttlFlagIndex + 1]).toBe("0.1");
-  });
-
-  it("emits done once when ACP stream repeats stop reason responses", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:double-done",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    const events = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "double-done",
-      mode: "prompt",
-      requestId: "req-double-done",
-    })) {
-      events.push(event);
-    }
-
-    const doneCount = events.filter((event) => event.type === "done").length;
-    expect(doneCount).toBe(1);
-  });
-
-  it("maps acpx error events into ACP runtime error events", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:456",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    const events = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "trigger-error",
-      mode: "prompt",
-      requestId: "req-err",
-    })) {
-      events.push(event);
-    }
-
-    expect(events).toContainEqual({
-      type: "error",
-      message: "mock failure",
-      code: "-32000",
-      retryable: undefined,
-    });
-  });
-
-  it("maps acpx permission-denied exits to actionable guidance", async () => {
-    const runtime = sharedFixture?.runtime;
-    expect(runtime).toBeDefined();
-    if (!runtime) {
-      throw new Error("shared runtime fixture missing");
-    }
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:permission-denied",
-      agent: "codex",
-      mode: "persistent",
-    });
-
-    const events = [];
-    for await (const event of runtime.runTurn({
-      handle,
-      text: "permission-denied",
-      mode: "prompt",
-      requestId: "req-perm",
-    })) {
-      events.push(event);
-    }
-
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "error",
-        message: expect.stringContaining("Permission denied by ACP runtime (acpx)."),
+function makeLeaseStore() {
+  const leases = new Map<string, Record<string, unknown>>();
+  return {
+    leases,
+    store: {
+      load: vi.fn(async (leaseId: string) => leases.get(leaseId) as never),
+      listOpen: vi.fn(async () => Array.from(leases.values()) as never),
+      save: vi.fn(async (lease: Record<string, unknown>) => {
+        leases.set(String(lease.leaseId), lease);
       }),
-    );
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "error",
-        message: expect.stringContaining("approve-reads, approve-all, deny-all"),
+      markState: vi.fn(async (leaseId: string, state: string) => {
+        const lease = leases.get(leaseId);
+        if (lease) {
+          lease.state = state;
+        }
       }),
-    );
+    },
+  };
+}
+
+function readFirstEnsureSessionInput(ensure: {
+  mock: { calls: Array<Array<unknown>> };
+}): Parameters<AcpRuntime["ensureSession"]>[0] {
+  const input = ensure.mock.calls[0]?.[0];
+  if (typeof input !== "object" || input === null) {
+    throw new Error("Expected ensureSession to be called with an input object");
+  }
+  return input as Parameters<AcpRuntime["ensureSession"]>[0];
+}
+
+describe("AcpxRuntime fresh reset wrapper", () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
   });
 
-  it("supports cancel and close using encoded runtime handle state", async () => {
-    const { runtime, logPath, config } = await createMockRuntimeFixture();
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:claude:acp:789",
-      agent: "claude",
-      mode: "persistent",
+  it("rejects unsupported runtime session modes with a clear AcpRuntimeError (issue #73071)", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const ensureSpy = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "claude",
     });
 
-    const decoded = decodeAcpxRuntimeHandleState(handle.runtimeSessionName);
-    expect(decoded?.name).toBe("agent:claude:acp:789");
+    for (const badMode of ["run", "session", "", undefined, null, 0]) {
+      let error: unknown;
+      try {
+        await runtime.ensureSession({
+          sessionKey: "agent:claude:acp:test",
+          agent: "claude",
+          mode: badMode as never,
+        });
+      } catch (caught) {
+        error = caught;
+      }
 
-    const secondRuntime = new AcpxRuntime(config, { logger: NOOP_LOGGER });
+      expect(error).toBeInstanceOf(AcpRuntimeError);
+      const acpError = error as AcpRuntimeError;
+      expect(acpError.name).toBe("AcpRuntimeError");
+      expect(acpError.code).toBe("ACP_INVALID_RUNTIME_OPTION");
+      expect(acpError.message).toBe(
+        `Unsupported ACP runtime session mode ${JSON.stringify(badMode)}. Expected one of: persistent, oneshot.`,
+      );
+    }
 
-    await secondRuntime.cancel({ handle, reason: "test" });
-    await secondRuntime.close({ handle, reason: "test" });
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const cancel = logs.find((entry) => entry.kind === "cancel");
-    const close = logs.find((entry) => entry.kind === "close");
-    expect(cancel?.sessionName).toBe("agent:claude:acp:789");
-    expect(close?.sessionName).toBe("agent:claude:acp:789");
+    expect(ensureSpy).not.toHaveBeenCalled();
   });
 
-  it("exposes control capabilities and runs set-mode/set/status commands", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:controls",
+  it("exposes assertSupportedRuntimeSessionMode as a typed guard", () => {
+    expect(__testing.assertSupportedRuntimeSessionMode("persistent")).toBeUndefined();
+    expect(__testing.assertSupportedRuntimeSessionMode("oneshot")).toBeUndefined();
+    expect(() => __testing.assertSupportedRuntimeSessionMode("run" as never)).toThrow(
+      AcpRuntimeError,
+    );
+  });
+
+  it("normalizes OpenClaw Codex model ids for ACP startup", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.4",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4",
+    });
+  });
+
+  it("leaves Codex ACP startup defaults alone when no model or thinking is provided", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
       agent: "codex",
       mode: "persistent",
     });
 
-    const capabilities = runtime.getCapabilities();
-    expect(capabilities.controls).toContain("session/set_mode");
-    expect(capabilities.controls).toContain("session/set_config_option");
-    expect(capabilities.controls).toContain("session/status");
-
-    await runtime.setMode({
-      handle,
-      mode: "plan",
+    const ensureInput = readFirstEnsureSessionInput(ensure);
+    expect(ensureInput).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
     });
+    expect(ensureInput).not.toHaveProperty("model");
+    expect(ensureInput).not.toHaveProperty("thinking");
+  });
+
+  it("does not normalize model startup for non-Codex ACP agents", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "main" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["main", "codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:main:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "main",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:main:acp:test",
+      agent: "main",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:main:acp:test",
+      agent: "main",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
+  });
+
+  it("injects Codex ACP startup config into the scoped registry", () => {
+    expect(__testing.isCodexAcpCommand(CODEX_ACP_COMMAND)).toBe(true);
+    expect(__testing.isCodexAcpCommand(CODEX_ACP_WRAPPER_COMMAND)).toBe(true);
+    expect(
+      __testing.appendCodexAcpConfigOverrides(CODEX_ACP_COMMAND, {
+        model: "gpt-5.4",
+        reasoningEffort: "medium",
+      }),
+    ).toBe(
+      "npx @zed-industries/codex-acp@0.13.0 -c model=gpt-5.4 -c model_reasoning_effort=medium",
+    );
+    expect(__testing.isCodexAcpCommand("openclaw acp")).toBe(false);
+  });
+
+  it("passes gpt-5.5 Codex ACP startup through instead of blocking it", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.5",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("maps explicit Codex ACP thinking to startup reasoning effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "openai-codex/gpt-5.4",
+      thinking: "x-high",
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+      model: "gpt-5.4/xhigh",
+      thinking: "x-high",
+    });
+  });
+
+  it("normalizes Codex ACP model config controls to adapter ids", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
     await runtime.setConfigOption({
       handle,
       key: "model",
       value: "openai-codex/gpt-5.4",
     });
-    const status = await runtime.getStatus({ handle });
-    const ensuredSessionName = "agent:codex:acp:controls";
 
-    expect(status.summary).toContain("status=alive");
-    expect(status.acpxRecordId).toBe("rec-" + ensuredSessionName);
-    expect(status.backendSessionId).toBe("sid-" + ensuredSessionName);
-    expect(status.agentSessionId).toBe("inner-" + ensuredSessionName);
-    expect(status.details?.acpxRecordId).toBe("rec-" + ensuredSessionName);
-    expect(status.details?.status).toBe("alive");
-    expect(status.details?.pid).toBe(4242);
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    expect(logs.find((entry) => entry.kind === "set-mode")?.mode).toBe("plan");
-    expect(logs.find((entry) => entry.kind === "set")?.key).toBe("model");
-    expect(logs.find((entry) => entry.kind === "status")).toBeDefined();
-  });
-
-  it("surfaces signal-only status exits as control command failures", async () => {
-    const previousSignal = process.env.MOCK_ACPX_STATUS_SIGNAL;
-    process.env.MOCK_ACPX_STATUS_SIGNAL = "SIGTERM";
-
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:controls-signal",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      await expect(runtime.getStatus({ handle })).rejects.toMatchObject({
-        code: "ACP_TURN_FAILED",
-        message: "acpx exited with signal SIGTERM",
-      });
-    } finally {
-      if (previousSignal === undefined) {
-        delete process.env.MOCK_ACPX_STATUS_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_STATUS_SIGNAL = previousSignal;
-      }
-    }
-  });
-
-  it("routes ACPX commands through an MCP proxy agent when MCP servers are configured", async () => {
-    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
-      codex: {
-        command: "npx custom-codex-acp",
-      },
-    });
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture({
-        mcpServers: {
-          canva: {
-            command: "npx",
-            args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-            env: {
-              CANVA_TOKEN: "secret", // pragma: allowlist secret
-            },
-          },
-        },
-      });
-
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:mcp",
-        agent: "codex",
-        mode: "persistent",
-      });
-      await runtime.setMode({
-        handle,
-        mode: "plan",
-      });
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
-      const setModeArgs = (logs.find((entry) => entry.kind === "set-mode")?.args as string[]) ?? [];
-
-      for (const args of [ensureArgs, setModeArgs]) {
-        const agentFlagIndex = args.indexOf("--agent");
-        expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
-        const rawAgentCommand = args[agentFlagIndex + 1];
-        expect(rawAgentCommand).toContain("mcp-proxy.mjs");
-        const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
-        expect(payloadMatch?.[1]).toBeDefined();
-        const payload = JSON.parse(
-          Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
-        ) as {
-          targetCommand: string;
-        };
-        expect(payload.targetCommand).toContain("custom-codex-acp");
-      }
-    } finally {
-      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
-    }
-  });
-
-  it("routes ACPX commands through the built-in plugin-tools bridge only when explicitly enabled", async () => {
-    process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS = JSON.stringify({
-      codex: {
-        command: "npx custom-codex-acp",
-      },
-    });
-    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-acpx-plugin-tools-"));
-    const pluginRoot = path.join(repoRoot, "extensions", "acpx");
-    const distEntry = path.join(repoRoot, "dist", "mcp", "plugin-tools-serve.js");
-    try {
-      fs.mkdirSync(path.join(pluginRoot, "src"), { recursive: true });
-      fs.mkdirSync(path.dirname(distEntry), { recursive: true });
-      fs.writeFileSync(path.join(pluginRoot, "package.json"), "{}\n", "utf8");
-      fs.writeFileSync(path.join(pluginRoot, "openclaw.plugin.json"), "{}\n", "utf8");
-      fs.writeFileSync(path.join(pluginRoot, "src", "config.ts"), "// test\n", "utf8");
-      fs.writeFileSync(distEntry, "// built entry\n", "utf8");
-
-      const fixture = await createMockRuntimeFixture();
-      const runtime = new AcpxRuntime(
-        resolveAcpxPluginConfig({
-          rawConfig: {
-            command: fixture.config.command,
-            pluginToolsMcpBridge: true,
-          },
-          workspaceDir: repoRoot,
-          moduleUrl: pathToFileURL(path.join(pluginRoot, "src", "config.ts")).href,
-        }),
-        { logger: NOOP_LOGGER },
-      );
-
-      await runtime.ensureSession({
-        sessionKey: "agent:codex:acp:plugin-tools-bridge",
-        agent: "codex",
-        mode: "persistent",
-      });
-
-      const logs = await readMockRuntimeLogEntries(fixture.logPath);
-      const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
-      const agentFlagIndex = ensureArgs.indexOf("--agent");
-      expect(agentFlagIndex).toBeGreaterThanOrEqual(0);
-      const rawAgentCommand = ensureArgs[agentFlagIndex + 1];
-      expect(rawAgentCommand).toContain("mcp-proxy.mjs");
-      const payloadMatch = rawAgentCommand.match(/--payload\s+([A-Za-z0-9_-]+)/);
-      expect(payloadMatch?.[1]).toBeDefined();
-      const payload = JSON.parse(
-        Buffer.from(String(payloadMatch?.[1]), "base64url").toString("utf8"),
-      ) as {
-        targetCommand: string;
-        mcpServers: Array<{ name: string; command: string; args: string[] }>;
-      };
-      expect(payload.targetCommand).toContain("custom-codex-acp");
-      expect(payload.mcpServers).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            name: "openclaw-plugin-tools",
-            command: process.execPath,
-            args: [distEntry],
-          }),
-        ]),
-      );
-    } finally {
-      delete process.env.MOCK_ACPX_CONFIG_SHOW_AGENTS;
-      fs.rmSync(repoRoot, { recursive: true, force: true });
-    }
-  });
-
-  it("does not pass unknown agent ids through acpx --agent when MCP servers are configured", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture({
-      mcpServers: {
-        canva: {
-          command: "npx",
-          args: ["-y", "mcp-remote@latest", "https://mcp.canva.com/mcp"],
-          env: {
-            CANVA_TOKEN: "secret", // pragma: allowlist secret
-          },
-        },
-      },
-    });
-
-    await runtime.ensureSession({
-      sessionKey: "agent:sh:acp:mcp",
-      agent: "sh -c whoami",
-      mode: "persistent",
-    });
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    const ensureArgs = (logs.find((entry) => entry.kind === "ensure")?.args as string[]) ?? [];
-    expect(ensureArgs).not.toContain("--agent");
-    expect(ensureArgs).toContain("sh -c whoami");
-  });
-
-  it("skips prompt execution when runTurn starts with an already-aborted signal", async () => {
-    const { runtime, logPath } = await createMockRuntimeFixture();
-    const handle = await runtime.ensureSession({
-      sessionKey: "agent:codex:acp:aborted",
-      agent: "codex",
-      mode: "persistent",
-    });
-    const controller = new AbortController();
-    controller.abort();
-
-    const events = [];
-    for await (const event of runtime.runTurn({
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
       handle,
-      text: "should-not-run",
-      mode: "prompt",
-      requestId: "req-aborted",
-      signal: controller.signal,
-    })) {
-      events.push(event);
-    }
-
-    const logs = await readMockRuntimeLogEntries(logPath);
-    expect(events).toEqual([]);
-    expect(logs.some((entry) => entry.kind === "prompt")).toBe(false);
-  });
-
-  it("does not mark backend unhealthy when a per-session cwd is missing", async () => {
-    const { runtime } = await createMockRuntimeFixture();
-    const missingCwd = path.join(os.tmpdir(), "openclaw-acpx-runtime-test-missing-cwd");
-
-    await runtime.probeAvailability();
-    expect(runtime.isHealthy()).toBe(true);
-
-    await expect(
-      runtime.ensureSession({
-        sessionKey: "agent:codex:acp:missing-cwd",
-        agent: "codex",
-        mode: "persistent",
-        cwd: missingCwd,
-      }),
-    ).rejects.toMatchObject({
-      code: "ACP_SESSION_INIT_FAILED",
-      message: expect.stringContaining("working directory does not exist"),
+      key: "model",
+      value: "gpt-5.4",
     });
-    expect(runtime.isHealthy()).toBe(true);
+    expect(setConfigOption).toHaveBeenCalledOnce();
   });
 
-  it("marks runtime unhealthy when command is missing", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
-    await missingCommandRuntime.probeAvailability();
-    expect(missingCommandRuntime.isHealthy()).toBe(false);
+  it("normalizes Codex ACP slash reasoning suffixes to config controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "model",
+      value: "openai-codex/gpt-5.4/high",
+    });
+
+    expect(setConfigOption).toHaveBeenNthCalledWith(1, {
+      handle,
+      key: "model",
+      value: "gpt-5.4",
+    });
+    expect(setConfigOption).toHaveBeenNthCalledWith(2, {
+      handle,
+      key: "reasoning_effort",
+      value: "high",
+    });
   });
 
-  it("marks runtime unhealthy when the help check exits on a signal", async () => {
-    const previousSignal = process.env.MOCK_ACPX_HELP_SIGNAL;
-    process.env.MOCK_ACPX_HELP_SIGNAL = "SIGTERM";
+  it("normalizes Codex ACP thinking config controls to reasoning effort", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
 
-    try {
-      const { runtime } = await createMockRuntimeFixture();
-      await runtime.probeAvailability();
-      expect(runtime.isHealthy()).toBe(false);
-    } finally {
-      if (previousSignal === undefined) {
-        delete process.env.MOCK_ACPX_HELP_SIGNAL;
-      } else {
-        process.env.MOCK_ACPX_HELP_SIGNAL = previousSignal;
-      }
-    }
+    await runtime.setConfigOption({
+      handle,
+      key: "thinking",
+      value: "minimal",
+    });
+
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "reasoning_effort",
+      value: "low",
+    });
   });
 
-  it("logs ACPX spawn resolution once per command policy", async () => {
-    const { config } = await createMockRuntimeFixture();
-    const debugLogs: string[] = [];
-    const runtime = new AcpxRuntime(
+  it("ignores unsupported Codex ACP timeout config controls", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:test",
+        agentCommand: CODEX_ACP_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:codex:acp:test",
+      acpxRecordId: "agent:codex:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout",
+      value: "60000",
+    });
+    await runtime.setConfigOption({
+      handle,
+      key: "Timeout_Seconds",
+      value: "60",
+    });
+
+    expect(setConfigOption).not.toHaveBeenCalled();
+  });
+
+  it("forwards timeout config controls for non-Codex ACP agents", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:claude:acp:test",
+        agentCommand: "npx @agentclientprotocol/claude-agent-acp",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore);
+    const setConfigOption = vi.spyOn(delegate, "setConfigOption").mockResolvedValue(undefined);
+    const handle: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0]["handle"] = {
+      sessionKey: "agent:claude:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "agent:claude:acp:test",
+      acpxRecordId: "agent:claude:acp:test",
+    };
+
+    await runtime.setConfigOption({
+      handle,
+      key: "timeout",
+      value: "60",
+    });
+
+    expect(setConfigOption).toHaveBeenCalledOnce();
+    expect(setConfigOption).toHaveBeenCalledWith({
+      handle,
+      key: "timeout",
+      value: "60",
+    });
+  });
+
+  it("keeps stale persistent loads hidden until a fresh record is saved", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, wrappedStore } = makeRuntime(baseStore);
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+
+    await runtime.prepareFreshSession({
+      sessionKey: "agent:codex:acp:binding:test",
+    });
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledTimes(1);
+
+    await wrappedStore.save({
+      acpxRecordId: "fresh-record",
+      name: "agent:codex:acp:binding:test",
+    } as never);
+
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toEqual({
+      acpxRecordId: "stale",
+    });
+    expect(baseStore.load).toHaveBeenCalledTimes(2);
+  });
+
+  it("marks the session fresh after discardPersistentState close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({ acpxRecordId: "stale" }) as never),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, wrappedStore, delegate } = makeRuntime(baseStore);
+    const close = vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+
+    expect(close).toHaveBeenCalledWith({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "new-in-place-reset",
+      discardPersistentState: true,
+    });
+    expect(await wrappedStore.load("agent:codex:acp:binding:test")).toBeUndefined();
+    expect(baseStore.load).toHaveBeenCalledOnce();
+  });
+
+  it("cleans up OpenClaw-owned ACPX process trees after close", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        pid: 900,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
       {
-        ...config,
-        strictWindowsCmdWrapper: true,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
       },
       {
-        logger: {
-          ...NOOP_LOGGER,
-          debug: (message: string) => {
-            debugLogs.push(message);
-          },
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 900,
+              ppid: 1,
+              command: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+            },
+            {
+              pid: 901,
+              ppid: 900,
+              command:
+                "node /tmp/openclaw/plugin-runtime-deps/node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
+            },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
         },
       },
     );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 901, signal: "SIGTERM" },
+      { pid: 900, signal: "SIGTERM" },
+    ]);
+  });
+
+  it("records ACPX process leases without persisting lease-specific agent commands", async () => {
+    const savedRecords: Record<string, unknown>[] = [];
+    const launchCommands: string[] = [];
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async (record) => {
+        savedRecords.push(record);
+      }),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      const command = (
+        runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+      ).scopedAgentRegistry.resolve("codex");
+      launchCommands.push(command);
+      await wrappedStore.save({
+        name: input.sessionKey,
+        agentCommand: command,
+        pid: 777,
+      });
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:binding:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(leaseStore.store.save).toHaveBeenCalledTimes(2);
+    const leases = Array.from(leaseStore.leases.values());
+    expect(leases).toHaveLength(1);
+    expect(leases[0]).toMatchObject({
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      rootPid: 777,
+      state: "open",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+    });
+    expect(launchCommands[0]).toContain("OPENCLAW_ACPX_LEASE_ID=");
+    expect(launchCommands[0]).toContain("OPENCLAW_GATEWAY_INSTANCE_ID=gateway-test");
+    expect(savedRecords[0]?.agentCommand).toBe(CODEX_ACP_WRAPPER_COMMAND);
+    expect(savedRecords[0]).toMatchObject({
+      openclawGatewayInstanceId: "gateway-test",
+      openclawLeaseId: leases[0]?.leaseId,
+    });
+  });
+
+  it("keeps reusable persistent ACP launch commands stable across ensures", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        acpxRecordId: "record-1",
+        acpSessionId: "session-1",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        cwd: "/tmp",
+        closed: false,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    const resolvedCommands: string[] = [];
+    vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      resolvedCommands.push(
+        (
+          runtime as unknown as { scopedAgentRegistry: { resolve(agent: string): string } }
+        ).scopedAgentRegistry.resolve("codex"),
+      );
+      return {
+        sessionKey: input.sessionKey,
+        backend: "acpx",
+        runtimeSessionName: input.sessionKey,
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:binding:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(resolvedCommands).toEqual([CODEX_ACP_WRAPPER_COMMAND]);
+    expect(leaseStore.store.save).not.toHaveBeenCalled();
+  });
+
+  it("merges sidecar lease ids into loaded ACPX session records", async () => {
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-loaded", {
+      leaseId: "lease-loaded",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 777,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        pid: 777,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+    });
+
+    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
+      openclawGatewayInstanceId: "gateway-test",
+      openclawLeaseId: "lease-loaded",
+    });
+  });
+
+  it("merges the lease for the current ACPX session process when old leases exist", async () => {
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-old", {
+      leaseId: "lease-old",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 700,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    leaseStore.leases.set("lease-current", {
+      leaseId: "lease-current",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 777,
+      commandHash: "hash",
+      startedAt: 2,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        pid: 777,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const { wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+    });
+
+    await expect(wrappedStore.load("agent:codex:acp:binding:test")).resolves.toMatchObject({
+      openclawGatewayInstanceId: "gateway-test",
+      openclawLeaseId: "lease-current",
+    });
+  });
+
+  it("uses matching leases before legacy pid cleanup on close", async () => {
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-close", {
+      leaseId: "lease-close",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 930,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        openclawLeaseId: "lease-close",
+        pid: 930,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 930,
+              ppid: 1,
+              command: CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE,
+            },
+            { pid: 931, ppid: 930, command: "node child.js" },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 931, signal: "SIGTERM" },
+      { pid: 930, signal: "SIGTERM" },
+    ]);
+    expect(leaseStore.store.markState).toHaveBeenCalledWith("lease-close", "closing");
+    expect(leaseStore.store.markState).toHaveBeenLastCalledWith("lease-close", "closed");
+  });
+
+  it("closes the current process lease when the saved lease id is stale", async () => {
+    const leaseStore = makeLeaseStore();
+    leaseStore.leases.set("lease-old", {
+      leaseId: "lease-old",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 930,
+      commandHash: "hash",
+      startedAt: 1,
+      state: "open",
+    });
+    leaseStore.leases.set("lease-current", {
+      leaseId: "lease-current",
+      gatewayInstanceId: "gateway-test",
+      sessionKey: "agent:codex:acp:binding:test",
+      wrapperRoot: "/tmp/openclaw/acpx",
+      wrapperPath: "/tmp/openclaw/acpx/codex-acp-wrapper.mjs",
+      rootPid: 940,
+      commandHash: "hash",
+      startedAt: 2,
+      state: "open",
+    });
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        openclawLeaseId: "lease-old",
+        pid: 940,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawGatewayInstanceId: "gateway-test",
+        openclawProcessLeaseStore: leaseStore.store,
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 930,
+              ppid: 1,
+              command: `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-old ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`,
+            },
+            {
+              pid: 940,
+              ppid: 1,
+              command: `${CODEX_ACP_WRAPPER_COMMAND} ${OPENCLAW_ACPX_LEASE_ID_ARG} lease-current ${OPENCLAW_GATEWAY_INSTANCE_ID_ARG} gateway-test`,
+            },
+            { pid: 941, ppid: 940, command: "node child.js" },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed.slice(0, 2)).toEqual([
+      { pid: 941, signal: "SIGTERM" },
+      { pid: 940, signal: "SIGTERM" },
+    ]);
+    expect(leaseStore.store.markState.mock.calls).toEqual([
+      ["lease-current", "closing"],
+      ["lease-current", "closed"],
+    ]);
+  });
+
+  it("does not clean up a stale close pid reused by another wrapper root", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        pid: 920,
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {
+        openclawWrapperRoot: "/tmp/openclaw/acpx",
+      },
+      {
+        openclawProcessCleanup: {
+          listProcesses: vi.fn(async () => [
+            {
+              pid: 920,
+              ppid: 1,
+              command: 'node "/tmp/other-gateway/acpx/codex-acp-wrapper.mjs"',
+            },
+          ]),
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    vi.spyOn(delegate, "close").mockResolvedValue(undefined);
+
+    await runtime.close({
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+      reason: "user-close",
+    });
+
+    expect(killed).toStrictEqual([]);
+  });
+
+  it("does not tear down reusable ACPX sessions after cancel", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:codex:acp:binding:test",
+        agentCommand: 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"',
+        processId: "910",
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const killed: Array<{ pid: number; signal: NodeJS.Signals }> = [];
+    const listProcesses = vi.fn(async () => {
+      throw new Error("process listing should not run on cancel");
+    });
+    const { runtime, delegate } = makeRuntime(
+      baseStore,
+      {},
+      {
+        openclawProcessCleanup: {
+          listProcesses,
+          killProcess: vi.fn((pid, signal) => {
+            killed.push({ pid, signal });
+          }),
+          sleep: vi.fn(async () => {}),
+        },
+      },
+    );
+    const cancel = vi.spyOn(delegate, "cancel").mockResolvedValue(undefined);
+
+    const input = {
+      handle: {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      },
+    } satisfies Parameters<AcpRuntime["cancel"]>[0];
+
+    await runtime.cancel(input);
+
+    expect(cancel).toHaveBeenCalledWith(input);
+    expect(listProcesses).not.toHaveBeenCalled();
+    expect(killed).toStrictEqual([]);
+  });
+
+  it("routes openclaw ensureSession through the bridge-safe delegate when MCP servers are configured", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:openclaw:acp:test",
+      agent: "openclaw",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("bridge");
+    expect(bridgeEnsure).toHaveBeenCalledOnce();
+    expect(defaultEnsure).not.toHaveBeenCalled();
+  });
+
+  it("routes non-openclaw sessions through the default delegate", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("default");
+    expect(defaultEnsure).toHaveBeenCalledOnce();
+    expect(bridgeEnsure).not.toHaveBeenCalled();
+  });
+
+  it("routes handle-based follow-up calls for openclaw sessions through the bridge-safe delegate", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+    });
+    const defaultStatus = vi.spyOn(delegate, "getStatus").mockResolvedValue({
+      summary: "default",
+    });
+    const bridgeStatus = vi.spyOn(bridgeSafeDelegate, "getStatus").mockResolvedValue({
+      summary: "bridge",
+    });
+    const handle: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0]["handle"] = {
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "openclaw-session-handle",
+    };
+
+    const status = await runtime.getStatus({ handle });
+
+    expect(status.summary).toBe("bridge");
+    expect(bridgeStatus).toHaveBeenCalledWith({ handle });
+    expect(defaultStatus).not.toHaveBeenCalled();
+  });
+
+  it("keeps MCP-enabled routing when the openclaw agent is overridden to a non-bridge adapter", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "openclaw" ? "codex" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:openclaw:acp:test",
+      agent: "openclaw",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("default");
+    expect(defaultEnsure).toHaveBeenCalledOnce();
+    expect(bridgeEnsure).not.toHaveBeenCalled();
+  });
+
+  it("uses the bridge-safe delegate for any agent mapped to the openclaw bridge command", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? "openclaw acp" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test",
+      agent: "codex",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("bridge");
+    expect(bridgeEnsure).toHaveBeenCalledOnce();
+    expect(defaultEnsure).not.toHaveBeenCalled();
+  });
+
+  it("uses the bridge-safe delegate for documented env-wrapped openclaw bridge commands", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "openclaw" ? DOCUMENTED_OPENCLAW_BRIDGE_COMMAND : agentName,
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:openclaw:acp:test",
+      agent: "openclaw",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("bridge");
+    expect(bridgeEnsure).toHaveBeenCalledOnce();
+    expect(defaultEnsure).not.toHaveBeenCalled();
+  });
+
+  it("uses the bridge-safe delegate for local node openclaw entrypoints", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "openclaw" ? "env OPENCLAW_HIDE_BANNER=1 node openclaw.mjs acp" : agentName,
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultEnsure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "default",
+    });
+    const bridgeEnsure = vi.spyOn(bridgeSafeDelegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:openclaw:acp:test",
+      backend: "acpx",
+      runtimeSessionName: "bridge",
+    });
+
+    const result = await runtime.ensureSession({
+      sessionKey: "agent:openclaw:acp:test",
+      agent: "openclaw",
+      mode: "persistent",
+    });
+
+    expect(result.runtimeSessionName).toBe("bridge");
+    expect(bridgeEnsure).toHaveBeenCalledOnce();
+    expect(defaultEnsure).not.toHaveBeenCalled();
+  });
+
+  it("routes follow-up calls by persisted agent command before current config", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        acpxRecordId: "agent:openclaw:acp:test",
+        agentCommand: DOCUMENTED_OPENCLAW_BRIDGE_COMMAND,
+      })),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "openclaw" ? "codex" : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultStatus = vi.spyOn(delegate, "getStatus").mockResolvedValue({
+      summary: "default",
+    });
+    const bridgeStatus = vi.spyOn(bridgeSafeDelegate, "getStatus").mockResolvedValue({
+      summary: "bridge",
+    });
+
+    const status = await runtime.getStatus({
+      handle: {
+        sessionKey: "agent:openclaw:acp:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:openclaw:acp:test",
+      },
+    });
+
+    expect(status.summary).toBe("bridge");
+    expect(bridgeStatus).toHaveBeenCalledOnce();
+    expect(defaultStatus).not.toHaveBeenCalled();
+  });
+
+  it("probes through the bridge-safe delegate when probeAgent resolves to openclaw bridge", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+
+    const { runtime, delegate, bridgeSafeDelegate } = makeRuntime(baseStore, {
+      mcpServers: [{ name: "tools", command: "mcp-tools" }] as never,
+      probeAgent: "openclaw",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "openclaw" ? DOCUMENTED_OPENCLAW_BRIDGE_COMMAND : agentName,
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const defaultProbe = vi.spyOn(delegate, "probeAvailability").mockResolvedValue(undefined);
+    const bridgeProbe = vi
+      .spyOn(bridgeSafeDelegate, "probeAvailability")
+      .mockResolvedValue(undefined);
+    vi.spyOn(delegate, "isHealthy").mockReturnValue(false);
+    vi.spyOn(bridgeSafeDelegate, "isHealthy").mockReturnValue(true);
 
     await runtime.probeAvailability();
 
-    const spawnLogs = debugLogs.filter((entry) => entry.startsWith("acpx spawn resolver:"));
-    expect(spawnLogs.length).toBe(1);
-    expect(spawnLogs[0]).toContain("mode=strict");
-  });
-
-  it("returns doctor report for missing command", async () => {
-    expect(missingCommandRuntime).toBeDefined();
-    if (!missingCommandRuntime) {
-      throw new Error("missing-command runtime fixture missing");
-    }
-    const report = await missingCommandRuntime.doctor();
-    expect(report.ok).toBe(false);
-    expect(report.code).toBe("ACP_BACKEND_UNAVAILABLE");
-    expect(report.installCommand).toContain("acpx");
-  });
-
-  it("falls back to 'sessions new' when 'sessions ensure' returns no session IDs", async () => {
-    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-      const handle = await runtime.ensureSession({
-        sessionKey: "agent:claude:acp:fallback-test",
-        agent: "claude",
-        mode: "persistent",
-      });
-      expect(handle.backend).toBe("acpx");
-      expect(handle.acpxRecordId).toBe("rec-agent:claude:acp:fallback-test");
-      expect(handle.agentSessionId).toBe("inner-agent:claude:acp:fallback-test");
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
-    }
-  });
-
-  it("fails with ACP_SESSION_INIT_FAILED when both ensure and new omit session IDs", async () => {
-    process.env.MOCK_ACPX_ENSURE_EMPTY = "1";
-    process.env.MOCK_ACPX_NEW_EMPTY = "1";
-    try {
-      const { runtime, logPath } = await createMockRuntimeFixture();
-
-      await expect(
-        runtime.ensureSession({
-          sessionKey: "agent:claude:acp:fallback-fail",
-          agent: "claude",
-          mode: "persistent",
-        }),
-      ).rejects.toMatchObject({
-        code: "ACP_SESSION_INIT_FAILED",
-        message: expect.stringContaining("neither 'sessions ensure' nor 'sessions new'"),
-      });
-
-      const logs = await readMockRuntimeLogEntries(logPath);
-      expect(logs.some((entry) => entry.kind === "ensure")).toBe(true);
-      expect(logs.some((entry) => entry.kind === "new")).toBe(true);
-    } finally {
-      delete process.env.MOCK_ACPX_ENSURE_EMPTY;
-      delete process.env.MOCK_ACPX_NEW_EMPTY;
-    }
+    expect(runtime.isHealthy()).toBe(true);
+    expect(bridgeProbe).toHaveBeenCalledOnce();
+    expect(defaultProbe).not.toHaveBeenCalled();
   });
 });

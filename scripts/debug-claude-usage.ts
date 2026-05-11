@@ -3,6 +3,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "../src/shared/string-coerce.ts";
 
 type Args = {
   agentId: string;
@@ -28,7 +29,7 @@ const parseArgs = (): Args => {
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === "--agent" && args[i + 1]) {
-      agentId = String(args[++i]).trim() || "main";
+      agentId = args[++i].trim() || "main";
       continue;
     }
     if (arg === "--reveal") {
@@ -36,7 +37,7 @@ const parseArgs = (): Args => {
       continue;
     }
     if (arg === "--session-key" && args[i + 1]) {
-      sessionKey = String(args[++i]).trim() || undefined;
+      sessionKey = normalizeOptionalString(args[++i]);
       continue;
     }
   }
@@ -378,7 +379,7 @@ const main = async () => {
   const web = await fetchClaudeWebUsage(sessionKey);
   if (!web.ok) {
     console.log(`Claude web: ${web.step} HTTP ${web.status}`);
-    console.log(String(web.body).slice(0, 400).replace(/\s+/g, " ").trim());
+    console.log(web.body.slice(0, 400).replace(/\s+/g, " ").trim());
     return;
   }
   console.log(`Claude web: org=${web.orgId} OK`);

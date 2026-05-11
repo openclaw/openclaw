@@ -1,18 +1,22 @@
-export type SubCliDescriptor = {
-  name: string;
-  description: string;
-  hasSubcommands: boolean;
-};
+import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
+import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
+import { isPrivateQaCliEnabled } from "./private-qa-cli.js";
 
-export const SUB_CLI_DESCRIPTORS = [
-  { name: "acp", description: "Agent Control Protocol tools", hasSubcommands: true },
+export type SubCliDescriptor = NamedCommandDescriptor;
+
+const subCliCommandCatalog = defineCommandDescriptorCatalog([
+  { name: "acp", description: "Run and manage ACP-backed coding agents", hasSubcommands: true },
   {
     name: "gateway",
-    description: "Run, inspect, and query the WebSocket Gateway",
+    description: "Run, inspect, and query the OpenClaw Gateway",
     hasSubcommands: true,
   },
-  { name: "daemon", description: "Gateway service (legacy alias)", hasSubcommands: true },
-  { name: "logs", description: "Tail gateway file logs via RPC", hasSubcommands: false },
+  {
+    name: "daemon",
+    description: "Manage the Gateway service (legacy alias)",
+    hasSubcommands: true,
+  },
+  { name: "logs", description: "Tail Gateway logs locally or via RPC", hasSubcommands: false },
   {
     name: "system",
     description: "System events, heartbeat, and presence",
@@ -20,7 +24,17 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "models",
-    description: "Discover, scan, and configure models",
+    description: "List, scan, and set model providers",
+    hasSubcommands: true,
+  },
+  {
+    name: "infer",
+    description: "Run provider-backed model, media, search, and embedding commands",
+    hasSubcommands: true,
+  },
+  {
+    name: "capability",
+    description: "Run provider capability commands (fallback alias: infer)",
     hasSubcommands: true,
   },
   {
@@ -29,8 +43,13 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: true,
   },
   {
+    name: "exec-policy",
+    description: "Show or synchronize requested exec policy with host approvals",
+    hasSubcommands: true,
+  },
+  {
     name: "nodes",
-    description: "Manage gateway-owned node pairing and node commands",
+    description: "Pair nodes and run node-host commands through the Gateway",
     hasSubcommands: true,
   },
   {
@@ -54,8 +73,18 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: false,
   },
   {
+    name: "terminal",
+    description: "Open a local terminal UI (alias for tui --local)",
+    hasSubcommands: false,
+  },
+  {
+    name: "chat",
+    description: "Open a local terminal UI (alias for tui --local)",
+    hasSubcommands: false,
+  },
+  {
     name: "cron",
-    description: "Manage cron jobs via the Gateway scheduler",
+    description: "Schedule and inspect Gateway background jobs",
     hasSubcommands: true,
   },
   {
@@ -69,6 +98,16 @@ export const SUB_CLI_DESCRIPTORS = [
     hasSubcommands: false,
   },
   {
+    name: "qa",
+    description: "Run QA scenarios and launch the private QA debugger UI",
+    hasSubcommands: true,
+  },
+  {
+    name: "proxy",
+    description: "Run the OpenClaw debug proxy and inspect captured traffic",
+    hasSubcommands: true,
+  },
+  {
     name: "hooks",
     description: "Manage internal agent hooks",
     hasSubcommands: true,
@@ -80,7 +119,7 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "qr",
-    description: "Generate iOS pairing QR/setup code",
+    description: "Generate mobile pairing QR/setup code",
     hasSubcommands: false,
   },
   {
@@ -95,12 +134,12 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "plugins",
-    description: "Manage OpenClaw plugins and extensions",
+    description: "Install, enable, disable, and inspect plugins",
     hasSubcommands: true,
   },
   {
     name: "channels",
-    description: "Manage connected chat channels (Telegram, Discord, etc.)",
+    description: "Add, remove, login, and inspect messaging channels",
     hasSubcommands: true,
   },
   {
@@ -115,12 +154,12 @@ export const SUB_CLI_DESCRIPTORS = [
   },
   {
     name: "secrets",
-    description: "Secrets runtime reload controls",
+    description: "Audit, apply, and reload SecretRef-backed credentials",
     hasSubcommands: true,
   },
   {
     name: "skills",
-    description: "List and inspect available skills",
+    description: "List, inspect, and install agent skills",
     hasSubcommands: true,
   },
   {
@@ -133,12 +172,22 @@ export const SUB_CLI_DESCRIPTORS = [
     description: "Generate shell completion script",
     hasSubcommands: false,
   },
-] as const satisfies ReadonlyArray<SubCliDescriptor>;
+] as const satisfies ReadonlyArray<SubCliDescriptor>);
+
+export const SUB_CLI_DESCRIPTORS = subCliCommandCatalog.descriptors;
 
 export function getSubCliEntries(): ReadonlyArray<SubCliDescriptor> {
-  return SUB_CLI_DESCRIPTORS;
+  const descriptors = subCliCommandCatalog.getDescriptors();
+  if (isPrivateQaCliEnabled()) {
+    return descriptors;
+  }
+  return descriptors.filter((descriptor) => descriptor.name !== "qa");
 }
 
 export function getSubCliCommandsWithSubcommands(): string[] {
-  return SUB_CLI_DESCRIPTORS.filter((entry) => entry.hasSubcommands).map((entry) => entry.name);
+  const commands = subCliCommandCatalog.getCommandsWithSubcommands();
+  if (isPrivateQaCliEnabled()) {
+    return commands;
+  }
+  return commands.filter((command) => command !== "qa");
 }

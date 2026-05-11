@@ -1,27 +1,45 @@
 import type { Message } from "@grammyjs/types";
+import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
 import type { TelegramContext } from "./types.js";
 
 const saveMediaBuffer = vi.fn();
 const fetchRemoteMedia = vi.fn();
+const rootRead = vi.fn();
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/media-runtime")>();
+vi.mock("openclaw/plugin-sdk/file-access-runtime", () => ({
+  root: async (rootDir: string) => ({
+    read: async (relativePath: string, options?: { maxBytes?: number }) =>
+      await rootRead({
+        rootDir,
+        relativePath,
+        maxBytes: options?.maxBytes,
+      }),
+  }),
+}));
+
+vi.mock("./delivery.resolve-media.runtime.js", () => {
+  class MediaFetchError extends Error {
+    code: string;
+
+    constructor(code: string, message: string, options?: { cause?: unknown }) {
+      super(message, options);
+      this.name = "MediaFetchError";
+      this.code = code;
+    }
+  }
   return {
-    ...actual,
-    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
     fetchRemoteMedia: (...args: unknown[]) => fetchRemoteMedia(...args),
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
+    formatErrorMessage: (err: unknown) => (err instanceof Error ? err.message : String(err)),
     logVerbose: () => {},
+    MediaFetchError,
+    resolveTelegramApiBase: (apiRoot?: string) =>
+      apiRoot?.trim() ? apiRoot.replace(/\/+$/u, "") : "https://api.telegram.org",
+    retryAsync,
+    saveMediaBuffer: (...args: unknown[]) => saveMediaBuffer(...args),
+    shouldRetryTelegramTransportFallback: vi.fn(() => false),
     warn: (s: string) => s,
-    danger: (s: string) => s,
   };
 });
 
@@ -151,21 +169,107 @@ function createFileTooBigError(): Error {
   return new Error("GrammyError: Call to 'getFile' failed! (400: Bad Request: file is too big)");
 }
 
+function resolveMediaWithDefaults(
+  ctx: TelegramContext,
+  overrides: Partial<Parameters<typeof resolveMedia>[0]> = {},
+) {
+  return resolveMedia({
+    ctx,
+    maxBytes: MAX_MEDIA_BYTES,
+    token: BOT_TOKEN,
+    ...overrides,
+  });
+}
+
+function requireResolvedMedia(
+  result: Awaited<ReturnType<typeof resolveMediaWithDefaults>>,
+  label: string,
+) {
+  if (!result) {
+    throw new Error(`expected ${label} media result`);
+  }
+  return result;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected ${label} to be a record`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function expectRecordFields(record: Record<string, unknown>, fields: Record<string, unknown>) {
+  for (const [key, value] of Object.entries(fields)) {
+    expect(record[key]).toEqual(value);
+  }
+}
+
+function requireFetchRemoteMediaParams(callIndex = 0): Record<string, unknown> {
+  const call = (fetchRemoteMedia.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected fetchRemoteMedia call ${callIndex}`);
+  }
+  return requireRecord(call[0], `fetchRemoteMedia call ${callIndex} params`);
+}
+
+function expectFetchRemoteMediaFields(fields: Record<string, unknown>, callIndex = 0) {
+  expectRecordFields(requireFetchRemoteMediaParams(callIndex), fields);
+}
+
+function expectFetchSsrfPolicyFields(fields: Record<string, unknown>, callIndex = 0) {
+  const params = requireFetchRemoteMediaParams(callIndex);
+  expectRecordFields(requireRecord(params.ssrfPolicy, "fetchRemoteMedia ssrfPolicy"), fields);
+}
+
+function expectResolvedMediaFields(
+  result: Awaited<ReturnType<typeof resolveMediaWithDefaults>>,
+  label: string,
+  fields: Record<string, unknown>,
+) {
+  expectRecordFields(requireResolvedMedia(result, label), fields);
+}
+
+async function expectMediaFetchError(
+  promise: Promise<unknown>,
+  fields: { code: string; messageIncludes: string },
+) {
+  try {
+    await promise;
+  } catch (error) {
+    const record = requireRecord(error, "MediaFetchError");
+    expect(record.name).toBe("MediaFetchError");
+    expect(record.code).toBe(fields.code);
+    expect(String(record.message)).toContain(fields.messageIncludes);
+    return;
+  }
+  throw new Error("expected MediaFetchError rejection");
+}
+
+function expectSaveMediaBufferCall(callIndex: number, fields: Record<string, unknown>) {
+  const call = (saveMediaBuffer.mock.calls as unknown[][])[callIndex];
+  if (!call) {
+    throw new Error(`expected saveMediaBuffer call ${callIndex}`);
+  }
+  expect(Buffer.isBuffer(call[0])).toBe(true);
+  expect(call[1]).toBe(fields.contentType);
+  expect(call[2]).toBe(fields.bucket);
+  expect(call[3]).toBe(fields.maxBytes);
+  expect(call[4]).toBe(fields.fileName);
+}
+
 async function expectTransientGetFileRetrySuccess() {
   const getFile = setupTransientGetFileRetry();
-  const promise = resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+  const promise = resolveMediaWithDefaults(makeCtx("voice", getFile));
   await flushRetryTimers();
   const result = await promise;
   expect(getFile).toHaveBeenCalledTimes(2);
-  expect(fetchRemoteMedia).toHaveBeenCalledWith(
-    expect.objectContaining({
-      url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
-      ssrfPolicy: {
-        allowRfc2544BenchmarkRange: true,
-        hostnameAllowlist: ["api.telegram.org"],
-      },
-    }),
-  );
+  expectFetchRemoteMediaFields({
+    url: `https://api.telegram.org/file/bot${BOT_TOKEN}/voice/file_0.oga`,
+  });
+  expectFetchSsrfPolicyFields({
+    allowRfc2544BenchmarkRange: true,
+    hostnameAllowlist: ["api.telegram.org"],
+  });
   return result;
 }
 
@@ -178,6 +282,7 @@ describe("resolveMedia getFile retry", () => {
     vi.useFakeTimers();
     fetchRemoteMedia.mockReset();
     saveMediaBuffer.mockReset();
+    rootRead.mockReset();
   });
 
   afterEach(() => {
@@ -186,9 +291,10 @@ describe("resolveMedia getFile retry", () => {
 
   it("retries getFile on transient failure and succeeds on second attempt", async () => {
     const result = await expectTransientGetFileRetrySuccess();
-    expect(result).toEqual(
-      expect.objectContaining({ path: "/tmp/file_0.oga", placeholder: "<media:audio>" }),
-    );
+    expectResolvedMediaFields(result, "retried voice", {
+      path: "/tmp/file_0.oga",
+      placeholder: "<media:audio>",
+    });
   });
 
   it.each(["voice", "photo", "video"] as const)(
@@ -196,7 +302,7 @@ describe("resolveMedia getFile retry", () => {
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
-      const promise = resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      const promise = resolveMediaWithDefaults(makeCtx(mediaField, getFile));
       await flushRetryTimers();
       const result = await promise;
 
@@ -209,9 +315,9 @@ describe("resolveMedia getFile retry", () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "voice/file_0.oga" });
     fetchRemoteMedia.mockRejectedValueOnce(new Error("download failed"));
 
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("download failed");
+    await expect(resolveMediaWithDefaults(makeCtx("voice", getFile))).rejects.toThrow(
+      "download failed",
+    );
 
     expect(getFile).toHaveBeenCalledTimes(1);
   });
@@ -221,7 +327,7 @@ describe("resolveMedia getFile retry", () => {
     const fileTooBigError = createFileTooBigError();
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(makeCtx("video", getFile));
 
     // Should NOT retry - "file is too big" is a permanent error, not transient.
     expect(getFile).toHaveBeenCalledTimes(1);
@@ -234,7 +340,7 @@ describe("resolveMedia getFile retry", () => {
     );
     const getFile = vi.fn().mockRejectedValue(fileTooBigError);
 
-    const result = await resolveMedia(makeCtx("video", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(makeCtx("video", getFile));
 
     expect(getFile).toHaveBeenCalledTimes(1);
     expect(result).toBeNull();
@@ -245,7 +351,7 @@ describe("resolveMedia getFile retry", () => {
     async (mediaField) => {
       const getFile = vi.fn().mockRejectedValue(createFileTooBigError());
 
-      const result = await resolveMedia(makeCtx(mediaField, getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+      const result = await resolveMediaWithDefaults(makeCtx(mediaField, getFile));
 
       expect(getFile).toHaveBeenCalledTimes(1);
       expect(result).toBeNull();
@@ -254,16 +360,16 @@ describe("resolveMedia getFile retry", () => {
 
   it("throws when getFile returns no file_path", async () => {
     const getFile = vi.fn().mockResolvedValue({});
-    await expect(
-      resolveMedia(makeCtx("voice", getFile), MAX_MEDIA_BYTES, BOT_TOKEN),
-    ).rejects.toThrow("Telegram getFile returned no file_path");
+    await expect(resolveMediaWithDefaults(makeCtx("voice", getFile))).rejects.toThrow(
+      "Telegram getFile returned no file_path",
+    );
     expect(getFile).toHaveBeenCalledTimes(1);
   });
 
   it("still retries transient errors even after encountering file too big in different call", async () => {
     const result = await expectTransientGetFileRetrySuccess();
     // Should retry transient errors.
-    expect(result).not.toBeNull();
+    expect(result?.path).toBe("/tmp/file_0.oga");
   });
 
   it("retries getFile for stickers on transient failure", async () => {
@@ -283,21 +389,22 @@ describe("resolveMedia getFile retry", () => {
     });
 
     const ctx = makeCtx("sticker", getFile);
-    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const promise = resolveMediaWithDefaults(ctx);
     await flushRetryTimers();
     const result = await promise;
 
     expect(getFile).toHaveBeenCalledTimes(2);
-    expect(result).toEqual(
-      expect.objectContaining({ path: "/tmp/file_0.webp", placeholder: "<media:sticker>" }),
-    );
+    expectResolvedMediaFields(result, "retried sticker", {
+      path: "/tmp/file_0.webp",
+      placeholder: "<media:sticker>",
+    });
   });
 
   it("returns null for sticker when getFile exhausts retries", async () => {
     const getFile = vi.fn().mockRejectedValue(new Error("Network request for 'getFile' failed!"));
 
     const ctx = makeCtx("sticker", getFile);
-    const promise = resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const promise = resolveMediaWithDefaults(ctx);
     await flushRetryTimers();
     const result = await promise;
 
@@ -308,7 +415,21 @@ describe("resolveMedia getFile retry", () => {
   it("uses caller-provided fetch impl for file downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const dispatcherAttempts = [
+      {
+        dispatcherPolicy: {
+          mode: "explicit-proxy" as const,
+          proxyUrl: "http://localhost:6152",
+          allowPrivateProxy: true,
+        },
+      },
+    ];
+    const callerTransport = {
+      fetch: callerFetch,
+      sourceFetch: callerFetch,
+      dispatcherAttempts,
+      close: async () => {},
+    };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("pdf-data"),
       contentType: "application/pdf",
@@ -319,25 +440,29 @@ describe("resolveMedia getFile retry", () => {
       contentType: "application/pdf",
     });
 
-    const result = await resolveMedia(
-      makeCtx("document", getFile),
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      callerTransport,
-    );
+    const result = await resolveMediaWithDefaults(makeCtx("document", getFile), {
+      transport: callerTransport,
+    });
 
-    expect(result).not.toBeNull();
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fetchImpl: callerFetch,
-      }),
-    );
+    expect(result?.path).toBe("/tmp/file_42---uuid.pdf");
+    const params = requireFetchRemoteMediaParams();
+    expectRecordFields(params, {
+      fetchImpl: callerFetch,
+      dispatcherAttempts,
+      trustExplicitProxyDns: true,
+      readIdleTimeoutMs: 30_000,
+    });
+    expect(typeof params.shouldRetryFetchError).toBe("function");
+    expectFetchSsrfPolicyFields({
+      allowRfc2544BenchmarkRange: true,
+      hostnameAllowlist: ["api.telegram.org"],
+    });
   });
 
   it("uses caller-provided fetch impl for sticker downloads", async () => {
     const getFile = vi.fn().mockResolvedValue({ file_path: "stickers/file_0.webp" });
     const callerFetch = vi.fn() as unknown as typeof fetch;
-    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch };
+    const callerTransport = { fetch: callerFetch, sourceFetch: callerFetch, close: async () => {} };
     fetchRemoteMedia.mockResolvedValueOnce({
       buffer: Buffer.from("sticker-data"),
       contentType: "image/webp",
@@ -348,56 +473,159 @@ describe("resolveMedia getFile retry", () => {
       contentType: "image/webp",
     });
 
-    const result = await resolveMedia(
-      makeCtx("sticker", getFile),
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      callerTransport,
-    );
+    const result = await resolveMediaWithDefaults(makeCtx("sticker", getFile), {
+      transport: callerTransport,
+    });
 
-    expect(result).not.toBeNull();
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        fetchImpl: callerFetch,
-      }),
-    );
+    expect(result?.path).toBe("/tmp/file_0.webp");
+    expectFetchRemoteMediaFields({ fetchImpl: callerFetch });
   });
 
-  it("uses local absolute file paths directly for media downloads", async () => {
-    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+  it("allows an explicit Telegram apiRoot host without broadening the default SSRF allowlist", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    fetchRemoteMedia.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      contentType: "application/pdf",
+      fileName: "file_42.pdf",
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/file_42---uuid.pdf",
+      contentType: "application/pdf",
+    });
 
-    const result = await resolveMedia(
+    await resolveMediaWithDefaults(makeCtx("document", getFile), {
+      apiRoot: "https://telegram.internal:8443/custom/",
+      dangerouslyAllowPrivateNetwork: true,
+    });
+
+    expectFetchRemoteMediaFields({
+      url: `https://telegram.internal:8443/custom/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
+    });
+    expectFetchSsrfPolicyFields({
+      hostnameAllowlist: ["api.telegram.org", "telegram.internal"],
+      allowedHostnames: ["telegram.internal"],
+      allowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+    });
+  });
+
+  it("copies trusted local absolute file paths into inbound media storage for media downloads", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("pdf-data"),
+      realPath: "/var/lib/telegram-bot-api/file.pdf",
+      stat: { size: 8 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/file.pdf",
+      contentType: "application/pdf",
+    });
+
+    const result = await resolveMediaWithDefaults(
       makeCtx("document", getFile, { mime_type: "application/pdf" }),
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
+      { trustedLocalFileRoots: ["/var/lib/telegram-bot-api"] },
     );
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual(
-      expect.objectContaining({
-        path: "/var/lib/telegram-bot-api/file.pdf",
-        contentType: "application/pdf",
-        placeholder: "<media:document>",
-      }),
+    expect(rootRead).toHaveBeenCalledWith({
+      rootDir: "/var/lib/telegram-bot-api",
+      relativePath: "file.pdf",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("pdf-data"),
+      "application/pdf",
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "file.pdf",
     );
+    expectResolvedMediaFields(result, "trusted local document", {
+      path: "/tmp/inbound/file.pdf",
+      contentType: "application/pdf",
+      placeholder: "<media:document>",
+    });
   });
 
-  it("uses local absolute file paths directly for sticker downloads", async () => {
+  it("copies trusted local absolute file paths into inbound media storage for sticker downloads", async () => {
     const getFile = vi
       .fn()
       .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/sticker.webp" });
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("sticker-data"),
+      realPath: "/var/lib/telegram-bot-api/sticker.webp",
+      stat: { size: 12 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/sticker.webp",
+      contentType: "image/webp",
+    });
 
-    const result = await resolveMedia(makeCtx("sticker", getFile), MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(makeCtx("sticker", getFile), {
+      trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
+    });
 
     expect(fetchRemoteMedia).not.toHaveBeenCalled();
-    expect(saveMediaBuffer).not.toHaveBeenCalled();
-    expect(result).toEqual(
-      expect.objectContaining({
-        path: "/var/lib/telegram-bot-api/sticker.webp",
-        placeholder: "<media:sticker>",
-      }),
+    expect(rootRead).toHaveBeenCalledWith({
+      rootDir: "/var/lib/telegram-bot-api",
+      relativePath: "sticker.webp",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("sticker-data"),
+      undefined,
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "sticker.webp",
     );
+    expectResolvedMediaFields(result, "trusted local sticker", {
+      path: "/tmp/inbound/sticker.webp",
+      placeholder: "<media:sticker>",
+    });
+  });
+
+  it("maps trusted local absolute path read failures to MediaFetchError", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+    rootRead.mockRejectedValueOnce(new Error("file not found"));
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
+        trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
+      }),
+      {
+        code: "fetch_failed",
+        messageIncludes: "/var/lib/telegram-bot-api/file.pdf",
+      },
+    );
+  });
+
+  it("maps oversized trusted local absolute path reads to MediaFetchError", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+    rootRead.mockRejectedValueOnce(new Error("file exceeds limit"));
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" }), {
+        trustedLocalFileRoots: ["/var/lib/telegram-bot-api"],
+      }),
+      {
+        code: "fetch_failed",
+        messageIncludes: "file exceeds limit",
+      },
+    );
+  });
+
+  it("rejects absolute Bot API file paths outside trustedLocalFileRoots", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/file.pdf" });
+
+    await expectMediaFetchError(
+      resolveMediaWithDefaults(makeCtx("document", getFile, { mime_type: "application/pdf" })),
+      {
+        code: "fetch_failed",
+        messageIncludes: "outside trustedLocalFileRoots",
+      },
+    );
+
+    expect(rootRead).not.toHaveBeenCalled();
+    expect(fetchRemoteMedia).not.toHaveBeenCalled();
   });
 });
 
@@ -425,16 +653,17 @@ describe("resolveMedia original filename preservation", () => {
     });
 
     const ctx = makeCtx("document", getFile, { file_name: "business-plan.pdf" });
-    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(ctx);
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      "application/pdf",
-      "inbound",
-      MAX_MEDIA_BYTES,
-      "business-plan.pdf",
-    );
-    expect(result).toEqual(expect.objectContaining({ path: "/tmp/business-plan---uuid.pdf" }));
+    expectSaveMediaBufferCall(0, {
+      contentType: "application/pdf",
+      bucket: "inbound",
+      maxBytes: MAX_MEDIA_BYTES,
+      fileName: "business-plan.pdf",
+    });
+    expectResolvedMediaFields(result, "document filename", {
+      path: "/tmp/business-plan---uuid.pdf",
+    });
   });
 
   it("passes audio.file_name to saveMediaBuffer", async () => {
@@ -450,16 +679,15 @@ describe("resolveMedia original filename preservation", () => {
     });
 
     const ctx = makeCtx("audio", getFile, { file_name: "my-song.mp3" });
-    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(ctx);
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      "audio/mpeg",
-      "inbound",
-      MAX_MEDIA_BYTES,
-      "my-song.mp3",
-    );
-    expect(result).not.toBeNull();
+    expectSaveMediaBufferCall(0, {
+      contentType: "audio/mpeg",
+      bucket: "inbound",
+      maxBytes: MAX_MEDIA_BYTES,
+      fileName: "my-song.mp3",
+    });
+    requireResolvedMedia(result, "audio filename");
   });
 
   it("passes video.file_name to saveMediaBuffer", async () => {
@@ -475,16 +703,15 @@ describe("resolveMedia original filename preservation", () => {
     });
 
     const ctx = makeCtx("video", getFile, { file_name: "presentation.mp4" });
-    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(ctx);
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      "video/mp4",
-      "inbound",
-      MAX_MEDIA_BYTES,
-      "presentation.mp4",
-    );
-    expect(result).not.toBeNull();
+    expectSaveMediaBufferCall(0, {
+      contentType: "video/mp4",
+      bucket: "inbound",
+      maxBytes: MAX_MEDIA_BYTES,
+      fileName: "presentation.mp4",
+    });
+    requireResolvedMedia(result, "video filename");
   });
 
   it("falls back to fetched.fileName when telegram file_name is absent", async () => {
@@ -492,16 +719,15 @@ describe("resolveMedia original filename preservation", () => {
     mockPdfFetchAndSave("file_42.pdf");
 
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(ctx);
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      "application/pdf",
-      "inbound",
-      MAX_MEDIA_BYTES,
-      "file_42.pdf",
-    );
-    expect(result).not.toBeNull();
+    expectSaveMediaBufferCall(0, {
+      contentType: "application/pdf",
+      bucket: "inbound",
+      maxBytes: MAX_MEDIA_BYTES,
+      fileName: "file_42.pdf",
+    });
+    requireResolvedMedia(result, "fetched filename fallback");
   });
 
   it("falls back to filePath when neither telegram nor fetched fileName is available", async () => {
@@ -509,16 +735,15 @@ describe("resolveMedia original filename preservation", () => {
     mockPdfFetchAndSave(undefined);
 
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMedia(ctx, MAX_MEDIA_BYTES, BOT_TOKEN);
+    const result = await resolveMediaWithDefaults(ctx);
 
-    expect(saveMediaBuffer).toHaveBeenCalledWith(
-      expect.any(Buffer),
-      "application/pdf",
-      "inbound",
-      MAX_MEDIA_BYTES,
-      "documents/file_42.pdf",
-    );
-    expect(result).not.toBeNull();
+    expectSaveMediaBufferCall(0, {
+      contentType: "application/pdf",
+      bucket: "inbound",
+      maxBytes: MAX_MEDIA_BYTES,
+      fileName: "documents/file_42.pdf",
+    });
+    requireResolvedMedia(result, "file path fallback");
   });
 
   it("allows a configured custom apiRoot host while keeping the hostname allowlist", async () => {
@@ -526,24 +751,31 @@ describe("resolveMedia original filename preservation", () => {
     mockPdfFetchAndSave("file_42.pdf");
 
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMedia(
-      ctx,
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      undefined,
-      "http://192.168.1.50:8081/custom-bot-api/",
-    );
+    const result = await resolveMediaWithDefaults(ctx, {
+      apiRoot: "http://192.168.1.50:8081/custom-bot-api/",
+    });
 
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ssrfPolicy: {
-          hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
-          allowedHostnames: ["192.168.1.50"],
-          allowRfc2544BenchmarkRange: true,
-        },
-      }),
-    );
-    expect(result).not.toBeNull();
+    expectFetchSsrfPolicyFields({
+      hostnameAllowlist: ["api.telegram.org", "192.168.1.50"],
+      allowedHostnames: ["192.168.1.50"],
+      allowRfc2544BenchmarkRange: true,
+    });
+    requireResolvedMedia(result, "custom apiRoot allowlist");
+  });
+
+  it("opts into private-network Telegram media downloads only when explicitly configured", async () => {
+    const getFile = vi.fn().mockResolvedValue({ file_path: "documents/file_42.pdf" });
+    mockPdfFetchAndSave("file_42.pdf");
+
+    const ctx = makeCtx("document", getFile);
+    const result = await resolveMediaWithDefaults(ctx, { dangerouslyAllowPrivateNetwork: true });
+
+    expectFetchSsrfPolicyFields({
+      hostnameAllowlist: ["api.telegram.org"],
+      allowPrivateNetwork: true,
+      allowRfc2544BenchmarkRange: true,
+    });
+    requireResolvedMedia(result, "private network opt-in");
   });
 
   it("constructs correct download URL with custom apiRoot for documents", async () => {
@@ -552,21 +784,12 @@ describe("resolveMedia original filename preservation", () => {
 
     const customApiRoot = "http://192.168.1.50:8081/custom-bot-api";
     const ctx = makeCtx("document", getFile);
-    const result = await resolveMedia(
-      ctx,
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      undefined,
-      customApiRoot,
-    );
+    const result = await resolveMediaWithDefaults(ctx, { apiRoot: customApiRoot });
 
-    // Verify the URL uses the custom apiRoot, not the default Telegram API
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `${customApiRoot}/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
-      }),
-    );
-    expect(result).not.toBeNull();
+    expectFetchRemoteMediaFields({
+      url: `${customApiRoot}/file/bot${BOT_TOKEN}/documents/file_42.pdf`,
+    });
+    requireResolvedMedia(result, "custom apiRoot document URL");
   });
 
   it("constructs correct download URL with custom apiRoot for stickers", async () => {
@@ -583,20 +806,11 @@ describe("resolveMedia original filename preservation", () => {
 
     const customApiRoot = "http://localhost:8081/bot";
     const ctx = makeCtx("sticker", getFile);
-    const result = await resolveMedia(
-      ctx,
-      MAX_MEDIA_BYTES,
-      BOT_TOKEN,
-      undefined,
-      customApiRoot,
-    );
+    const result = await resolveMediaWithDefaults(ctx, { apiRoot: customApiRoot });
 
-    // Verify the URL uses the custom apiRoot for sticker downloads
-    expect(fetchRemoteMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        url: `${customApiRoot}/file/bot${BOT_TOKEN}/stickers/file_0.webp`,
-      }),
-    );
-    expect(result).not.toBeNull();
+    expectFetchRemoteMediaFields({
+      url: `${customApiRoot}/file/bot${BOT_TOKEN}/stickers/file_0.webp`,
+    });
+    requireResolvedMedia(result, "custom apiRoot sticker URL");
   });
 });

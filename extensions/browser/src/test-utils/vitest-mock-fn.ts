@@ -1,1 +1,2 @@
-export type { MockFn } from "openclaw/plugin-sdk/browser-support";
+export type MockFn<T extends (...args: unknown[]) => unknown = (...args: unknown[]) => unknown> =
+  import("vitest").Mock<T>;

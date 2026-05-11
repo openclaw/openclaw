@@ -1,9 +1,9 @@
-import type { Context, Tool } from "@mariozechner/pi-ai";
+import type { Context, Tool } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   convertMessages,
   convertTools,
-} from "../../node_modules/@mariozechner/pi-ai/dist/providers/google-shared.js";
+} from "../../node_modules/@earendil-works/pi-ai/dist/providers/google-shared.js";
 import {
   asRecord,
   expectConvertedRoles,
@@ -13,6 +13,23 @@ import {
   makeGoogleAssistantMessage,
   makeModel,
 } from "./google-shared.test-helpers.js";
+
+type GoogleSharedTestModel = ReturnType<typeof makeModel> | ReturnType<typeof makeGeminiCliModel>;
+const convertMessagesForTest = convertMessages as unknown as (
+  model: GoogleSharedTestModel,
+  context: Context,
+) => ReturnType<typeof convertMessages>;
+
+function requireRecordProperty(
+  record: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const value = record[key];
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`expected object property ${key}`);
+  }
+  return value as Record<string, unknown>;
+}
 
 describe("google-shared convertTools", () => {
   it("preserves parameters when type is missing", () => {
@@ -35,7 +52,9 @@ describe("google-shared convertTools", () => {
     );
 
     expect(params.type).toBeUndefined();
-    expect(params.properties).toBeDefined();
+    expect(params.properties).toEqual({
+      action: { type: "string" },
+    });
     expect(params.required).toEqual(["action"]);
   });
 
@@ -154,7 +173,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(2);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("user");
@@ -176,7 +195,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(1);
     expect(contents[0].role).toBe("model");
     expect(contents[0].parts?.[0]).toMatchObject({
@@ -199,7 +218,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     const parts = contents?.[0]?.parts ?? [];
     expect(parts).toHaveLength(1);
     expect(parts[0]).toMatchObject({
@@ -237,7 +256,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     expectConvertedRoles(contents, ["user", "model", "model"]);
     expect(contents[1].parts).toHaveLength(1);
     expect(contents[2].parts).toHaveLength(1);
@@ -274,7 +293,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     expect(contents).toHaveLength(4);
     expect(contents[0].role).toBe("user");
     expect(contents[1].role).toBe("model");
@@ -284,7 +303,9 @@ describe("google-shared convertMessages", () => {
       (part) => typeof part === "object" && part !== null && "functionResponse" in part,
     );
     const toolResponse = asRecord(toolResponsePart);
-    expect(toolResponse.functionResponse).toBeTruthy();
+    expect(requireRecordProperty(toolResponse, "functionResponse")).toMatchObject({
+      name: "myTool",
+    });
     expect(contents[3].role).toBe("user");
   });
 
@@ -308,13 +329,15 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
-    expectConvertedRoles(contents, ["user", "model", "model"]);
+    const contents = convertMessagesForTest(model, context);
+    expectConvertedRoles(contents, ["user", "model", "model", "user"]);
     const toolCallPart = contents[2].parts?.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,
     );
     const toolCall = asRecord(toolCallPart);
-    expect(toolCall.functionCall).toBeTruthy();
+    expect(requireRecordProperty(toolCall, "functionCall")).toMatchObject({
+      name: "myTool",
+    });
   });
 
   it("strips tool call and response ids for google-gemini-cli", () => {
@@ -345,7 +368,7 @@ describe("google-shared convertMessages", () => {
       ],
     } as unknown as Context;
 
-    const contents = convertMessages(model, context);
+    const contents = convertMessagesForTest(model, context);
     const parts = contents.flatMap((content) => content.parts ?? []);
     const toolCallPart = parts.find(
       (part) => typeof part === "object" && part !== null && "functionCall" in part,

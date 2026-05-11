@@ -17,6 +17,8 @@ export type NodeListNode = {
   paired?: boolean;
   connected?: boolean;
   connectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
   approvedAtMs?: number;
 };
 
@@ -30,6 +32,8 @@ export type PendingRequest = {
   uiVersion?: string;
   remoteIp?: string;
   ts: number;
+  commands?: string[];
+  requiredApproveScopes?: Array<"operator.pairing" | "operator.write" | "operator.admin">;
 };
 
 export type PairedNode = {
@@ -45,6 +49,8 @@ export type PairedNode = {
   createdAtMs?: number;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastSeenAtMs?: number;
+  lastSeenReason?: string;
 };
 
 export type PairingList = {

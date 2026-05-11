@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => {
     clackText: vi.fn(),
     clackConfirm: vi.fn(),
     resolveSearchProviderOptions: vi.fn(),
+    resolvePluginContributionOwners: vi.fn(),
     setupSearch: vi.fn(),
     readConfigFileSnapshot: vi.fn(),
     writeConfigFile,
@@ -25,6 +26,14 @@ const mocks = vi.hoisted(() => {
     waitForGatewayReachable: vi.fn(),
     resolveControlUiLinks: vi.fn(),
     summarizeExistingConfig: vi.fn(),
+    promptRemoteGatewayConfig: vi.fn(async (cfg: OpenClawConfig) => ({
+      ...cfg,
+      gateway: { mode: "remote", remote: { url: "wss://gateway.example.test" } },
+    })),
+    isCodexNativeWebSearchRelevant: vi.fn(({ config }: { config: OpenClawConfig }) =>
+      Boolean(config.auth?.profiles?.["openai-codex:default"]),
+    ),
+    setupChannels: vi.fn(async (cfg: OpenClawConfig) => cfg),
   };
 });
 
@@ -93,7 +102,7 @@ vi.mock("./configure.daemon.js", () => ({
 }));
 
 vi.mock("./onboard-remote.js", () => ({
-  promptRemoteGatewayConfig: vi.fn(),
+  promptRemoteGatewayConfig: mocks.promptRemoteGatewayConfig,
 }));
 
 vi.mock("./onboard-skills.js", () => ({
@@ -101,7 +110,7 @@ vi.mock("./onboard-skills.js", () => ({
 }));
 
 vi.mock("./onboard-channels.js", () => ({
-  setupChannels: vi.fn(),
+  setupChannels: mocks.setupChannels,
 }));
 
 vi.mock("./onboard-search.js", () => ({
@@ -109,6 +118,23 @@ vi.mock("./onboard-search.js", () => ({
   setupSearch: mocks.setupSearch,
 }));
 
+vi.mock("../plugins/plugin-registry.js", () => ({
+  resolvePluginContributionOwners: mocks.resolvePluginContributionOwners,
+}));
+
+vi.mock("../agents/codex-native-web-search.js", () => ({
+  isCodexNativeWebSearchRelevant: mocks.isCodexNativeWebSearchRelevant,
+}));
+
+vi.mock("../config/mutate.js", async () => {
+  const actual = await vi.importActual<typeof import("../config/mutate.js")>("../config/mutate.js");
+  return {
+    ...actual,
+    ConfigMutationConflictError: actual.ConfigMutationConflictError,
+  };
+});
+
+import { ConfigMutationConflictError } from "../config/mutate.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
 import { runConfigureWizard } from "./configure.wizard.js";
 
@@ -175,6 +201,34 @@ function setupBaseWizardState(config: OpenClawConfig = {}) {
   });
 }
 
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  expect(value, label).toBeTypeOf("object");
+  expect(value, label).not.toBeNull();
+  return value as Record<string, unknown>;
+}
+
+function requireWriteConfig(callIndex = 0) {
+  const call = mocks.writeConfigFile.mock.calls.at(callIndex);
+  expect(call, "writeConfigFile call").toBeDefined();
+  return requireRecord(call?.[0], "written config");
+}
+
+function getGateway(config: Record<string, unknown>) {
+  return requireRecord(config.gateway, "gateway config");
+}
+
+function getWebSearch(config: Record<string, unknown>) {
+  const tools = requireRecord(config.tools, "tools config");
+  const web = requireRecord(tools.web, "web config");
+  return requireRecord(web.search, "web search config");
+}
+
+function getPluginEntry(config: Record<string, unknown>, pluginId: string) {
+  const plugins = requireRecord(config.plugins, "plugins config");
+  const entries = requireRecord(plugins.entries, "plugin entries");
+  return requireRecord(entries[pluginId], `${pluginId} entry`);
+}
+
 function queueWizardPrompts(params: { select: string[]; confirm: boolean[]; text?: string }) {
   const selectQueue = [...params.select];
   const confirmQueue = [...params.confirm];
@@ -193,6 +247,7 @@ describe("runConfigureWizard", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.ensureControlUiAssetsBuilt.mockResolvedValue({ ok: true });
+    mocks.resolvePluginContributionOwners.mockReturnValue(["firecrawl"]);
     mocks.resolveSearchProviderOptions.mockReturnValue([
       {
         id: "firecrawl",
@@ -218,11 +273,35 @@ describe("runConfigureWizard", () => {
 
     await runConfigureWizard({ command: "configure" }, createRuntime());
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({ mode: "local" }),
-      }),
+    expect(getGateway(requireWriteConfig()).mode).toBe("local");
+  });
+  it("keeps startup gateway hint probes bounded", async () => {
+    setupBaseWizardState({
+      gateway: {
+        mode: "local",
+        remote: {
+          url: "wss://gateway.example.test",
+          token: "token",
+        },
+      },
+    });
+    queueWizardPrompts({
+      select: ["local", "__continue"],
+      confirm: [],
+    });
+
+    await runConfigureWizard({ command: "configure" }, createRuntime());
+
+    const probeRequests = mocks.probeGatewayReachable.mock.calls.map(([request]) =>
+      requireRecord(request, "probe request"),
     );
+    const localProbe = probeRequests.find((request) => request.url === "ws://127.0.0.1:18789");
+    const remoteProbe = probeRequests.find(
+      (request) => request.url === "wss://gateway.example.test",
+    );
+    expect(localProbe?.timeoutMs).toBe(300);
+    expect(remoteProbe?.token).toBe("token");
+    expect(remoteProbe?.timeoutMs).toBe(300);
   });
 
   it("exits with code 1 when configure wizard is cancelled", async () => {
@@ -250,66 +329,22 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              provider: "firecrawl",
-              enabled: true,
-            }),
-          }),
-        }),
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            firecrawl: expect.objectContaining({
-              enabled: true,
-              config: expect.objectContaining({
-                webSearch: expect.objectContaining({ apiKey: "fc-entered-key" }),
-              }),
-            }),
-          }),
-        }),
-      }),
+    const setupConfig = requireRecord(mocks.setupSearch.mock.calls[0]?.[0], "setupSearch config");
+    expect(getGateway(setupConfig).mode).toBe("local");
+    const written = requireWriteConfig();
+    const search = getWebSearch(written);
+    expect(search.provider).toBe("firecrawl");
+    expect(search.enabled).toBe(true);
+    const firecrawl = getPluginEntry(written, "firecrawl");
+    expect(firecrawl.enabled).toBe(true);
+    const firecrawlConfig = requireRecord(firecrawl.config, "firecrawl config");
+    expect(requireRecord(firecrawlConfig.webSearch, "firecrawl web search").apiKey).toBe(
+      "fc-entered-key",
     );
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
   });
 
-  it("delegates provider selection to the shared search setup flow", async () => {
-    setupBaseWizardState();
-    mocks.setupSearch.mockImplementation(async (cfg: OpenClawConfig) =>
-      createEnabledWebSearchConfig("firecrawl", {
-        enabled: true,
-      })(cfg),
-    );
-    queueWizardPrompts({
-      select: ["local"],
-      confirm: [true, false],
-    });
-
-    await runWebConfigureWizard();
-
-    expect(mocks.setupSearch).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gateway: expect.objectContaining({ mode: "local" }),
-      }),
-      expect.anything(),
-      expect.anything(),
-    );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        plugins: expect.objectContaining({
-          entries: expect.objectContaining({
-            firecrawl: expect.objectContaining({
-              enabled: true,
-            }),
-          }),
-        }),
-      }),
-    );
-  });
-
-  it("does not crash when web search providers are unavailable under plugin policy", async () => {
+  it("notes unavailable web search providers under plugin policy", async () => {
     setupBaseWizardState();
     mocks.resolveSearchProviderOptions.mockReturnValue([]);
     queueWizardPrompts({
@@ -325,17 +360,43 @@ describe("runConfigureWizard", () => {
       ),
       "Web search",
     );
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: false,
-            }),
-          }),
-        }),
-      }),
+    expect(getWebSearch(requireWriteConfig()).enabled).toBe(false);
+  });
+
+  it("does not load managed search provider options when web search is disabled", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [false, true],
+    });
+
+    await runWebConfigureWizard();
+
+    const ownersRequest = requireRecord(
+      mocks.resolvePluginContributionOwners.mock.calls[0]?.[0],
+      "plugin owner request",
     );
+    expect(ownersRequest.contribution).toBe("contracts");
+    expect(ownersRequest.matches).toBe("webSearchProviders");
+    expect(mocks.resolveSearchProviderOptions).not.toHaveBeenCalled();
+    expect(mocks.setupSearch).not.toHaveBeenCalled();
+  });
+
+  it("defers channel status checks until a channel is selected", async () => {
+    setupBaseWizardState();
+    queueWizardPrompts({
+      select: ["local", "configure"],
+      confirm: [],
+    });
+
+    await runConfigureWizard({ command: "configure", sections: ["channels"] }, createRuntime());
+
+    const setupChannelsCall = mocks.setupChannels.mock.calls[0] as Array<unknown> | undefined;
+    const setupChannelsConfig = requireRecord(setupChannelsCall?.[0], "setupChannels config");
+    expect(getGateway(setupChannelsConfig).mode).toBe("local");
+    const setupChannelsOptions = requireRecord(setupChannelsCall?.[3], "setupChannels options");
+    expect(setupChannelsOptions.deferStatusUntilSelection).toBe(true);
+    expect(setupChannelsOptions.skipStatusNote).toBe(true);
   });
 
   it("still supports keyless web search providers through the shared setup flow", async () => {
@@ -387,21 +448,11 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: true,
-              openaiCodex: expect.objectContaining({
-                enabled: true,
-                mode: "cached",
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
+    const search = getWebSearch(requireWriteConfig());
+    expect(search.enabled).toBe(true);
+    const codexSearch = requireRecord(search.openaiCodex, "Codex native search");
+    expect(codexSearch.enabled).toBe(true);
+    expect(codexSearch.mode).toBe("cached");
     expect(mocks.setupSearch).not.toHaveBeenCalled();
   });
 
@@ -434,21 +485,120 @@ describe("runConfigureWizard", () => {
 
     await runWebConfigureWizard();
 
-    expect(mocks.writeConfigFile).toHaveBeenCalledWith(
-      expect.objectContaining({
-        tools: expect.objectContaining({
-          web: expect.objectContaining({
-            search: expect.objectContaining({
-              enabled: true,
-              openaiCodex: expect.objectContaining({
-                enabled: false,
-                mode: "live",
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
+    const search = getWebSearch(requireWriteConfig());
+    expect(search.enabled).toBe(true);
+    const codexSearch = requireRecord(search.openaiCodex, "Codex native search");
+    expect(codexSearch.enabled).toBe(false);
+    expect(codexSearch.mode).toBe("live");
     expect(mocks.setupSearch).toHaveBeenCalledOnce();
+  });
+
+  it("retries without dropping nested plugin config written during wizard flow (issue #64188)", async () => {
+    const baseConfig: OpenClawConfig = {
+      plugins: {
+        entries: {
+          "github-copilot": {
+            enabled: false,
+            config: {
+              region: "us-east-1",
+            },
+          },
+        },
+      },
+    };
+    setupBaseWizardState(baseConfig);
+    queueWizardPrompts({
+      select: ["local"],
+      confirm: [],
+    });
+
+    // Simulate plugin mutation: first replaceConfigFile call throws conflict,
+    // second call after hash refresh succeeds
+    let callCount = 0;
+    const originalHash = "hash-before-plugin-mutation";
+    const newHashAfterMutation = "hash-after-plugin-mutation";
+    const finalHashAfterWrite = "hash-after-wizard-write";
+
+    mocks.replaceConfigFile.mockImplementation(
+      async (params: { nextConfig: unknown; baseHash?: string }) => {
+        callCount++;
+        if (callCount === 1) {
+          // First call: simulate plugin mutating config during promptAuthConfig
+          expect(params.baseHash).toBe(originalHash);
+          throw new ConfigMutationConflictError("config changed since last load", {
+            currentHash: newHashAfterMutation,
+          });
+        }
+        // Second call: succeeds with refreshed hash
+        expect(params.baseHash).toBe(newHashAfterMutation);
+        await mocks.writeConfigFile(params.nextConfig);
+      },
+    );
+
+    // Mock readConfigFileSnapshot to return different hashes/configs on each call
+    mocks.readConfigFileSnapshot
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: originalHash,
+        config: baseConfig,
+        sourceConfig: baseConfig,
+      })
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: newHashAfterMutation,
+        config: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                enabled: false,
+                config: {
+                  region: "us-east-1",
+                  accessToken: "plugin-wrote-this",
+                },
+              },
+            },
+          },
+        },
+        sourceConfig: {
+          plugins: {
+            entries: {
+              "github-copilot": {
+                enabled: false,
+                config: {
+                  region: "us-east-1",
+                  accessToken: "plugin-wrote-this",
+                },
+              },
+            },
+          },
+        },
+        valid: true,
+      })
+      .mockResolvedValueOnce({
+        ...EMPTY_CONFIG_SNAPSHOT,
+        hash: finalHashAfterWrite,
+        config: {},
+      });
+
+    await runConfigureWizard({ command: "configure", sections: ["workspace"] }, createRuntime());
+
+    // Verify retry happened: first call threw, second call succeeded
+    expect(mocks.replaceConfigFile).toHaveBeenCalledTimes(2);
+    expect(mocks.writeConfigFile).toHaveBeenCalledTimes(1);
+    // Verify readConfigFileSnapshot was called: initial read, after conflict, after successful write
+    expect(mocks.readConfigFileSnapshot).toHaveBeenCalledTimes(3);
+
+    // Verify plugin-written nested config survived the retry merge.
+    const retryCall = mocks.replaceConfigFile.mock.calls[1][0] as {
+      nextConfig: Record<string, unknown>;
+    };
+    const agents = requireRecord(retryCall.nextConfig.agents, "agents config");
+    const defaults = requireRecord(agents.defaults, "agent defaults");
+    expect(String(defaults.workspace)).toContain("/.openclaw/workspace");
+    const githubCopilot = getPluginEntry(retryCall.nextConfig, "github-copilot");
+    expect(githubCopilot.enabled).toBe(false);
+    const pluginConfig = requireRecord(githubCopilot.config, "github-copilot config");
+    expect(pluginConfig.region).toBe("us-east-1");
+    expect(pluginConfig.accessToken).toBe("plugin-wrote-this");
   });
 });

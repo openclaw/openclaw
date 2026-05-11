@@ -1,6 +1,10 @@
+import { readConfiguredProviderCatalogEntries } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
+import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import { applyDeepSeekConfig, DEEPSEEK_DEFAULT_MODEL_REF } from "./onboard.js";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
+import { createDeepSeekV4ThinkingWrapper } from "./stream.js";
+import { resolveDeepSeekV4ThinkingProfile } from "./thinking.js";
 
 const PROVIDER_ID = "deepseek";
 
@@ -34,5 +38,19 @@ export default defineSingleProviderPluginEntry({
     catalog: {
       buildProvider: buildDeepSeekProvider,
     },
+    augmentModelCatalog: ({ config }) =>
+      readConfiguredProviderCatalogEntries({
+        config,
+        providerId: PROVIDER_ID,
+      }),
+    matchesContextOverflowError: ({ errorMessage }) =>
+      /\bdeepseek\b.*(?:input.*too long|context.*exceed)/i.test(errorMessage),
+    ...buildProviderReplayFamilyHooks({
+      family: "openai-compatible",
+      dropReasoningFromHistory: false,
+    }),
+    wrapStreamFn: (ctx) => createDeepSeekV4ThinkingWrapper(ctx.streamFn, ctx.thinkingLevel),
+    resolveThinkingProfile: ({ modelId }) => resolveDeepSeekV4ThinkingProfile(modelId),
+    isModernModelRef: ({ modelId }) => Boolean(resolveDeepSeekV4ThinkingProfile(modelId)),
   },
 });

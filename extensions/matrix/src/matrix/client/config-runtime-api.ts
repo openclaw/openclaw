@@ -3,10 +3,7 @@ export {
   normalizeAccountId,
   normalizeOptionalAccountId,
 } from "openclaw/plugin-sdk/account-id";
-export { isPrivateOrLoopbackHost } from "./private-network-host.js";
 export {
-  assertHttpUrlTargetsPrivateNetwork,
-  ssrfPolicyFromAllowPrivateNetwork,
-  type LookupFn,
-  type SsrFPolicy,
+  isPrivateNetworkOptInEnabled,
+  ssrfPolicyFromDangerouslyAllowPrivateNetwork,
 } from "openclaw/plugin-sdk/ssrf-runtime";

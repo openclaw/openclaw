@@ -1,5 +1,10 @@
-import type { StreamFn } from "@mariozechner/pi-agent-core";
-import { streamSimple } from "@mariozechner/pi-ai";
+import type { StreamFn } from "@earendil-works/pi-agent-core";
+import { streamSimple } from "@earendil-works/pi-ai";
+import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  composeProviderStreamWrappers,
+  createToolStreamWrapper,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 
 const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-3", "grok-3-fast"],
@@ -37,7 +42,70 @@ function supportsExplicitImageInput(model: { input?: unknown }): boolean {
   return Array.isArray(model.input) && model.input.includes("image");
 }
 
+function supportsReasoningControls(model: { reasoning?: unknown }): boolean {
+  return model.reasoning === true;
+}
+
 const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
+const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
+
+function decodeHtmlEntities(value: string): string {
+  return value
+    .replace(/&amp;/gi, "&")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/gi, (_, dec) => String.fromCodePoint(Number.parseInt(dec, 10)));
+}
+
+function decodeHtmlEntitiesInObject(value: unknown): unknown {
+  if (typeof value === "string") {
+    return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(decodeHtmlEntitiesInObject);
+  }
+  if (value && typeof value === "object") {
+    const result: Record<string, unknown> = {};
+    for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+      result[key] = decodeHtmlEntitiesInObject(entry);
+    }
+    return result;
+  }
+  return value;
+}
+
+function visitContentBlocks(
+  value: unknown,
+  visitor: (block: Record<string, unknown>) => void,
+): void {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      visitContentBlocks(entry, visitor);
+    }
+    return;
+  }
+  if (!value || typeof value !== "object") {
+    return;
+  }
+  const block = value as Record<string, unknown>;
+  visitor(block);
+  if ("content" in block) {
+    visitContentBlocks(block.content, visitor);
+  }
+}
+
+function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
+  visitContentBlocks(message, (block) => {
+    if (block.type !== "toolCall" || !block.arguments || typeof block.arguments !== "object") {
+      return;
+    }
+    block.arguments = decodeHtmlEntitiesInObject(block.arguments);
+  });
+}
 
 type ReplayableInputImagePart =
   | {
@@ -164,9 +232,11 @@ export function createXaiToolPayloadCompatibilityWrapper(
             payloadObj.tools = payloadObj.tools.map((tool) => stripUnsupportedStrictFlag(tool));
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
-          delete payloadObj.reasoning;
-          delete payloadObj.reasoningEffort;
-          delete payloadObj.reasoning_effort;
+          if (!supportsReasoningControls(model)) {
+            delete payloadObj.reasoning;
+            delete payloadObj.reasoningEffort;
+            delete payloadObj.reasoning_effort;
+          }
         }
         return originalOnPayload?.(payload, model);
       },
@@ -195,66 +265,14 @@ export function createXaiFastModeWrapper(
   };
 }
 
-function decodeHtmlEntities(value: string): string {
-  return value
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#34;", '"')
-    .replaceAll("&apos;", "'")
-    .replaceAll("&#39;", "'")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&#60;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&#62;", ">")
-    .replaceAll("&amp;", "&")
-    .replaceAll("&#38;", "&");
-}
-
-function decodeHtmlEntitiesInObject(value: unknown): unknown {
-  if (typeof value === "string") {
-    return decodeHtmlEntities(value);
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((entry) => decodeHtmlEntitiesInObject(entry));
-  }
-  const record = value as Record<string, unknown>;
-  for (const [key, entry] of Object.entries(record)) {
-    record[key] = decodeHtmlEntitiesInObject(entry);
-  }
-  return record;
-}
-
-function decodeXaiToolCallArgumentsInMessage(message: unknown): void {
-  if (!message || typeof message !== "object") {
-    return;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content)) {
-    return;
-  }
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const typedBlock = block as { type?: unknown; arguments?: unknown };
-    if (typedBlock.type !== "toolCall" || !typedBlock.arguments) {
-      continue;
-    }
-    if (typeof typedBlock.arguments === "object") {
-      typedBlock.arguments = decodeHtmlEntitiesInObject(typedBlock.arguments);
-    }
-  }
-}
-
-function wrapStreamDecodeXaiToolCallArguments(
+function wrapStreamMessageObjects(
   stream: ReturnType<typeof streamSimple>,
+  transformMessage: (message: unknown) => void,
 ): ReturnType<typeof streamSimple> {
   const originalResult = stream.result.bind(stream);
   stream.result = async () => {
     const message = await originalResult();
-    decodeXaiToolCallArgumentsInMessage(message);
+    transformMessage(message);
     return message;
   };
 
@@ -267,8 +285,8 @@ function wrapStreamDecodeXaiToolCallArguments(
           const result = await iterator.next();
           if (!result.done && result.value && typeof result.value === "object") {
             const event = result.value as { partial?: unknown; message?: unknown };
-            decodeXaiToolCallArgumentsInMessage(event.partial);
-            decodeXaiToolCallArgumentsInMessage(event.message);
+            transformMessage(event.partial);
+            transformMessage(event.message);
           }
           return result;
         },
@@ -283,14 +301,29 @@ function wrapStreamDecodeXaiToolCallArguments(
   return stream;
 }
 
-export function createXaiToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn): StreamFn {
+function createXaiToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
-    const maybeStream = baseStreamFn(model, context, options);
+    const maybeStream = underlying(model, context, options);
     if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
       return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamDecodeXaiToolCallArguments(stream),
+        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
       );
     }
-    return wrapStreamDecodeXaiToolCallArguments(maybeStream);
+    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
   };
+}
+
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
+  const extraParams = ctx.extraParams;
+  const fastMode = extraParams?.fastMode;
+  const toolStreamEnabled = extraParams?.tool_stream !== false;
+  return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
+    let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
+    if (typeof fastMode === "boolean") {
+      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+    }
+    wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
+    return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
+  });
 }

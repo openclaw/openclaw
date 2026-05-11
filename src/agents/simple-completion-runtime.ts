@@ -1,5 +1,13 @@
-import { complete, type Api, type Model } from "@mariozechner/pi-ai";
-import type { OpenClawConfig } from "../config/config.js";
+import {
+  completeSimple,
+  type Api,
+  type Model,
+  type ThinkingLevel as SimpleCompletionThinkingLevel,
+} from "@earendil-works/pi-ai";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.js";
 import { resolveAgentDir, resolveAgentEffectiveModelPrimary } from "./agent-scope.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
 import {
@@ -13,7 +21,8 @@ import {
   resolveDefaultModelForAgent,
   resolveModelRefFromString,
 } from "./model-selection.js";
-import { resolveModel } from "./pi-embedded-runner/model.js";
+import { resolveModel, resolveModelAsync } from "./pi-embedded-runner/model.js";
+import { prepareModelForSimpleCompletion } from "./simple-completion-transport.js";
 
 type SimpleCompletionAuthStorage = {
   setRuntimeApiKey: (provider: string, apiKey: string) => void;
@@ -25,6 +34,13 @@ type CompletionRuntimeCredential = {
 };
 
 type AllowedMissingApiKeyMode = ResolvedProviderAuth["mode"];
+
+export type SimpleCompletionModelOptions = {
+  maxTokens?: number;
+  temperature?: number;
+  reasoning?: ThinkLevel | SimpleCompletionThinkingLevel;
+  signal?: AbortSignal;
+};
 
 export type PreparedSimpleCompletionModel =
   | {
@@ -95,6 +111,10 @@ async function setRuntimeApiKeyForCompletion(params: {
   authStorage: SimpleCompletionAuthStorage;
   model: Model<Api>;
   apiKey: string;
+  authMode: ResolvedProviderAuth["mode"];
+  cfg?: OpenClawConfig;
+  workspaceDir?: string;
+  profileId?: string;
 }): Promise<CompletionRuntimeCredential> {
   if (params.model.provider === "github-copilot") {
     const { resolveCopilotApiToken } = await import("./github-copilot-token.js");
@@ -107,9 +127,28 @@ async function setRuntimeApiKeyForCompletion(params: {
       baseUrl: copilotToken.baseUrl,
     };
   }
-  params.authStorage.setRuntimeApiKey(params.model.provider, params.apiKey);
+  const preparedAuth = await prepareProviderRuntimeAuth({
+    provider: params.model.provider,
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+    env: process.env,
+    context: {
+      config: params.cfg,
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      provider: params.model.provider,
+      modelId: params.model.id,
+      model: params.model,
+      apiKey: params.apiKey,
+      authMode: params.authMode,
+      profileId: params.profileId,
+    },
+  });
+  const runtimeApiKey = preparedAuth?.apiKey?.trim() || params.apiKey;
+  params.authStorage.setRuntimeApiKey(params.model.provider, runtimeApiKey);
   return {
-    apiKey: params.apiKey,
+    apiKey: runtimeApiKey,
+    baseUrl: preparedAuth?.baseUrl,
   };
 }
 
@@ -128,8 +167,17 @@ export async function prepareSimpleCompletionModel(params: {
   profileId?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
+  skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModel> {
-  const resolved = resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
+  const resolved = params.skipPiDiscovery
+    ? await resolveModelAsync(params.provider, params.modelId, params.agentDir, params.cfg, {
+        ...(params.allowBundledStaticCatalogFallback !== undefined
+          ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+          : {}),
+        skipPiDiscovery: true,
+      })
+    : resolveModel(params.provider, params.modelId, params.agentDir, params.cfg);
   if (!resolved.model) {
     return {
       error: resolved.error ?? `Unknown model: ${params.provider}/${params.modelId}`,
@@ -147,7 +195,7 @@ export async function prepareSimpleCompletionModel(params: {
     });
   } catch (err) {
     return {
-      error: `Auth lookup failed for provider "${resolved.model.provider}": ${err instanceof Error ? err.message : String(err)}`,
+      error: `Auth lookup failed for provider "${resolved.model.provider}": ${formatErrorMessage(err)}`,
     };
   }
   const rawApiKey = auth.apiKey?.trim();
@@ -171,6 +219,10 @@ export async function prepareSimpleCompletionModel(params: {
       authStorage: resolved.authStorage,
       model: resolved.model,
       apiKey: rawApiKey,
+      authMode: auth.mode,
+      cfg: params.cfg,
+      workspaceDir: params.agentDir,
+      profileId: auth.profileId,
     });
     resolvedApiKey = runtimeCredential.apiKey;
     const runtimeBaseUrl = runtimeCredential.baseUrl?.trim();
@@ -199,6 +251,8 @@ export async function prepareSimpleCompletionModelForAgent(params: {
   modelRef?: string;
   preferredProfile?: string;
   allowMissingApiKeyModes?: ReadonlyArray<AllowedMissingApiKeyMode>;
+  allowBundledStaticCatalogFallback?: boolean;
+  skipPiDiscovery?: boolean;
 }): Promise<PreparedSimpleCompletionModelForAgent> {
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: params.cfg,
@@ -218,6 +272,10 @@ export async function prepareSimpleCompletionModelForAgent(params: {
     profileId: selection.profileId,
     preferredProfile: params.preferredProfile,
     allowMissingApiKeyModes: params.allowMissingApiKeyModes,
+    ...(params.allowBundledStaticCatalogFallback !== undefined
+      ? { allowBundledStaticCatalogFallback: params.allowBundledStaticCatalogFallback }
+      : {}),
+    skipPiDiscovery: params.skipPiDiscovery,
   });
   if ("error" in prepared) {
     return {
@@ -235,11 +293,32 @@ export async function prepareSimpleCompletionModelForAgent(params: {
 export async function completeWithPreparedSimpleCompletionModel(params: {
   model: Model<Api>;
   auth: ResolvedProviderAuth;
-  context: Parameters<typeof complete>[1];
-  options?: Omit<Parameters<typeof complete>[2], "apiKey">;
+  context: Parameters<typeof completeSimple>[1];
+  cfg?: OpenClawConfig;
+  options?: SimpleCompletionModelOptions;
 }) {
-  return await complete(params.model, params.context, {
-    ...params.options,
+  const completionModel = prepareModelForSimpleCompletion({ model: params.model, cfg: params.cfg });
+  const { reasoning: rawReasoning, ...options } = params.options ?? {};
+  const reasoning = normalizeSimpleCompletionReasoning(rawReasoning);
+  return await completeSimple(completionModel, params.context, {
+    ...options,
+    ...(reasoning ? { reasoning } : {}),
     apiKey: params.auth.apiKey,
   });
+}
+
+function normalizeSimpleCompletionReasoning(
+  reasoning: SimpleCompletionModelOptions["reasoning"],
+): SimpleCompletionThinkingLevel | undefined {
+  switch (reasoning) {
+    case undefined:
+    case "off":
+      return undefined;
+    case "adaptive":
+      return "medium";
+    case "max":
+      return "xhigh";
+    default:
+      return reasoning;
+  }
 }

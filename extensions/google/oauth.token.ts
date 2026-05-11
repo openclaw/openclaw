@@ -1,6 +1,7 @@
 import { resolveOAuthClientConfig } from "./oauth.credentials.js";
 import { fetchWithTimeout } from "./oauth.http.js";
-import { resolveGoogleOAuthIdentity } from "./oauth.project.js";
+import { resolveGoogleOAuthIdentity, resolveGooglePersonalOAuthIdentity } from "./oauth.project.js";
+import { isGeminiCliPersonalOAuth } from "./oauth.settings.js";
 import { REDIRECT_URI, TOKEN_URL, type GeminiCliOAuthCredentials } from "./oauth.shared.js";
 
 export async function exchangeCodeForTokens(
@@ -44,7 +45,9 @@ export async function exchangeCodeForTokens(
     throw new Error("No refresh token received. Please try again.");
   }
 
-  const identity = await resolveGoogleOAuthIdentity(data.access_token);
+  const identity = isGeminiCliPersonalOAuth()
+    ? await resolveGooglePersonalOAuthIdentity(data.access_token)
+    : await resolveGoogleOAuthIdentity(data.access_token);
   const expiresAt = Date.now() + data.expires_in * 1000 - 5 * 60 * 1000;
 
   return {

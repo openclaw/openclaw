@@ -3,6 +3,7 @@ import {
   resolveCompiledAllowlistMatch,
   type AllowlistMatch,
 } from "openclaw/plugin-sdk/allow-from";
+import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   normalizeHyphenSlug,
   normalizeStringEntries,
@@ -38,7 +39,7 @@ export function normalizeAllowListLower(list?: Array<string | number>) {
 }
 
 export function normalizeSlackAllowOwnerEntry(entry: string): string | undefined {
-  const trimmed = entry.trim().toLowerCase();
+  const trimmed = normalizeOptionalLowercaseString(entry);
   if (!trimmed || trimmed === "*") {
     return undefined;
   }
@@ -58,8 +59,8 @@ export function resolveSlackAllowListMatch(params: {
   allowNameMatching?: boolean;
 }): SlackAllowListMatch {
   const compiledAllowList = compileAllowlist(params.allowList);
-  const id = params.id?.toLowerCase();
-  const name = params.name?.toLowerCase();
+  const id = normalizeOptionalLowercaseString(params.id);
+  const name = normalizeOptionalLowercaseString(params.name);
   const slug = normalizeSlackSlug(name);
   const candidates: Array<{ value?: string; source: SlackAllowListSource }> = [
     { value: id, source: "id" },

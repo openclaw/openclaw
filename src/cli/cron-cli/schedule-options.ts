@@ -1,4 +1,5 @@
 import type { CronSchedule } from "../../cron/types.js";
+import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { parseAt, parseCronStaggerMs, parseDurationMs } from "./shared.js";
 
 type ScheduleOptionInput = {
@@ -74,16 +75,16 @@ export function applyExistingCronSchedulePatch(
 }
 
 function normalizeScheduleOptions(options: ScheduleOptionInput): NormalizedScheduleOptions {
-  const staggerRaw = readTrimmedString(options.stagger);
+  const staggerRaw = normalizeOptionalString(options.stagger) ?? "";
   const useExact = Boolean(options.exact);
   if (staggerRaw && useExact) {
     throw new Error("Choose either --stagger or --exact, not both");
   }
   return {
-    at: readTrimmedString(options.at),
-    every: readTrimmedString(options.every),
-    cronExpr: readTrimmedString(options.cron),
-    tz: readOptionalString(options.tz),
+    at: normalizeOptionalString(options.at) ?? "",
+    every: normalizeOptionalString(options.every) ?? "",
+    cronExpr: normalizeOptionalString(options.cron) ?? "",
+    tz: normalizeOptionalString(options.tz),
     requestedStaggerMs: parseCronStaggerMs({ staggerRaw, useExact }),
   };
 }
@@ -103,14 +104,14 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
   if (options.at) {
     const atIso = parseAt(options.at, options.tz);
     if (!atIso) {
-      throw new Error("Invalid --at; use ISO time or duration like 20m");
+      throw new Error("Invalid --at. Use an ISO timestamp or a duration like 20m.");
     }
     return { kind: "at", at: atIso };
   }
   if (options.every) {
     const everyMs = parseDurationMs(options.every);
     if (!everyMs) {
-      throw new Error("Invalid --every; use e.g. 10m, 1h, 1d");
+      throw new Error("Invalid --every. Use a duration like 10m, 1h, or 1d.");
     }
     return { kind: "every", everyMs };
   }
@@ -123,13 +124,4 @@ function resolveDirectSchedule(options: NormalizedScheduleOptions): CronSchedule
     };
   }
   return undefined;
-}
-
-function readOptionalString(value: unknown): string | undefined {
-  const trimmed = readTrimmedString(value);
-  return trimmed || undefined;
-}
-
-function readTrimmedString(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
 }

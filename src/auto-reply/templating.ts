@@ -1,16 +1,23 @@
-import type { ChannelId } from "../channels/plugins/types.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
 } from "../media-understanding/types.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
-import type { InternalMessageChannel } from "../utils/message-channel.js";
-import type { CommandArgs } from "./commands-registry.types.js";
+import type { CommandArgs } from "./commands-args.types.js";
+import type { ReplyThreadingPolicy } from "./types.js";
 
 /** Valid message channels for routing. */
-export type OriginatingChannelType = ChannelId | InternalMessageChannel;
+export type OriginatingChannelType = string & { readonly __originatingChannelBrand?: never };
 
-export type StickerContextMetadata = {
+export type MentionSource =
+  | "explicit_bot"
+  | "subteam"
+  | "mention_pattern"
+  | "implicit_thread"
+  | "command_bypass"
+  | "none";
+
+type StickerContextMetadata = {
   cachedDescription?: string;
   emoji?: string;
   setName?: string;
@@ -21,6 +28,13 @@ export type StickerContextMetadata = {
   isAnimated?: boolean;
   isVideo?: boolean;
 } & Record<string, unknown>;
+
+type UntrustedStructuredContextEntry = {
+  label: string;
+  source?: string;
+  type?: string;
+  payload: unknown;
+};
 
 export type MsgContext = {
   Body?: string;
@@ -39,6 +53,8 @@ export type MsgContext = {
     timestamp?: number;
   }>;
   /**
+   * @deprecated Use CommandBody.
+   *
    * Raw message body without structural context (history, sender labels).
    * Legacy alias for CommandBody. Falls back to Body if not set.
    */
@@ -56,15 +72,28 @@ export type MsgContext = {
   From?: string;
   To?: string;
   SessionKey?: string;
+  /**
+   * Session-like key used for runtime policy (sandbox/tool policy) when the
+   * conversation key intentionally remains broader, such as a main-session DM.
+   */
+  RuntimePolicySessionKey?: string;
   /** Provider account id (multi-account). */
   AccountId?: string;
   ParentSessionKey?: string;
+  /**
+   * Session key used only for inheriting session-scoped model/provider
+   * overrides. Unlike ParentSessionKey, this must not trigger transcript
+   * forking or parent-session lifecycle behavior.
+   */
+  ModelParentSessionKey?: string;
   MessageSid?: string;
   /** Provider-specific full message id when MessageSid is a shortened alias. */
   MessageSidFull?: string;
   MessageSids?: string[];
   MessageSidFirst?: string;
   MessageSidLast?: string;
+  /** Per-turn reply-threading overrides. */
+  ReplyThreading?: ReplyThreadingPolicy;
   ReplyToId?: string;
   /**
    * Root message id for thread reconstruction (used by Feishu for root_id).
@@ -74,7 +103,26 @@ export type MsgContext = {
   /** Provider-specific full reply-to id when ReplyToId is a shortened alias. */
   ReplyToIdFull?: string;
   ReplyToBody?: string;
+  ReplyToQuoteText?: string;
   ReplyToSender?: string;
+  ReplyChain?: Array<{
+    messageId?: string;
+    threadId?: string;
+    sender?: string;
+    senderId?: string;
+    senderUsername?: string;
+    timestamp?: number;
+    body?: string;
+    isQuote?: boolean;
+    mediaType?: string;
+    mediaPath?: string;
+    mediaRef?: string;
+    replyToId?: string;
+    forwardedFrom?: string;
+    forwardedFromId?: string;
+    forwardedFromUsername?: string;
+    forwardedDate?: number;
+  }>;
   ReplyToIsQuote?: boolean;
   /** Forward origin from the reply target (when reply_to_message is a forwarded message). */
   ReplyToForwardedFrom?: string;
@@ -104,6 +152,15 @@ export type MsgContext = {
   MediaPaths?: string[];
   MediaUrls?: string[];
   MediaTypes?: string[];
+  MediaWorkspaceDir?: string;
+  /** Attachment indexes whose audio was already transcribed before media understanding runs. */
+  MediaTranscribedIndexes?: number[];
+  /**
+   * Marker: skip downstream stageSandboxMedia. chat.send RPC sets this so
+   * staging runs synchronously before respond() and surfaces 5xx to the
+   * client; any later failure only reaches the broadcast channel.
+   */
+  MediaStaged?: boolean;
   /** Telegram sticker metadata (emoji, set name, file IDs, cached description). */
   Sticker?: StickerContextMetadata;
   /** True when current-turn sticker media is present in MediaPaths (false for cached-description path). */
@@ -125,10 +182,14 @@ export type MsgContext = {
   /** Human label for channel-like group conversations (e.g. #general, #support). */
   GroupChannel?: string;
   GroupSpace?: string;
+  /** Trusted provider role ids for the sender in this group turn. */
+  MemberRoleIds?: string[];
   GroupMembers?: string;
   GroupSystemPrompt?: string;
   /** Untrusted metadata that must not be treated as system instructions. */
   UntrustedContext?: string[];
+  /** Structured untrusted metadata rendered by prompt assembly as fenced JSON. */
+  UntrustedStructuredContext?: UntrustedStructuredContextEntry[];
   /** System-attached provenance for the current inbound message. */
   InputProvenance?: InputProvenance;
   /** Explicit owner allowlist overrides (trusted, configuration-derived). */
@@ -139,13 +200,31 @@ export type MsgContext = {
   SenderTag?: string;
   SenderE164?: string;
   Timestamp?: number;
-  /** Provider label (e.g. whatsapp, telegram). */
+  LocationLat?: number;
+  LocationLon?: number;
+  LocationAccuracy?: number;
+  LocationName?: string;
+  LocationAddress?: string;
+  LocationSource?: string;
+  LocationIsLive?: boolean;
+  LocationCaption?: string;
+  /** Provider label. */
   Provider?: string;
-  /** Provider surface label (e.g. discord, slack). Prefer this over `Provider` when available. */
+  /** Provider surface label. Prefer this over `Provider` when available. */
   Surface?: string;
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** True when this turn explicitly mentioned the current bot target. */
+  ExplicitlyMentionedBot?: boolean;
+  /** Provider-native explicit user mention ids present on this turn. */
+  MentionedUserIds?: string[];
+  /** Provider-native explicit user-group/subteam mention ids present on this turn. */
+  MentionedSubteamIds?: string[];
+  /** Provider-native implicit mention wake reasons present on this turn. */
+  ImplicitMentionKinds?: string[];
+  /** Provider-native source that caused the current mention decision. */
+  MentionSource?: MentionSource;
   CommandAuthorized?: boolean;
   CommandSource?: "text" | "native";
   CommandTargetSessionKey?: string;
@@ -162,8 +241,12 @@ export type MsgContext = {
   MessageThreadId?: string | number;
   /** Platform-native channel/conversation id (e.g. Slack DM channel "D…" id). */
   NativeChannelId?: string;
+  /** Stable provider-native direct-peer id when a DM room/user mapping must survive later writes. */
+  NativeDirectUserId?: string;
   /** Telegram forum supergroup marker. */
   IsForum?: boolean;
+  /** Human-readable Telegram forum topic name (cached from service messages). */
+  TopicName?: string;
   /** Warning: DM has topics enabled but this message is not in a topic. */
   TopicRequiredButMissing?: boolean;
   /**

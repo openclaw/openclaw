@@ -1,17 +1,29 @@
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
-import { CHANNEL_IDS } from "../channels/ids.js";
-import { normalizeChatChannelId } from "../channels/chat-meta.js";
+import { CHANNEL_IDS, normalizeChatChannelId } from "../channels/ids.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { planManifestModelCatalogSuppressions } from "../model-catalog/index.js";
 import { withBundledPluginAllowlistCompat } from "../plugins/bundled-compat.js";
-import { listBundledWebSearchPluginIds } from "../plugins/bundled-web-search-ids.js";
 import {
   normalizePluginsConfig,
+  normalizePluginId,
   resolveEffectivePluginActivationState,
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
-import { loadPluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { loadInstalledPluginIndexInstallRecordsSync } from "../plugins/installed-plugin-index-record-reader.js";
+import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogEntry,
+  resolveOfficialExternalPluginInstall,
+} from "../plugins/official-external-plugin-catalog.js";
+import {
+  loadPluginMetadataSnapshot,
+  type PluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
+import { resolveWebSearchInstallCatalogEntries } from "../plugins/web-search-install-catalog.js";
 import { collectUnsupportedSecretRefConfigCandidates } from "../secrets/unsupported-surface-policy.js";
 import {
   hasAvatarUriScheme,
@@ -21,18 +33,20 @@ import {
   isWindowsAbsolutePath,
 } from "../shared/avatar-policy.js";
 import { isCanonicalDottedDecimalIPv4, isLoopbackIpAddress } from "../shared/net/ip.js";
-import { isRecord } from "../utils.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { isRecord, resolveUserPath } from "../utils.js";
 import { findDuplicateAgentDirs, formatDuplicateAgentDirError } from "./agent-dirs.js";
 import { appendAllowedValuesHint, summarizeAllowedValues } from "./allowed-values.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { collectChannelSchemaMetadata } from "./channel-config-metadata.js";
-import { findLegacyConfigIssues } from "./legacy.js";
 import { materializeRuntimeConfig } from "./materialize.js";
+import { collectConfiguredModelRefs } from "./model-refs.js";
 import type { OpenClawConfig, ConfigValidationIssue } from "./types.js";
 import { coerceSecretRef } from "./types.secrets.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
 const LEGACY_REMOVED_PLUGIN_IDS = new Set(["google-antigravity-auth", "google-gemini-cli-auth"]);
+const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
 type UnknownIssueRecord = Record<string, unknown>;
 type ConfigPathSegment = string | number;
@@ -42,6 +56,18 @@ type AllowedValuesCollection = {
   hasValues: boolean;
 };
 type JsonSchemaLike = Record<string, unknown>;
+
+function stripDeprecatedValidationKeys(raw: unknown): unknown {
+  if (!isRecord(raw) || !isRecord(raw.commands) || !Object.hasOwn(raw.commands, "modelsWrite")) {
+    return raw;
+  }
+  const commands = { ...raw.commands };
+  delete commands.modelsWrite;
+  return {
+    ...raw,
+    commands,
+  };
+}
 
 const CUSTOM_EXPECTED_ONE_OF_RE = /expected one of ((?:"[^"]+"(?:\|"?[^"]+"?)*)+)/i;
 const SECRETREF_POLICY_DOC_URL = "https://docs.openclaw.ai/reference/secretref-credential-surface";
@@ -70,6 +96,22 @@ function toConfigPathSegments(path: unknown): ConfigPathSegment[] {
 
 function formatConfigPath(segments: readonly ConfigPathSegment[]): string {
   return segments.join(".");
+}
+
+function formatMissingOfficialExternalPluginWarning(pluginId: string): string | null {
+  const catalogEntry = getOfficialExternalPluginCatalogEntry(pluginId);
+  if (!catalogEntry) {
+    return null;
+  }
+  const install = resolveOfficialExternalPluginInstall(catalogEntry);
+  const npmSpec = install?.npmSpec?.trim();
+  const clawhubSpec = install?.clawhubSpec?.trim();
+  const installSpec =
+    install?.defaultChoice === "clawhub" ? (clawhubSpec ?? npmSpec) : (npmSpec ?? clawhubSpec);
+  if (!installSpec) {
+    return null;
+  }
+  return `plugin not installed: ${pluginId} — install the official external plugin with: openclaw plugins install ${installSpec}`;
 }
 
 function asJsonSchemaLike(value: unknown): JsonSchemaLike | null {
@@ -161,6 +203,40 @@ function collectAllowedValuesFromBundledChannelSchemaPath(
     return { values: [], incomplete: false, hasValues: false };
   }
   return collectAllowedValuesFromJsonSchemaNode(targetNode);
+}
+
+function collectRawBundledChannelConfigIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  if (!config.channels || !isRecord(config.channels)) {
+    return [];
+  }
+  const issues: ConfigValidationIssue[] = [];
+  for (const [channelId, schema] of bundledChannelSchemaById) {
+    if (!Object.prototype.hasOwnProperty.call(config.channels, channelId)) {
+      continue;
+    }
+    const result = validateJsonSchemaValue({
+      schema: schema as Record<string, unknown>,
+      cacheKey: `raw-channel:${channelId}`,
+      value: config.channels[channelId],
+      applyDefaults: false,
+    });
+    if (result.ok) {
+      continue;
+    }
+    for (const error of result.errors) {
+      const message = error.additionalProperty
+        ? `${error.message}: "${error.additionalProperty}"`
+        : error.message;
+      issues.push({
+        path:
+          error.path === "<root>" ? `channels.${channelId}` : `channels.${channelId}.${error.path}`,
+        message: `invalid config: ${message}`,
+        allowedValues: error.allowedValues,
+        allowedValuesHiddenCount: error.allowedValuesHiddenCount,
+      });
+    }
+  }
+  return issues;
 }
 
 function collectAllowedValuesFromCustomIssue(record: UnknownIssueRecord): AllowedValuesCollection {
@@ -256,6 +332,99 @@ function collectAllowedValuesFromUnknownIssue(issue: unknown): unknown[] {
   return collection.values;
 }
 
+function isBindingsIssuePath(pathSegments: readonly ConfigPathSegment[]): boolean {
+  return pathSegments[0] === "bindings" && typeof pathSegments[1] === "number";
+}
+
+function isRouteTypeMismatchIssue(issue: UnknownIssueRecord): boolean {
+  const issuePath = toConfigPathSegments(issue.path);
+  if (issuePath.length !== 1 || issuePath[0] !== "type") {
+    return false;
+  }
+  if (issue.code !== "invalid_value" || !Array.isArray(issue.values)) {
+    return false;
+  }
+  return issue.values.includes("route");
+}
+
+function extractBindingsSpecificUnionIssue(
+  record: UnknownIssueRecord,
+  parentPath: string,
+): ConfigValidationIssue | null {
+  if (!isBindingsIssuePath(toConfigPathSegments(record.path)) || !Array.isArray(record.errors)) {
+    return null;
+  }
+
+  let matchingBranchIssue: UnknownIssueRecord | null = null;
+  let matchingBranchIsUnrecognized = false;
+  let matchingBranchPathLen = -1;
+  let sawRouteTypeMismatch = false;
+
+  for (const errGroup of record.errors) {
+    if (!Array.isArray(errGroup)) {
+      continue;
+    }
+
+    const branch = errGroup
+      .map((issue) => toIssueRecord(issue))
+      .filter(Boolean) as UnknownIssueRecord[];
+    if (branch.length === 0) {
+      continue;
+    }
+
+    if (branch.some((issue) => isRouteTypeMismatchIssue(issue))) {
+      sawRouteTypeMismatch = true;
+      continue;
+    }
+
+    let branchBestIssue: UnknownIssueRecord | null = null;
+    let branchBestIsUnrecognized = false;
+    let branchBestPathLen = -1;
+
+    for (const issue of branch) {
+      const issueCode = typeof issue.code === "string" ? issue.code : "";
+      const issuePathLen = toConfigPathSegments(issue.path).length;
+      const issueIsUnrecognized = issueCode === "unrecognized_keys";
+      const issueIsBetter =
+        issuePathLen > branchBestPathLen
+          ? true
+          : issuePathLen === branchBestPathLen && issueIsUnrecognized && !branchBestIsUnrecognized;
+
+      if (issueIsBetter) {
+        branchBestIssue = issue;
+        branchBestIsUnrecognized = issueIsUnrecognized;
+        branchBestPathLen = issuePathLen;
+      }
+    }
+
+    if (!branchBestIssue) {
+      continue;
+    }
+
+    if (matchingBranchIssue) {
+      return null;
+    }
+
+    matchingBranchIssue = branchBestIssue;
+    matchingBranchIsUnrecognized = branchBestIsUnrecognized;
+    matchingBranchPathLen = branchBestPathLen;
+  }
+
+  if (!sawRouteTypeMismatch || !matchingBranchIssue) {
+    return null;
+  }
+
+  if (matchingBranchPathLen === 0 && !matchingBranchIsUnrecognized) {
+    return null;
+  }
+
+  const subPath = formatConfigPath(toConfigPathSegments(matchingBranchIssue.path));
+  const fullPath = parentPath && subPath ? `${parentPath}.${subPath}` : parentPath || subPath;
+  const subMessage =
+    typeof matchingBranchIssue.message === "string" ? matchingBranchIssue.message : "Invalid input";
+  return { path: fullPath, message: subMessage };
+}
+
 function isObjectSecretRefCandidate(value: unknown): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -348,7 +517,23 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
   const record = toIssueRecord(issue);
   const path = formatConfigPath(toConfigPathSegments(record?.path));
   const message = typeof record?.message === "string" ? record.message : "Invalid input";
+
   const allowedValuesSummary = summarizeAllowedValues(collectAllowedValuesFromUnknownIssue(issue));
+
+  // Bindings use a plain union because legacy route bindings may omit `type`.
+  // When an explicit ACP binding fails strict-object checks, Zod collapses the
+  // useful ACP branch issue behind a generic union-level "Invalid input".
+  if (
+    record &&
+    typeof record.code === "string" &&
+    record.code === "invalid_union" &&
+    !allowedValuesSummary
+  ) {
+    const betterIssue = extractBindingsSpecificUnionIssue(record, path);
+    if (betterIssue) {
+      return betterIssue;
+    }
+  }
 
   if (!allowedValuesSummary) {
     return { path, message };
@@ -361,6 +546,10 @@ function mapZodIssueToConfigIssue(issue: unknown): ConfigValidationIssue {
     allowedValuesHiddenCount: allowedValuesSummary.hiddenCount,
   };
 }
+
+export const __testing = {
+  mapZodIssueToConfigIssue,
+};
 
 function isWorkspaceAvatarPath(value: string, workspaceDir: string): boolean {
   const workspaceRoot = path.resolve(workspaceDir);
@@ -451,19 +640,15 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
  */
 export function validateConfigObjectRaw(
   raw: unknown,
+  opts?: {
+    sourceRaw?: unknown;
+    touchedPaths?: ReadonlyArray<ReadonlyArray<string>>;
+    validateBundledChannels?: boolean;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
-  const legacyIssues = findLegacyConfigIssues(raw);
-  if (legacyIssues.length > 0) {
-    return {
-      ok: false,
-      issues: legacyIssues.map((iss) => ({
-        path: iss.path,
-        message: iss.message,
-      })),
-    };
-  }
-  const validated = OpenClawSchema.safeParse(raw);
+  const normalizedRaw = stripDeprecatedValidationKeys(raw);
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(normalizedRaw);
+  const validated = OpenClawSchema.safeParse(normalizedRaw);
   if (!validated.success) {
     const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
     return {
@@ -471,10 +656,20 @@ export function validateConfigObjectRaw(
       issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
     };
   }
+  const validatedConfig = validated.data as OpenClawConfig;
+  const channelIssues =
+    policyIssues.length > 0 || opts?.validateBundledChannels
+      ? collectRawBundledChannelConfigIssues(validatedConfig)
+      : [];
+  if (channelIssues.length > 0) {
+    return {
+      ok: false,
+      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, channelIssues),
+    };
+  }
   if (policyIssues.length > 0) {
     return { ok: false, issues: policyIssues };
   }
-  const validatedConfig = validated.data as OpenClawConfig;
   const duplicates = findDuplicateAgentDirs(validatedConfig);
   if (duplicates.length > 0) {
     return {
@@ -503,14 +698,20 @@ export function validateConfigObjectRaw(
 
 export function validateConfigObject(
   raw: unknown,
+  opts?: {
+    manifestRegistry?: Pick<PluginMetadataSnapshot, "manifestRegistry">["manifestRegistry"];
+    sourceRaw?: unknown;
+  },
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw);
+  const result = validateConfigObjectRaw(raw, opts);
   if (!result.ok) {
     return result;
   }
   return {
     ok: true,
-    config: materializeRuntimeConfig(result.config, "snapshot"),
+    config: materializeRuntimeConfig(result.config, "snapshot", {
+      manifestRegistry: opts?.manifestRegistry,
+    }),
   };
 }
 
@@ -526,30 +727,75 @@ type ValidateConfigWithPluginsResult =
       warnings: ConfigValidationIssue[];
     };
 
+type ValidateConfigWithPluginsParams = {
+  env?: NodeJS.ProcessEnv;
+  pluginValidation?: "full" | "skip";
+  pluginMetadataSnapshot?: Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  loadPluginMetadataSnapshot?: (
+    config: OpenClawConfig,
+  ) => Pick<PluginMetadataSnapshot, "manifestRegistry">;
+  sourceRaw?: unknown;
+};
+
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+    sourceRaw: params?.sourceRaw,
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: ValidateConfigWithPluginsParams,
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    env: params?.env,
+    pluginValidation: params?.pluginValidation ?? "full",
+    pluginMetadataSnapshot: params?.pluginMetadataSnapshot,
+    loadPluginMetadataSnapshot: params?.loadPluginMetadataSnapshot,
+    sourceRaw: params?.sourceRaw,
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: ValidateConfigWithPluginsParams & { applyDefaults: boolean },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const base = validateConfigObjectRaw(raw, { sourceRaw: opts.sourceRaw });
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
 
-  const config = base.config;
+  let registryInfo: RegistryInfo | null = opts.pluginMetadataSnapshot
+    ? { registry: opts.pluginMetadataSnapshot.manifestRegistry }
+    : null;
+  if (opts.applyDefaults && !registryInfo && opts.pluginValidation !== "skip") {
+    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(base.config);
+    if (pluginMetadataSnapshot) {
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+    }
+  }
+  const config = opts.applyDefaults
+    ? materializeRuntimeConfig(base.config, "snapshot", {
+        manifestRegistry: registryInfo?.registry,
+      })
+    : base.config;
+  if (opts.pluginValidation === "skip") {
+    return {
+      ok: true,
+      config,
+      warnings: [],
+    };
+  }
+
   const issues: ConfigValidationIssue[] = [];
   const warnings: ConfigValidationIssue[] = [];
   const hasExplicitPluginsConfig =
@@ -564,8 +810,9 @@ function validateConfigObjectWithPluginsBase(
   };
 
   type RegistryInfo = {
-    registry: ReturnType<typeof loadPluginManifestRegistry>;
+    registry: PluginManifestRegistry;
     knownIds?: Set<string>;
+    overriddenPluginIds?: Set<string>;
     normalizedPlugins?: ReturnType<typeof normalizePluginsConfig>;
     channelSchemas?: Map<
       string,
@@ -575,61 +822,16 @@ function validateConfigObjectWithPluginsBase(
     >;
   };
 
-  let registryInfo: RegistryInfo | null = null;
   let compatConfig: OpenClawConfig | null | undefined;
+  let compatPluginIds: ReadonlySet<string> | null = null;
+  let compatPluginIdsResolved = false;
+  let registryDiagnosticsPushed = false;
 
-  const ensureCompatConfig = (): OpenClawConfig => {
-    if (compatConfig !== undefined) {
-      return compatConfig ?? config;
+  const pushRegistryDiagnostics = (registry: PluginManifestRegistry): void => {
+    if (registryDiagnosticsPushed) {
+      return;
     }
-
-    const allow = config.plugins?.allow;
-    if (!Array.isArray(allow) || allow.length === 0) {
-      compatConfig = config;
-      return config;
-    }
-
-    const bundledWebSearchPluginIds = new Set(listBundledWebSearchPluginIds());
-    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
-    const seenCompatPluginIds = new Set<string>();
-    const compatPluginIds = loadPluginManifestRegistry({
-      config,
-      workspaceDir: workspaceDir ?? undefined,
-      env: opts.env,
-    })
-      .plugins.filter((plugin) => {
-        if (seenCompatPluginIds.has(plugin.id)) {
-          return false;
-        }
-        seenCompatPluginIds.add(plugin.id);
-        return plugin.origin === "bundled" && bundledWebSearchPluginIds.has(plugin.id);
-      })
-      .map((plugin) => plugin.id)
-      .toSorted((left, right) => left.localeCompare(right));
-
-    compatConfig = withBundledPluginAllowlistCompat({
-      config,
-      pluginIds: compatPluginIds,
-    });
-    return compatConfig ?? config;
-  };
-
-  const ensureRegistry = (): RegistryInfo => {
-    if (registryInfo) {
-      return registryInfo;
-    }
-
-    const effectiveConfig = ensureCompatConfig();
-    const workspaceDir = resolveAgentWorkspaceDir(
-      effectiveConfig,
-      resolveDefaultAgentId(effectiveConfig),
-    );
-    const registry = loadPluginManifestRegistry({
-      config: effectiveConfig,
-      workspaceDir: workspaceDir ?? undefined,
-      env: opts.env,
-    });
-
+    registryDiagnosticsPushed = true;
     for (const diag of registry.diagnostics) {
       let path = diag.pluginId ? `plugins.entries.${diag.pluginId}` : "plugins";
       if (!diag.pluginId && diag.message.includes("plugin path not found")) {
@@ -643,9 +845,77 @@ function validateConfigObjectWithPluginsBase(
         warnings.push({ path, message });
       }
     }
+  };
 
+  const loadValidationRegistry = (): RegistryInfo => {
+    const pluginMetadataSnapshot = opts.loadPluginMetadataSnapshot?.(config);
+    if (pluginMetadataSnapshot) {
+      registryInfo = { registry: pluginMetadataSnapshot.manifestRegistry };
+      return registryInfo;
+    }
+    const workspaceDir = resolveAgentWorkspaceDir(config, resolveDefaultAgentId(config));
+    const registry = loadPluginMetadataSnapshot({
+      config,
+      workspaceDir: workspaceDir ?? undefined,
+      env: opts.env ?? process.env,
+    }).manifestRegistry;
     registryInfo = { registry };
     return registryInfo;
+  };
+
+  const ensureCompatPluginIds = (): ReadonlySet<string> => {
+    if (compatPluginIdsResolved) {
+      return compatPluginIds ?? new Set<string>();
+    }
+    compatPluginIdsResolved = true;
+    const allow = config.plugins?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) {
+      compatPluginIds = new Set<string>();
+      return compatPluginIds;
+    }
+    const { registry } = registryInfo ?? loadValidationRegistry();
+    const overriddenBundledPluginIds = new Set(
+      registry.diagnostics
+        .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+        .map((diag) => diag.pluginId)
+        .filter((pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== ""),
+    );
+    compatPluginIds = new Set(
+      registry.plugins
+        .filter(
+          (plugin) =>
+            plugin.origin === "bundled" &&
+            (plugin.contracts?.webSearchProviders?.length ?? 0) > 0 &&
+            !overriddenBundledPluginIds.has(plugin.id),
+        )
+        .map((plugin) => plugin.id),
+    );
+    return compatPluginIds;
+  };
+
+  const ensureCompatConfig = (): OpenClawConfig => {
+    if (compatConfig !== undefined) {
+      return compatConfig ?? config;
+    }
+
+    const allow = config.plugins?.allow;
+    if (!Array.isArray(allow) || allow.length === 0) {
+      compatConfig = config;
+      return config;
+    }
+
+    compatConfig = withBundledPluginAllowlistCompat({
+      config,
+      pluginIds: [...ensureCompatPluginIds()],
+    });
+    return compatConfig ?? config;
+  };
+
+  const ensureRegistry = (): RegistryInfo => {
+    const info = registryInfo ?? loadValidationRegistry();
+    ensureCompatConfig();
+    pushRegistryDiagnostics(info.registry);
+    return info;
   };
 
   const ensureKnownIds = (): Set<string> => {
@@ -654,6 +924,21 @@ function validateConfigObjectWithPluginsBase(
       info.knownIds = new Set(info.registry.plugins.map((record) => record.id));
     }
     return info.knownIds;
+  };
+
+  const ensureOverriddenPluginIds = (): Set<string> => {
+    const info = ensureRegistry();
+    if (!info.overriddenPluginIds) {
+      info.overriddenPluginIds = new Set(
+        info.registry.diagnostics
+          .filter((diag) => diag.message.includes("duplicate plugin id detected"))
+          .map((diag) => diag.pluginId)
+          .filter(
+            (pluginId): pluginId is string => typeof pluginId === "string" && pluginId !== "",
+          ),
+      );
+    }
+    return info.overriddenPluginIds;
   };
 
   const ensureNormalizedPlugins = (): ReturnType<typeof normalizePluginsConfig> => {
@@ -673,10 +958,20 @@ function validateConfigObjectWithPluginsBase(
     const info = ensureRegistry();
     if (!info.channelSchemas) {
       info.channelSchemas = new Map(
-        collectChannelSchemaMetadata(info.registry).map(
-          (entry) => [entry.id, { schema: entry.configSchema }] as const,
+        GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA.map(
+          (entry) => [entry.channelId, { schema: entry.schema }] as const,
         ),
       );
+      for (const entry of collectChannelSchemaMetadata(info.registry)) {
+        const current = info.channelSchemas.get(entry.id);
+        if (entry.configSchema) {
+          info.channelSchemas.set(entry.id, { schema: entry.configSchema });
+          continue;
+        }
+        if (!current) {
+          info.channelSchemas.set(entry.id, {});
+        }
+      }
     }
     return info.channelSchemas;
   };
@@ -685,6 +980,214 @@ function validateConfigObjectWithPluginsBase(
   let channelsCloned = false;
   let pluginsCloned = false;
   let pluginEntriesCloned = false;
+  let installedPluginRecordIds: Set<string> | undefined;
+
+  const ensureInstalledPluginRecordIds = (): Set<string> => {
+    if (installedPluginRecordIds) {
+      return installedPluginRecordIds;
+    }
+    try {
+      installedPluginRecordIds = new Set(
+        Object.keys(loadInstalledPluginIndexInstallRecordsSync({ env: opts.env })).map(
+          normalizePluginId,
+        ),
+      );
+    } catch {
+      installedPluginRecordIds = new Set();
+    }
+    return installedPluginRecordIds;
+  };
+
+  const hasStalePluginEvidenceForUnknownChannel = (channelId: string): boolean => {
+    const normalizedChannelId = normalizePluginId(channelId);
+    if (!normalizedChannelId || ensureKnownIds().has(normalizedChannelId)) {
+      return false;
+    }
+    const pluginConfig = config.plugins;
+    if (
+      Array.isArray(pluginConfig?.allow) &&
+      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedChannelId)
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.entries) &&
+      Object.keys(pluginConfig.entries).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedChannelId,
+      )
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.installs) &&
+      Object.keys(pluginConfig.installs).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedChannelId,
+      )
+    ) {
+      return true;
+    }
+    return ensureInstalledPluginRecordIds().has(normalizedChannelId);
+  };
+
+  const collectActiveWebSearchProviderIds = (): string[] => {
+    const { registry } = ensureRegistry();
+    return [
+      ...new Set(
+        registry.plugins
+          .flatMap((record) => record.contracts?.webSearchProviders ?? [])
+          .map((providerId) => providerId.trim())
+          .filter((providerId) => providerId.length > 0),
+      ),
+    ].toSorted((left, right) => left.localeCompare(right));
+  };
+
+  const collectKnownWebSearchProviderIds = (): string[] => {
+    return [
+      ...new Set([
+        ...collectActiveWebSearchProviderIds(),
+        ...resolveWebSearchInstallCatalogEntries()
+          .map((entry) => entry.provider.id.trim())
+          .filter((providerId) => providerId.length > 0),
+      ]),
+    ].toSorted((left, right) => left.localeCompare(right));
+  };
+
+  const hasStalePluginEvidenceForUnknownWebSearchProvider = (providerId: string): boolean => {
+    const normalizedProviderId = normalizePluginId(providerId);
+    if (!normalizedProviderId || ensureKnownIds().has(normalizedProviderId)) {
+      return false;
+    }
+    const pluginConfig = config.plugins;
+    if (
+      Array.isArray(pluginConfig?.allow) &&
+      pluginConfig.allow.some((pluginId) => normalizePluginId(pluginId) === normalizedProviderId)
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.entries) &&
+      Object.keys(pluginConfig.entries).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+    if (
+      isRecord(pluginConfig?.installs) &&
+      Object.keys(pluginConfig.installs).some(
+        (pluginId) => normalizePluginId(pluginId) === normalizedProviderId,
+      )
+    ) {
+      return true;
+    }
+    return ensureInstalledPluginRecordIds().has(normalizedProviderId);
+  };
+
+  const validateWebSearchProvider = () => {
+    const provider = config.tools?.web?.search?.provider;
+    if (typeof provider !== "string") {
+      return;
+    }
+    const trimmed = provider.trim();
+    const path = "tools.web.search.provider";
+    if (!trimmed) {
+      issues.push({ path, message: "web_search provider must not be empty" });
+      return;
+    }
+    const activeProviderIds = collectActiveWebSearchProviderIds();
+    if (activeProviderIds.includes(trimmed)) {
+      return;
+    }
+    const installCatalogEntry = resolveWebSearchInstallCatalogEntries().find(
+      (entry) => entry.provider.id === trimmed,
+    );
+    if (installCatalogEntry) {
+      issues.push({
+        path,
+        message: `web_search provider is not available: ${trimmed} (install or enable plugin "${installCatalogEntry.pluginId}", then run openclaw doctor --fix)`,
+        allowedValues: collectKnownWebSearchProviderIds(),
+      });
+      return;
+    }
+    const allowedValues = collectKnownWebSearchProviderIds();
+    if (allowedValues.length === 0) {
+      return;
+    }
+    const issue = {
+      path,
+      message: `unknown web_search provider: ${trimmed}`,
+      allowedValues,
+    };
+    if (hasStalePluginEvidenceForUnknownWebSearchProvider(trimmed)) {
+      warnings.push({
+        ...issue,
+        message: `${issue.message} (stale web search plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+      });
+      return;
+    }
+    issues.push(issue);
+  };
+
+  const parseProviderModelRef = (value: string): { provider: string; model: string } | null => {
+    const slashIndex = value.indexOf("/");
+    if (slashIndex <= 0 || slashIndex >= value.length - 1) {
+      return null;
+    }
+    const provider = normalizeLowercaseStringOrEmpty(value.slice(0, slashIndex));
+    const model = normalizeLowercaseStringOrEmpty(value.slice(slashIndex + 1));
+    return provider && model ? { provider, model } : null;
+  };
+
+  const validateConfiguredModelRefs = () => {
+    const configuredRefs = collectConfiguredModelRefs(config);
+    if (configuredRefs.length === 0) {
+      return;
+    }
+    const { registry } = ensureRegistry();
+    const suppressedModels = new Map<
+      string,
+      { provider: string; model: string; reason?: string }
+    >();
+    for (const suppression of planManifestModelCatalogSuppressions({ registry }).suppressions) {
+      if (suppression.when) {
+        continue;
+      }
+      const key = `${suppression.provider}/${suppression.model}`;
+      if (!suppressedModels.has(key)) {
+        suppressedModels.set(key, {
+          provider: suppression.provider,
+          model: suppression.model,
+          ...(suppression.reason ? { reason: suppression.reason } : {}),
+        });
+      }
+    }
+    if (suppressedModels.size === 0) {
+      return;
+    }
+    const seen = new Set<string>();
+    for (const ref of configuredRefs) {
+      const parsed = parseProviderModelRef(ref.value);
+      if (!parsed) {
+        continue;
+      }
+      const suppression = suppressedModels.get(`${parsed.provider}/${parsed.model}`);
+      if (!suppression) {
+        continue;
+      }
+      const issueKey = `${ref.path}\0${parsed.provider}/${parsed.model}`;
+      if (seen.has(issueKey)) {
+        continue;
+      }
+      seen.add(issueKey);
+      const modelRef = `${suppression.provider}/${suppression.model}`;
+      issues.push({
+        path: ref.path,
+        message: suppression.reason
+          ? `Unknown model: ${modelRef}. ${suppression.reason}`
+          : `Unknown model: ${modelRef}.`,
+      });
+    }
+  };
 
   const replaceChannelConfig = (channelId: string, nextValue: unknown) => {
     if (!channelsCloned) {
@@ -742,10 +1245,18 @@ function validateConfigObjectWithPluginsBase(
         }
       }
       if (!allowedChannels.has(trimmed)) {
-        issues.push({
+        const issue = {
           path: `channels.${trimmed}`,
           message: `unknown channel id: ${trimmed}`,
-        });
+        };
+        if (hasStalePluginEvidenceForUnknownChannel(trimmed)) {
+          warnings.push({
+            ...issue,
+            message: `${issue.message} (stale channel plugin config ignored; run openclaw doctor --fix to remove stale config, or install the plugin)`,
+          });
+        } else {
+          issues.push(issue);
+        }
         continue;
       }
 
@@ -757,7 +1268,8 @@ function validateConfigObjectWithPluginsBase(
         schema: channelSchema,
         cacheKey: `channel:${trimmed}`,
         value: config.channels[trimmed],
-        applyDefaults: true,
+        applyDefaults: true, // Always apply defaults for AJV schema validation;
+        // writeConfigFile persists persistCandidate, not validated.config (#61841)
       });
       if (!result.ok) {
         for (const error of result.errors) {
@@ -777,7 +1289,7 @@ function validateConfigObjectWithPluginsBase(
 
   const heartbeatChannelIds = new Set<string>();
   for (const channelId of CHANNEL_IDS) {
-    heartbeatChannelIds.add(channelId.toLowerCase());
+    heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(channelId));
   }
 
   const validateHeartbeatTarget = (target: string | undefined, path: string) => {
@@ -789,7 +1301,7 @@ function validateConfigObjectWithPluginsBase(
       issues.push({ path, message: "heartbeat target must not be empty" });
       return;
     }
-    const normalized = trimmed.toLowerCase();
+    const normalized = normalizeLowercaseStringOrEmpty(trimmed);
     if (normalized === "last" || normalized === "none") {
       return;
     }
@@ -802,7 +1314,7 @@ function validateConfigObjectWithPluginsBase(
         for (const channelId of record.channels) {
           const pluginChannel = channelId.trim();
           if (pluginChannel) {
-            heartbeatChannelIds.add(pluginChannel.toLowerCase());
+            heartbeatChannelIds.add(normalizeLowercaseStringOrEmpty(pluginChannel));
           }
         }
       }
@@ -823,6 +1335,9 @@ function validateConfigObjectWithPluginsBase(
     }
   }
 
+  validateWebSearchProvider();
+  validateConfiguredModelRefs();
+
   if (!hasExplicitPluginsConfig) {
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
@@ -833,10 +1348,101 @@ function validateConfigObjectWithPluginsBase(
   const { registry } = ensureRegistry();
   const knownIds = ensureKnownIds();
   const normalizedPlugins = ensureNormalizedPlugins();
+  const effectiveConfig = ensureCompatConfig();
+  const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
+  const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
+  const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
+    const trimmed = value?.trim();
+    if (!trimmed) {
+      return "";
+    }
+    try {
+      return path.resolve(resolveUserPath(trimmed, opts.env ?? process.env));
+    } catch {
+      return path.resolve(trimmed);
+    }
+  };
+  for (const diag of registry.diagnostics) {
+    if (!diag.message.startsWith(BLOCKED_PLUGIN_CANDIDATE_PREFIX)) {
+      continue;
+    }
+    if (!diag.pluginId && diag.source) {
+      blockedPluginDiagnosticsWithSource.push({
+        message: diag.message,
+        source: diag.source,
+      });
+    }
+    if (diag.pluginId) {
+      const normalizedPluginId = normalizePluginId(diag.pluginId);
+      for (const key of [diag.pluginId, normalizedPluginId]) {
+        if (!key || blockedPluginDiagnostics.has(key)) {
+          continue;
+        }
+        blockedPluginDiagnostics.set(key, {
+          message: diag.message,
+          ...(diag.source ? { source: diag.source } : {}),
+        });
+      }
+    }
+  }
+  const blockedDiagnosticSourceMatchesPluginId = (
+    diagnostic: { message: string; source: string },
+    pluginId: string,
+  ): boolean => {
+    const normalizedPluginId = normalizePluginId(pluginId);
+    if (!normalizedPluginId) {
+      return false;
+    }
+    const sourcePath = normalizeBlockedDiagnosticPath(diagnostic.source);
+    if (!sourcePath) {
+      return false;
+    }
+    if (
+      normalizePluginId(path.basename(sourcePath)) === normalizedPluginId ||
+      normalizePluginId(path.basename(path.dirname(sourcePath))) === normalizedPluginId
+    ) {
+      return true;
+    }
+    const loadPaths = config.plugins?.load?.paths;
+    if (!Array.isArray(loadPaths)) {
+      return false;
+    }
+    for (const loadPath of loadPaths) {
+      if (typeof loadPath !== "string") {
+        continue;
+      }
+      const resolvedLoadPath = normalizeBlockedDiagnosticPath(loadPath);
+      if (!resolvedLoadPath) {
+        continue;
+      }
+      if (normalizePluginId(path.basename(resolvedLoadPath)) !== normalizedPluginId) {
+        continue;
+      }
+      if (
+        sourcePath === resolvedLoadPath ||
+        isPathInside(resolvedLoadPath, sourcePath) ||
+        isPathInside(sourcePath, resolvedLoadPath)
+      ) {
+        return true;
+      }
+    }
+    return false;
+  };
+  const findBlockedPluginDiagnostic = (pluginId: string) => {
+    const direct =
+      blockedPluginDiagnostics.get(pluginId) ??
+      blockedPluginDiagnostics.get(normalizePluginId(pluginId));
+    if (direct) {
+      return direct;
+    }
+    return blockedPluginDiagnosticsWithSource.find((diagnostic) =>
+      blockedDiagnosticSourceMatchesPluginId(diagnostic, pluginId),
+    );
+  };
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,
-    opts?: { warnOnly?: boolean },
+    opts?: { warnOnly?: boolean; officialInstallHint?: boolean },
   ) => {
     if (LEGACY_REMOVED_PLUGIN_IDS.has(pluginId)) {
       warnings.push({
@@ -844,6 +1450,27 @@ function validateConfigObjectWithPluginsBase(
         message: `plugin removed: ${pluginId} (stale config entry ignored; remove it from plugins config)`,
       });
       return;
+    }
+    const blockedDiagnostic = findBlockedPluginDiagnostic(pluginId);
+    if (blockedDiagnostic) {
+      const source = blockedDiagnostic.source ? `; source: ${blockedDiagnostic.source}` : "";
+      const message = `plugin present but blocked: ${pluginId} (see preceding plugin warning${source}; fix the blocked plugin path instead of removing config)`;
+      if (opts?.warnOnly) {
+        warnings.push({ path, message });
+      } else {
+        issues.push({ path, message });
+      }
+      return;
+    }
+    if (opts?.warnOnly && opts.officialInstallHint !== false) {
+      const externalInstallWarning = formatMissingOfficialExternalPluginWarning(pluginId);
+      if (externalInstallWarning) {
+        warnings.push({
+          path,
+          message: externalInstallWarning,
+        });
+        return;
+      }
     }
     if (opts?.warnOnly) {
       warnings.push({
@@ -876,7 +1503,20 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      const commandAlias = resolveManifestCommandAliasOwnerInRegistry({
+        command: pluginId,
+        registry,
+      });
+      if (commandAlias?.pluginId && knownIds.has(commandAlias.pluginId)) {
+        warnings.push({
+          path: "plugins.allow",
+          message:
+            `"${pluginId}" is not a plugin — it is a command provided by the "${commandAlias.pluginId}" plugin. ` +
+            `Use "${commandAlias.pluginId}" in plugins.allow instead.`,
+        });
+      } else {
+        pushMissingPluginIssue("plugins.allow", pluginId, { warnOnly: true });
+      }
     }
   }
 
@@ -886,7 +1526,10 @@ function validateConfigObjectWithPluginsBase(
       continue;
     }
     if (!knownIds.has(pluginId)) {
-      pushMissingPluginIssue("plugins.deny", pluginId);
+      pushMissingPluginIssue("plugins.deny", pluginId, {
+        warnOnly: true,
+        officialInstallHint: false,
+      });
     }
   }
 
@@ -919,7 +1562,7 @@ function validateConfigObjectWithPluginsBase(
       id: pluginId,
       origin: record.origin,
       config: normalizedPlugins,
-      rootConfig: config,
+      rootConfig: effectiveConfig,
     });
     let enabled = activationState.activated;
     let reason = activationState.reason;
@@ -940,6 +1583,7 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
+    const shouldReplacePluginConfig = entryHasConfig || (opts.applyDefaults && enabled);
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
@@ -947,7 +1591,8 @@ function validateConfigObjectWithPluginsBase(
           schema: record.configSchema,
           cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
           value: entry?.config ?? {},
-          applyDefaults: true,
+          applyDefaults: true, // Always apply defaults for AJV schema validation;
+          // writeConfigFile persists persistCandidate, not validated.config (#61841)
         });
         if (!res.ok) {
           for (const error of res.errors) {
@@ -958,7 +1603,7 @@ function validateConfigObjectWithPluginsBase(
               allowedValuesHiddenCount: error.allowedValuesHiddenCount,
             });
           }
-        } else if (entry || entryHasConfig) {
+        } else if (shouldReplacePluginConfig) {
           replacePluginEntryConfig(pluginId, res.value as Record<string, unknown>);
         }
       } else if (record.format === "bundle") {
@@ -972,7 +1617,9 @@ function validateConfigObjectWithPluginsBase(
       }
     }
 
-    if (!enabled && entryHasConfig) {
+    const suppressDisabledConfigWarning =
+      ensureCompatPluginIds().has(pluginId) && !ensureOverriddenPluginIds().has(pluginId);
+    if (!enabled && entryHasConfig && !suppressDisabledConfigWarning) {
       warnings.push({
         path: `plugins.entries.${pluginId}`,
         message: `plugin disabled (${reason ?? "disabled"}) but config is present`,

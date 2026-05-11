@@ -10,7 +10,7 @@ function createReactionsClient(params: {
   }>;
   userId?: string | null;
 }) {
-  const doRequest = vi.fn(async (_method: string, _path: string, _query: any) => ({
+  const doRequest = vi.fn(async (_method: string, _path: string, _query: unknown) => ({
     chunk: params.chunk.map((item) => ({
       event_id: item.event_id ?? "",
       sender: item.sender ?? "",
@@ -118,7 +118,7 @@ describe("matrix reaction actions", () => {
 
     const result = await listMatrixReactions("!room:example.org", "$msg", { client });
 
-    expect(result).toEqual([]);
+    expect(result).toStrictEqual([]);
   });
 
   it("rejects blank message ids before querying Matrix relations", async () => {

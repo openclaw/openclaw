@@ -1,4 +1,4 @@
-import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { createToolFactoryHarness } from "./tool-factory-test-harness.js";
 
@@ -62,6 +62,11 @@ describe("feishu tool account routing", () => {
     ({ registerFeishuWikiTools } = await import("./wiki.js"));
   });
 
+  afterAll(() => {
+    vi.doUnmock("./client.js");
+    vi.resetModules();
+  });
+
   beforeEach(() => {
     vi.clearAllMocks();
   });
@@ -81,7 +86,7 @@ describe("feishu tool account routing", () => {
     expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
   });
 
-  test("wiki tool prefers configured defaultAccount over inherited default account context", async () => {
+  test("wiki tool prefers the active contextual account over configured defaultAccount", async () => {
     const { api, resolveTool } = createToolFactoryHarness(
       createConfig({
         defaultAccount: "b",
@@ -94,7 +99,7 @@ describe("feishu tool account routing", () => {
     const tool = resolveTool("feishu_wiki", { agentAccountId: "a" });
     await tool.execute("call", { action: "search" });
 
-    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-b");
+    expect(createFeishuClientMock.mock.calls.at(-1)?.[0]?.appId).toBe("app-a");
   });
 
   test("drive tool registers when first account disables it and routes to agentAccountId", async () => {
@@ -180,6 +185,8 @@ describe("feishu tool account routing", () => {
     const result = await tool.execute("call", { action: "search" });
 
     expect(createFeishuClientMock).not.toHaveBeenCalled();
-    expect(String(result.details.error ?? "")).toContain("unresolved SecretRef");
+    expect(typeof result.details.error === "string" ? result.details.error : "").toContain(
+      "Resolve this command against an active gateway runtime snapshot before reading it.",
+    );
   });
 });

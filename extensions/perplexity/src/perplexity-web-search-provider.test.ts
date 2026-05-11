@@ -1,6 +1,7 @@
+import { withEnv, withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it } from "vitest";
-import { withEnv } from "../../../test/helpers/plugins/env.js";
-import { __testing } from "./perplexity-web-search-provider.js";
+import { createPerplexityWebSearchProvider } from "./perplexity-web-search-provider.js";
+import { __testing } from "./perplexity-web-search-provider.runtime.js";
 
 const openRouterApiKeyEnv = ["OPENROUTER_API", "KEY"].join("_");
 const perplexityApiKeyEnv = ["PERPLEXITY_API", "KEY"].join("_");
@@ -9,6 +10,26 @@ const directPerplexityApiKey = ["pplx", "test"].join("-");
 const enterprisePerplexityApiKey = ["enterprise", "perplexity", "test"].join("-");
 
 describe("perplexity web search provider", () => {
+  it("points missing-key users to fetch/browser alternatives", async () => {
+    await withEnvAsync(
+      { [perplexityApiKeyEnv]: undefined, [openRouterApiKeyEnv]: undefined },
+      async () => {
+        const provider = createPerplexityWebSearchProvider();
+        const tool = provider.createTool({ config: {}, searchConfig: {} });
+        if (!tool) {
+          throw new Error("Expected tool definition");
+        }
+
+        await expect(tool.execute({ query: "OpenClaw docs" })).resolves.toEqual({
+          error: "missing_perplexity_api_key",
+          message:
+            "web_search (perplexity) needs an API key. Set PERPLEXITY_API_KEY or OPENROUTER_API_KEY in the Gateway environment, or configure tools.web.search.perplexity.apiKey. If you do not want to configure a search API key, use web_fetch for a specific URL or the browser tool for interactive pages.",
+          docs: "https://docs.openclaw.ai/tools/web",
+        });
+      },
+    );
+  });
+
   it("infers provider routing from api key prefixes", () => {
     expect(__testing.inferPerplexityBaseUrlFromApiKey("pplx-abc")).toBe("direct");
     expect(__testing.inferPerplexityBaseUrlFromApiKey("sk-or-v1-abc")).toBe("openrouter");

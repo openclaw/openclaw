@@ -17,6 +17,14 @@ function drainChunks(chunker: EmbeddedBlockChunker, force = false) {
   return chunks;
 }
 
+function expectChunksWithinLength(chunks: string[], maxLength: number) {
+  expect(
+    chunks
+      .map((chunk, index) => ({ index, length: chunk.length }))
+      .filter((entry) => entry.length > maxLength),
+  ).toStrictEqual([]);
+}
+
 describe("EmbeddedBlockChunker", () => {
   it("breaks at paragraph boundary right after fence close", () => {
     const chunker = new EmbeddedBlockChunker({
@@ -62,7 +70,7 @@ describe("EmbeddedBlockChunker", () => {
 
     chunker.append("First paragraph.\n \nSecond paragraph.");
 
-    expect(drainChunks(chunker)).toEqual([]);
+    expect(drainChunks(chunker)).toStrictEqual([]);
     expect(drainChunks(chunker, true)).toEqual(["First paragraph.\n \nSecond paragraph."]);
     expect(chunker.bufferedText).toBe("");
   });
@@ -95,7 +103,7 @@ describe("EmbeddedBlockChunker", () => {
 
     const chunks = drainChunks(chunker);
 
-    expect(chunks.every((chunk) => chunk.length <= 10)).toBe(true);
+    expectChunksWithinLength(chunks, 10);
     expect(chunks).toEqual(["abcdefghij", "k"]);
     expect(chunker.bufferedText).toBe("Rest");
   });
@@ -141,5 +149,23 @@ describe("EmbeddedBlockChunker", () => {
     expect(chunks.length).toBeGreaterThan(2);
     expect(parseSpy).toHaveBeenCalledTimes(1);
     parseSpy.mockRestore();
+  });
+
+  it("does not split inside the closing fence marker when clamping at maxChars", () => {
+    const chunker = new EmbeddedBlockChunker({
+      minChars: 10,
+      maxChars: 30,
+      breakPreference: "paragraph",
+    });
+
+    chunker.append(`\`\`\`txt\n${"a".repeat(80)}\n\`\`\``);
+    const chunks = drainChunks(chunker, true);
+
+    expect(chunks.length).toBeGreaterThan(2);
+    for (const chunk of chunks) {
+      expect(chunk.startsWith("```txt")).toBe(true);
+      expect(chunk.match(/```/g)?.length ?? 0).toBeGreaterThanOrEqual(2);
+      expect(chunk).not.toContain("``\n```");
+    }
   });
 });

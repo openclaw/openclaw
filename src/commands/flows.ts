@@ -1,6 +1,8 @@
-import { loadConfig } from "../config/config.js";
+import { formatCliCommand } from "../cli/command-format.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { info } from "../globals.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { listTasksForFlowId } from "../tasks/runtime-internal.js";
 import { cancelFlowById, getFlowTaskSummary } from "../tasks/task-executor.js";
 import type { TaskFlowRecord, TaskFlowStatus } from "../tasks/task-flow-registry.types.js";
@@ -17,6 +19,10 @@ const STATUS_PAD = 10;
 const MODE_PAD = 14;
 const REV_PAD = 6;
 const CTRL_PAD = 20;
+
+function formatFlowLookupMiss(lookup: string): string {
+  return `TaskFlow not found: ${lookup}. Run ${formatCliCommand("openclaw tasks flow list")} to see recent flow ids.`;
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -37,7 +43,7 @@ function safeFlowDisplayText(value: string | undefined, maxChars?: number): stri
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "n/a";
   }
@@ -172,7 +178,9 @@ export async function flowsListCommand(
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (flows.length === 0) {
-    runtime.log("No TaskFlows found.");
+    runtime.log(
+      `No TaskFlows found. Run ${formatCliCommand("openclaw tasks list")} to inspect standalone background tasks.`,
+    );
     return;
   }
   const rich = isRich();
@@ -187,7 +195,7 @@ export async function flowsShowCommand(
 ) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(`TaskFlow not found: ${opts.lookup}`);
+    runtime.error(formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -244,16 +252,16 @@ export async function flowsShowCommand(
 export async function flowsCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const flow = resolveTaskFlowForLookupToken(opts.lookup);
   if (!flow) {
-    runtime.error(`Flow not found: ${opts.lookup}`);
+    runtime.error(formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
   const result = await cancelFlowById({
-    cfg: loadConfig(),
+    cfg: getRuntimeConfig(),
     flowId: flow.flowId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? `Flow not found: ${opts.lookup}`);
+    runtime.error(result.reason ?? formatFlowLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }

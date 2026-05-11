@@ -1,5 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  resolveAgentDirMock,
+  resolveSessionAgentIdMock,
+} from "./commands-agent-scope.test-support.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
 import { createMockTypingController } from "./test-helpers.js";
 
@@ -19,9 +23,38 @@ function buildParams(commandBody: string) {
   return buildCommandTestParams(commandBody, cfg, undefined, { workspaceDir: "/tmp/workspace" });
 }
 
+function mockCall(mock: unknown, index = 0): Array<unknown> {
+  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
+  const call = calls.at(index);
+  expect(call, `mock call ${index + 1}`).toBeDefined();
+  return call as Array<unknown>;
+}
+
+function mockFirstObjectArg(mock: unknown): Record<string, unknown> {
+  const [arg] = mockCall(mock);
+  expect(arg).toBeTypeOf("object");
+  expect(arg).not.toBeNull();
+  return arg as Record<string, unknown>;
+}
+
+function expectObjectFields(value: unknown, expected: Record<string, unknown>): void {
+  expect(value).toBeTypeOf("object");
+  expect(value).not.toBeNull();
+  const record = value as Record<string, unknown>;
+  for (const [key, expectedValue] of Object.entries(expected)) {
+    expect(record[key], key).toEqual(expectedValue);
+  }
+}
+
 describe("handleBtwCommand", () => {
   beforeEach(() => {
     runBtwSideQuestionMock.mockReset();
+    resolveAgentDirMock.mockReset();
+    resolveAgentDirMock.mockImplementation(
+      (_cfg: unknown, agentId: string) => `/tmp/workspace/.openclaw/agents/${agentId}/agent`,
+    );
+    resolveSessionAgentIdMock.mockReset();
+    resolveSessionAgentIdMock.mockReturnValue("main");
   });
 
   it("returns usage when the side question is missing", async () => {
@@ -29,7 +62,7 @@ describe("handleBtwCommand", () => {
 
     expect(result).toEqual({
       shouldContinue: false,
-      reply: { text: "Usage: /btw <side question>" },
+      reply: { text: "Usage: /btw [side question]" },
     });
   });
 
@@ -73,14 +106,12 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "what changed?",
-        sessionEntry: params.sessionEntry,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
-      }),
-    );
+    expectObjectFields(mockFirstObjectArg(runBtwSideQuestionMock), {
+      question: "what changed?",
+      sessionEntry: params.sessionEntry,
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "snapshot answer", btw: { question: "what changed?" } },
@@ -114,18 +145,139 @@ describe("handleBtwCommand", () => {
 
     const result = await handleBtwCommand(params, true);
 
-    expect(runBtwSideQuestionMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        question: "what changed?",
-        agentDir: "/tmp/agent",
-        sessionEntry: params.sessionEntry,
-        resolvedThinkLevel: "off",
-        resolvedReasoningLevel: "off",
-      }),
-    );
+    const runnerArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expectObjectFields(runnerArgs, {
+      question: "what changed?",
+      sessionEntry: params.sessionEntry,
+      resolvedThinkLevel: "off",
+      resolvedReasoningLevel: "off",
+    });
+    expect(String(runnerArgs.agentDir)).toContain("/agents/main/agent");
     expect(result).toEqual({
       shouldContinue: false,
       reply: { text: "nothing important", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("accepts /side as a /btw alias", async () => {
+    const params = buildParams("/side what changed?");
+    params.agentDir = "/tmp/agent";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "alias answer" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(mockFirstObjectArg(runBtwSideQuestionMock).question).toBe("what changed?");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "alias answer", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("falls back to the resolved agent dir when the caller omits it", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentId = "worker-1";
+    params.agentDir = undefined;
+    delete (params as { sessionKey?: string }).sessionKey;
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
+
+    const result = await handleBtwCommand(params, true);
+
+    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
+      "/agents/worker-1/agent",
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the canonical session agent when resolving a fallback agent dir", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentId = "main";
+    params.agentDir = undefined;
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    resolveSessionAgentIdMock.mockReturnValue("worker-1");
+    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
+
+    const result = await handleBtwCommand(params, true);
+
+    const sessionAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
+    expect(sessionAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
+    expect(sessionAgentArgs.config).toBeTypeOf("object");
+    expect(sessionAgentArgs.config).not.toBeNull();
+    expect(String(mockFirstObjectArg(runBtwSideQuestionMock).agentDir)).toContain(
+      "/agents/worker-1/agent",
+    );
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("uses the canonical session agent dir even when the wrapper agentDir disagrees", async () => {
+    const params = buildParams("/btw what changed?");
+    params.agentId = "main";
+    params.agentDir = "/tmp/main-agent";
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "session-1",
+      updatedAt: Date.now(),
+    };
+    resolveSessionAgentIdMock.mockReturnValue("worker-1");
+    resolveAgentDirMock.mockReturnValue("/tmp/worker-1-agent");
+    runBtwSideQuestionMock.mockResolvedValue({ text: "resolved fallback" });
+
+    const result = await handleBtwCommand(params, true);
+
+    const canonicalAgentArgs = mockFirstObjectArg(resolveSessionAgentIdMock);
+    expect(canonicalAgentArgs.sessionKey).toBe("agent:worker-1:whatsapp:direct:12345");
+    expect(canonicalAgentArgs.config).toBeTypeOf("object");
+    expect(canonicalAgentArgs.config).not.toBeNull();
+    const resolveDirCall = mockCall(resolveAgentDirMock);
+    expect(resolveDirCall[0]).toBeTypeOf("object");
+    expect(resolveDirCall[0]).not.toBeNull();
+    expect(resolveDirCall[1]).toBe("worker-1");
+    expect(mockFirstObjectArg(runBtwSideQuestionMock).agentDir).toBe("/tmp/worker-1-agent");
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "resolved fallback", btw: { question: "what changed?" } },
+    });
+  });
+
+  it("prefers the target session entry for side-question context", async () => {
+    const params = buildParams("/btw what changed?");
+    params.sessionKey = "agent:worker-1:whatsapp:direct:12345";
+    params.sessionEntry = {
+      sessionId: "wrapper-session",
+      updatedAt: Date.now(),
+    };
+    params.sessionStore = {
+      "agent:worker-1:whatsapp:direct:12345": {
+        sessionId: "target-session",
+        updatedAt: Date.now(),
+      },
+    };
+    runBtwSideQuestionMock.mockResolvedValue({ text: "target context" });
+
+    const result = await handleBtwCommand(params, true);
+
+    const sideQuestionArgs = mockFirstObjectArg(runBtwSideQuestionMock);
+    expectObjectFields(sideQuestionArgs.sessionEntry, { sessionId: "target-session" });
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "target context", btw: { question: "what changed?" } },
     });
   });
 });

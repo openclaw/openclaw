@@ -1,5 +1,5 @@
 import { Command } from "commander";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { registerNodesCli } from "./nodes-cli.js";
 
 type NodeInvokeCall = {
@@ -46,28 +46,9 @@ const callGateway = vi.fn(async (opts: NodeInvokeCall) => {
 
 const randomIdempotencyKey = vi.fn(() => "rk_test");
 
-const mocks = vi.hoisted(() => {
-  const runtimeErrors: string[] = [];
-  const stringifyArgs = (args: unknown[]) => args.map((value) => String(value)).join(" ");
-  const defaultRuntime = {
-    log: vi.fn(),
-    error: vi.fn((...args: unknown[]) => {
-      runtimeErrors.push(stringifyArgs(args));
-    }),
-    writeStdout: vi.fn((value: string) => {
-      defaultRuntime.log(value.endsWith("\n") ? value.slice(0, -1) : value);
-    }),
-    writeJson: vi.fn((value: unknown, space = 2) => {
-      defaultRuntime.log(JSON.stringify(value, null, space > 0 ? space : undefined));
-    }),
-    exit: vi.fn((code: number) => {
-      throw new Error(`__exit__:${code}`);
-    }),
-  };
-  return {
-    runtimeErrors,
-    defaultRuntime,
-  };
+const mocks = await vi.hoisted(async () => {
+  const { createCliRuntimeMock } = await import("./test-runtime-mock.js");
+  return createCliRuntimeMock(vi);
 });
 
 const { runtimeErrors, defaultRuntime } = mocks;
@@ -77,13 +58,24 @@ vi.mock("../gateway/call.js", () => ({
   randomIdempotencyKey: () => randomIdempotencyKey(),
 }));
 
-vi.mock("../runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../runtime.js")>()),
+vi.mock("../runtime.js", async () => ({
+  ...(await vi.importActual<typeof import("../runtime.js")>("../runtime.js")),
   defaultRuntime: mocks.defaultRuntime,
 }));
 
 describe("nodes-cli coverage", () => {
   let sharedProgram: Command = new Command();
+
+  const withSuppressedStderr = async <T>(run: () => Promise<T>) => {
+    const stderrSpy = vi
+      .spyOn(process.stderr, "write")
+      .mockImplementation((() => true) as typeof process.stderr.write);
+    try {
+      return await run();
+    } finally {
+      stderrSpy.mockRestore();
+    }
+  };
 
   const getNodeInvokeCall = () => {
     const last = lastNodeInvokeCall;
@@ -98,10 +90,13 @@ describe("nodes-cli coverage", () => {
     return getNodeInvokeCall();
   };
 
-  if (sharedProgram.commands.length === 0) {
+  beforeAll(async () => {
+    if (sharedProgram.commands.length > 0) {
+      return;
+    }
     sharedProgram.exitOverride();
-    registerNodesCli(sharedProgram);
-  }
+    await registerNodesCli(sharedProgram);
+  });
 
   beforeEach(() => {
     runtimeErrors.length = 0;
@@ -116,10 +111,12 @@ describe("nodes-cli coverage", () => {
   });
 
   it("does not register the removed run wrapper", async () => {
-    await expect(
-      sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
-    ).rejects.toMatchObject({
-      code: "commander.unknownCommand",
+    await withSuppressedStderr(async () => {
+      await expect(
+        sharedProgram.parseAsync(["nodes", "run", "--node", "mac-1"], { from: "user" }),
+      ).rejects.toMatchObject({
+        code: "commander.unknownCommand",
+      });
     });
   });
 
@@ -146,9 +143,11 @@ describe("nodes-cli coverage", () => {
       "overlay",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("system.notify");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected system.notify invocation");
+    }
+    expect(invoke.params?.command).toBe("system.notify");
+    expect(invoke.params?.params).toEqual({
       title: "Ping",
       body: "Gateway ready",
       sound: undefined,
@@ -174,13 +173,15 @@ describe("nodes-cli coverage", () => {
       "6000",
     ]);
 
-    expect(invoke).toBeTruthy();
-    expect(invoke?.params?.command).toBe("location.get");
-    expect(invoke?.params?.params).toEqual({
+    if (!invoke) {
+      throw new Error("expected location.get invocation");
+    }
+    expect(invoke.params?.command).toBe("location.get");
+    expect(invoke.params?.params).toEqual({
       maxAgeMs: 1000,
       desiredAccuracy: "precise",
       timeoutMs: 5000,
     });
-    expect(invoke?.params?.timeoutMs).toBe(6000);
+    expect(invoke.params?.timeoutMs).toBe(6000);
   });
 });

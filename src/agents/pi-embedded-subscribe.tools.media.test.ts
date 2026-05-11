@@ -8,13 +8,13 @@ import {
 
 describe("extractToolResultMediaPaths", () => {
   it("returns empty array for null/undefined", () => {
-    expect(extractToolResultMediaPaths(null)).toEqual([]);
-    expect(extractToolResultMediaPaths(undefined)).toEqual([]);
+    expect(extractToolResultMediaPaths(null)).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(undefined)).toStrictEqual([]);
   });
 
   it("returns empty array for non-object", () => {
-    expect(extractToolResultMediaPaths("hello")).toEqual([]);
-    expect(extractToolResultMediaPaths(42)).toEqual([]);
+    expect(extractToolResultMediaPaths("hello")).toStrictEqual([]);
+    expect(extractToolResultMediaPaths(42)).toStrictEqual([]);
   });
 
   it("extracts structured details.media without content blocks", () => {
@@ -32,7 +32,7 @@ describe("extractToolResultMediaPaths", () => {
   });
 
   it("returns empty array when content has no text or image blocks", () => {
-    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toEqual([]);
+    expect(extractToolResultMediaPaths({ content: [{ type: "other" }] })).toStrictEqual([]);
   });
 
   it("extracts structured media with audioAsVoice", () => {
@@ -48,6 +48,49 @@ describe("extractToolResultMediaPaths", () => {
     ).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
       audioAsVoice: true,
+    });
+  });
+
+  it("extracts audioAsVoice from text MEDIA directives", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "Generated audio\n[[audio_as_voice]]\nMEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("keeps audioAsVoice when the tag and MEDIA path are in separate text blocks", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        content: [
+          { type: "text", text: "[[audio_as_voice]]" },
+          { type: "text", text: "MEDIA:/tmp/reply.opus" },
+        ],
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      audioAsVoice: true,
+    });
+  });
+
+  it("extracts structured media trust markers", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      trustedLocalMedia: true,
     });
   });
 
@@ -100,7 +143,7 @@ describe("extractToolResultMediaPaths", () => {
         { type: "image", data: "base64data", mimeType: "image/png" },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not fall back to details.path when MEDIA: paths are found", () => {
@@ -133,7 +176,7 @@ describe("extractToolResultMediaPaths", () => {
     const result = {
       content: [{ type: "text", text: "Command executed successfully" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("ignores details.path when no image content exists", () => {
@@ -142,7 +185,7 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "text", text: "File saved" }],
       details: { path: "/tmp/data.json" },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("handles details.path with whitespace", () => {
@@ -158,7 +201,7 @@ describe("extractToolResultMediaPaths", () => {
       content: [{ type: "image", data: "base64", mimeType: "image/png" }],
       details: { path: "   " },
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match <media:audio> placeholder as a MEDIA: token", () => {
@@ -170,14 +213,14 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match <media:image> placeholder as a MEDIA: token", () => {
     const result = {
       content: [{ type: "text", text: "<media:image> (2 images)" }],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not match other media placeholder variants", () => {
@@ -190,7 +233,7 @@ describe("extractToolResultMediaPaths", () => {
       const result = {
         content: [{ type: "text", text: `${tag} some context` }],
       };
-      expect(extractToolResultMediaPaths(result)).toEqual([]);
+      expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
     }
   });
 
@@ -203,7 +246,7 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("does not treat malformed MEDIA:-prefixed prose as a file path", () => {
@@ -215,7 +258,7 @@ describe("extractToolResultMediaPaths", () => {
         },
       ],
     };
-    expect(extractToolResultMediaPaths(result)).toEqual([]);
+    expect(extractToolResultMediaPaths(result)).toStrictEqual([]);
   });
 
   it("still extracts MEDIA: at line start after other text lines", () => {
@@ -265,6 +308,110 @@ describe("extractToolResultMediaPaths", () => {
     expect(isToolResultMediaTrusted("image_generate")).toBe(true);
   });
 
+  it("trusts music_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
+  it("trusts video_generate local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("video_generate")).toBe(true);
+  });
+
+  it("trusts bundled plugin tool local MEDIA paths", () => {
+    expect(isToolResultMediaTrusted("music_generate")).toBe(true);
+  });
+
+  it("blocks trusted-media aliases that are not exact registered built-ins", () => {
+    expect(
+      filterToolResultMediaUrls("bash", ["/etc/passwd"], undefined, new Set(["exec"])),
+    ).toStrictEqual([]);
+    expect(
+      filterToolResultMediaUrls("Web_Search", ["/etc/passwd"], undefined, new Set(["web_search"])),
+    ).toStrictEqual([]);
+  });
+
+  it("keeps local media for exact registered built-in tool names", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "web_search",
+        ["/tmp/screenshot.png"],
+        undefined,
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/screenshot.png"]);
+  });
+
+  it("keeps trusted TTS local media when the raw built-in name is absent", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "tts",
+        ["/tmp/reply.opus"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/tmp/reply.opus",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toEqual(["/tmp/reply.opus"]);
+  });
+
+  it("keeps local media for bundled plugin tool names registered in this run", () => {
+    // music_generate is a bundled-plugin trusted tool; when the runner
+    // registers it for this run, its raw name must be allowed through the
+    // exact-name gate just like a core built-in.
+    expect(
+      filterToolResultMediaUrls(
+        "music_generate",
+        ["/tmp/song.mp3"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toEqual(["/tmp/song.mp3"]);
+  });
+
+  it("strips local media for plugin-name collisions when the plugin is not registered", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Music_Generate",
+        ["/etc/passwd"],
+        undefined,
+        new Set(["music_generate"]),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("does not let non-TTS trustedLocalMedia bypass the exact-name gate", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "Web_Search",
+        ["/etc/passwd"],
+        {
+          details: {
+            media: {
+              mediaUrl: "/etc/passwd",
+              trustedLocalMedia: true,
+            },
+          },
+        },
+        new Set(["web_search"]),
+      ),
+    ).toStrictEqual([]);
+  });
+
+  it("still allows remote media for colliding aliases", () => {
+    expect(
+      filterToolResultMediaUrls(
+        "bash",
+        ["/etc/passwd", "https://example.com/file.png"],
+        undefined,
+        new Set(["exec"]),
+      ),
+    ).toEqual(["https://example.com/file.png"]);
+  });
+
   it("does not trust local MEDIA paths for MCP-provenance results", () => {
     expect(
       filterToolResultMediaUrls("browser", ["/tmp/screenshot.png"], {
@@ -273,7 +420,22 @@ describe("extractToolResultMediaPaths", () => {
           mcpTool: "browser",
         },
       }),
-    ).toEqual([]);
+    ).toStrictEqual([]);
+  });
+
+  it("does not trust external TTS results with trustedLocalMedia", () => {
+    expect(
+      filterToolResultMediaUrls("tts", ["/tmp/reply.opus"], {
+        details: {
+          mcpServer: "probe",
+          mcpTool: "tts",
+          media: {
+            mediaUrl: "/tmp/reply.opus",
+            trustedLocalMedia: true,
+          },
+        },
+      }),
+    ).toStrictEqual([]);
   });
 
   it("still allows remote MEDIA urls for MCP-provenance results", () => {

@@ -1,10 +1,11 @@
 import type {
-  ChannelApprovalKind,
   ChannelApprovalNativeAdapter,
   ChannelApprovalNativeSurface,
   ChannelApprovalNativeTarget,
-} from "../channels/plugins/types.adapters.js";
-import type { OpenClawConfig } from "../config/config.js";
+} from "../channels/plugins/approval-native.types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
+import type { ChannelApprovalKind } from "./approval-types.js";
 import type { ExecApprovalRequest } from "./exec-approvals.js";
 import type { PluginApprovalRequest } from "./plugin-approvals.js";
 
@@ -22,17 +23,13 @@ export type ChannelApprovalNativeDeliveryPlan = {
   notifyOriginWhenDmOnly: boolean;
 };
 
-function buildTargetKey(target: ChannelApprovalNativeTarget): string {
-  return `${target.to}:${target.threadId ?? ""}`;
-}
-
 function dedupeTargets(
   targets: ChannelApprovalNativePlannedTarget[],
 ): ChannelApprovalNativePlannedTarget[] {
   const seen = new Set<string>();
   const deduped: ChannelApprovalNativePlannedTarget[] = [];
   for (const target of targets) {
-    const key = buildTargetKey(target.target);
+    const key = buildChannelApprovalNativeTargetKey(target.target);
     if (seen.has(key)) {
       continue;
     }

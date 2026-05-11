@@ -1,17 +1,27 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import type { createJiti as createJitiType } from "jiti";
+import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadChannelConfigSurfaceModule } from "../../scripts/load-channel-config-surface.ts";
-import { importFreshModule } from "../../test/helpers/import-fresh.ts";
+import { withTempDir } from "../test-helpers/temp-dir.js";
 
-const tempDirs: string[] = [];
+const jitiFactoryOverrideKey = Symbol.for("openclaw.channelConfigSurfaceJitiFactoryOverride");
 
-function makeTempRoot(prefix: string): string {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  tempDirs.push(root);
-  return root;
+function stubChannelConfigSurfaceJitiFactory(createJiti: typeof createJitiType): void {
+  (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: typeof createJitiType;
+    }
+  )[jitiFactoryOverrideKey] = createJiti;
 }
+
+afterEach(() => {
+  delete (
+    globalThis as typeof globalThis & {
+      [jitiFactoryOverrideKey]?: typeof createJitiType;
+    }
+  )[jitiFactoryOverrideKey];
+});
 
 async function importLoaderWithMissingBun() {
   const spawnSync = vi.fn(() => ({
@@ -32,117 +42,144 @@ async function importLoaderWithMissingBun() {
   }
 }
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0, tempDirs.length)) {
-    fs.rmSync(dir, { recursive: true, force: true });
+async function importLoaderWithFailingJitiAndWorkingBun() {
+  const spawnSync = vi.fn(() => ({
+    error: undefined,
+    status: 0,
+    stdout: JSON.stringify({
+      schema: {
+        type: "object",
+        properties: {
+          ok: { type: "number" },
+        },
+      },
+    }),
+    stderr: "",
+  }));
+  const createJiti = vi.fn(() => () => {
+    throw new Error("jiti failed");
+  });
+  vi.doMock("node:child_process", () => ({ spawnSync }));
+  stubChannelConfigSurfaceJitiFactory(createJiti as unknown as typeof createJitiType);
+
+  try {
+    const imported = await importFreshModule<
+      typeof import("../../scripts/load-channel-config-surface.ts")
+    >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=failing-jiti");
+    return {
+      loadChannelConfigSurfaceModule: imported.loadChannelConfigSurfaceModule,
+      spawnSync,
+      createJiti,
+    };
+  } finally {
+    vi.doUnmock("node:child_process");
   }
-});
+}
 
-describe("loadChannelConfigSurfaceModule", () => {
-  it("falls back to Jiti when bun is unavailable", async () => {
-    const repoRoot = makeTempRoot("openclaw-config-surface-");
-    const packageRoot = path.join(repoRoot, "extensions", "demo");
-    const modulePath = path.join(packageRoot, "src", "config-schema.js");
+function expectedOkSchema(type: string) {
+  return {
+    schema: {
+      type: "object",
+      properties: {
+        ok: { type },
+      },
+    },
+  };
+}
 
-    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-      "utf8",
-    );
-    fs.writeFileSync(
-      modulePath,
-      [
+function createDemoConfigSchemaModule(repoRoot: string, sourceLines?: string[]) {
+  const packageRoot = path.join(repoRoot, "extensions", "demo");
+  const modulePath = path.join(packageRoot, "src", "config-schema.js");
+
+  fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
+  fs.writeFileSync(
+    path.join(packageRoot, "package.json"),
+    JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
+    "utf8",
+  );
+  fs.writeFileSync(
+    modulePath,
+    [
+      ...(sourceLines ?? [
         "export const DemoChannelConfigSchema = {",
         "  schema: {",
         "    type: 'object',",
         "    properties: { ok: { type: 'string' } },",
         "  },",
         "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+      ]),
+      "",
+    ].join("\n"),
+    "utf8",
+  );
 
-    const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
-      await importLoaderWithMissingBun();
+  return { packageRoot, modulePath };
+}
 
-    await expect(loadWithMissingBun(modulePath, { repoRoot })).resolves.toMatchObject({
-      schema: {
-        type: "object",
-        properties: {
-          ok: { type: "string" },
-        },
-      },
+describe("loadChannelConfigSurfaceModule", () => {
+  it("prefers the source-aware loader over bun when both succeed", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
+
+      const spawnSync = vi.fn(() => ({
+        error: undefined,
+        status: 0,
+        stdout: JSON.stringify({
+          schema: {
+            type: "object",
+            properties: {
+              ok: { type: "number" },
+            },
+          },
+        }),
+        stderr: "",
+      }));
+      vi.doMock("node:child_process", () => ({ spawnSync }));
+
+      try {
+        const imported = await importFreshModule<
+          typeof import("../../scripts/load-channel-config-surface.ts")
+        >(import.meta.url, "../../scripts/load-channel-config-surface.ts?scope=prefer-jiti");
+
+        const surface = await imported.loadChannelConfigSurfaceModule(modulePath, { repoRoot });
+        expect(surface).toStrictEqual(expectedOkSchema("string"));
+        expect(spawnSync).not.toHaveBeenCalled();
+      } finally {
+        vi.doUnmock("node:child_process");
+      }
     });
-    expect(spawnSync).toHaveBeenCalledWith("bun", expect.any(Array), expect.any(Object));
   });
 
-  it("retries from an isolated package copy when extension-local node_modules is broken", async () => {
-    const repoRoot = makeTempRoot("openclaw-config-surface-");
-    const packageRoot = path.join(repoRoot, "extensions", "demo");
-    const modulePath = path.join(packageRoot, "src", "config-schema.js");
+  it("does not require bun when the source-aware loader succeeds", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot);
 
-    fs.mkdirSync(path.join(packageRoot, "src"), { recursive: true });
-    fs.writeFileSync(
-      path.join(packageRoot, "package.json"),
-      JSON.stringify({ name: "@openclaw/demo", type: "module" }, null, 2),
-      "utf8",
-    );
-    fs.writeFileSync(
-      modulePath,
-      [
-        "import { z } from 'zod';",
-        "export const DemoChannelConfigSchema = {",
-        "  schema: {",
-        "    type: 'object',",
-        "    properties: { ok: { type: z.object({}).shape ? 'string' : 'string' } },",
-        "  },",
-        "};",
-        "",
-      ].join("\n"),
-      "utf8",
-    );
+      const { loadChannelConfigSurfaceModule: loadWithMissingBun, spawnSync } =
+        await importLoaderWithMissingBun();
 
-    fs.mkdirSync(path.join(repoRoot, "node_modules", "zod"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, "node_modules", "zod", "package.json"),
-      JSON.stringify({
-        name: "zod",
-        type: "module",
-        exports: { ".": "./index.js" },
-      }),
-      "utf8",
-    );
-    fs.writeFileSync(
-      path.join(repoRoot, "node_modules", "zod", "index.js"),
-      "export const z = { object: () => ({ shape: {} }) };\n",
-      "utf8",
-    );
+      const surface = await loadWithMissingBun(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("string"));
+      expect(spawnSync).not.toHaveBeenCalled();
+    });
+  });
 
-    const poisonedStorePackage = path.join(
-      repoRoot,
-      "node_modules",
-      ".pnpm",
-      "zod@0.0.0",
-      "node_modules",
-      "zod",
-    );
-    fs.mkdirSync(poisonedStorePackage, { recursive: true });
-    fs.mkdirSync(path.join(packageRoot, "node_modules"), { recursive: true });
-    fs.symlinkSync(
-      "../../../node_modules/.pnpm/zod@0.0.0/node_modules/zod",
-      path.join(packageRoot, "node_modules", "zod"),
-      "dir",
-    );
+  it("falls back to bun when the source-aware loader fails", async () => {
+    await withTempDir({ prefix: "openclaw-config-surface-" }, async (repoRoot) => {
+      const { modulePath } = createDemoConfigSchemaModule(repoRoot, ["export const = ;"]);
 
-    await expect(loadChannelConfigSurfaceModule(modulePath, { repoRoot })).resolves.toMatchObject({
-      schema: {
-        type: "object",
-        properties: {
-          ok: { type: "string" },
-        },
-      },
+      const { loadChannelConfigSurfaceModule: loadWithFailingJiti, spawnSync } =
+        await importLoaderWithFailingJitiAndWorkingBun();
+
+      const surface = await loadWithFailingJiti(modulePath, { repoRoot });
+      expect(surface).toStrictEqual(expectedOkSchema("number"));
+
+      const spawnCalls = spawnSync.mock.calls as unknown as Array<
+        [string, string[], Record<string, unknown>]
+      >;
+      const spawnCall = spawnCalls[0];
+      expect(spawnCall?.[0]).toBe("bun");
+      expect(Array.isArray(spawnCall?.[1])).toBe(true);
+      expect(typeof spawnCall?.[2]).toBe("object");
     });
   });
 });

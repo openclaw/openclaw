@@ -1,35 +1,15 @@
-import type { AssistantMessage } from "@mariozechner/pi-ai";
-import { beforeAll, beforeEach, describe, expect, it } from "vitest";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeAttemptResult } from "./run.overflow-compaction.fixture.js";
 import {
   loadRunOverflowCompactionHarness,
   mockedEnsureRuntimePluginsLoaded,
+  mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
 } from "./run.overflow-compaction.harness.js";
 import type { EmbeddedRunAttemptResult } from "./run/types.js";
 
 let runEmbeddedPiAgent: typeof import("./run.js").runEmbeddedPiAgent;
-
-function makeAttemptResult(
-  overrides: Partial<EmbeddedRunAttemptResult> = {},
-): EmbeddedRunAttemptResult {
-  return {
-    aborted: false,
-    timedOut: false,
-    timedOutDuringCompaction: false,
-    promptError: null,
-    sessionIdUsed: "test-session",
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    cloudCodeAssistFormatError: false,
-    ...overrides,
-  };
-}
 
 function makeAssistantMessage(
   overrides: Partial<AssistantMessage> = {},
@@ -38,7 +18,7 @@ function makeAssistantMessage(
     role: "assistant",
     api: "openai-responses",
     provider: "openai",
-    model: "gpt-5.2",
+    model: "gpt-5.4",
     usage: { input: 0, output: 0 } as AssistantMessage["usage"],
     stopReason: "end_turn" as AssistantMessage["stopReason"],
     timestamp: Date.now(),
@@ -103,11 +83,10 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       workspaceDir: "/tmp/workspace",
       allowGatewaySubagentBinding: true,
     });
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowGatewaySubagentBinding: true,
-      }),
-    );
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+      | { allowGatewaySubagentBinding?: boolean }
+      | undefined;
+    expect(attemptInput?.allowGatewaySubagentBinding).toBe(true);
   });
 
   it("forwards sender identity fields into embedded attempts", async () => {
@@ -131,14 +110,18 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       senderE164: "+15551234567",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderId: "user-123",
-        senderName: "Josh Lehman",
-        senderUsername: "josh",
-        senderE164: "+15551234567",
-      }),
-    );
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+      | {
+          senderId?: string;
+          senderName?: string;
+          senderUsername?: string;
+          senderE164?: string;
+        }
+      | undefined;
+    expect(attemptInput?.senderId).toBe("user-123");
+    expect(attemptInput?.senderName).toBe("Josh Lehman");
+    expect(attemptInput?.senderUsername).toBe("josh");
+    expect(attemptInput?.senderE164).toBe("+15551234567");
   });
 
   it("forwards memory flush write paths into memory-triggered attempts", async () => {
@@ -160,12 +143,11 @@ describe("runEmbeddedPiAgent usage reporting", () => {
       memoryFlushWritePath: "memory/2026-03-10.md",
     });
 
-    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "memory",
-        memoryFlushWritePath: "memory/2026-03-10.md",
-      }),
-    );
+    const attemptInput = mockedRunEmbeddedAttempt.mock.calls[0]?.[0] as
+      | { trigger?: string; memoryFlushWritePath?: string }
+      | undefined;
+    expect(attemptInput?.trigger).toBe("memory");
+    expect(attemptInput?.memoryFlushWritePath).toBe("memory/2026-03-10.md");
   });
 
   it("reports total usage from the last turn instead of accumulated total", async () => {
@@ -206,10 +188,56 @@ describe("runEmbeddedPiAgent usage reporting", () => {
 
     // Check usage in meta
     const usage = result.meta.agentMeta?.usage;
-    expect(usage).toBeDefined();
+    expect(usage?.input).toBe(250);
+    expect(usage?.output).toBe(100);
+    expect(usage?.total).toBe(200);
 
     // Check if total matches the last turn's total (200)
     // If the bug exists, it will likely be 350
     expect(usage?.total).toBe(200);
+  });
+
+  it("reports the resolved model provider when PI marks the assistant message as pi", async () => {
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "openai/gpt-5.4",
+        provider: "openrouter",
+        contextWindow: 200000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Response 1"],
+        lastAssistant: makeAssistantMessage({
+          provider: "pi",
+          model: "pi",
+          usage: { input: 100, output: 50, total: 150 } as unknown as AssistantMessage["usage"],
+        }),
+        attemptUsage: { input: 100, output: 50, total: 150 },
+      }),
+    );
+
+    const result = await runEmbeddedPiAgent({
+      sessionId: "test-session",
+      sessionKey: "test-key",
+      sessionFile: "/tmp/session.json",
+      workspaceDir: "/tmp/workspace",
+      prompt: "hello",
+      provider: "openrouter",
+      model: "openai/gpt-5.4",
+      timeoutMs: 30000,
+      runId: "run-provider-attribution",
+    });
+
+    expect(result.meta.agentMeta?.provider).toBe("openrouter");
+    expect(result.meta.agentMeta?.model).toBe("openai/gpt-5.4");
+    expect(result.meta.executionTrace?.winnerProvider).toBe("openrouter");
+    expect(result.meta.executionTrace?.winnerModel).toBe("openai/gpt-5.4");
   });
 });

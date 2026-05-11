@@ -9,6 +9,8 @@ import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveStateDir, type OpenClawConfig } from "../config/config.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
 import { resolveSecretInputRef, type SecretRef } from "../config/types.secrets.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { iterateAuthProfileCredentials } from "./auth-profiles-scan.js";
@@ -27,7 +29,6 @@ import {
   isExpectedResolvedSecretValue,
 } from "./secret-value.js";
 import { isNonEmptyString, isRecord } from "./shared.js";
-import { describeUnknownError } from "./shared.js";
 import {
   listAgentModelsJsonPaths,
   listAuthProfileStorePaths,
@@ -127,7 +128,7 @@ const SENSITIVE_MODEL_PROVIDER_HEADER_NAME_FRAGMENTS = [
 ];
 
 function isLikelySensitiveModelProviderHeaderName(value: string): boolean {
-  const normalized = value.trim().toLowerCase();
+  const normalized = normalizeLowercaseStringOrEmpty(value);
   if (!normalized) {
     return false;
   }
@@ -568,7 +569,7 @@ async function collectUnresolvedRefFindings(params: {
         severity: "error",
         file: assignment.file,
         jsonPath: assignment.path,
-        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${describeUnknownError(resolveErr)}).`,
+        message: `Failed to resolve ${assignment.ref.source}:${assignment.ref.provider}:${assignment.ref.id} (${formatErrorMessage(resolveErr)}).`,
         provider: assignment.provider,
       });
       continue;

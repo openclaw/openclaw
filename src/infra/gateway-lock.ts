@@ -29,7 +29,7 @@ const LockPayloadSchema = z.object({
   startTime: z.number().optional(),
 }) as z.ZodType<LockPayload>;
 
-export type GatewayLockHandle = {
+type GatewayLockHandle = {
   lockPath: string;
   configPath: string;
   release: () => Promise<void>;
@@ -53,7 +53,7 @@ export type GatewayLockOptions = {
 export class GatewayLockError extends Error {
   constructor(
     message: string,
-    public readonly cause?: unknown,
+    public override readonly cause?: unknown,
   ) {
     super(message);
     this.name = "GatewayLockError";
@@ -299,7 +299,13 @@ export async function acquireGatewayLock(
       lastPayload = await readLockPayload(lockPath);
       const ownerPid = lastPayload?.pid;
       const ownerStatus = ownerPid
-        ? await resolveGatewayOwnerStatus(ownerPid, lastPayload, platform, port, opts.readProcessCmdline)
+        ? await resolveGatewayOwnerStatus(
+            ownerPid,
+            lastPayload,
+            platform,
+            port,
+            opts.readProcessCmdline,
+          )
         : "unknown";
       if (ownerStatus === "dead" && ownerPid) {
         await fs.rm(lockPath, { force: true });

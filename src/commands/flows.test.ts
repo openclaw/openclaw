@@ -9,16 +9,13 @@ import {
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { flowsCancelCommand, flowsListCommand, flowsShowCommand } from "./flows.js";
 
-vi.mock("../config/config.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../config/config.js")>();
-  return {
-    ...actual,
-    loadConfig: vi.fn(() => ({})),
-  };
-});
+vi.mock("../config/config.js", () => ({
+  getRuntimeConfig: vi.fn(() => ({})),
+  loadConfig: vi.fn(() => ({})),
+}));
 
 const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
@@ -31,19 +28,24 @@ function createRuntime(): RuntimeEnv {
 }
 
 async function withTaskFlowCommandStateDir(run: (root: string) => Promise<void>): Promise<void> {
-  await withTempDir({ prefix: "openclaw-flows-command-" }, async (root) => {
-    process.env.OPENCLAW_STATE_DIR = root;
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
-    try {
-      await run(root);
-    } finally {
+  await withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-flows-command-",
+    },
+    async (state) => {
       resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests();
-      resetTaskFlowRegistryForTests();
-    }
-  });
+      resetTaskRegistryForTests({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      try {
+        await run(state.stateDir);
+      } finally {
+        resetTaskRegistryDeliveryRuntimeForTests();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+      }
+    },
+  );
 }
 
 describe("flows commands", () => {
@@ -54,8 +56,8 @@ describe("flows commands", () => {
       process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
     }
     resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests();
-    resetTaskFlowRegistryForTests();
+    resetTaskRegistryForTests({ persist: false });
+    resetTaskFlowRegistryForTests({ persist: false });
   });
 
   it("lists TaskFlows as JSON with linked tasks and summaries", async () => {
@@ -96,25 +98,15 @@ describe("flows commands", () => {
         }>;
       };
 
-      expect(payload).toMatchObject({
-        count: 1,
-        status: "blocked",
-        flows: [
-          {
-            flowId: flow.flowId,
-            taskSummary: {
-              total: 1,
-              active: 1,
-            },
-            tasks: [
-              {
-                runId: "run-child-1",
-                label: "Inspect PR 123",
-              },
-            ],
-          },
-        ],
-      });
+      expect(payload.count).toBe(1);
+      expect(payload.status).toBe("blocked");
+      expect(payload.flows).toHaveLength(1);
+      expect(payload.flows[0]?.flowId).toBe(flow.flowId);
+      expect(payload.flows[0]?.taskSummary.total).toBe(1);
+      expect(payload.flows[0]?.taskSummary.active).toBe(1);
+      expect(payload.flows[0]?.tasks).toHaveLength(1);
+      expect(payload.flows[0]?.tasks[0]?.runId).toBe("run-child-1");
+      expect(payload.flows[0]?.tasks[0]?.label).toBe("Inspect PR 123");
     });
   });
 

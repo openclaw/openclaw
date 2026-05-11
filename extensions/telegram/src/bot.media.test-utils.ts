@@ -1,5 +1,5 @@
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
-import { afterEach, beforeEach, expect, vi, type Mock } from "vitest";
+import { afterEach, beforeAll, beforeEach, expect, vi, type Mock } from "vitest";
 import * as harness from "./bot.media.e2e-harness.js";
 
 type StickerSpy = Mock<(...args: unknown[]) => unknown>;
@@ -132,13 +132,17 @@ async function loadTelegramBotHarness() {
       ...opts,
       telegramDeps: harness.telegramBotDepsForTest,
     });
-  const replyModule = await import("openclaw/plugin-sdk/reply-runtime");
-  replySpyRef = (replyModule as unknown as { __replySpy: ReturnType<typeof vi.fn> }).__replySpy;
+  replySpyRef = harness.mediaHarnessReplySpy;
 }
 
-beforeEach(async () => {
-  vi.resetModules();
+beforeAll(async () => {
   await loadTelegramBotHarness();
+});
+
+beforeEach(() => {
+  onSpyRef.mockClear();
+  replySpyRef.mockClear();
+  sendChatActionSpyRef.mockClear();
   vi.useRealTimers();
   lookupMock.mockResolvedValue([{ address: "93.184.216.34", family: 4 }]);
   resolvePinnedHostnameSpy = vi
@@ -152,12 +156,11 @@ afterEach(() => {
   resolvePinnedHostnameSpy = null;
 });
 
-vi.mock("./sticker-cache.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./sticker-cache.js")>();
-  return {
-    ...actual,
-    cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
-    getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
-    describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
-  };
-});
+vi.mock("./sticker-cache.js", () => ({
+  cacheSticker: (...args: unknown[]) => cacheStickerSpy(...args),
+  getCachedSticker: (...args: unknown[]) => getCachedStickerSpy(...args),
+  describeStickerImage: (...args: unknown[]) => describeStickerImageSpy(...args),
+  getAllCachedStickers: vi.fn(() => []),
+  getCacheStats: vi.fn(() => ({ count: 0 })),
+  searchStickers: vi.fn(() => []),
+}));

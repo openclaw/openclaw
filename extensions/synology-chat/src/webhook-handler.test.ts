@@ -10,6 +10,42 @@ const resolveLegacyWebhookNameToChatUserId = vi
 const { clearSynologyWebhookRateLimiterStateForTest, createWebhookHandler } =
   await import("./webhook-handler.js");
 
+type TestLog = {
+  info: (...args: unknown[]) => void;
+  warn: (...args: unknown[]) => void;
+  error: (...args: unknown[]) => void;
+};
+
+function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
+  let count = 0;
+  for (const item of items) {
+    if (predicate(item)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+function deliveredMessage(deliver: ReturnType<typeof vi.fn>) {
+  expect(deliver).toHaveBeenCalledTimes(1);
+  const message = deliver.mock.calls[0]?.[0] as
+    | {
+        accountId?: unknown;
+        body?: unknown;
+        chatType?: unknown;
+        chatUserId?: unknown;
+        commandAuthorized?: unknown;
+        from?: unknown;
+        provider?: unknown;
+        senderName?: unknown;
+      }
+    | undefined;
+  if (!message) {
+    throw new Error("expected delivered Synology Chat message");
+  }
+  return message;
+}
+
 function makeAccount(
   overrides: Partial<ResolvedSynologyChatAccount> = {},
 ): ResolvedSynologyChatAccount {
@@ -24,7 +60,7 @@ function makeAccount(
     dangerouslyAllowNameMatching: false,
     dangerouslyAllowInheritedWebhookPath: false,
     dmPolicy: "open",
-    allowedUserIds: [],
+    allowedUserIds: ["*"],
     rateLimitPerMinute: 30,
     botName: "TestBot",
     allowInsecureSsl: true,
@@ -40,7 +76,7 @@ const validBody = makeFormBody({
 });
 
 async function runDangerousNameMatchReply(
-  log: { info: any; warn: any; error: any },
+  log: TestLog,
   options: {
     resolvedChatUserId?: number;
     accountIdSuffix: string;
@@ -73,7 +109,7 @@ async function runDangerousNameMatchReply(
 }
 
 describe("createWebhookHandler", () => {
-  let log: { info: any; warn: any; error: any };
+  let log: TestLog;
 
   beforeEach(() => {
     clearSynologyWebhookRateLimiterStateForTest();
@@ -109,6 +145,70 @@ describe("createWebhookHandler", () => {
     expect(deliver).not.toHaveBeenCalled();
   }
 
+  function makeTestHandler(params: {
+    accountIdSuffix: string;
+    deliver?: WebhookHandlerDeps["deliver"];
+    account?: Partial<ResolvedSynologyChatAccount>;
+  }) {
+    const deliver = params.deliver ?? vi.fn().mockResolvedValue(null);
+    return {
+      deliver,
+      handler: createWebhookHandler({
+        account: makeAccount({
+          accountId: `${params.accountIdSuffix}-${Date.now()}`,
+          ...params.account,
+        }),
+        deliver,
+        log,
+      }),
+    };
+  }
+
+  async function postToWebhook(
+    handler: ReturnType<typeof createWebhookHandler>,
+    body = validBody,
+    options?: Parameters<typeof makeReq>[2],
+  ) {
+    const req = makeReq("POST", body, options);
+    const res = makeRes();
+    await handler(req, res);
+    return res;
+  }
+
+  async function expectTokenlessBodyAccepted(params: {
+    accountIdSuffix: string;
+    options: Parameters<typeof makeReq>[2];
+  }) {
+    const { deliver, handler } = makeTestHandler({ accountIdSuffix: params.accountIdSuffix });
+    const res = await postToWebhook(
+      handler,
+      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
+      params.options,
+    );
+    expect(res._status).toBe(204);
+    expect(deliver).toHaveBeenCalled();
+  }
+
+  async function runValidReply(params: { accountIdSuffix: string; reply?: string }) {
+    const deliver = vi.fn().mockResolvedValue(params.reply ?? "Bot reply");
+    const { handler } = makeTestHandler({
+      accountIdSuffix: params.accountIdSuffix,
+      deliver,
+    });
+    const res = await postToWebhook(handler);
+    expect(res._status).toBe(204);
+    return { deliver, res };
+  }
+
+  function expectBotReplySentTo(chatUserId: string) {
+    expect(sendMessage).toHaveBeenCalledWith(
+      "https://nas.example.com/incoming",
+      "Bot reply",
+      chatUserId,
+      true,
+    );
+  }
+
   it("rejects non-POST methods with 405", async () => {
     const handler = createWebhookHandler({
       account: makeAccount(),
@@ -138,26 +238,19 @@ describe("createWebhookHandler", () => {
   });
 
   it("returns 408 when request body times out", async () => {
-    vi.useFakeTimers();
-    try {
-      const handler = createWebhookHandler({
-        account: makeAccount(),
-        deliver: vi.fn(),
-        log,
-      });
+    const handler = createWebhookHandler({
+      account: makeAccount(),
+      deliver: vi.fn(),
+      log,
+      bodyTimeoutMs: 1,
+    });
 
-      const req = makeStalledReq("POST");
-      const res = makeRes();
-      const run = handler(req, res);
+    const req = makeStalledReq("POST");
+    const res = makeRes();
+    await handler(req, res);
 
-      await vi.advanceTimersByTimeAsync(30_000);
-      await run;
-
-      expect(res._status).toBe(408);
-      expect(res._body).toContain("timeout");
-    } finally {
-      vi.useRealTimers();
-    }
+    expect(res._status).toBe(408);
+    expect(res._body).toContain("timeout");
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
@@ -178,8 +271,8 @@ describe("createWebhookHandler", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
-    expect(responses.filter((res) => res._status === 0)).toHaveLength(8);
-    expect(responses.filter((res) => res._status === 429)).toHaveLength(4);
+    expect(countMatching(responses, (res) => res._status === 0)).toBe(8);
+    expect(countMatching(responses, (res) => res._status === 429)).toBe(4);
 
     for (const req of requests) {
       req.emit("end");
@@ -348,62 +441,36 @@ describe("createWebhookHandler", () => {
     await handler(req, res);
 
     expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "Hello from json",
-        from: "123",
-        senderName: "json-user",
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.body).toBe("Hello from json");
+    expect(message.from).toBe("123");
+    expect(message.senderName).toBe("json-user");
+    expect(message.provider).toBe("synology-chat");
+    expect(message.chatType).toBe("direct");
+    expect(message.commandAuthorized).toBe(true);
+    expect(message.chatUserId).toBe("123");
   });
 
   it("accepts token from query when body token is absent", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "query-token-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq(
-      "POST",
-      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
-      {
+    await expectTokenlessBodyAccepted({
+      accountIdSuffix: "query-token-test",
+      options: {
         headers: { "content-type": "application/x-www-form-urlencoded" },
         url: "/webhook/synology?token=valid-token",
       },
-    );
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalled();
+    });
   });
 
   it("accepts token from authorization header when body token is absent", async () => {
-    const deliver = vi.fn().mockResolvedValue(null);
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "header-token-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq(
-      "POST",
-      makeFormBody({ user_id: "123", username: "testuser", text: "hello" }),
-      {
+    await expectTokenlessBodyAccepted({
+      accountIdSuffix: "header-token-test",
+      options: {
         headers: {
           "content-type": "application/x-www-form-urlencoded",
           authorization: "Bearer valid-token",
         },
       },
-    );
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
-    expect(deliver).toHaveBeenCalled();
+    });
   });
 
   it("returns 403 for unauthorized user with allowlist policy", async () => {
@@ -481,61 +548,29 @@ describe("createWebhookHandler", () => {
 
     expect(res._status).toBe(204);
     // deliver should have been called with the stripped text
-    expect(deliver).toHaveBeenCalledWith(expect.objectContaining({ body: "Hello there" }));
+    expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
   it("responds 204 immediately and delivers async", async () => {
-    const deliver = vi.fn().mockResolvedValue("Bot reply");
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "async-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq("POST", validBody);
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
+    const { deliver, res } = await runValidReply({ accountIdSuffix: "async-test" });
     expect(res._body).toBe("");
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: "Hello bot",
-        from: "123",
-        senderName: "testuser",
-        provider: "synology-chat",
-        chatType: "direct",
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.body).toBe("Hello bot");
+    expect(message.from).toBe("123");
+    expect(message.senderName).toBe("testuser");
+    expect(message.provider).toBe("synology-chat");
+    expect(message.chatType).toBe("direct");
+    expect(message.commandAuthorized).toBe(true);
+    expect(message.chatUserId).toBe("123");
   });
 
   it("keeps replies bound to payload.user_id by default", async () => {
-    const deliver = vi.fn().mockResolvedValue("Bot reply");
-    const handler = createWebhookHandler({
-      account: makeAccount({ accountId: "stable-id-test-" + Date.now() }),
-      deliver,
-      log,
-    });
-
-    const req = makeReq("POST", validBody);
-    const res = makeRes();
-    await handler(req, res);
-
-    expect(res._status).toBe(204);
+    const { deliver } = await runValidReply({ accountIdSuffix: "stable-id-test" });
     expect(resolveLegacyWebhookNameToChatUserId).not.toHaveBeenCalled();
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "123",
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "https://nas.example.com/incoming",
-      "Bot reply",
-      "123",
-      true,
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("123");
+    expectBotReplySentTo("123");
   });
 
   it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
@@ -543,18 +578,10 @@ describe("createWebhookHandler", () => {
       resolvedChatUserId: 456,
       accountIdSuffix: "dangerous-name-match-test",
     });
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "456",
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "https://nas.example.com/incoming",
-      "Bot reply",
-      "456",
-      true,
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("456");
+    expectBotReplySentTo("456");
   });
 
   it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
@@ -564,18 +591,10 @@ describe("createWebhookHandler", () => {
     expect(log.warn).toHaveBeenCalledWith(
       'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
     );
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        from: "123",
-        chatUserId: "123",
-      }),
-    );
-    expect(sendMessage).toHaveBeenCalledWith(
-      "https://nas.example.com/incoming",
-      "Bot reply",
-      "123",
-      true,
-    );
+    const message = deliveredMessage(deliver);
+    expect(message.from).toBe("123");
+    expect(message.chatUserId).toBe("123");
+    expectBotReplySentTo("123");
   });
 
   it("sanitizes input before delivery", async () => {
@@ -597,11 +616,8 @@ describe("createWebhookHandler", () => {
     const res = makeRes();
     await handler(req, res);
 
-    expect(deliver).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.stringContaining("[FILTERED]"),
-        commandAuthorized: true,
-      }),
-    );
+    const message = deliveredMessage(deliver);
+    expect(String(message.body)).toContain("[FILTERED]");
+    expect(message.commandAuthorized).toBe(true);
   });
 });

@@ -32,7 +32,9 @@ function resolveNodeRunner(): NodeRunner {
   if (hasBinary("npx")) {
     return { cmd: "npx", args: ["-y"] };
   }
-  throw new Error("Missing pnpm or npx; install a Node package runner.");
+  throw new Error(
+    `Docs search needs pnpm or npx to run the docs search helper. Install pnpm, or run ${formatCliCommand("npm install -g pnpm")}.`,
+  );
 }
 
 async function runNodeTool(tool: string, toolArgs: string[], options: ToolRunOptions = {}) {
@@ -75,11 +77,12 @@ function normalizeSnippet(raw: string | undefined, fallback: string): string {
 }
 
 function firstParagraph(text: string): string {
-  const parts = text
-    .split(/\n\s*\n/)
-    .map((chunk) => chunk.trim())
-    .filter(Boolean);
-  return parts[0] ?? "";
+  return (
+    text
+      .split(/\n\s*\n/)
+      .map((chunk) => chunk.trim())
+      .find(Boolean) ?? ""
+  );
 }
 
 function parseSearchOutput(raw: string): DocResult[] {

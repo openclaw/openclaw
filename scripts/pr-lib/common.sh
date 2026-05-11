@@ -74,6 +74,10 @@ changelog_required_for_changed_files() {
 print_review_stdout_summary() {
   require_artifact .local/review.md
   require_artifact .local/review.json
+  require_artifact .local/pr-meta.env
+
+  # shellcheck disable=SC1091
+  source .local/pr-meta.env
 
   local recommendation
   recommendation=$(jq -r '.recommendation // ""' .local/review.json)
@@ -81,6 +85,7 @@ print_review_stdout_summary() {
   finding_count=$(jq '[.findings[]?] | length' .local/review.json)
 
   echo "review summary:"
+  echo "pr_url=${PR_URL:-}"
   echo "recommendation: $recommendation"
   echo "findings: $finding_count"
   cat .local/review.md
@@ -184,6 +189,32 @@ merge_author_email_candidates() {
     "$git_email" \
     "${reviewer_id}+${reviewer}@users.noreply.github.com" \
     "${reviewer}@users.noreply.github.com" | awk 'NF && !seen[$0]++'
+}
+
+pr_contributor_allows_human_trailers() {
+  local contrib="${1:-}"
+  local normalized
+  normalized=$(printf '%s' "$contrib" | tr '[:upper:]' '[:lower:]')
+
+  case "$normalized" in
+    ""|"null"|"app/"*|"codex"|"openclaw"|"clawsweeper"|"openclaw-clawsweeper"|"clawsweeper[bot]"|"openclaw-clawsweeper[bot]"|"steipete")
+      return 1
+      ;;
+  esac
+
+  return 0
+}
+
+resolve_contributor_coauthor_email() {
+  local contrib="${1:-}"
+
+  if ! pr_contributor_allows_human_trailers "$contrib"; then
+    return 1
+  fi
+
+  local contrib_id
+  contrib_id=$(gh api "users/$contrib" --jq .id) || return 1
+  printf '%s+%s@users.noreply.github.com\n' "$contrib_id" "$contrib"
 }
 
 common_repo_root() {

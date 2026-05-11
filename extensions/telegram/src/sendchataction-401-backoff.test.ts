@@ -5,13 +5,10 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // Mock the runtime-exported backoff sleep that the handler actually imports.
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    sleepWithAbort: mocks.sleepWithAbort,
-  };
-});
+vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
+  computeBackoff: vi.fn((_policy, attempt: number) => attempt * 1000),
+  sleepWithAbort: mocks.sleepWithAbort,
+}));
 
 let createTelegramSendChatActionHandler: typeof import("./sendchataction-401-backoff.js").createTelegramSendChatActionHandler;
 
@@ -34,6 +31,53 @@ describe("createTelegramSendChatActionHandler", () => {
     await handler.sendChatAction(123, "typing");
     expect(fn).toHaveBeenCalledWith(123, "typing", undefined);
     expect(handler.isSuspended()).toBe(false);
+  });
+
+  it("coalesces duplicate chat actions while one for the chat is pending", async () => {
+    let resolveSend: ((value: true) => void) | undefined;
+    const send = new Promise<true>((resolve) => {
+      resolveSend = resolve;
+    });
+    const fn = vi.fn(() => send);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      minIntervalMs: 4000,
+    });
+
+    const first = handler.sendChatAction(-100, "typing", { message_thread_id: 1 });
+    await handler.sendChatAction(-100, "typing", { message_thread_id: 2 });
+
+    expect(fn).toHaveBeenCalledTimes(1);
+    expect(fn).toHaveBeenCalledWith(-100, "typing", { message_thread_id: 1 });
+
+    resolveSend?.(true);
+    await first;
+  });
+
+  it("coalesces recent same-chat actions after the pending send resolves", async () => {
+    let now = 1000;
+    const fn = vi.fn().mockResolvedValue(true);
+    const logger = vi.fn();
+    const handler = createTelegramSendChatActionHandler({
+      sendChatActionFn: fn,
+      logger,
+      minIntervalMs: 4000,
+      now: () => now,
+    });
+
+    await handler.sendChatAction(-100, "typing");
+    now = 4999;
+    await handler.sendChatAction(-100, "typing");
+    expect(fn).toHaveBeenCalledTimes(1);
+
+    await handler.sendChatAction(-100, "upload_photo");
+    expect(fn).toHaveBeenCalledTimes(2);
+
+    now = 5000;
+    await handler.sendChatAction(-100, "typing");
+    expect(fn).toHaveBeenCalledTimes(3);
   });
 
   it("applies exponential backoff on consecutive 401 errors", async () => {

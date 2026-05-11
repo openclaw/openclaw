@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
 import {
@@ -8,7 +9,7 @@ import {
   type BrowserFormField,
 } from "../core-api.js";
 
-export type BrowserActionContext = {
+type BrowserActionContext = {
   parent: BrowserParentOpts;
   profile: string | undefined;
 };
@@ -63,7 +64,6 @@ export function requireRef(ref: string | undefined) {
 }
 
 async function readFile(path: string): Promise<string> {
-  const fs = await import("node:fs/promises");
   return await fs.readFile(path, "utf8");
 }
 

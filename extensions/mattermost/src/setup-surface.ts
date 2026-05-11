@@ -1,21 +1,18 @@
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
+  applySetupAccountConfigPatch,
   createStandardChannelSetupStatus,
   formatDocsLink,
   type ChannelSetupWizard,
 } from "openclaw/plugin-sdk/setup";
-import { listMattermostAccountIds } from "./mattermost/accounts.js";
-import { normalizeMattermostBaseUrl } from "./mattermost/client.js";
 import {
-  applySetupAccountConfigPatch,
-  DEFAULT_ACCOUNT_ID,
-  type OpenClawConfig,
-} from "./runtime-api.js";
-import { hasConfiguredSecretInput } from "./secret-input.js";
-import {
+  applyMattermostSetupConfigPatch,
   isMattermostConfigured,
-  mattermostSetupAdapter,
   resolveMattermostAccountWithSecrets,
 } from "./setup-core.js";
+import { normalizeMattermostBaseUrl } from "./setup.client.runtime.js";
+import { hasConfiguredSecretInput } from "./setup.secret-input.runtime.js";
 
 const channel = "mattermost" as const;
 export { mattermostSetupAdapter } from "./setup-core.js";
@@ -30,9 +27,9 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
     unconfiguredHint: "needs setup",
     configuredScore: 2,
     unconfiguredScore: 1,
-    resolveConfigured: ({ cfg }) =>
-      listMattermostAccountIds(cfg).some((accountId) =>
-        isMattermostConfigured(resolveMattermostAccountWithSecrets(cfg, accountId)),
+    resolveConfigured: ({ cfg, accountId }) =>
+      isMattermostConfigured(
+        resolveMattermostAccountWithSecrets(cfg, accountId ?? DEFAULT_ACCOUNT_ID),
       ),
   }),
   introNote: {
@@ -88,6 +85,12 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           hasConfiguredValue: hasConfiguredSecretInput(resolvedAccount.config.botToken),
         };
       },
+      applySet: async ({ cfg, accountId, value }) =>
+        applyMattermostSetupConfigPatch({
+          cfg,
+          accountId,
+          patch: { botToken: value },
+        }),
     },
   ],
   textInputs: [
@@ -113,6 +116,12 @@ export const mattermostSetupWizard: ChannelSetupWizard = {
           ? undefined
           : "Mattermost base URL must include a valid base URL.",
       normalizeValue: ({ value }) => normalizeMattermostBaseUrl(value) ?? value.trim(),
+      applySet: async ({ cfg, accountId, value }) =>
+        applyMattermostSetupConfigPatch({
+          cfg,
+          accountId,
+          patch: { baseUrl: value },
+        }),
     },
   ],
   disable: (cfg: OpenClawConfig) => ({

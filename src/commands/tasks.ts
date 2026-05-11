@@ -1,11 +1,20 @@
-import { loadConfig } from "../config/config.js";
-import { info } from "../globals.js";
-import type { RuntimeEnv } from "../runtime.js";
+import fs from "node:fs";
+import { formatCliCommand } from "../cli/command-format.js";
+import { formatLookupMiss } from "../cli/error-format.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
-  cancelTaskById,
-  getTaskById,
-  updateTaskNotifyPolicyById,
-} from "../tasks/runtime-internal.js";
+  loadSessionStore,
+  pruneStaleEntries,
+  resolveAllAgentSessionStoreTargetsSync,
+  updateSessionStore,
+  type SessionEntry,
+} from "../config/sessions.js";
+import { loadCronStoreSync, resolveCronStorePath } from "../cron/store.js";
+import type { RuntimeEnv } from "../runtime.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
+import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { getTaskById, updateTaskNotifyPolicyById } from "../tasks/runtime-internal.js";
+import { cancelDetachedTaskRunById } from "../tasks/task-executor.js";
 import {
   listTaskFlowAuditFindings,
   summarizeTaskFlowAuditFindings,
@@ -24,9 +33,11 @@ import {
   type TaskAuditCode,
   type TaskAuditSeverity,
 } from "../tasks/task-registry.audit.js";
+import { compareTaskAuditFindingSortKeys } from "../tasks/task-registry.audit.shared.js";
 import {
   getInspectableTaskAuditSummary,
   getInspectableTaskRegistrySummary,
+  configureTaskRegistryMaintenance,
   previewTaskRegistryMaintenance,
   runTaskRegistryMaintenance,
 } from "../tasks/task-registry.maintenance.js";
@@ -43,6 +54,163 @@ const STATUS_PAD = 10;
 const DELIVERY_PAD = 14;
 const ID_PAD = 10;
 const RUN_PAD = 10;
+const SESSION_REGISTRY_RETENTION_MS = 7 * 24 * 60 * 60_000;
+
+const info = theme.info;
+
+function formatTaskLookupMiss(lookup: string): string {
+  return formatLookupMiss({
+    noun: "Task",
+    value: lookup,
+    listCommand: "openclaw tasks list",
+    valueLabel: "task id",
+  });
+}
+
+async function loadTaskCancelConfig() {
+  return getRuntimeConfig();
+}
+
+function configureTaskMaintenanceFromConfig(): void {
+  const cfg = getRuntimeConfig();
+  configureTaskRegistryMaintenance({
+    cronStorePath: resolveCronStorePath(cfg.cron?.store),
+  });
+}
+
+type SessionRegistryMaintenanceStoreSummary = {
+  agentId: string;
+  storePath: string;
+  beforeCount: number;
+  afterCount: number;
+  pruned: number;
+  preservedRunning: number;
+};
+
+type SessionRegistryMaintenanceSummary = {
+  retentionMs: number;
+  runningCronJobs: number;
+  pruned: number;
+  stores: SessionRegistryMaintenanceStoreSummary[];
+};
+
+function parseCronRunSessionJobId(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  if (!parsed) {
+    return undefined;
+  }
+  return /^cron:([^:]+):run:[^:]+$/u.exec(parsed.rest)?.[1];
+}
+
+function readRunningCronJobIds(): Set<string> {
+  try {
+    const cronStorePath = resolveCronStorePath(getRuntimeConfig().cron?.store);
+    return new Set(
+      loadCronStoreSync(cronStorePath)
+        .jobs.filter((job) => typeof job.state?.runningAtMs === "number")
+        // Cron session keys are matched case-insensitively against job ids.
+        .map((job) => job.id.toLowerCase()),
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+function buildSessionRegistryPreserveKeys(params: {
+  store: Record<string, SessionEntry>;
+  runningCronJobIds: ReadonlySet<string>;
+}): { preserveKeys: Set<string>; preservedRunning: number } {
+  const preserveKeys = new Set<string>();
+  let preservedRunning = 0;
+  for (const key of Object.keys(params.store)) {
+    const jobId = parseCronRunSessionJobId(key);
+    if (!jobId) {
+      preserveKeys.add(key);
+      continue;
+    }
+    if (params.runningCronJobIds.has(jobId)) {
+      preserveKeys.add(key);
+      preservedRunning += 1;
+    }
+  }
+  return { preserveKeys, preservedRunning };
+}
+
+async function runSessionRegistryMaintenance(params: {
+  apply: boolean;
+}): Promise<SessionRegistryMaintenanceSummary> {
+  const cfg = getRuntimeConfig();
+  const runningCronJobIds = readRunningCronJobIds();
+  const stores: SessionRegistryMaintenanceStoreSummary[] = [];
+  for (const target of resolveAllAgentSessionStoreTargetsSync(cfg)) {
+    if (!fs.existsSync(target.storePath)) {
+      stores.push({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        beforeCount: 0,
+        afterCount: 0,
+        pruned: 0,
+        preservedRunning: 0,
+      });
+      continue;
+    }
+    const beforeStore = loadSessionStore(target.storePath, { skipCache: true });
+    const beforeCount = Object.keys(beforeStore).length;
+    if (params.apply) {
+      const applied = await updateSessionStore(
+        target.storePath,
+        (store) => {
+          const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
+            store,
+            runningCronJobIds,
+          });
+          const pruned = pruneStaleEntries(store, SESSION_REGISTRY_RETENTION_MS, {
+            log: false,
+            preserveKeys,
+          });
+          return {
+            pruned,
+            afterCount: Object.keys(store).length,
+            preservedRunning,
+          };
+        },
+        { skipMaintenance: true },
+      );
+      stores.push({
+        agentId: target.agentId,
+        storePath: target.storePath,
+        beforeCount,
+        afterCount: applied.afterCount,
+        pruned: applied.pruned,
+        preservedRunning: applied.preservedRunning,
+      });
+      continue;
+    }
+    const previewStore = structuredClone(beforeStore);
+    const { preserveKeys, preservedRunning } = buildSessionRegistryPreserveKeys({
+      store: previewStore,
+      runningCronJobIds,
+    });
+    const pruned = pruneStaleEntries(previewStore, SESSION_REGISTRY_RETENTION_MS, {
+      log: false,
+      preserveKeys,
+    });
+    stores.push({
+      agentId: target.agentId,
+      storePath: target.storePath,
+      beforeCount,
+      afterCount: Object.keys(previewStore).length,
+      pruned,
+      preservedRunning,
+    });
+  }
+  return {
+    retentionMs: SESSION_REGISTRY_RETENTION_MS,
+    runningCronJobs: runningCronJobIds.size,
+    pruned: stores.reduce((total, store) => total + store.pruned, 0),
+    stores,
+  };
+}
 
 function truncate(value: string, maxChars: number) {
   if (value.length <= maxChars) {
@@ -55,7 +223,7 @@ function truncate(value: string, maxChars: number) {
 }
 
 function shortToken(value: string | undefined, maxChars = ID_PAD): string {
-  const trimmed = value?.trim();
+  const trimmed = normalizeOptionalString(value);
   if (!trimmed) {
     return "n/a";
   }
@@ -92,9 +260,9 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
   const lines = [rich ? theme.heading(header) : header];
   for (const task of tasks) {
     const summary = truncate(
-      task.terminalSummary?.trim() ||
-        task.progressSummary?.trim() ||
-        task.label?.trim() ||
+      normalizeOptionalString(task.terminalSummary) ||
+        normalizeOptionalString(task.progressSummary) ||
+        normalizeOptionalString(task.label) ||
         task.task.trim(),
       80,
     );
@@ -104,7 +272,7 @@ function formatTaskRows(tasks: TaskRecord[], rich: boolean) {
       formatTaskStatusCell(task.status, rich),
       task.deliveryStatus.padEnd(DELIVERY_PAD),
       shortToken(task.runId, RUN_PAD).padEnd(RUN_PAD),
-      truncate(task.childSessionKey?.trim() || "n/a", 36).padEnd(36),
+      truncate(normalizeOptionalString(task.childSessionKey) || "n/a", 36).padEnd(36),
       summary,
     ].join(" ");
     lines.push(line.trimEnd());
@@ -153,19 +321,18 @@ type TaskSystemAuditFinding = {
 };
 
 function compareSystemAuditFindings(left: TaskSystemAuditFinding, right: TaskSystemAuditFinding) {
-  const severityRank = (severity: TaskSystemAuditSeverity) => (severity === "error" ? 0 : 1);
-  const severityDiff = severityRank(left.severity) - severityRank(right.severity);
-  if (severityDiff !== 0) {
-    return severityDiff;
-  }
-  const leftAge = left.ageMs ?? -1;
-  const rightAge = right.ageMs ?? -1;
-  if (leftAge !== rightAge) {
-    return rightAge - leftAge;
-  }
-  const leftCreatedAt = left.task?.createdAt ?? left.flow?.createdAt ?? 0;
-  const rightCreatedAt = right.task?.createdAt ?? right.flow?.createdAt ?? 0;
-  return leftCreatedAt - rightCreatedAt;
+  return compareTaskAuditFindingSortKeys(
+    {
+      severity: left.severity,
+      ageMs: left.ageMs,
+      createdAt: left.task?.createdAt ?? left.flow?.createdAt ?? 0,
+    },
+    {
+      severity: right.severity,
+      ageMs: right.ageMs,
+      createdAt: right.task?.createdAt ?? right.flow?.createdAt ?? 0,
+    },
+  );
 }
 
 function formatAuditRows(findings: TaskSystemAuditFinding[], rich: boolean) {
@@ -209,7 +376,7 @@ function toSystemAuditFindings(params: {
   severityFilter?: TaskSystemAuditSeverity;
   codeFilter?: TaskSystemAuditCode;
 }) {
-  const taskFindings = listTaskAuditFindings();
+  const taskFindings = listTaskAuditFindings({ tasks: reconcileInspectableTasks() });
   const flowFindings = listTaskFlowAuditFindings();
   const allFindings: TaskSystemAuditFinding[] = [
     ...taskFindings.map((finding) => ({
@@ -233,15 +400,17 @@ function toSystemAuditFindings(params: {
       ...(finding.flow ? { flow: finding.flow } : {}),
     })),
   ];
-  const filteredFindings = allFindings.filter((finding) => {
-    if (params.severityFilter && finding.severity !== params.severityFilter) {
-      return false;
-    }
-    if (params.codeFilter && finding.code !== params.codeFilter) {
-      return false;
-    }
-    return true;
-  }).toSorted(compareSystemAuditFindings);
+  const filteredFindings = allFindings
+    .filter((finding) => {
+      if (params.severityFilter && finding.severity !== params.severityFilter) {
+        return false;
+      }
+      if (params.codeFilter && finding.code !== params.codeFilter) {
+        return false;
+      }
+      return true;
+    })
+    .toSorted(compareSystemAuditFindings);
   const sortedAllFindings = [...allFindings].toSorted(compareSystemAuditFindings);
   return {
     allFindings: sortedAllFindings,
@@ -299,7 +468,9 @@ export async function tasksListCommand(
     runtime.log(info(`Status filter: ${statusFilter}`));
   }
   if (tasks.length === 0) {
-    runtime.log("No background tasks found.");
+    runtime.log(
+      `No background tasks found. Run ${formatCliCommand("openclaw tasks audit")} to check for stale task state.`,
+    );
     return;
   }
   const rich = isRich();
@@ -314,7 +485,7 @@ export async function tasksShowCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -360,7 +531,7 @@ export async function tasksNotifyCommand(
 ) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -369,7 +540,7 @@ export async function tasksNotifyCommand(
     notifyPolicy: opts.notify,
   });
   if (!updated) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -379,16 +550,16 @@ export async function tasksNotifyCommand(
 export async function tasksCancelCommand(opts: { lookup: string }, runtime: RuntimeEnv) {
   const task = reconcileTaskLookupToken(opts.lookup);
   if (!task) {
-    runtime.error(`Task not found: ${opts.lookup}`);
+    runtime.error(formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
-  const result = await cancelTaskById({
-    cfg: loadConfig(),
+  const result = await cancelDetachedTaskRunById({
+    cfg: await loadTaskCancelConfig(),
     taskId: task.taskId,
   });
   if (!result.found) {
-    runtime.error(result.reason ?? `Task not found: ${opts.lookup}`);
+    runtime.error(result.reason ?? formatTaskLookupMiss(opts.lookup));
     runtime.exit(1);
     return;
   }
@@ -412,6 +583,7 @@ export async function tasksAuditCommand(
   },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const severityFilter = opts.severity?.trim() as TaskSystemAuditSeverity | undefined;
   const codeFilter = opts.code?.trim() as TaskSystemAuditCode | undefined;
   const { allFindings, filteredFindings, taskFindings, summary } = toSystemAuditFindings({
@@ -486,6 +658,7 @@ export async function tasksMaintenanceCommand(
   opts: { json?: boolean; apply?: boolean },
   runtime: RuntimeEnv,
 ) {
+  configureTaskMaintenanceFromConfig();
   const auditBefore = getInspectableTaskAuditSummary();
   const flowAuditBefore = getInspectableTaskFlowAuditSummary();
   const taskMaintenance = opts.apply
@@ -494,6 +667,7 @@ export async function tasksMaintenanceCommand(
   const flowMaintenance = opts.apply
     ? await runTaskFlowRegistryMaintenance()
     : previewTaskFlowRegistryMaintenance();
+  const sessionMaintenance = await runSessionRegistryMaintenance({ apply: Boolean(opts.apply) });
   const summary = getInspectableTaskRegistrySummary();
   const auditAfter = opts.apply ? getInspectableTaskAuditSummary() : auditBefore;
   const flowAuditAfter = opts.apply ? getInspectableTaskFlowAuditSummary() : flowAuditBefore;
@@ -506,6 +680,7 @@ export async function tasksMaintenanceCommand(
           maintenance: {
             tasks: taskMaintenance,
             taskFlows: flowMaintenance,
+            sessions: sessionMaintenance,
           },
           tasks: summary,
           auditBefore: {
@@ -526,7 +701,12 @@ export async function tasksMaintenanceCommand(
 
   runtime.log(
     info(
-      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
+      `Tasks maintenance (${opts.apply ? "applied" : "preview"}): tasks ${taskMaintenance.reconciled} reconcile · ${taskMaintenance.recovered} recovered · ${taskMaintenance.cleanupStamped} cleanup stamp · ${taskMaintenance.pruned} prune; task-flows ${flowMaintenance.reconciled} reconcile · ${flowMaintenance.pruned} prune`,
+    ),
+  );
+  runtime.log(
+    info(
+      `Session registry: ${sessionMaintenance.pruned} prune · ${sessionMaintenance.runningCronJobs} running cron jobs`,
     ),
   );
   runtime.log(

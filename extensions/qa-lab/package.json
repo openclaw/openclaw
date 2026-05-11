@@ -1,0 +1,37 @@
+{
+  "name": "@openclaw/qa-lab",
+  "version": "2026.5.10-beta.1",
+  "private": true,
+  "description": "OpenClaw QA lab plugin with private debugger UI and scenario runner",
+  "type": "module",
+  "dependencies": {
+    "@copilotkit/aimock": "1.19.5",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "playwright-core": "1.59.1",
+    "yaml": "^2.8.4",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@openclaw/discord": "workspace:*",
+    "@openclaw/plugin-sdk": "workspace:*",
+    "@openclaw/slack": "workspace:*",
+    "@openclaw/whatsapp": "workspace:*",
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.5.10-beta.1"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.5.10-beta.1"
+    }
+  }
+}

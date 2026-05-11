@@ -1,6 +1,6 @@
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-let page: { evaluate: ReturnType<typeof vi.fn> } | null = null;
+let page: { evaluate: ReturnType<typeof vi.fn>; url: ReturnType<typeof vi.fn> } | null = null;
 let locator: { evaluate: ReturnType<typeof vi.fn> } | null = null;
 
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
@@ -11,6 +11,7 @@ const getPageForTargetId = vi.fn(async () => {
   return page;
 });
 const ensurePageState = vi.fn(() => {});
+const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const restoreRoleRefsForTarget = vi.fn(() => {});
 const refLocator = vi.fn(() => {
   if (!locator) {
@@ -21,6 +22,7 @@ const refLocator = vi.fn(() => {
 
 vi.mock("./pw-session.js", () => {
   return {
+    assertPageNavigationCompletedSafely,
     ensurePageState,
     forceDisconnectPlaywrightForTarget,
     getPageForTargetId,
@@ -29,13 +31,16 @@ vi.mock("./pw-session.js", () => {
   };
 });
 
-let evaluateViaPlaywright: typeof import("./pw-tools-core.interactions.js").evaluateViaPlaywright;
+const { evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
 function createPendingEval() {
-  let evalCalled!: () => void;
+  let evalCalled: (() => void) | undefined;
   const evalCalledPromise = new Promise<void>((resolve) => {
     evalCalled = resolve;
   });
+  if (!evalCalled) {
+    throw new Error("Expected evaluate callback to be initialized");
+  }
   return {
     evalCalledPromise,
     resolveEvalCalled: evalCalled,
@@ -43,10 +48,6 @@ function createPendingEval() {
 }
 
 describe("evaluateViaPlaywright (abort)", () => {
-  beforeAll(async () => {
-    ({ evaluateViaPlaywright } = await import("./pw-tools-core.interactions.js"));
-  });
-
   beforeEach(() => {
     vi.clearAllMocks();
     page = null;
@@ -68,6 +69,7 @@ describe("evaluateViaPlaywright (abort)", () => {
         }
         return pendingPromise;
       }),
+      url: vi.fn(() => "https://example.com/current"),
     };
     locator = {
       evaluate: vi.fn(() => {

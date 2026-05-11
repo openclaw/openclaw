@@ -56,6 +56,27 @@ describe("resolveDefaultMattermostAccountId", () => {
 });
 
 describe("resolveMattermostReplyToMode", () => {
+  it("uses configured defaultAccount when accountId is omitted", () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        mattermost: {
+          defaultAccount: "alerts",
+          accounts: {
+            alerts: {
+              botToken: "tok-alerts",
+              baseUrl: "https://alerts.example.com",
+              replyToMode: "all",
+            },
+          },
+        },
+      },
+    };
+
+    const account = resolveMattermostAccount({ cfg });
+    expect(account.accountId).toBe("alerts");
+    expect(resolveMattermostReplyToMode(account, "channel")).toBe("all");
+  });
+
   it("uses the configured mode for channel and group messages", () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -113,5 +134,25 @@ describe("resolveMattermostReplyToMode", () => {
       native: true,
       callbackPath: "/hooks/work",
     });
+  });
+
+  it("resolves documented streaming mode from account config", () => {
+    const account = resolveMattermostAccount({
+      cfg: {
+        channels: {
+          mattermost: {
+            streaming: "partial",
+            accounts: {
+              work: {
+                streaming: "off",
+              },
+            },
+          },
+        },
+      },
+      accountId: "work",
+    });
+
+    expect(account.streamingMode).toBe("off");
   });
 });

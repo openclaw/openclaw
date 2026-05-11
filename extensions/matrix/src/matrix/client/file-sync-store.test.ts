@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ISyncResponse } from "matrix-js-sdk";
+import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
 import * as jsonStore from "openclaw/plugin-sdk/json-store";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FileBackedMatrixSyncStore } from "./file-sync-store.js";
@@ -52,10 +52,13 @@ function createSyncResponse(nextBatch: string): ISyncResponse {
 }
 
 function createDeferred() {
-  let resolve!: () => void;
+  let resolve: (() => void) | undefined;
   const promise = new Promise<void>((resolvePromise) => {
     resolve = resolvePromise;
   });
+  if (!resolve) {
+    throw new Error("Expected deferred resolver to be initialized");
+  }
   return { promise, resolve };
 }
 
@@ -96,8 +99,43 @@ describe("FileBackedMatrixSyncStore", () => {
         type: "com.openclaw.test",
       },
     ]);
-    expect(savedSync?.roomsData.join?.["!room:example.org"]).toBeTruthy();
+    expect(savedSync?.roomsData.join?.["!room:example.org"]).toMatchObject({
+      timeline: {
+        events: [
+          {
+            event_id: "$message",
+            sender: "@user:example.org",
+            type: "m.room.message",
+          },
+        ],
+      },
+    });
     expect(secondStore.hasSavedSyncFromCleanShutdown()).toBe(false);
+  });
+
+  it("claims current-token storage ownership when sync state is persisted", async () => {
+    const storagePath = createStoragePath();
+    const rootDir = path.dirname(storagePath);
+    fs.writeFileSync(
+      path.join(rootDir, "storage-meta.json"),
+      JSON.stringify({
+        homeserver: "https://matrix.example.org",
+        userId: "@bot:example.org",
+        accountId: "default",
+        accessTokenHash: "token-hash",
+        deviceId: null,
+      }),
+      "utf8",
+    );
+
+    const store = new FileBackedMatrixSyncStore(storagePath);
+    await store.setSyncData(createSyncResponse("claimed-token"));
+    await store.flush();
+
+    const meta = JSON.parse(fs.readFileSync(path.join(rootDir, "storage-meta.json"), "utf8")) as {
+      currentTokenStateClaimed?: boolean;
+    };
+    expect(meta.currentTokenStateClaimed).toBe(true);
   });
 
   it("only treats sync state as restart-safe after a clean shutdown persist", async () => {

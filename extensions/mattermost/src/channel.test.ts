@@ -1,12 +1,6 @@
-import { Type } from "@sinclair/typebox";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
-import { createChannelReplyPipeline } from "../runtime-api.js";
-
-vi.mock("../../../src/config/bundled-channel-config-runtime.js", () => ({
-  getBundledChannelRuntimeMap: () => new Map(),
-  getBundledChannelConfigSchemaMap: () => new Map(),
-}));
+import { createChannelMessageReplyPipeline } from "../runtime-api.js";
 
 const { sendMessageMattermostMock, mockFetchGuard } = vi.hoisted(() => ({
   sendMessageMattermostMock: vi.fn(),
@@ -20,19 +14,21 @@ vi.mock("./mattermost/send.js", () => ({
   sendMessageMattermost: sendMessageMattermostMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const original = (await importOriginal()) as Record<string, unknown>;
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", async () => {
+  const original = (await vi.importActual("openclaw/plugin-sdk/ssrf-runtime")) as Record<
+    string,
+    unknown
+  >;
   return { ...original, fetchWithSsrFGuard: mockFetchGuard };
 });
 
+import { mattermostPlugin } from "./channel.js";
+import { resetMattermostReactionBotUserCacheForTests } from "./mattermost/reactions.js";
 import {
   createMattermostReactionFetchMock,
   createMattermostTestConfig,
   withMockedGlobalFetch,
 } from "./mattermost/reactions.test-helpers.js";
-
-let mattermostPlugin: typeof import("./channel.js").mattermostPlugin;
-let resetMattermostReactionBotUserCacheForTests: typeof import("./mattermost/reactions.js").resetMattermostReactionBotUserCacheForTests;
 
 type MattermostHandleAction = NonNullable<
   NonNullable<typeof mattermostPlugin.actions>["handleAction"]
@@ -43,8 +39,8 @@ type MattermostSendTextParams = Parameters<MattermostSendText>[0];
 type MattermostSendMedia = NonNullable<NonNullable<typeof mattermostPlugin.outbound>["sendMedia"]>;
 type MattermostSendMediaParams = Parameters<MattermostSendMedia>[0];
 
-function getDescribedActions(cfg: OpenClawConfig): string[] {
-  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg })?.actions ?? [])];
+function getDescribedActions(cfg: OpenClawConfig, accountId?: string): string[] {
+  return [...(mattermostPlugin.actions?.describeMessageTool?.({ cfg, accountId })?.actions ?? [])];
 }
 
 function requireMattermostNormalizeTarget() {
@@ -107,12 +103,18 @@ function createMattermostActionContext(
   };
 }
 
-describe("mattermostPlugin", () => {
-  beforeAll(async () => {
-    ({ mattermostPlugin } = await import("./channel.js"));
-    ({ resetMattermostReactionBotUserCacheForTests } = await import("./mattermost/reactions.js"));
-  });
+function expectSingleMattermostSend(to: string, text: string): Record<string, unknown> {
+  expect(sendMessageMattermostMock).toHaveBeenCalledTimes(1);
+  const [actualTo, actualText, options] = sendMessageMattermostMock.mock.calls[0] ?? [];
+  expect(actualTo).toBe(to);
+  expect(actualText).toBe(text);
+  if (!options || typeof options !== "object" || Array.isArray(options)) {
+    throw new Error("expected Mattermost send options object");
+  }
+  return options as Record<string, unknown>;
+}
 
+describe("mattermostPlugin", () => {
   beforeEach(() => {
     sendMessageMattermostMock.mockReset();
     sendMessageMattermostMock.mockResolvedValue({
@@ -175,6 +177,33 @@ describe("mattermostPlugin", () => {
         }),
       ).toBe("off");
     });
+
+    it("uses configured defaultAccount when accountId is omitted", () => {
+      const resolveReplyToMode = requireMattermostReplyToModeResolver();
+
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            defaultAccount: "alerts",
+            replyToMode: "off",
+            accounts: {
+              alerts: {
+                replyToMode: "all",
+                botToken: "alerts-token",
+                baseUrl: "https://alerts.example.com",
+              },
+            },
+          },
+        },
+      };
+
+      expect(
+        resolveReplyToMode({
+          cfg,
+          chatType: "channel",
+        }),
+      ).toBe("all");
+    });
   });
 
   describe("messageActions", () => {
@@ -230,10 +259,10 @@ describe("mattermostPlugin", () => {
       };
 
       const actions = getDescribedActions(cfg);
-      expect(actions).toEqual([]);
+      expect(actions).toStrictEqual([]);
     });
 
-    it("keeps buttons optional in message tool schema", () => {
+    it("declares presentation capability for message sends", () => {
       const cfg: OpenClawConfig = {
         channels: {
           mattermost: {
@@ -245,12 +274,8 @@ describe("mattermostPlugin", () => {
       };
 
       const discovery = mattermostPlugin.actions?.describeMessageTool?.({ cfg });
-      const schema = discovery?.schema;
-      if (!schema || Array.isArray(schema)) {
-        throw new Error("expected mattermost message-tool schema");
-      }
-
-      expect(Type.Object(schema.properties).required).toBeUndefined();
+      expect(discovery?.capabilities).toContain("presentation");
+      expect(discovery?.schema).toBeUndefined();
     });
 
     it("hides react when actions.reactions is false", () => {
@@ -292,6 +317,34 @@ describe("mattermostPlugin", () => {
       expect(actions).toContain("react");
     });
 
+    it("honors the selected Mattermost account during discovery", () => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          mattermost: {
+            enabled: true,
+            actions: { reactions: false },
+            accounts: {
+              default: {
+                enabled: true,
+                botToken: "test-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: false },
+              },
+              work: {
+                enabled: true,
+                botToken: "work-token",
+                baseUrl: "https://chat.example.com",
+                actions: { reactions: true },
+              },
+            },
+          },
+        },
+      };
+
+      expect(getDescribedActions(cfg, "default")).toEqual(["send"]);
+      expect(getDescribedActions(cfg, "work")).toEqual(["send", "react"]);
+    });
+
     it("blocks react when default account disables reactions and accountId is omitted", async () => {
       const cfg: OpenClawConfig = {
         channels: {
@@ -325,7 +378,7 @@ describe("mattermostPlugin", () => {
       const result = await runReactAction({ messageId: "POST1", emoji: "thumbsup" }, "add");
 
       expect(result?.content).toEqual([{ type: "text", text: "Reacted with :thumbsup: on POST1" }]);
-      expect(result?.details).toEqual({});
+      expect(result?.details).toStrictEqual({});
     });
 
     it("only treats boolean remove flag as removal", async () => {
@@ -346,7 +399,7 @@ describe("mattermostPlugin", () => {
       expect(result?.content).toEqual([
         { type: "text", text: "Removed reaction :thumbsup: from POST1" },
       ]);
-      expect(result?.details).toEqual({});
+      expect(result?.details).toStrictEqual({});
     });
 
     it("maps replyTo to replyToId for send actions", async () => {
@@ -365,14 +418,9 @@ describe("mattermostPlugin", () => {
         }),
       );
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "hello",
-        expect.objectContaining({
-          accountId: "default",
-          replyToId: "post-root",
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("post-root");
     });
 
     it("falls back to trimmed replyTo when replyToId is blank", async () => {
@@ -392,14 +440,9 @@ describe("mattermostPlugin", () => {
         }),
       );
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "hello",
-        expect.objectContaining({
-          accountId: "default",
-          replyToId: "post-root",
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("post-root");
     });
   });
 
@@ -407,7 +450,6 @@ describe("mattermostPlugin", () => {
     it("chunks outbound text without requiring Mattermost runtime initialization", () => {
       const chunker = requireMattermostChunker();
 
-      expect(() => chunker("hello world", 5)).not.toThrow();
       expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
     });
 
@@ -427,14 +469,9 @@ describe("mattermostPlugin", () => {
 
       await sendMedia(params);
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "hello",
-        expect.objectContaining({
-          mediaUrl: "/tmp/workspace/image.png",
-          mediaLocalRoots: ["/tmp/workspace"],
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.mediaUrl).toBe("/tmp/workspace/image.png");
+      expect(options.mediaLocalRoots).toStrictEqual(["/tmp/workspace"]);
     });
 
     it("threads resolved cfg on sendText", async () => {
@@ -457,14 +494,9 @@ describe("mattermostPlugin", () => {
 
       await sendText(params);
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "hello",
-        expect.objectContaining({
-          cfg,
-          accountId: "default",
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.cfg).toBe(cfg);
+      expect(options.accountId).toBe("default");
     });
 
     it("uses threadId as fallback when replyToId is absent (sendText)", async () => {
@@ -481,14 +513,9 @@ describe("mattermostPlugin", () => {
 
       await sendText(params);
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "hello",
-        expect.objectContaining({
-          accountId: "default",
-          replyToId: "post-root",
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "hello");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("post-root");
     });
 
     it("uses threadId as fallback when replyToId is absent (sendMedia)", async () => {
@@ -506,14 +533,9 @@ describe("mattermostPlugin", () => {
 
       await sendMedia(params);
 
-      expect(sendMessageMattermostMock).toHaveBeenCalledWith(
-        "channel:CHAN1",
-        "caption",
-        expect.objectContaining({
-          accountId: "default",
-          replyToId: "post-root",
-        }),
-      );
+      const options = expectSingleMattermostSend("channel:CHAN1", "caption");
+      expect(options.accountId).toBe("default");
+      expect(options.replyToId).toBe("post-root");
     });
   });
 
@@ -540,7 +562,7 @@ describe("mattermostPlugin", () => {
         },
       };
 
-      const prefixContext = createChannelReplyPipeline({
+      const prefixContext = createChannelMessageReplyPipeline({
         cfg,
         agentId: "main",
         channel: "mattermost",

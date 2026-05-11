@@ -1,5 +1,7 @@
 /** Distance (px) from the bottom within which we consider the user "near bottom". */
 const NEAR_BOTTOM_THRESHOLD = 450;
+const HEADER_HIDE_SCROLL_DELTA = 12;
+const HEADER_SHOW_TOP_THRESHOLD = 24;
 
 type ScrollHost = {
   updateComplete: Promise<unknown>;
@@ -7,9 +9,13 @@ type ScrollHost = {
   style: CSSStyleDeclaration;
   chatScrollFrame: number | null;
   chatScrollTimeout: number | null;
+  chatLastScrollTop: number;
   chatHasAutoScrolled: boolean;
   chatUserNearBottom: boolean;
+  chatHeaderControlsHidden: boolean;
   chatNewMessagesBelow: boolean;
+  chatIsProgrammaticScroll: boolean;
+  chatProgrammaticScrollTarget: number;
   logsScrollFrame: number | null;
   logsAtBottom: boolean;
   topbarObserver: ResizeObserver | null;
@@ -71,11 +77,17 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
           typeof window.matchMedia !== "function" ||
           !window.matchMedia("(prefers-reduced-motion: reduce)").matches);
       const scrollTop = target.scrollHeight;
+      host.chatProgrammaticScrollTarget = scrollTop;
+      host.chatIsProgrammaticScroll = true;
       if (typeof target.scrollTo === "function") {
         target.scrollTo({ top: scrollTop, behavior: smoothEnabled ? "smooth" : "auto" });
       } else {
         target.scrollTop = scrollTop;
       }
+      // Clear the flag after the scroll event has fired (sync or next microtask).
+      requestAnimationFrame(() => {
+        host.chatIsProgrammaticScroll = false;
+      });
       host.chatUserNearBottom = true;
       host.chatNewMessagesBelow = false;
       const retryDelay = effectiveForce ? 150 : 120;
@@ -94,7 +106,12 @@ export function scheduleChatScroll(host: ScrollHost, force = false, smooth = fal
         if (!shouldStickRetry) {
           return;
         }
+        host.chatProgrammaticScrollTarget = latest.scrollHeight;
+        host.chatIsProgrammaticScroll = true;
         latest.scrollTop = latest.scrollHeight;
+        requestAnimationFrame(() => {
+          host.chatIsProgrammaticScroll = false;
+        });
         host.chatUserNearBottom = true;
       }, retryDelay);
     });
@@ -128,8 +145,32 @@ export function handleChatScroll(host: ScrollHost, event: Event) {
   if (!container) {
     return;
   }
+  const scrollTop = Math.max(0, container.scrollTop);
+  const delta = scrollTop - host.chatLastScrollTop;
+  host.chatLastScrollTop = scrollTop;
+  // Ignore scroll events that we ourselves triggered — they must not flip
+  // chatUserNearBottom to false while streaming content grows the page.
+  // Only suppress if scrollTop is still at or above the position we scrolled to;
+  // if it dropped below, the user scrolled up during the guard window and we must
+  // process the event so streaming stops pinning them back to the bottom.
+  if (
+    host.chatIsProgrammaticScroll &&
+    container.scrollTop >= host.chatProgrammaticScrollTarget - container.clientHeight
+  ) {
+    return;
+  }
   const distanceFromBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
   host.chatUserNearBottom = distanceFromBottom < NEAR_BOTTOM_THRESHOLD;
+  const hasUsefulScroll = container.scrollHeight - container.clientHeight > NEAR_BOTTOM_THRESHOLD;
+
+  if (!hasUsefulScroll || scrollTop <= HEADER_SHOW_TOP_THRESHOLD || host.chatUserNearBottom) {
+    host.chatHeaderControlsHidden = false;
+  } else if (delta > HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = true;
+  } else if (delta < -HEADER_HIDE_SCROLL_DELTA) {
+    host.chatHeaderControlsHidden = false;
+  }
+
   // Clear the "new messages below" indicator when user scrolls back to bottom.
   if (host.chatUserNearBottom) {
     host.chatNewMessagesBelow = false;
@@ -148,7 +189,11 @@ export function handleLogsScroll(host: ScrollHost, event: Event) {
 export function resetChatScroll(host: ScrollHost) {
   host.chatHasAutoScrolled = false;
   host.chatUserNearBottom = true;
+  host.chatLastScrollTop = 0;
+  host.chatHeaderControlsHidden = false;
   host.chatNewMessagesBelow = false;
+  host.chatIsProgrammaticScroll = false;
+  host.chatProgrammaticScrollTarget = 0;
 }
 
 export function exportLogs(lines: string[], label: string) {

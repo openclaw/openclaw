@@ -1,4 +1,4 @@
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type TaskRuntime = "subagent" | "acp" | "cli" | "cron";
 
@@ -53,6 +53,7 @@ export type TaskDeliveryState = {
 export type TaskRecord = {
   taskId: string;
   runtime: TaskRuntime;
+  taskKind?: string;
   sourceId?: string;
   requesterSessionKey: string;
   ownerKey: string;

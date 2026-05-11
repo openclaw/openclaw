@@ -17,14 +17,10 @@ const storeMocks = vi.hoisted(() => ({
 }));
 const fetchMock = vi.hoisted(() => vi.fn());
 
-vi.mock("./store.js", async (importOriginal) => {
-  const original = await importOriginal<typeof import("./store.js")>();
-  return {
-    ...original,
-    updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
-    saveAuthProfileStore: storeMocks.saveAuthProfileStore,
-  };
-});
+vi.mock("./store.js", () => ({
+  updateAuthProfileStoreWithLock: storeMocks.updateAuthProfileStoreWithLock,
+  saveAuthProfileStore: storeMocks.saveAuthProfileStore,
+}));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -367,12 +363,13 @@ describe("clearExpiredCooldowns", () => {
   });
 
   it("clears expired cooldownUntil and resets errorCount", () => {
+    const lastFailureAt = Date.now() - 120_000;
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: Date.now() - 1_000,
         errorCount: 4,
         failureCounts: { rate_limit: 3, timeout: 1 },
-        lastFailureAt: Date.now() - 120_000,
+        lastFailureAt,
       },
     });
 
@@ -383,7 +380,7 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.errorCount).toBe(0);
     expect(stats?.failureCounts).toBeUndefined();
     // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toBeDefined();
+    expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
 
   it("clears expired disabledUntil and disabledReason", () => {
@@ -524,7 +521,7 @@ describe("clearExpiredCooldowns", () => {
   it("ignores NaN and Infinity cooldown values", () => {
     const store = makeStore({
       "anthropic:default": {
-        cooldownUntil: NaN,
+        cooldownUntil: Number.NaN,
         errorCount: 2,
       },
       "openai:default": {
@@ -653,7 +650,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
       label: "disabledUntil(auth_permanent)",
       reason: "auth_permanent" as const,
       buildUsageStats: (now: number): WindowStats => ({
-        disabledUntil: now + 20 * 60 * 60 * 1000,
+        disabledUntil: now + 50 * 60 * 1000,
         disabledReason: "auth_permanent",
         errorCount: 5,
         failureCounts: { auth_permanent: 5 },
@@ -709,7 +706,7 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, billing count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
+      // calculateDisabledLaneBackoffMs(1, 5h, 24h) = 5h
       expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
@@ -724,8 +721,8 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
         lastFailureAt: now - 60_000,
       }),
       // errorCount resets, auth_permanent count resets to 1 →
-      // calculateAuthProfileBillingDisableMsWithConfig(1, 5h, 24h) = 5h
-      expectedUntil: (now: number) => now + 5 * 60 * 60 * 1000,
+      // calculateDisabledLaneBackoffMs(1, 10m, 60m) = 10m
+      expectedUntil: (now: number) => now + 10 * 60 * 1000,
       readUntil: (stats: WindowStats | undefined) => stats?.disabledUntil,
     },
   ];
@@ -838,16 +835,14 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     await markCodexFailureAt({ store, now });
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "https://chatgpt.com/backend-api/wham/usage",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({
-          Authorization: "Bearer codex-access-token",
-          "ChatGPT-Account-Id": "acct_test_123",
-        }),
-      }),
-    );
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe("https://chatgpt.com/backend-api/wham/usage");
+    expect(init.method).toBe("GET");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer codex-access-token");
+    expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
+    expect(headers.originator).toBe("openclaw");
+    expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     expect(store.usageStats?.["openai-codex:default"]?.cooldownUntil).toBe(now + expectedMs);
   });
 

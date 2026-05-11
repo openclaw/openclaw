@@ -1,4 +1,6 @@
 import { resolveGlobalDedupeCache } from "../../../infra/dedupe.js";
+import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { normalizeOptionalString } from "../../../shared/string-coerce.js";
 import { applyQueueDropPolicy, shouldSkipQueueItem } from "../../../utils/queue-helpers.js";
 import { kickFollowupDrainIfIdle, rememberFollowupDrainCallback } from "./drain.js";
 import { getExistingFollowupQueue, getFollowupQueue } from "./state.js";
@@ -15,22 +17,23 @@ const RECENT_QUEUE_MESSAGE_IDS = resolveGlobalDedupeCache(RECENT_QUEUE_MESSAGE_I
   maxSize: 10_000,
 });
 
+function followupRouteIdentityKey(run: FollowupRun): string {
+  return channelRouteDedupeKey({
+    channel: run.originatingChannel,
+    to: run.originatingTo,
+    accountId: run.originatingAccountId,
+    threadId: run.originatingThreadId,
+  });
+}
+
 function buildRecentMessageIdKey(run: FollowupRun, queueKey: string): string | undefined {
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (!messageId) {
     return undefined;
   }
   // Use JSON tuple serialization to avoid delimiter-collision edge cases when
   // channel/to/account values contain "|" characters.
-  return JSON.stringify([
-    "queue",
-    queueKey,
-    run.originatingChannel ?? "",
-    run.originatingTo ?? "",
-    run.originatingAccountId ?? "",
-    run.originatingThreadId == null ? "" : String(run.originatingThreadId),
-    messageId,
-  ]);
+  return JSON.stringify(["queue", queueKey, followupRouteIdentityKey(run), messageId]);
 }
 
 function isRunAlreadyQueued(
@@ -38,15 +41,14 @@ function isRunAlreadyQueued(
   items: FollowupRun[],
   allowPromptFallback = false,
 ): boolean {
-  const hasSameRouting = (item: FollowupRun) =>
-    item.originatingChannel === run.originatingChannel &&
-    item.originatingTo === run.originatingTo &&
-    item.originatingAccountId === run.originatingAccountId &&
-    item.originatingThreadId === run.originatingThreadId;
+  const routeKey = followupRouteIdentityKey(run);
+  const hasSameRouting = (item: FollowupRun) => followupRouteIdentityKey(item) === routeKey;
 
-  const messageId = run.messageId?.trim();
+  const messageId = normalizeOptionalString(run.messageId);
   if (messageId) {
-    return items.some((item) => item.messageId?.trim() === messageId && hasSameRouting(item));
+    return items.some(
+      (item) => normalizeOptionalString(item.messageId) === messageId && hasSameRouting(item),
+    );
   }
   if (!allowPromptFallback) {
     return false;
@@ -84,7 +86,7 @@ export function enqueueFollowupRun(
 
   const shouldEnqueue = applyQueueDropPolicy({
     queue,
-    summarize: (item) => item.summaryLine?.trim() || item.prompt.trim(),
+    summarize: (item) => normalizeOptionalString(item.summaryLine) || item.prompt.trim(),
   });
   if (!shouldEnqueue) {
     return false;

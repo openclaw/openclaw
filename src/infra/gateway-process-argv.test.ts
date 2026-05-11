@@ -13,7 +13,7 @@ describe("parseProcCmdline", () => {
 
   it("keeps non-delimited single arguments and drops whitespace-only entries", () => {
     expect(parseProcCmdline(" gateway ")).toEqual(["gateway"]);
-    expect(parseProcCmdline(" \0\t\0 ")).toEqual([]);
+    expect(parseProcCmdline(" \0\t\0 ")).toStrictEqual([]);
   });
 });
 
@@ -29,16 +29,12 @@ describe("parseWindowsCmdline", () => {
   });
 
   it("returns empty array for empty input", () => {
-    expect(parseWindowsCmdline("")).toEqual([]);
-    expect(parseWindowsCmdline("   ")).toEqual([]);
+    expect(parseWindowsCmdline("")).toStrictEqual([]);
+    expect(parseWindowsCmdline("   ")).toStrictEqual([]);
   });
 
   it("collapses consecutive spaces outside quotes", () => {
-    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual([
-      "node.exe",
-      "gateway",
-      "run",
-    ]);
+    expect(parseWindowsCmdline("node.exe   gateway   run")).toEqual(["node.exe", "gateway", "run"]);
   });
 });
 

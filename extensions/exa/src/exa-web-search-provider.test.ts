@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import plugin from "../index.js";
-import { __testing, createExaWebSearchProvider } from "./exa-web-search-provider.js";
+import { __testing } from "../test-api.js";
+import { createExaWebSearchProvider as createContractExaWebSearchProvider } from "../web-search-contract-api.js";
+import { createExaWebSearchProvider } from "./exa-web-search-provider.js";
 
 describe("exa web search provider", () => {
   it("exposes the expected metadata and selection wiring", () => {
@@ -11,12 +12,83 @@ describe("exa web search provider", () => {
     const applied = provider.applySelectionConfig({});
 
     expect(provider.id).toBe("exa");
+    expect(provider.onboardingScopes).toEqual(["text-inference"]);
     expect(provider.credentialPath).toBe("plugins.entries.exa.config.webSearch.apiKey");
-    expect(applied.plugins?.entries?.exa?.enabled).toBe(true);
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
+  });
+
+  it("keeps the lightweight contract surface aligned with provider metadata", () => {
+    const provider = createExaWebSearchProvider();
+    const contractProvider = createContractExaWebSearchProvider();
+    if (!contractProvider.applySelectionConfig) {
+      throw new Error("Expected contract applySelectionConfig to be defined");
+    }
+    const applied = contractProvider.applySelectionConfig({});
+
+    expect(contractProvider).toMatchObject({
+      id: provider.id,
+      label: provider.label,
+      hint: provider.hint,
+      onboardingScopes: provider.onboardingScopes,
+      credentialLabel: provider.credentialLabel,
+      envVars: provider.envVars,
+      placeholder: provider.placeholder,
+      signupUrl: provider.signupUrl,
+      docsUrl: provider.docsUrl,
+      autoDetectOrder: provider.autoDetectOrder,
+      credentialPath: provider.credentialPath,
+    });
+    expect(contractProvider.createTool({ config: {}, searchConfig: {} })).toBeNull();
+    const pluginEntry = applied.plugins?.entries?.exa;
+    if (!pluginEntry) {
+      throw new Error("expected contract Exa plugin entry");
+    }
+    expect(pluginEntry.enabled).toBe(true);
   });
 
   it("prefers scoped configured api keys over environment fallbacks", () => {
     expect(__testing.resolveExaApiKey({ apiKey: "exa-secret" })).toBe("exa-secret");
+  });
+
+  it("resolves Exa search base URL overrides", () => {
+    expect(__testing.resolveExaSearchEndpoint()).toEqual({
+      endpoint: "https://api.exa.ai/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "https://proxy.example/exa" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "proxy.example/exa/search/" })).toEqual({
+      endpoint: "https://proxy.example/exa/search",
+    });
+    expect(__testing.resolveExaSearchEndpoint({ baseUrl: "ftp://proxy.example/exa" })).toEqual({
+      docs: "https://docs.openclaw.ai/tools/exa-search",
+      error: "invalid_base_url",
+      message:
+        "plugins.entries.exa.config.webSearch.baseUrl must be a valid http(s) URL. Got: ftp://proxy.example/exa",
+    });
+  });
+
+  it("partitions Exa cache keys by resolved endpoint", () => {
+    const base = {
+      type: "auto" as const,
+      query: "openclaw",
+      count: 5,
+    };
+    expect(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://api.exa.ai/search",
+      }),
+    ).not.toBe(
+      __testing.buildExaCacheKey({
+        ...base,
+        endpoint: "https://proxy.example/exa/search",
+      }),
+    );
   });
 
   it("normalizes Exa result descriptions from highlights before text", () => {

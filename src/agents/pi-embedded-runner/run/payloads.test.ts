@@ -1,5 +1,10 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import { buildPayloads, expectSingleToolErrorPayload } from "./payloads.test-helpers.js";
+import {
+  buildPayloads,
+  expectSinglePayloadText,
+  expectSingleToolErrorPayload,
+} from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
@@ -7,10 +12,178 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expect(payloads).toHaveLength(0);
   }
 
-  it("suppresses exec tool errors when verbose mode is off", () => {
-    expectNoPayloads({
+  it("does not fall back to commentary-only assistant text when streamed text was suppressed", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "toolUse",
+        content: [
+          {
+            type: "text",
+            text: "Need update cron messages to use finalBrief/briefPath.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toStrictEqual([]);
+  });
+
+  it("falls back to final-answer assistant text when streamed text is unavailable", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Need inspect.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_commentary",
+              phase: "commentary",
+            }),
+          },
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["   "],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Fixed.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Fixed.");
+  });
+
+  it("delivers only the final assistant answer when accumulated text includes pre-tool progress", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["I'll inspect that first.", "Done."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("does not replay raw-looking accumulated tool output when final answer text is available", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "/root/openclaw/src/gateway/protocol/schema/protocol-schemas.ts:181:  PluginControlUiDescriptorSchema,",
+        "The schema export is fixed.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "The schema export is fixed.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "The schema export is fixed.");
+  });
+
+  it("ignores accumulated internal/status text after the final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: [
+        "Done.",
+        "Background task done: Context engine turn maintenance. Rewrote 0 transcript entries and freed 0 bytes.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "Done.",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it("surfaces concise exec tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "command failed" },
       verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "command failed",
+    });
+  });
+
+  it("surfaces concise bash tool errors when verbose mode is off", () => {
+    const payloads = buildPayloads({
+      lastToolError: { toolName: "bash", error: "command failed" },
+      verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Bash",
+      absentDetail: "command failed",
     });
   });
 
@@ -51,11 +224,16 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
-  it("keeps non-timeout exec tool errors suppressed for cron sessions when verbose mode is off", () => {
-    expectNoPayloads({
+  it("surfaces non-timeout exec tool errors for cron sessions without raw details", () => {
+    const payloads = buildPayloads({
       lastToolError: { toolName: "exec", error: "Command not found" },
       sessionKey: "agent:main:cron:job-1",
       verboseLevel: "off",
+    });
+
+    expectSingleToolErrorPayload(payloads, {
+      title: "Exec",
+      absentDetail: "Command not found",
     });
   });
 
@@ -140,5 +318,115 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectNoPayloads({
       assistantTexts: ['{"action":"NO_REPLY"}'],
     });
+  });
+
+  it("strips NO_REPLY text but keeps voice media directives", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["NO_REPLY\nMEDIA:/tmp/openclaw/tts-a/voice-a.opus\n[[audio_as_voice]]"],
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/openclaw/tts-a/voice-a.opus");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/openclaw/tts-a/voice-a.opus"]);
+    expect(payloads[0]?.audioAsVoice).toBe(true);
+    expect(payloads[0]?.text).toBeUndefined();
+  });
+
+  it("preserves media directives when stored assistant text was reduced to visible text only", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Attached image"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
+  it("keeps media directives when collapsing accumulated pre-tool text to the final answer", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Preparing the image...", "Attached image"],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
+  it("uses raw final assistant text when visible-text extraction removed a media-only directive line", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/reply-image.png\nAttached image",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Attached image");
+    expect(payloads[0]?.mediaUrl).toBe("/tmp/reply-image.png");
+    expect(payloads[0]?.mediaUrls).toEqual(["/tmp/reply-image.png"]);
+  });
+
+  it("suppresses native reasoning payloads when thinking is disabled", () => {
+    const payloads = buildPayloads({
+      reasoningLevel: "on",
+      thinkingLevel: "off",
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "thinking",
+            thinking: "",
+            thinkingSignature: JSON.stringify({ type: "reasoning", id: "rs_live", summary: [] }),
+          },
+          { type: "text", text: "THINKING-OFF-OK" },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "THINKING-OFF-OK");
   });
 });

@@ -1,19 +1,36 @@
 import type { ChatType } from "../channels/chat-type.js";
-import type { SessionEntry } from "../config/sessions.js";
+import type { SessionCompactionCheckpoint, SessionEntry } from "../config/sessions/types.js";
+import type { PluginSessionExtensionProjection } from "../plugins/host-hooks.js";
 import type {
+  GatewayAgentRuntime,
   GatewayAgentRow as SharedGatewayAgentRow,
   SessionsListResultBase,
   SessionsPatchResultBase,
 } from "../shared/session-types.js";
-import type { DeliveryContext } from "../utils/delivery-context.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 export type GatewaySessionsDefaults = {
   modelProvider: string | null;
   model: string | null;
   contextTokens: number | null;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
+};
+
+type GatewayThinkingLevelOption = {
+  id: string;
+  label: string;
 };
 
 export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
+
+type SubagentRunState = "active" | "interrupted" | "historical";
+
+export type SessionCompactionCheckpointPreview = Pick<
+  SessionCompactionCheckpoint,
+  "checkpointId" | "createdAt" | "reason"
+>;
 
 export type GatewaySessionRow = {
   key: string;
@@ -39,8 +56,12 @@ export type GatewaySessionRow = {
   systemSent?: boolean;
   abortedLastRun?: boolean;
   thinkingLevel?: string;
+  thinkingLevels?: GatewayThinkingLevelOption[];
+  thinkingOptions?: string[];
+  thinkingDefault?: string;
   fastMode?: boolean;
   verboseLevel?: string;
+  traceLevel?: string;
   reasoningLevel?: string;
   elevatedLevel?: string;
   sendPolicy?: "allow" | "deny";
@@ -50,6 +71,9 @@ export type GatewaySessionRow = {
   totalTokensFresh?: boolean;
   estimatedCostUsd?: number;
   status?: SessionRunStatus;
+  hasActiveRun?: boolean;
+  subagentRunState?: SubagentRunState;
+  hasActiveSubagentRun?: boolean;
   startedAt?: number;
   endedAt?: number;
   runtimeMs?: number;
@@ -58,12 +82,16 @@ export type GatewaySessionRow = {
   responseUsage?: "on" | "off" | "tokens" | "full";
   modelProvider?: string;
   model?: string;
+  agentRuntime?: GatewayAgentRuntime;
   contextTokens?: number;
   deliveryContext?: DeliveryContext;
   lastChannel?: SessionEntry["lastChannel"];
   lastTo?: string;
   lastAccountId?: string;
   lastThreadId?: SessionEntry["lastThreadId"];
+  compactionCheckpointCount?: number;
+  latestCompactionCheckpoint?: SessionCompactionCheckpointPreview;
+  pluginExtensions?: PluginSessionExtensionProjection[];
 };
 
 export type GatewayAgentRow = SharedGatewayAgentRow;
@@ -91,5 +119,6 @@ export type SessionsPatchResult = SessionsPatchResultBase<SessionEntry> & {
   resolved?: {
     modelProvider?: string;
     model?: string;
+    agentRuntime?: GatewayAgentRuntime;
   };
 };

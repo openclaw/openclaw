@@ -92,14 +92,6 @@ struct DebugSettings: View {
                             self.launchAgentWriteDisabled = GatewayLaunchAgentManager.isLaunchAgentWriteDisabled()
                             return
                         }
-                        if newValue {
-                            Task {
-                                _ = await GatewayLaunchAgentManager.set(
-                                    enabled: false,
-                                    bundlePath: Bundle.main.bundlePath,
-                                    port: GatewayEnvironment.gatewayPort())
-                            }
-                        }
                     }
 
                 Text(
@@ -787,7 +779,10 @@ struct DebugSettings: View {
         session["store"] = trimmed.isEmpty ? SessionLoader.defaultStorePath : trimmed
         root["session"] = session
 
-        OpenClawConfigFile.saveDict(root)
+        guard OpenClawConfigFile.saveDict(root) else {
+            self.sessionStoreSaveError = "Config write rejected to protect gateway auth/mode."
+            return
+        }
         self.sessionStoreSaveError = nil
     }
 
