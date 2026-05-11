@@ -83,7 +83,10 @@ import {
 } from "./subagent-capabilities.js";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
 import { countActiveRunsForSession, getSubagentRunByChildSessionKey } from "./subagent-registry.js";
-import { resolveSubagentTargetPolicy } from "./subagent-target-policy.js";
+import {
+  resolveSpawnAllowlistFromEnv,
+  resolveSubagentTargetPolicy,
+} from "./subagent-target-policy.js";
 import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sessions-helpers.js";
 
 const log = createSubsystemLogger("agents/acp-spawn");
@@ -790,7 +793,8 @@ function resolveAcpSubagentEnvelopeState(params: {
     requestedAgentId: params.requestedAgentId,
     allowAgents:
       resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
-      params.cfg.agents?.defaults?.subagents?.allowAgents,
+      params.cfg.agents?.defaults?.subagents?.allowAgents ??
+      resolveSpawnAllowlistFromEnv(),
   });
   if (!targetPolicy.ok) {
     return {

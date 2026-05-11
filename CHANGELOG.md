@@ -59,6 +59,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- Agents/subagents: read `SPAWN_ALLOWLIST` from the host environment as a fallback for `subagents.allowAgents` in the spawn target-policy, ACP spawn, and `agents_list` paths so Docker / Coolify deployments that set `AGENTS=[…]` and `SPAWN_ALLOWLIST=*` purely through env vars get a working `sessions_spawn` allowlist instead of `allowed: none`. Comma-separated; per-agent and `agents.defaults` config still take precedence. Fixes #79490.
 - Control UI/performance: scope Nodes polling to the active Nodes tab, debounce stale session-list reconciliation, and bound chat-side session refreshes so long-running dashboards avoid background reload churn. Thanks @BunsDev.
 - Bonjour/Gateway: treat active ciao probing and fresh name-conflict renames as in-progress so the mDNS watchdog waits for probe settlement before retrying, preventing rapid re-advertise loops on Windows, WSL, and other multicast-hostile hosts. (#74778) Refs #74242. Thanks @fuller-stack-dev.
 - Providers/MiniMax: send a minimal Anthropic-compatible user fallback when message conversion filters a turn to an empty payload, so MiniMax M2.7 no longer returns `chat content is empty` after tool-heavy sessions. Fixes #74589. Thanks @neeravmakwana and @DerekEXS.
