@@ -1,9 +1,14 @@
 import { normalizeTalkTransport } from "../../../../src/talk/talk-session-controller.js";
 import type { GatewayBrowserClient } from "../gateway.ts";
+import {
+  BrowserSpeechRealtimeTalkTransport,
+  shouldUseLocalTalkForRealtimeError,
+} from "./realtime-talk-browser-fallback.ts";
 import { GatewayRelayRealtimeTalkTransport } from "./realtime-talk-gateway-relay.ts";
 import { GoogleLiveRealtimeTalkTransport } from "./realtime-talk-google-live.ts";
 import {
   type RealtimeTalkCallbacks,
+  type RealtimeTalkBrowserSpeechLocalSessionResult,
   type RealtimeTalkEvent,
   type RealtimeTalkGatewayRelaySessionResult,
   type RealtimeTalkJsonPcmWebSocketSessionResult,
@@ -26,7 +31,12 @@ export type RealtimeTalkLaunchOptions = {
   provider?: string;
   model?: string;
   voice?: string;
-  transport?: "webrtc" | "provider-websocket" | "gateway-relay" | "managed-room";
+  transport?:
+    | "webrtc"
+    | "provider-websocket"
+    | "gateway-relay"
+    | "managed-room"
+    | "browser-speech-local";
   vadThreshold?: number;
   silenceDurationMs?: number;
   prefixPaddingMs?: number;
@@ -53,6 +63,11 @@ function createTransport(
       ctx,
     );
   }
+  if (transport === "browser-speech-local") {
+    return new BrowserSpeechRealtimeTalkTransport(ctx, {
+      session: session as RealtimeTalkBrowserSpeechLocalSessionResult,
+    });
+  }
   if (transport === "managed-room") {
     throw new Error("Managed-room realtime Talk sessions are not available in this UI yet");
   }
@@ -72,6 +87,7 @@ function compactLaunchParams(
 
 export class RealtimeTalkSession {
   private transport: RealtimeTalkTransport | null = null;
+  private session: RealtimeTalkSessionResult | null = null;
   private closed = false;
 
   constructor(
@@ -84,18 +100,23 @@ export class RealtimeTalkSession {
   async start(): Promise<void> {
     this.closed = false;
     this.callbacks.onStatus?.("connecting");
-    const session = await this.createSession();
-    if (this.closed) {
-      return;
+    try {
+      const session = await this.createSession();
+      if (this.closed) {
+        return;
+      }
+      this.session = session;
+      this.transport = createTransport(session, this.createTransportContext(session));
+      await this.transport.start();
+    } catch (error) {
+      if (!shouldUseLocalTalkForRealtimeError(error)) {
+        throw error;
+      }
+      if (this.closed) {
+        return;
+      }
+      await this.startLocalTalk(this.transport);
     }
-    this.transport = createTransport(session, {
-      client: this.client,
-      sessionKey: this.sessionKey,
-      callbacks: this.callbacks,
-      consultThinkingLevel: session.consultThinkingLevel,
-      consultFastMode: session.consultFastMode,
-    });
-    await this.transport.start();
   }
 
   private async createSession(): Promise<RealtimeTalkSessionResult> {
@@ -133,5 +154,48 @@ export class RealtimeTalkSession {
     this.callbacks.onStatus?.("idle");
     this.transport?.stop();
     this.transport = null;
+    this.session = null;
+  }
+
+  private createTransportContext(session = this.session): RealtimeTalkTransportContext {
+    return {
+      client: this.client,
+      sessionKey: this.sessionKey,
+      callbacks: this.callbacks,
+      consultThinkingLevel: session?.consultThinkingLevel,
+      consultFastMode: session?.consultFastMode,
+      onRecoverableError: (error, source) => this.requestLocalTalk(error, source),
+    };
+  }
+
+  private requestLocalTalk(error: Error, source: RealtimeTalkTransport): boolean {
+    if (!shouldUseLocalTalkForRealtimeError(error)) {
+      return false;
+    }
+    if (this.closed || this.transport !== source) {
+      return true;
+    }
+    void this.startLocalTalk(source).catch((localTalkError) => {
+      if (!this.closed) {
+        this.callbacks.onStatus?.(
+          "error",
+          localTalkError instanceof Error ? localTalkError.message : String(localTalkError),
+        );
+      }
+    });
+    return true;
+  }
+
+  private async startLocalTalk(source: RealtimeTalkTransport | null): Promise<void> {
+    if (this.closed) {
+      return;
+    }
+    if (source && this.transport !== source) {
+      return;
+    }
+    source?.stop();
+    const localTalk = new BrowserSpeechRealtimeTalkTransport(this.createTransportContext());
+    this.transport = localTalk;
+    await localTalk.start();
   }
 }

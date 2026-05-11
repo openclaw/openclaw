@@ -33,6 +33,7 @@ export const CLI_DEFAULT_OPERATOR_SCOPES: OperatorScope[] = [
 const NODE_ROLE_METHODS = new Set([
   "node.invoke.result",
   "node.event",
+  "node.canvas.capability.refresh",
   "node.pluginSurface.refresh",
   "node.pending.drain",
   "node.pending.pull",
@@ -77,6 +78,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "doctor.memory.dreamDiary",
     "doctor.memory.remHarness",
     "logs.tail",
+    "actions.list",
     "channels.status",
     "status",
     "usage.status",
@@ -123,6 +125,7 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "last-heartbeat",
     "node.list",
     "node.describe",
+    "node.canvas.capability.refresh",
     "environments.list",
     "environments.status",
     "chat.history",
@@ -137,6 +140,9 @@ const METHOD_SCOPE_GROUPS: Record<OperatorScope, readonly string[]> = {
     "artifacts.download",
   ],
   [WRITE_SCOPE]: [
+    "actions.add",
+    "actions.update",
+    "actions.resolve",
     "message.action",
     "send",
     "poll",

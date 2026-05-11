@@ -135,7 +135,7 @@ export const pluginRegistrationContractCases = {
   },
   "tts-local-cli": {
     pluginId: "tts-local-cli",
-    speechProviderIds: ["tts-local-cli", "cli"],
+    speechProviderIds: ["tts-local-cli", "cli", "local-voice", "local", "piper", "say"],
   },
   xai: {
     pluginId: "xai",

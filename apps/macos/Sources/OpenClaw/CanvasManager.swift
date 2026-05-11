@@ -12,8 +12,9 @@ final class CanvasManager {
 
     private var panelController: CanvasWindowController?
     private var panelSessionKey: String?
-    private var lastAutoA2UIUrl: String?
     private var gatewayWatchTask: Task<Void, Never>?
+    private var dashboardRefreshTask: Task<Void, Never>?
+    private var lastAutoA2UIUrl: String?
 
     private init() {
         self.startGatewayObserver()
@@ -58,17 +59,18 @@ final class CanvasManager {
             controller.presentAnchoredPanel(anchorProvider: anchorProvider)
             controller.applyPreferredPlacement(placement)
             self.refreshDebugStatus()
+            self.scheduleDashboardRefresh(controller: controller)
 
             // Existing session: only navigate when an explicit target was provided.
             if let normalizedTarget {
                 controller.load(target: normalizedTarget)
+                self.scheduleDashboardRefresh(controller: controller)
                 return self.makeShowResult(
                     directory: controller.directoryPath,
                     target: target,
                     effectiveTarget: normalizedTarget)
             }
 
-            self.maybeAutoNavigateToA2UIAsync(controller: controller)
             return CanvasShowResult(
                 directory: controller.directoryPath,
                 target: target,
@@ -102,10 +104,8 @@ final class CanvasManager {
         Self.logger.debug("showDetailed showCanvas effectiveTarget=\(effectiveTarget, privacy: .public)")
         controller.showCanvas(path: effectiveTarget)
         Self.logger.debug("showDetailed showCanvas done")
-        if normalizedTarget == nil {
-            self.maybeAutoNavigateToA2UIAsync(controller: controller)
-        }
         self.refreshDebugStatus()
+        self.scheduleDashboardRefresh(controller: controller)
 
         return self.makeShowResult(
             directory: controller.directoryPath,
@@ -165,12 +165,13 @@ final class CanvasManager {
             Self.logger.debug("canvas plugin surface URL invalid; cannot resolve A2UI")
         }
         guard let controller = self.panelController else {
-            if a2uiUrl != nil {
+            if !raw.isEmpty {
                 Self.logger.debug("canvas panel not visible; skipping auto-nav")
             }
             return
         }
         self.maybeAutoNavigateToA2UI(controller: controller, a2uiUrl: a2uiUrl)
+        self.scheduleDashboardRefresh(controller: controller)
     }
 
     private func maybeAutoNavigateToA2UIAsync(controller: CanvasWindowController) {
@@ -230,6 +231,64 @@ final class CanvasManager {
             subtitle = mode.rawValue
         }
         controller.updateDebugStatus(enabled: enabled, title: title, subtitle: subtitle)
+    }
+
+    private func scheduleDashboardRefresh(controller: CanvasWindowController, delayMs: Int = 750) {
+        self.dashboardRefreshTask?.cancel()
+        self.dashboardRefreshTask = Task { [weak self, weak controller] in
+            guard let self, let controller else { return }
+            var nextDelayMs = max(0, delayMs)
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: UInt64(nextDelayMs) * 1_000_000)
+                if Task.isCancelled { return }
+                let payload = await self.makeDashboardPayload()
+                guard let data = try? JSONEncoder().encode(payload),
+                      let json = String(data: data, encoding: .utf8)
+                else {
+                    return
+                }
+                await MainActor.run {
+                    guard self.panelController === controller else { return }
+                    controller.updateHomeCanvasState(json: json)
+                }
+                nextDelayMs = 60000
+            }
+        }
+    }
+
+    private func makeDashboardPayload() async -> CanvasDashboardPayload {
+        async let runsResult = GatewayConnection.shared.cronRunsAll(limit: 8)
+        async let actionsResult = GatewayConnection.shared.actionsList(limit: 6)
+        let runs = await (try? runsResult) ?? []
+        let actionItems = await (try? actionsResult) ?? []
+        let gatewayLabel: String
+        let gatewayCaption: String
+        switch AppStateStore.shared.connectionMode {
+        case .local:
+            gatewayLabel = GatewayProcessManager.shared.status.label
+            gatewayCaption = "Local gateway is serving Canvas and automation state."
+        case .remote:
+            gatewayLabel = "Remote"
+            gatewayCaption = "Connected to the configured remote gateway."
+        case .unconfigured:
+            gatewayLabel = "Unconfigured"
+            gatewayCaption = "Connect or start a gateway to unlock live dashboard data."
+        }
+
+        let talkEnabled = AppStateStore.shared.talkEnabled
+        let talkLabel = talkEnabled ? "On" : "Standby"
+        let talkCaption = talkEnabled
+            ? "Talk mode is active. Thomas should answer like a person, not a settings screen."
+            : "Voice can step in once a conversation starts."
+
+        return CanvasDashboardSnapshot.build(
+            gatewayLabel: gatewayLabel,
+            gatewayCaption: gatewayCaption,
+            activeAgentName: "Main",
+            talkLabel: talkLabel,
+            talkCaption: talkCaption,
+            cronRuns: runs,
+            actionItems: actionItems)
     }
 
     private static func resolveA2UIHostUrl(from raw: String?) -> String? {

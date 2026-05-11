@@ -15,10 +15,10 @@ enum ExecApprovalNotificationBridge {
 
     static func registerCategory(center: UNUserNotificationCenter = .current()) {
         let category = UNNotificationCategory(
-            identifier: self.categoryIdentifier,
+            identifier: categoryIdentifier,
             actions: [
                 UNNotificationAction(
-                    identifier: self.reviewActionIdentifier,
+                    identifier: reviewActionIdentifier,
                     title: "Review",
                     options: [.foreground]),
             ],
@@ -46,7 +46,7 @@ enum ExecApprovalNotificationBridge {
             return nil
         }
         guard self.payloadKind(userInfo: userInfo) == self.requestedKind else { return nil }
-        guard let approvalId = self.approvalID(from: userInfo) else { return nil }
+        guard let approvalId = approvalID(from: userInfo) else { return nil }
         return ExecApprovalNotificationPrompt(approvalId: approvalId)
     }
 
@@ -56,7 +56,7 @@ enum ExecApprovalNotificationBridge {
         notificationCenter: NotificationCentering) async -> Bool
     {
         guard self.payloadKind(userInfo: userInfo) == self.resolvedKind,
-              let approvalId = self.approvalID(from: userInfo)
+              let approvalId = approvalID(from: userInfo)
         else {
             return false
         }

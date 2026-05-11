@@ -19,7 +19,8 @@ class TalkModeConfigParsingTest {
           {
             "talk": {
               "interruptOnSpeech": true,
-              "silenceTimeoutMs": 1800
+              "silenceTimeoutMs": 1800,
+              "conversationEngine": "local-thomas"
             },
             "session": {
               "mainKey": "voice-main"
@@ -33,6 +34,15 @@ class TalkModeConfigParsingTest {
     assertEquals("voice-main", parsed.mainSessionKey)
     assertEquals(true, parsed.interruptOnSpeech)
     assertEquals(1800L, parsed.silenceTimeoutMs)
+    assertEquals("local-thomas", parsed.conversationEngine)
+  }
+
+  @Test
+  fun defaultsConversationEngineToDeluxeThomas() {
+    assertEquals(
+      "deluxe-thomas",
+      TalkModeGatewayConfigParser.resolvedConversationEngine(null),
+    )
   }
 
   @Test

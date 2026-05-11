@@ -36,6 +36,6 @@ struct GatewayTrustPromptAlert: ViewModifier {
 
 extension View {
     func gatewayTrustPromptAlert() -> some View {
-        self.modifier(GatewayTrustPromptAlert())
+        modifier(GatewayTrustPromptAlert())
     }
 }

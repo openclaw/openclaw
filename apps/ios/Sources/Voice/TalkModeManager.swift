@@ -32,8 +32,10 @@ private final class StreamFailureBox: @unchecked Sendable {
 @Observable
 final class TalkModeManager: NSObject {
     private typealias SpeechRequest = SFSpeechAudioBufferRecognitionRequest
-    private static let defaultModelIdFallback = "eleven_v3"
-    private static let defaultTalkProvider = "elevenlabs"
+    private static let defaultModelIdFallback = "gpt-4o-mini-tts"
+    private static let defaultOpenAIVoiceId = "cedar"
+    private static let defaultTalkProvider = "openai"
+    private static let supportedLocalTalkProviders: Set<String> = ["elevenlabs", "openai"]
     private static let defaultSilenceTimeoutMs = TalkDefaults.silenceTimeoutMs
     private static let redactedConfigSentinel = "__OPENCLAW_REDACTED__"
     var isEnabled: Bool = false
@@ -84,9 +86,11 @@ final class TalkModeManager: NSObject {
     private var voiceOverrideActive = false
     private var modelOverrideActive = false
     private var defaultOutputFormat: String?
+    private var activeTalkProvider: String = TalkModeManager.defaultTalkProvider
     private var apiKey: String?
     private var voiceAliases: [String: String] = [:]
     private var interruptOnSpeech: Bool = true
+    private var conversationEngine: String = "deluxe-thomas"
     private var gatewaySpeechLocaleID: String?
     private var mainSessionKey: String = "main"
     private var fallbackVoiceId: String?
@@ -190,7 +194,7 @@ final class TalkModeManager: NSObject {
             return
         }
 
-        await self.reloadConfig()
+        await reloadConfig()
         do {
             try Self.configureAudioSession()
             // Set this before starting recognition so any early speech errors are classified correctly.
@@ -296,7 +300,7 @@ final class TalkModeManager: NSObject {
                 NSLocalizedDescriptionKey: "Gateway not connected",
             ])
         }
-        if self.isPushToTalkActive, let captureId = self.activePTTCaptureId {
+        if self.isPushToTalkActive, let captureId = activePTTCaptureId {
             return OpenClawTalkPTTStartPayload(captureId: captureId)
         }
 
@@ -506,7 +510,7 @@ final class TalkModeManager: NSObject {
             localSelection: localSpeechLocale,
             gatewaySelection: self.gatewaySpeechLocaleID)
         self.speechRecognizer = resolvedSpeech.recognizer
-        guard let recognizer = self.speechRecognizer else {
+        guard let recognizer = speechRecognizer else {
             throw NSError(domain: "TalkMode", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "Speech recognizer unavailable",
             ])
@@ -516,7 +520,7 @@ final class TalkModeManager: NSObject {
         self.recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         self.recognitionRequest?.shouldReportPartialResults = true
         self.recognitionRequest?.taskHint = .dictation
-        guard let request = self.recognitionRequest else { return }
+        guard let request = recognitionRequest else { return }
 
         GatewayDiagnostics.log("talk audio: session \(Self.describeAudioSession())")
 
@@ -720,7 +724,7 @@ final class TalkModeManager: NSObject {
             guard self.isListening, !self.isSpeechOutputActive else { return }
             let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !transcript.isEmpty else { return }
-            let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap(\.self).max()
+            let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
             guard let lastActivity else { return }
             if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
             await self.processTranscript(transcript, restartAfter: true)
@@ -731,7 +735,7 @@ final class TalkModeManager: NSObject {
         guard self.isListening, !self.isSpeaking, self.isPushToTalkActive else { return }
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !transcript.isEmpty else { return }
-        let lastActivity = [self.lastHeard, self.lastAudioActivity].compactMap(\.self).max()
+        let lastActivity = [lastHeard, lastAudioActivity].compactMap(\.self).max()
         guard let lastActivity else { return }
         if Date().timeIntervalSince(lastActivity) < self.silenceWindow { return }
         _ = await self.endPushToTalk()
@@ -754,7 +758,7 @@ final class TalkModeManager: NSObject {
     }
 
     private func finishPTTOnce(_ payload: OpenClawTalkPTTStopPayload) {
-        guard let continuation = self.pttCompletion else { return }
+        guard let continuation = pttCompletion else { return }
         self.pttCompletion = nil
         continuation.resume(returning: payload)
     }
@@ -768,7 +772,7 @@ final class TalkModeManager: NSObject {
         self.stopRecognition()
 
         GatewayDiagnostics.log("talk: process transcript chars=\(transcript.count) restartAfter=\(restartAfter)")
-        await self.reloadConfig()
+        await reloadConfig()
         let prompt = self.buildPrompt(transcript: transcript)
         guard self.gatewayConnected, let gateway else {
             self.statusText = "Gateway not connected"
@@ -787,7 +791,7 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let runId = try await self.sendChat(prompt, gateway: gateway)
+            let runId = try await sendChat(prompt, gateway: gateway)
             self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send ok runId=\(runId)")
             let shouldIncremental = self.shouldUseIncrementalTTS()
@@ -799,7 +803,7 @@ final class TalkModeManager: NSObject {
                     await self.streamAssistant(runId: runId, gateway: gateway)
                 }
             }
-            let completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
+            let completion = await waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
             if completion.state == .timeout {
                 self.logger.warning(
                     "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
@@ -909,10 +913,11 @@ final class TalkModeManager: NSObject {
     private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
         struct SendResponse: Decodable { let runId: String }
         let payload: [String: Any] = [
-            "sessionKey": self.mainSessionKey,
+            "sessionKey": mainSessionKey,
             "message": message,
-            "thinking": "low",
+            "thinking": "off",
             "timeoutMs": 30000,
+            "conversationEngine": conversationEngine,
             "idempotencyKey": UUID().uuidString,
         ]
         let data = try JSONSerialization.data(withJSONObject: payload)
@@ -981,7 +986,7 @@ final class TalkModeManager: NSObject {
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
         while Date() < deadline {
-            if let text = try await self.fetchLatestAssistantText(gateway: gateway, since: since) {
+            if let text = try await fetchLatestAssistantText(gateway: gateway, since: since) {
                 return text
             }
             try? await Task.sleep(nanoseconds: 300_000_000)
@@ -1026,7 +1031,7 @@ final class TalkModeManager: NSObject {
             let started = Date()
             let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
             let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-            let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
+            let resolvedVoice = resolveVoiceAlias(requestedVoice)
             if requestedVoice?.isEmpty == false, resolvedVoice == nil {
                 self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
             }
@@ -1034,21 +1039,61 @@ final class TalkModeManager: NSObject {
             let configuredKey = self.apiKey?
                 .trimmingCharacters(in: .whitespacesAndNewlines)
                 .isEmpty == false ? self.apiKey : nil
+            let activeProvider = self.activeTalkProvider.lowercased()
             #if DEBUG
-            let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
+            let envKey = activeProvider == "openai" ? "OPENAI_API_KEY" : "ELEVENLABS_API_KEY"
+            let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment[envKey]
             #else
             let resolvedKey = configuredKey
             #endif
             let apiKey = resolvedKey?.trimmingCharacters(in: .whitespacesAndNewlines)
             let preferredVoice = resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId
-            let voiceId: String? = if let apiKey, !apiKey.isEmpty {
-                await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
+            let voiceId: String? = if activeProvider == "elevenlabs", let apiKey, !apiKey.isEmpty {
+                await resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
             } else {
                 nil
             }
-            let canUseElevenLabs = (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
+            let canUseElevenLabs = activeProvider == "elevenlabs"
+                && (voiceId?.isEmpty == false)
+                && (apiKey?.isEmpty == false)
 
-            if canUseElevenLabs, let voiceId, let apiKey {
+            if activeProvider == "openai", let apiKey, !apiKey.isEmpty {
+                let openAIVoice = preferredVoice?.isEmpty == false ? preferredVoice! : Self.defaultOpenAIVoiceId
+                let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
+                    ?? Self.defaultModelIdFallback
+                let responseFormat = Self.normalizedOpenAIResponseFormat(
+                    directive?.outputFormat ?? self.defaultOutputFormat)
+                GatewayDiagnostics.log("talk tts: provider=openai voice=\(openAIVoice) model=\(modelId)")
+
+                if self.interruptOnSpeech {
+                    do {
+                        try self.startRecognition()
+                    } catch {
+                        self.logger.warning(
+                            "startRecognition during speak failed: \(error.localizedDescription, privacy: .public)")
+                    }
+                }
+
+                self.statusText = "Speaking…"
+                self.lastPlaybackWasPCM = false
+                let stream = OpenAITTSClient(apiKey: apiKey).streamSynthesize(
+                    request: OpenAITTSRequest(
+                        text: cleaned,
+                        modelId: modelId,
+                        voiceId: openAIVoice,
+                        responseFormat: responseFormat,
+                        speed: TalkTTSValidation.resolveSpeed(
+                            speed: directive?.speed,
+                            rateWPM: directive?.rateWPM),
+                        instructions: nil))
+                let result = await mp3Player.play(stream: stream)
+                let duration = Date().timeIntervalSince(started)
+                self.logger
+                    .info("openai tts finished=\(result.finished, privacy: .public) dur=\(duration, privacy: .public)s")
+                if !result.finished, let interruptedAt = result.interruptedAt {
+                    self.lastInterruptedAtSeconds = interruptedAt
+                }
+            } else if activeProvider == "elevenlabs", canUseElevenLabs, let voiceId, let apiKey {
                 GatewayDiagnostics.log("talk tts: provider=elevenlabs voiceId=\(voiceId)")
                 let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
                     .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1101,7 +1146,7 @@ final class TalkModeManager: NSObject {
                     let streamFailure = StreamFailureBox()
                     let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
                     self.lastPlaybackWasPCM = true
-                    var playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
+                    var playback = await pcmPlayer.play(stream: stream, sampleRate: sampleRate)
                     if !playback.finished, playback.interruptedAt == nil {
                         let mp3Format = ElevenLabsTTSClient.validatedOutputFormat("mp3_44100_128")
                         self.logger.warning("pcm playback failed; retrying mp3")
@@ -1138,7 +1183,11 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
+                let systemLanguage = language ?? self.gatewaySpeechLocaleID
+                try await TalkSystemSpeechSynthesizer.shared.speak(
+                    text: cleaned,
+                    language: systemLanguage,
+                    voiceName: preferredVoice)
             }
         } catch {
             self.logger.error(
@@ -1154,7 +1203,9 @@ final class TalkModeManager: NSObject {
                     }
                 }
                 self.statusText = "Speaking (System)…"
-                let language = ElevenLabsTTSClient.validatedLanguage(directive?.language)
+                let language =
+                    ElevenLabsTTSClient.validatedLanguage(directive?.language) ??
+                    self.gatewaySpeechLocaleID
                 try await TalkSystemSpeechSynthesizer.shared.speak(text: cleaned, language: language)
             } catch {
                 self.statusText = "Speak failed: \(error.localizedDescription)"
@@ -1192,7 +1243,7 @@ final class TalkModeManager: NSObject {
         guard self.shouldAllowSpeechInterruptForCurrentRoute() else { return false }
         let trimmed = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.count >= 3 else { return false }
-        if let spoken = self.lastSpokenText?.lowercased(), spoken.contains(trimmed.lowercased()) {
+        if let spoken = lastSpokenText?.lowercased(), spoken.contains(trimmed.lowercased()) {
             return false
         }
         return true
@@ -1225,7 +1276,7 @@ final class TalkModeManager: NSObject {
 
     private func applyDirective(_ directive: TalkDirective?) {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = resolveVoiceAlias(requestedVoice)
         if requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
@@ -1346,8 +1397,8 @@ final class TalkModeManager: NSObject {
             self.cancelIncrementalPrefetch()
             return false
         }
-        guard let nextSegment = self.incrementalSpeechQueue.first else { return false }
-        if let existing = self.incrementalSpeechPrefetch {
+        guard let nextSegment = incrementalSpeechQueue.first else { return false }
+        if let existing = incrementalSpeechPrefetch {
             if existing.segment == nextSegment, existing.context == context {
                 return true
             }
@@ -1391,19 +1442,19 @@ final class TalkModeManager: NSObject {
     }
 
     private func completeIncrementalPrefetch(id: UUID, chunks: [Data]) {
-        guard var prefetch = self.incrementalSpeechPrefetch, prefetch.id == id else { return }
+        guard var prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
         prefetch.chunks = chunks
         self.incrementalSpeechPrefetch = prefetch
     }
 
     private func clearIncrementalPrefetch(id: UUID) {
-        guard let prefetch = self.incrementalSpeechPrefetch, prefetch.id == id else { return }
+        guard let prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
         prefetch.task.cancel()
         self.incrementalSpeechPrefetch = nil
     }
 
     private func failIncrementalPrefetch(id: UUID, error: any Error) {
-        guard let prefetch = self.incrementalSpeechPrefetch, prefetch.id == id else { return }
+        guard let prefetch = incrementalSpeechPrefetch, prefetch.id == id else { return }
         self.logger.debug("incremental prefetch failed: \(error.localizedDescription, privacy: .public)")
         prefetch.task.cancel()
         self.incrementalSpeechPrefetch = nil
@@ -1417,7 +1468,7 @@ final class TalkModeManager: NSObject {
             self.cancelIncrementalPrefetch()
             return nil
         }
-        guard let prefetch = self.incrementalSpeechPrefetch else {
+        guard let prefetch = incrementalSpeechPrefetch else {
             return nil
         }
         guard prefetch.context == context else {
@@ -1434,7 +1485,7 @@ final class TalkModeManager: NSObject {
             return prefetched
         }
         await prefetch.task.value
-        guard let completed = self.incrementalSpeechPrefetch else { return nil }
+        guard let completed = incrementalSpeechPrefetch else { return nil }
         guard completed.context == context, completed.segment == segment else { return nil }
         guard let chunks = completed.chunks, !chunks.isEmpty else { return nil }
         let prefetched = IncrementalPrefetchedAudio(chunks: chunks, outputFormat: completed.outputFormat)
@@ -1455,7 +1506,7 @@ final class TalkModeManager: NSObject {
         if let leftover {
             self.enqueueIncrementalSpeech(leftover)
         }
-        if let task = self.incrementalSpeechTask {
+        if let task = incrementalSpeechTask {
             _ = await task.result
         }
         self.incrementalSpeechActive = false
@@ -1492,7 +1543,7 @@ final class TalkModeManager: NSObject {
             guard agentEvent.runId == runId, agentEvent.stream == "assistant" else { continue }
             guard let text = agentEvent.data["text"]?.value as? String else { continue }
             let segments = self.incrementalSpeechBuffer.ingest(text: text, isFinal: false)
-            if let lang = self.incrementalSpeechBuffer.directive?.language {
+            if let lang = incrementalSpeechBuffer.directive?.language {
                 self.incrementalSpeechLanguage = ElevenLabsTTSClient.validatedLanguage(lang)
             }
             await self.updateIncrementalContextIfNeeded()
@@ -1504,7 +1555,7 @@ final class TalkModeManager: NSObject {
 
     private func updateIncrementalContextIfNeeded() async {
         let directive = self.incrementalSpeechBuffer.directive
-        if let existing = self.incrementalSpeechContext, directive == self.incrementalSpeechDirective {
+        if let existing = incrementalSpeechContext, directive == incrementalSpeechDirective {
             if existing.language != self.incrementalSpeechLanguage {
                 self.incrementalSpeechContext = IncrementalSpeechContext(
                     apiKey: existing.apiKey,
@@ -1517,25 +1568,28 @@ final class TalkModeManager: NSObject {
             }
             return
         }
-        let context = await self.buildIncrementalSpeechContext(directive: directive)
+        let context = await buildIncrementalSpeechContext(directive: directive)
         self.incrementalSpeechContext = context
         self.incrementalSpeechDirective = directive
     }
 
     private func buildIncrementalSpeechContext(directive: TalkDirective?) async -> IncrementalSpeechContext {
         let requestedVoice = directive?.voiceId?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let resolvedVoice = self.resolveVoiceAlias(requestedVoice)
+        let resolvedVoice = resolveVoiceAlias(requestedVoice)
         if requestedVoice?.isEmpty == false, resolvedVoice == nil {
             self.logger.warning("unknown voice alias \(requestedVoice ?? "?", privacy: .public)")
         }
         let preferredVoice = resolvedVoice ?? self.currentVoiceId ?? self.defaultVoiceId
+        let activeProvider = self.activeTalkProvider.lowercased()
         let modelId = directive?.modelId ?? self.currentModelId ?? self.defaultModelId
         let desiredOutputFormat = (directive?.outputFormat ?? self.defaultOutputFormat)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let requestedOutputFormat = (desiredOutputFormat?.isEmpty == false) ? desiredOutputFormat : nil
-        let outputFormat = ElevenLabsTTSClient.validatedOutputFormat(
-            requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
-        if outputFormat == nil, let requestedOutputFormat {
+        let outputFormat = activeProvider == "openai"
+            ? Self.normalizedOpenAIResponseFormat(requestedOutputFormat)
+            : ElevenLabsTTSClient.validatedOutputFormat(
+                requestedOutputFormat ?? self.effectiveDefaultOutputFormat)
+        if activeProvider != "openai", outputFormat == nil, let requestedOutputFormat {
             self.logger.warning(
                 "talk output_format unsupported for local playback: \(requestedOutputFormat, privacy: .public)")
         }
@@ -1544,21 +1598,26 @@ final class TalkModeManager: NSObject {
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty == false ? self.apiKey : nil
         #if DEBUG
-        let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment["ELEVENLABS_API_KEY"]
+        let envKey = activeProvider == "openai" ? "OPENAI_API_KEY" : "ELEVENLABS_API_KEY"
+        let resolvedKey = configuredKey ?? ProcessInfo.processInfo.environment[envKey]
         #else
         let resolvedKey = configuredKey
         #endif
         let apiKey = resolvedKey?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let voiceId: String? = if let apiKey, !apiKey.isEmpty {
-            await self.resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
+        let voiceId: String? = if activeProvider == "openai" {
+            preferredVoice?.isEmpty == false ? preferredVoice : Self.defaultOpenAIVoiceId
+        } else if let apiKey, !apiKey.isEmpty {
+            await resolveVoiceId(preferred: preferredVoice, apiKey: apiKey)
         } else {
             nil
         }
-        let canUseElevenLabs = (voiceId?.isEmpty == false) && (apiKey?.isEmpty == false)
+        let canUseElevenLabs = activeProvider == "elevenlabs"
+            && (voiceId?.isEmpty == false)
+            && (apiKey?.isEmpty == false)
         return IncrementalSpeechContext(
             apiKey: apiKey,
             voiceId: voiceId,
-            modelId: modelId,
+            modelId: modelId ?? (activeProvider == "openai" ? Self.defaultModelIdFallback : nil),
             outputFormat: outputFormat,
             language: self.incrementalSpeechLanguage,
             directive: directive,
@@ -1592,6 +1651,16 @@ final class TalkModeManager: NSObject {
     /// Returns `mp3_44100_128` when the API has already rejected PCM, otherwise `pcm_44100`.
     private var effectiveDefaultOutputFormat: String {
         self.pcmFormatUnavailable ? "mp3_44100_128" : "pcm_44100"
+    }
+
+    private static func normalizedOpenAIResponseFormat(_ raw: String?) -> String {
+        let value = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return switch value {
+        case "mp3":
+            value
+        default:
+            "mp3"
+        }
     }
 
     private static func monitorStreamFailures(
@@ -1645,13 +1714,35 @@ final class TalkModeManager: NSObject {
             context = preferredContext
         } else {
             await self.updateIncrementalContextIfNeeded()
-            guard let resolvedContext = self.incrementalSpeechContext else {
+            guard let resolvedContext = incrementalSpeechContext else {
                 try? await TalkSystemSpeechSynthesizer.shared.speak(
                     text: text,
                     language: self.incrementalSpeechLanguage)
                 return
             }
             context = resolvedContext
+        }
+
+        if self.activeTalkProvider.lowercased() == "openai",
+           let apiKey = context.apiKey,
+           !apiKey.isEmpty,
+           let voiceId = context.voiceId,
+           let modelId = context.modelId
+        {
+            let stream = OpenAITTSClient(apiKey: apiKey).streamSynthesize(
+                request: OpenAITTSRequest(
+                    text: text,
+                    modelId: modelId,
+                    voiceId: voiceId,
+                    responseFormat: Self.normalizedOpenAIResponseFormat(context.outputFormat),
+                    speed: TalkTTSValidation.resolveSpeed(
+                        speed: context.directive?.speed,
+                        rateWPM: context.directive?.rateWPM),
+                    instructions: nil))
+            self.lastPlaybackWasPCM = false
+            _ = await self.mp3Player.play(stream: stream)
+            self.incrementalSpeechUsed = true
+            return
         }
 
         guard context.canUseElevenLabs, let apiKey = context.apiKey, let voiceId = context.voiceId else {
@@ -1678,7 +1769,7 @@ final class TalkModeManager: NSObject {
             let streamFailure = StreamFailureBox()
             let stream = Self.monitorStreamFailures(rawStream, failureBox: streamFailure)
             self.lastPlaybackWasPCM = true
-            var playback = await self.pcmPlayer.play(stream: stream, sampleRate: sampleRate)
+            var playback = await pcmPlayer.play(stream: stream, sampleRate: sampleRate)
             if !playback.finished, playback.interruptedAt == nil {
                 self.logger.warning("pcm playback failed; retrying mp3")
                 if Self.isPCMFormatRejectedByAPI(streamFailure.value) {
@@ -1716,7 +1807,7 @@ private struct IncrementalSpeechBuffer {
 
     mutating func ingest(text: String, isFinal: Bool) -> [String] {
         let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-        guard let usable = self.stripDirectiveIfReady(from: normalized) else { return [] }
+        guard let usable = stripDirectiveIfReady(from: normalized) else { return [] }
         self.updateText(usable)
         return self.extractSegments(isFinal: isFinal)
     }
@@ -1779,7 +1870,7 @@ private struct IncrementalSpeechBuffer {
     }
 
     private mutating func extractSegments(isFinal: Bool) -> [String] {
-        let chars = Array(self.latestText)
+        let chars = Array(latestText)
         guard self.spokenOffset < chars.count else { return [] }
         var idx = self.spokenOffset
         var lastBoundary: Int?
@@ -1936,7 +2027,7 @@ extension TalkModeManager {
         let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
         let normalized = trimmed.lowercased()
-        if let mapped = self.voiceAliases[normalized] { return mapped }
+        if let mapped = voiceAliases[normalized] { return mapped }
         if self.voiceAliases.values.contains(where: { $0.caseInsensitiveCompare(trimmed) == .orderedSame }) {
             return trimmed
         }
@@ -1951,7 +2042,7 @@ extension TalkModeManager {
             if Self.isLikelyVoiceId(trimmed) {
                 return trimmed
             }
-            if let resolved = self.resolveVoiceAlias(trimmed) { return resolved }
+            if let resolved = resolveVoiceAlias(trimmed) { return resolved }
             self.logger.warning("unknown voice alias \(trimmed, privacy: .public)")
         }
         if let fallbackVoiceId { return fallbackVoiceId }
@@ -1962,7 +2053,7 @@ extension TalkModeManager {
                 self.logger.warning("elevenlabs voices list empty")
                 return nil
             }
-            self.fallbackVoiceId = first.voiceId
+            fallbackVoiceId = first.voiceId
             if self.defaultVoiceId == nil {
                 self.defaultVoiceId = first.voiceId
             }
@@ -2013,6 +2104,7 @@ extension TalkModeManager {
                     "talk config ignored: normalized payload missing talk.resolved")
             }
             let activeProvider = parsed.activeProvider
+            self.activeTalkProvider = activeProvider
             self.defaultVoiceId = parsed.defaultVoiceId
             self.voiceAliases = parsed.voiceAliases
             if !self.voiceOverrideActive {
@@ -2033,7 +2125,7 @@ extension TalkModeManager {
             } else {
                 self.apiKey = (localApiKey?.isEmpty == false) ? localApiKey : configApiKey
             }
-            if activeProvider != Self.defaultTalkProvider {
+            if !Self.supportedLocalTalkProviders.contains(activeProvider) {
                 self.apiKey = nil
                 GatewayDiagnostics.log(
                     "talk provider '\(activeProvider)' not yet supported on iOS; using system voice fallback")
@@ -2045,6 +2137,7 @@ extension TalkModeManager {
             if let interrupt = parsed.interruptOnSpeech {
                 self.interruptOnSpeech = interrupt
             }
+            self.conversationEngine = parsed.conversationEngine
             self.gatewaySpeechLocaleID = parsed.speechLocaleID
             self.silenceWindow = TimeInterval(parsed.silenceTimeoutMs) / 1000
             if parsed.normalizedPayload || parsed.defaultVoiceId != nil || parsed.rawConfigApiKey != nil {
@@ -2167,6 +2260,10 @@ private final class AudioTapDiagnostics: @unchecked Sendable {
 extension TalkModeManager {
     static func _test_isPCMFormatRejectedByAPI(_ error: Error?) -> Bool {
         self.isPCMFormatRejectedByAPI(error)
+    }
+
+    static func _test_normalizedOpenAIResponseFormat(_ raw: String?) -> String {
+        self.normalizedOpenAIResponseFormat(raw)
     }
 
     func _test_seedTranscript(_ transcript: String) {

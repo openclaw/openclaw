@@ -106,7 +106,7 @@ final class GatewayConnectionController {
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
 
         // Resolve the service endpoint (SRV/A/AAAA). TXT is unauthenticated; do not route via TXT.
-        guard let target = await self.resolveServiceEndpoint(gateway.endpoint) else {
+        guard let target = await resolveServiceEndpoint(gateway.endpoint) else {
             return "Failed to resolve the discovered gateway endpoint."
         }
 
@@ -120,9 +120,9 @@ final class GatewayConnectionController {
         }
 
         if tlsRequired, stored == nil {
-            guard let url = self.buildGatewayURL(host: target.host, port: target.port, useTLS: true)
+            guard let url = buildGatewayURL(host: target.host, port: target.port, useTLS: true)
             else { return "Failed to build TLS URL for trust verification." }
-            guard let fp = await self.probeTLSFingerprint(url: url) else {
+            guard let fp = await probeTLSFingerprint(url: url) else {
                 return "Failed to read TLS fingerprint from discovered gateway."
             }
             self.pendingTrustConnect = (url: url, stableID: stableID, isManual: false)
@@ -141,7 +141,7 @@ final class GatewayConnectionController {
             GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
         }
 
-        guard let url = self.buildGatewayURL(
+        guard let url = buildGatewayURL(
             host: target.host,
             port: target.port,
             useTLS: tlsParams?.required == true)
@@ -169,13 +169,13 @@ final class GatewayConnectionController {
         let bootstrapToken = GatewaySettingsStore.loadGatewayBootstrapToken(instanceId: instanceId)
         let password = GatewaySettingsStore.loadGatewayPassword(instanceId: instanceId)
         let resolvedUseTLS = self.resolveManualUseTLS(host: host, useTLS: useTLS)
-        guard let resolvedPort = self.resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
+        guard let resolvedPort = resolveManualPort(host: host, port: port, useTLS: resolvedUseTLS)
         else { return }
         let stableID = self.manualStableID(host: host, port: resolvedPort)
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if resolvedUseTLS, stored == nil {
-            guard let url = self.buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
-            guard let fp = await self.probeTLSFingerprint(url: url) else {
+            guard let url = buildGatewayURL(host: host, port: resolvedPort, useTLS: true) else { return }
+            guard let fp = await probeTLSFingerprint(url: url) else {
                 self.appModel?.gatewayStatusText =
                     "TLS handshake failed for \(host):\(resolvedPort). "
                         + "Remote gateways must use HTTPS/WSS."
@@ -196,7 +196,7 @@ final class GatewayConnectionController {
         let tlsParams = stored.map { fp in
             GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
         }
-        guard let url = self.buildGatewayURL(
+        guard let url = buildGatewayURL(
             host: host,
             port: resolvedPort,
             useTLS: tlsParams?.required == true)
@@ -222,7 +222,7 @@ final class GatewayConnectionController {
         case let .manual(host, port, useTLS, _):
             await self.connectManual(host: host, port: port, useTLS: useTLS)
         case let .discovered(stableID, _):
-            guard let gateway = self.gateways.first(where: { $0.stableID == stableID }) else { return }
+            guard let gateway = gateways.first(where: { $0.stableID == stableID }) else { return }
             _ = await self.connectDiscoveredGateway(gateway)
         }
     }
@@ -251,8 +251,8 @@ final class GatewayConnectionController {
     }
 
     func acceptPendingTrustPrompt() async {
-        guard let pending = self.pendingTrustConnect,
-              let prompt = self.pendingTrustPrompt,
+        guard let pending = pendingTrustConnect,
+              let prompt = pendingTrustPrompt,
               pending.stableID == prompt.stableID
         else { return }
 
@@ -361,7 +361,7 @@ final class GatewayConnectionController {
 
     private func maybeAutoConnect() {
         guard !self.didAutoConnect else { return }
-        guard let appModel = self.appModel else { return }
+        guard let appModel else { return }
         guard appModel.gatewayServerName == nil else { return }
 
         let defaults = UserDefaults.standard
@@ -384,7 +384,7 @@ final class GatewayConnectionController {
             let manualPort = defaults.integer(forKey: "gateway.manual.port")
             let manualTLS = defaults.bool(forKey: "gateway.manual.tls")
             let resolvedUseTLS = self.resolveManualUseTLS(host: manualHost, useTLS: manualTLS)
-            guard let resolvedPort = self.resolveManualPort(
+            guard let resolvedPort = resolveManualPort(
                 host: manualHost,
                 port: manualPort,
                 useTLS: resolvedUseTLS)
@@ -396,7 +396,7 @@ final class GatewayConnectionController {
                 tlsEnabled: resolvedUseTLS,
                 allowTOFUReset: self.shouldRequireTLS(host: manualHost))
 
-            guard let url = self.buildGatewayURL(
+            guard let url = buildGatewayURL(
                 host: manualHost,
                 port: resolvedPort,
                 useTLS: tlsParams?.required == true)
@@ -420,7 +420,7 @@ final class GatewayConnectionController {
                 let tlsParams = stored.map { fp in
                     GatewayTLSParams(required: true, expectedFingerprint: fp, allowTOFU: false, storeKey: stableID)
                 }
-                guard let url = self.buildGatewayURL(
+                guard let url = buildGatewayURL(
                     host: host,
                     port: port,
                     useTLS: resolvedUseTLS && tlsParams != nil)
@@ -450,7 +450,7 @@ final class GatewayConnectionController {
         if let targetStableID = candidates.first(where: { id in
             self.gateways.contains(where: { $0.stableID == id })
         }) {
-            guard let target = self.gateways.first(where: { $0.stableID == targetStableID }) else { return }
+            guard let target = gateways.first(where: { $0.stableID == targetStableID }) else { return }
             // Security: autoconnect only to previously trusted gateways (stored TLS pin).
             guard GatewayTLSStore.loadFingerprint(stableID: target.stableID) != nil else { return }
 
@@ -462,7 +462,7 @@ final class GatewayConnectionController {
             return
         }
 
-        if self.gateways.count == 1, let gateway = self.gateways.first {
+        if self.gateways.count == 1, let gateway = gateways.first {
             // Security: autoconnect only to previously trusted gateways (stored TLS pin).
             guard GatewayTLSStore.loadFingerprint(stableID: gateway.stableID) != nil else { return }
 
@@ -476,7 +476,7 @@ final class GatewayConnectionController {
     }
 
     private func attemptAutoReconnectIfNeeded() {
-        guard let appModel = self.appModel else { return }
+        guard let appModel else { return }
         guard appModel.gatewayAutoReconnectEnabled else { return }
         // Avoid starting duplicate connect loops while a prior config is active.
         guard appModel.activeGatewayConnectConfig == nil else { return }
@@ -530,7 +530,7 @@ final class GatewayConnectionController {
 
     private func resolveDiscoveredTLSParams(
         gateway: GatewayDiscoveryModel.DiscoveredGateway,
-        allowTOFU: Bool) -> GatewayTLSParams?
+        allowTOFU _: Bool) -> GatewayTLSParams?
     {
         let stableID = gateway.stableID
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
@@ -558,7 +558,7 @@ final class GatewayConnectionController {
     private func resolveManualTLSParams(
         stableID: String,
         tlsEnabled: Bool,
-        allowTOFUReset: Bool = false) -> GatewayTLSParams?
+        allowTOFUReset _: Bool = false) -> GatewayTLSParams?
     {
         let stored = GatewayTLSStore.loadFingerprint(stableID: stableID)
         if tlsEnabled || stored != nil {
@@ -650,7 +650,7 @@ final class GatewayConnectionController {
                 self.finish(Self.extractHostPort(sender))
             }
 
-            func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+            func netService(_: NetService, didNotResolve errorDict: [String: NSNumber]) {
                 _ = errorDict // currently best-effort; callers surface a generic failure
                 self.finish(nil)
             }
@@ -851,7 +851,7 @@ final class GatewayConnectionController {
             OpenClawTalkCommand.pttOnce.rawValue,
         ]
 
-        let caps = Set(self.currentCaps())
+        let caps = Set(currentCaps())
         if caps.contains(OpenClawCapability.camera.rawValue) {
             commands.append(OpenClawCameraCommand.list.rawValue)
             commands.append(OpenClawCameraCommand.snap.rawValue)
@@ -1042,7 +1042,7 @@ private final class GatewayTLSFingerprintProbe: NSObject, URLSessionDelegate, @u
     }
 
     func urlSession(
-        _ session: URLSession,
+        _: URLSession,
         didReceive challenge: URLAuthenticationChallenge,
         completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void)
     {

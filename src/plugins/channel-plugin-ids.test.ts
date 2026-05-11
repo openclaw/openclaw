@@ -148,7 +148,9 @@ function createManifestRegistryFixture(): PluginManifestRegistry {
         enabledByDefault: true,
         providers: [],
         cliBackends: [],
-        contracts: { speechProviders: ["tts-local-cli", "cli"] },
+        contracts: {
+          speechProviders: ["tts-local-cli", "cli", "local-voice", "local", "piper", "say"],
+        },
       },
       {
         id: "anthropic",
@@ -672,6 +674,19 @@ describe("resolveGatewayStartupPluginIds", () => {
       {
         channels: {},
         messages: { tts: { providers: { "tts-local-cli": { command: "say" } } } },
+      } as OpenClawConfig,
+      ["browser", "tts-local-cli", "memory-core"],
+    ],
+    [
+      "includes bundled speech providers configured only by Talk provider block",
+      {
+        channels: {},
+        talk: {
+          provider: "local-voice",
+          providers: {
+            "local-voice": { engine: "say", voiceId: "Xander" },
+          },
+        },
       } as OpenClawConfig,
       ["browser", "tts-local-cli", "memory-core"],
     ],

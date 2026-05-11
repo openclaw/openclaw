@@ -35,7 +35,7 @@ enum TalkModeGatewayConfigParser {
             fallback: defaultSilenceTimeoutMs)
         let ui = snapshot.config?["ui"]?.dictionaryValue
         let rawSeam = ui?["seamColor"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let voice = activeConfig?["voiceId"]?.stringValue
+        let voice = activeConfig?["voiceId"]?.stringValue ?? activeConfig?["voice"]?.stringValue
         let rawAliases = activeConfig?["voiceAliases"]?.dictionaryValue
         let resolvedAliases: [String: String] =
             rawAliases?.reduce(into: [:]) { acc, entry in
@@ -44,7 +44,8 @@ enum TalkModeGatewayConfigParser {
                 guard !key.isEmpty, !value.isEmpty else { return }
                 acc[key] = value
             } ?? [:]
-        let model = activeConfig?["modelId"]?.stringValue?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let model = (activeConfig?["modelId"]?.stringValue ?? activeConfig?["model"]?.stringValue)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
         let resolvedModel: String? = if model?.isEmpty == false {
             model!
         } else if activeProvider == defaultProvider {
@@ -86,6 +87,7 @@ enum TalkModeGatewayConfigParser {
     }
 
     static func fallback(
+        defaultProvider: String,
         defaultModelIdFallback: String,
         defaultSilenceTimeoutMs: Int,
         envVoice: String?,
@@ -98,7 +100,7 @@ enum TalkModeGatewayConfigParser {
         let resolvedApiKey = envApiKey?.isEmpty == false ? envApiKey : nil
 
         return TalkModeGatewayConfigState(
-            activeProvider: "elevenlabs",
+            activeProvider: defaultProvider,
             normalizedPayload: false,
             missingResolvedPayload: false,
             voiceId: resolvedVoice,

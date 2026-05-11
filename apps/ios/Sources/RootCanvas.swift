@@ -26,6 +26,8 @@ struct RootCanvas: View {
     @State private var onboardingAllowSkip: Bool = true
     @State private var didEvaluateOnboarding: Bool = false
     @State private var didAutoOpenSettings: Bool = false
+    @State private var homeActionQueue: [HomeCanvasActionQueueItem] = []
+    @State private var homeActionRefreshTask: Task<Void, Never>?
 
     private enum PresentedSheet: Identifiable {
         case settings
@@ -144,6 +146,7 @@ struct RootCanvas: View {
         }
         .onAppear { self.updateIdleTimer() }
         .onAppear { self.updateHomeCanvasState() }
+        .onAppear { self.refreshHomeActionQueueIfNeeded() }
         .onAppear { self.evaluateOnboardingPresentation(force: false) }
         .onAppear { self.maybeAutoOpenSettings() }
         .onChange(of: self.preventSleep) { _, _ in self.updateIdleTimer() }
@@ -153,6 +156,7 @@ struct RootCanvas: View {
             guard newValue == .active else { return }
             Task {
                 await self.appModel.refreshGatewayOverviewIfConnected()
+                await self.refreshHomeActionQueue()
                 await MainActor.run {
                     self.updateHomeCanvasState()
                 }
@@ -184,6 +188,7 @@ struct RootCanvas: View {
         }
         .onChange(of: self.appModel.homeCanvasRevision) { _, _ in
             self.updateHomeCanvasState()
+            self.refreshHomeActionQueueIfNeeded()
         }
         .onChange(of: self.appModel.gatewayServerName) { _, newValue in
             if newValue != nil {
@@ -219,6 +224,8 @@ struct RootCanvas: View {
             UIApplication.shared.isIdleTimerDisabled = false
             self.toastDismissTask?.cancel()
             self.toastDismissTask = nil
+            self.homeActionRefreshTask?.cancel()
+            self.homeActionRefreshTask = nil
         }
     }
 
@@ -249,6 +256,61 @@ struct RootCanvas: View {
         self.appModel.screen.updateHomeCanvasState(json: json)
     }
 
+    private func refreshHomeActionQueueIfNeeded() {
+        guard self.gatewayStatus == .connected else {
+            if !self.homeActionQueue.isEmpty {
+                self.homeActionQueue = []
+                self.updateHomeCanvasState()
+            }
+            return
+        }
+        self.homeActionRefreshTask?.cancel()
+        self.homeActionRefreshTask = Task { [gateway = self.appModel.operatorSession] in
+            struct Params: Codable {
+                var status: String
+                var limit: Int
+            }
+            struct Response: Codable {
+                var items: [HomeCanvasActionQueueItem]
+            }
+            do {
+                let data = try JSONEncoder().encode(Params(status: "open", limit: 6))
+                let json = String(data: data, encoding: .utf8)
+                let res = try await gateway.request(method: "actions.list", paramsJSON: json, timeoutSeconds: 10)
+                let decoded = try JSONDecoder().decode(Response.self, from: res)
+                await MainActor.run {
+                    self.homeActionQueue = decoded.items
+                    self.updateHomeCanvasState()
+                }
+            } catch {
+                // Best-effort; the static dashboard remains usable while the gateway warms up.
+            }
+        }
+    }
+
+    private func refreshHomeActionQueue() async {
+        guard self.gatewayStatus == .connected else { return }
+        struct Params: Codable {
+            var status: String
+            var limit: Int
+        }
+        struct Response: Codable {
+            var items: [HomeCanvasActionQueueItem]
+        }
+        do {
+            let data = try JSONEncoder().encode(Params(status: "open", limit: 6))
+            let json = String(data: data, encoding: .utf8)
+            let res = try await appModel.operatorSession.request(
+                method: "actions.list",
+                paramsJSON: json,
+                timeoutSeconds: 10)
+            let decoded = try JSONDecoder().decode(Response.self, from: res)
+            self.homeActionQueue = decoded.items
+        } catch {
+            // Best-effort; dashboard state will refresh again on foreground/reconnect.
+        }
+    }
+
     private func makeHomeCanvasPayload() -> HomeCanvasPayload {
         let gatewayName = self.normalized(self.appModel.gatewayServerName)
         let gatewayAddress = self.normalized(self.appModel.gatewayRemoteAddress)
@@ -258,19 +320,30 @@ struct RootCanvas: View {
 
         switch self.gatewayStatus {
         case .connected:
-            return HomeCanvasPayload(
+            var payload = HomeCanvasPayload(
                 gatewayState: "connected",
                 eyebrow: "Connected to \(gatewayLabel)",
                 title: "Your agents are ready",
                 subtitle:
                 "This phone stays dormant until the gateway needs it, then wakes, syncs, and goes back to sleep.",
                 gatewayLabel: gatewayLabel,
-                activeAgentName: self.appModel.activeAgentName,
+                activeAgentName: appModel.activeAgentName,
                 activeAgentBadge: agents.first(where: { $0.isActive })?.badge ?? "OC",
                 activeAgentCaption: "Selected on this phone",
                 agentCount: agents.count,
                 agents: Array(agents.prefix(6)),
                 footer: "The overview refreshes on reconnect and when the app returns to foreground.")
+            let actionCards = Self.homeActionCards(from: self.homeActionQueue)
+            if let leadingAction = homeActionQueue.first {
+                payload.nextLabel = leadingAction.actionLabel ?? "Proactive queue"
+                payload.nextCaption =
+                    "\(leadingAction.title): \(Self.compact(leadingAction.caption, maxLength: 120))"
+            }
+            if !actionCards.isEmpty {
+                payload.attention = Array(actionCards.prefix(3))
+                payload.actions = Array((actionCards + payload.actions).prefix(4))
+            }
+            return payload
         case .connecting:
             return HomeCanvasPayload(
                 gatewayState: "connecting",
@@ -346,7 +419,7 @@ struct RootCanvas: View {
     private func homeCanvasBadge(for agent: AgentSummary) -> String {
         if let identity = agent.identity,
            let emoji = identity["emoji"]?.value as? String,
-           let normalizedEmoji = self.normalized(emoji)
+           let normalizedEmoji = normalized(emoji)
         {
             return normalizedEmoji
         }
@@ -364,6 +437,42 @@ struct RootCanvas: View {
         guard let value else { return nil }
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    private static func homeActionCards(from items: [HomeCanvasActionQueueItem]) -> [HomeCanvasCard] {
+        items
+            .filter { $0.status == "open" || $0.status == "in_progress" }
+            .prefix(8)
+            .map { item in
+                HomeCanvasCard(
+                    kicker: Self.actionSourceLabel(item.source),
+                    title: Self.compact(item.title, maxLength: 54),
+                    caption: Self.compact(item.caption, maxLength: 130),
+                    status: item.priority,
+                    badge: item.actionLabel,
+                    id: item.id,
+                    isActive: item.status == "in_progress")
+            }
+    }
+
+    private static func compact(_ value: String?, maxLength: Int) -> String {
+        let trimmed = (value ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "No summary provided." }
+        guard trimmed.count > maxLength else { return trimmed }
+        let end = trimmed.index(trimmed.startIndex, offsetBy: max(1, maxLength - 1))
+        return String(trimmed[..<end]).trimmingCharacters(in: .whitespacesAndNewlines) + "..."
+    }
+
+    private static func actionSourceLabel(_ source: String) -> String {
+        switch source.lowercased() {
+        case "bluebubbles": "BlueBubbles"
+        case "notion": "Notion"
+        case "cron": "Cron"
+        case "talk": "Talk"
+        case "canvas": "Canvas"
+        case "system": "System"
+        default: "Thomas"
+        }
     }
 
     private func evaluateOnboardingPresentation(force: Bool) {
@@ -436,13 +545,118 @@ private struct HomeCanvasPayload: Codable {
     var eyebrow: String
     var title: String
     var subtitle: String
+    var mood: String = "Ready"
+    var moodNote: String = "Personal, fast, and only mildly too pleased with itself."
     var gatewayLabel: String
+    var gatewayCaption: String = "Gateway status is refreshed from this phone."
     var activeAgentName: String
     var activeAgentBadge: String
     var activeAgentCaption: String
+    var talkLabel: String = "Standby"
+    var talkCaption: String = "Voice can step in once a conversation starts."
+    var nextLabel: String = "Proactive queue"
+    var nextCaption: String = "Suggestions, useful handoffs, and gateway context land here."
+    var plan: [HomeCanvasCard] = [
+        HomeCanvasCard(
+            title: "Keep priorities visible",
+            caption: "Current work, approvals, reminders, and handoff stay in view.",
+            status: "ready"),
+        HomeCanvasCard(
+            title: "Turn context into action",
+            caption: "Use Canvas for previews, checklists, generated pages, and device actions.",
+            status: "next"),
+        HomeCanvasCard(
+            title: "Stay useful and personal",
+            caption: "Thomas should be quick, direct, funny when useful, and proactive without becoming noisy.",
+            status: "soon"),
+    ]
+    var actions: [HomeCanvasCard] = [
+        HomeCanvasCard(
+            kicker: "Work",
+            title: "Draft a message",
+            caption: "Turn a summary into a BlueBubbles-ready approval draft."),
+        HomeCanvasCard(
+            kicker: "Voice",
+            title: "Check Talk",
+            caption: "Review provider, key, voice, and latency state."),
+        HomeCanvasCard(kicker: "Notion", title: "Pin context", caption: "Keep important pages and reminders close."),
+        HomeCanvasCard(
+            kicker: "Files",
+            title: "Preview output",
+            caption: "Render generated pages, docs, and screenshots here."),
+    ]
+    var devices: [HomeCanvasCard] = [
+        HomeCanvasCard(caption: "Local control center", badge: "Mac", name: "Mac gateway", isActive: true),
+        HomeCanvasCard(caption: "Paired assistant mode", badge: "iOS", name: "iPhone"),
+    ]
+    var memories: [HomeCanvasCard] = [
+        HomeCanvasCard(caption: "Personal, direct, funny when it helps.", badge: "Tone", name: "Tone"),
+        HomeCanvasCard(caption: "Fast voice first, cloud deluxe when available.", badge: "Voice", name: "Voice"),
+        HomeCanvasCard(caption: "Make the next useful action obvious.", badge: "Next", name: "Focus"),
+    ]
+    var notion: [HomeCanvasCard] = [
+        HomeCanvasCard(
+            kicker: "Notion",
+            title: "Connect a source",
+            caption: "Important Notion pages, projects, and reminders will sit here once Thomas has a source."),
+    ]
+    var cronRuns: [HomeCanvasCard] = [
+        HomeCanvasCard(
+            kicker: "Cron",
+            title: "No recent run yet",
+            caption: "Completed automation runs will appear here with compact summaries."),
+    ]
+    var attention: [HomeCanvasCard] = [
+        HomeCanvasCard(
+            kicker: "Ready",
+            title: "Choose the next useful thing",
+            caption: "Thomas is watching for follow-ups, failures, approvals, and handoffs."),
+    ]
+    var seriousSuggestion: HomeCanvasSuggestion = .init(
+        kicker: "Serious suggestion",
+        title: "Draft a useful BlueBubbles message",
+        caption: "Summarize a news article, make it personal, and queue the message for approval before sending.",
+        actionLabel: "Prepare draft")
+    var funSuggestion: HomeCanvasSuggestion = .init(
+        kicker: "Fun suggestion",
+        title: "Teach Thomas image generation",
+        caption: "Add a playful image mode with prompt templates, style memory, and Canvas previews.",
+        actionLabel: "Explore image mode")
     var agentCount: Int
     var agents: [HomeCanvasAgentCard]
     var footer: String
+}
+
+private struct HomeCanvasActionQueueItem: Codable, Equatable {
+    var id: String
+    var title: String
+    var caption: String?
+    var kind: String
+    var source: String
+    var priority: String
+    var status: String
+    var createdAtMs: Int
+    var updatedAtMs: Int
+    var dueAtMs: Int?
+    var actionLabel: String?
+}
+
+private struct HomeCanvasCard: Codable {
+    var kicker: String?
+    var title: String?
+    var caption: String?
+    var status: String?
+    var badge: String?
+    var name: String?
+    var id: String?
+    var isActive: Bool?
+}
+
+private struct HomeCanvasSuggestion: Codable {
+    var kicker: String
+    var title: String
+    var caption: String
+    var actionLabel: String
 }
 
 private struct HomeCanvasAgentCard: Codable {

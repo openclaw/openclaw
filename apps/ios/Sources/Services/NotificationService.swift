@@ -31,7 +31,7 @@ struct LiveNotificationCenter: NotificationCentering, @unchecked Sendable {
     }
 
     func authorizationStatus() async -> NotificationAuthorizationStatus {
-        let settings = await self.center.notificationSettings()
+        let settings = await center.notificationSettings()
         return switch settings.authorizationStatus {
         case .authorized:
             .authorized

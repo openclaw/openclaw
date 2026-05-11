@@ -87,9 +87,11 @@ export type TalkConfig = {
     | "high"
     | "xhigh"
     | "adaptive"
-    | "max";
+  | "max";
   /** Optional fast mode override for the agent run behind Talk realtime consults. */
   consultFastMode?: boolean;
+  /** Conversation engine for non-realtime Talk mode. */
+  conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
   /** BCP 47 locale id used for Talk speech recognition on device nodes. */
   speechLocale?: string;
   /** Stop speaking when user starts talking (default: true). */

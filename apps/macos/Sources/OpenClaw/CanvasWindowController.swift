@@ -20,6 +20,7 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
     private var debugStatusEnabled = false
     private var debugStatusTitle: String?
     private var debugStatusSubtitle: String?
+    private var homeCanvasStateJSON: String?
 
     var onVisibilityChanged: ((Bool) -> Void)?
 
@@ -265,6 +266,15 @@ final class CanvasWindowController: NSWindowController, WKNavigationDelegate, NS
             enabled: self.debugStatusEnabled,
             title: self.debugStatusTitle,
             subtitle: self.debugStatusSubtitle)
+    }
+
+    func updateHomeCanvasState(json: String?) {
+        self.homeCanvasStateJSON = json
+        self.applyHomeCanvasStateIfNeeded()
+    }
+
+    func applyHomeCanvasStateIfNeeded() {
+        WebViewJavaScriptSupport.applyHomeCanvasState(webView: self.webView, json: self.homeCanvasStateJSON)
     }
 
     private func loadFile(_ url: URL) {

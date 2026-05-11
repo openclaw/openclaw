@@ -34,7 +34,7 @@ final class GatewayServiceResolver: NSObject, NetServiceDelegate {
         self.finish(result: (host: host, port: port))
     }
 
-    func netService(_ sender: NetService, didNotResolve errorDict: [String: NSNumber]) {
+    func netService(_: NetService, didNotResolve _: [String: NSNumber]) {
         self.finish(result: nil)
     }
 

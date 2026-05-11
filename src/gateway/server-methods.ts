@@ -8,6 +8,7 @@ import {
   GATEWAY_STARTUP_RETRY_AFTER_MS,
 } from "./protocol/startup-unavailable.js";
 import { isRoleAuthorizedForMethod, parseGatewayRole } from "./role-policy.js";
+import { actionsHandlers } from "./server-methods/actions.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { agentsHandlers } from "./server-methods/agents.js";
 import { artifactsHandlers } from "./server-methods/artifacts.js";
@@ -91,6 +92,7 @@ function authorizeGatewayMethod(
 
 export const coreGatewayHandlers: GatewayRequestHandlers = {
   ...connectHandlers,
+  ...actionsHandlers,
   ...logsHandlers,
   ...voicewakeHandlers,
   ...voicewakeRoutingHandlers,

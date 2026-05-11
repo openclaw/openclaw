@@ -24,8 +24,6 @@
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
 	<string>$(OPENCLAW_MARKETING_VERSION)</string>
-	<key>OpenClawCanonicalVersion</key>
-	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -68,6 +66,8 @@
 	<string>OpenClaw uses on-device speech recognition for voice wake.</string>
 	<key>NSSupportsLiveActivities</key>
 	<true/>
+	<key>OpenClawCanonicalVersion</key>
+	<string>$(OPENCLAW_IOS_VERSION)</string>
 	<key>OpenClawPushAPNsEnvironment</key>
 	<string>$(OPENCLAW_PUSH_APNS_ENVIRONMENT)</string>
 	<key>OpenClawPushDistribution</key>

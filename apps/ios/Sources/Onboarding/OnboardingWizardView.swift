@@ -14,11 +14,11 @@ private enum OnboardingStep: Int, CaseIterable {
     case success
 
     var previous: Self? {
-        Self(rawValue: self.rawValue - 1)
+        Self(rawValue: rawValue - 1)
     }
 
     var next: Self? {
-        Self(rawValue: self.rawValue + 1)
+        Self(rawValue: rawValue + 1)
     }
 
     /// Progress label for the manual setup flow (mode → connect → auth → success).
@@ -806,7 +806,7 @@ struct OnboardingWizardView: View {
         guard self.connectingGatewayID == nil else { return }
 
         let now = Date()
-        if let last = self.lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
+        if let last = lastPairingAutoResumeAttemptAt, now.timeIntervalSince(last) < 6 {
             return
         }
         self.lastPairingAutoResumeAttemptAt = now
@@ -874,7 +874,7 @@ struct OnboardingWizardView: View {
     }
 
     private func navigateBack() {
-        guard let target = self.step.previous else { return }
+        guard let target = step.previous else { return }
         self.connectingGatewayID = nil
         self.connectMessage = nil
         self.step = target

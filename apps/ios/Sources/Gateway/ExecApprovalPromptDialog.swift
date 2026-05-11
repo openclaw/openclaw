@@ -191,6 +191,6 @@ private struct ExecApprovalPromptMetadataRow: View {
 
 extension View {
     func execApprovalPromptDialog() -> some View {
-        self.modifier(ExecApprovalPromptDialogModifier())
+        modifier(ExecApprovalPromptDialogModifier())
     }
 }

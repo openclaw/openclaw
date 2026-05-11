@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import SwiftUI
 
 struct GatewayOnboardingView: View {
@@ -67,7 +68,7 @@ private struct AutoDetectStep: View {
     private func triggerAutoConnect() {
         guard self.appModel.gatewayServerName == nil else { return }
         guard self.connectingGatewayID == nil else { return }
-        guard let candidate = self.autoCandidate() else { return }
+        guard let candidate = autoCandidate() else { return }
 
         self.connectingGatewayID = candidate.id
         Task {
@@ -81,12 +82,12 @@ private struct AutoDetectStep: View {
         let lastDiscovered = self.lastDiscoveredGatewayStableID.trimmingCharacters(in: .whitespacesAndNewlines)
 
         if !preferred.isEmpty,
-           let match = self.gatewayController.gateways.first(where: { $0.stableID == preferred })
+           let match = gatewayController.gateways.first(where: { $0.stableID == preferred })
         {
             return match
         }
         if !lastDiscovered.isEmpty,
-           let match = self.gatewayController.gateways.first(where: { $0.stableID == lastDiscovered })
+           let match = gatewayController.gateways.first(where: { $0.stableID == lastDiscovered })
         {
             return match
         }
@@ -195,7 +196,7 @@ private struct ManualEntryStep: View {
             return
         }
 
-        if let port = self.manualPortValue(), !(1...65535).contains(port) {
+        if let port = manualPortValue(), !(1...65535).contains(port) {
             self.connectStatusText = "Failed: invalid port"
             return
         }

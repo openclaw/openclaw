@@ -393,6 +393,7 @@ struct CronRunLogEntry: Codable, Identifiable {
 
     let ts: Int
     let jobId: String
+    let jobName: String?
     let action: String
     let status: String?
     let error: String?
@@ -400,6 +401,30 @@ struct CronRunLogEntry: Codable, Identifiable {
     let runAtMs: Int?
     let durationMs: Int?
     let nextRunAtMs: Int?
+
+    init(
+        ts: Int,
+        jobId: String,
+        jobName: String? = nil,
+        action: String,
+        status: String?,
+        error: String?,
+        summary: String?,
+        runAtMs: Int?,
+        durationMs: Int?,
+        nextRunAtMs: Int?)
+    {
+        self.ts = ts
+        self.jobId = jobId
+        self.jobName = jobName
+        self.action = action
+        self.status = status
+        self.error = error
+        self.summary = summary
+        self.runAtMs = runAtMs
+        self.durationMs = durationMs
+        self.nextRunAtMs = nextRunAtMs
+    }
 
     var date: Date {
         Date(timeIntervalSince1970: TimeInterval(self.ts) / 1000)

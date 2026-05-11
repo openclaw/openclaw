@@ -468,6 +468,22 @@ const BrowserRealtimeGatewayRelaySessionSchema = Type.Object(
   { additionalProperties: false },
 );
 
+const BrowserSpeechLocalSessionSchema = Type.Object(
+  {
+    provider: NonEmptyString,
+    transport: Type.Literal("browser-speech-local"),
+    speechLocale: Type.Optional(Type.String()),
+    conversationEngine: Type.Optional(
+      Type.Union([
+        Type.Literal("auto"),
+        Type.Literal("deluxe-thomas"),
+        Type.Literal("local-thomas"),
+      ]),
+    ),
+  },
+  { additionalProperties: false },
+);
+
 const BrowserRealtimeManagedRoomSessionSchema = Type.Object(
   {
     provider: NonEmptyString,
@@ -485,6 +501,7 @@ export const TalkClientCreateResultSchema = Type.Union([
   BrowserRealtimeWebRtcSdpSessionSchema,
   BrowserRealtimeJsonPcmWebSocketSessionSchema,
   BrowserRealtimeGatewayRelaySessionSchema,
+  BrowserSpeechLocalSessionSchema,
   BrowserRealtimeManagedRoomSessionSchema,
 ]);
 

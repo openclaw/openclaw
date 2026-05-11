@@ -30,11 +30,11 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         }
         let data = try JSONEncoder().encode(Params(includeGlobal: true, includeUnknown: false, limit: limit))
         let json = String(data: data, encoding: .utf8)
-        let res = try await self.gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
+        let res = try await gateway.request(method: "sessions.list", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatSessionsListResponse.self, from: res)
     }
 
-    func setActiveSessionKey(_ sessionKey: String) async throws {
+    func setActiveSessionKey(_: String) async throws {
         // Operator clients receive chat events without node-style subscriptions.
         // (chat.subscribe is a node event, not an operator RPC method.)
     }
@@ -57,7 +57,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         struct Params: Codable { var sessionKey: String }
         let data = try JSONEncoder().encode(Params(sessionKey: sessionKey))
         let json = String(data: data, encoding: .utf8)
-        let res = try await self.gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
+        let res = try await gateway.request(method: "chat.history", paramsJSON: json, timeoutSeconds: 15)
         return try JSONDecoder().decode(OpenClawChatHistoryPayload.self, from: res)
     }
 
@@ -92,7 +92,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
         let data = try JSONEncoder().encode(params)
         let json = String(data: data, encoding: .utf8)
         do {
-            let res = try await self.gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
+            let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 35)
             let decoded = try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
             Self.logger.info("chat.send ok runId=\(decoded.runId, privacy: .public)")
             return decoded
@@ -104,7 +104,7 @@ struct IOSGatewayChatTransport: OpenClawChatTransport {
 
     func requestHealth(timeoutMs: Int) async throws -> Bool {
         let seconds = max(1, Int(ceil(Double(timeoutMs) / 1000.0)))
-        let res = try await self.gateway.request(method: "health", paramsJSON: nil, timeoutSeconds: seconds)
+        let res = try await gateway.request(method: "health", paramsJSON: nil, timeoutSeconds: seconds)
         return (try? JSONDecoder().decode(OpenClawGatewayHealthOK.self, from: res))?.ok ?? true
     }
 

@@ -1,4 +1,5 @@
 import OpenClawKit
+import OpenClawProtocol
 import Speech
 import Testing
 @testable import OpenClaw
@@ -79,5 +80,77 @@ struct TalkModeRuntimeSpeechTests {
         #expect(params["normalize"]?.value as? String == "auto")
         #expect(params["language"]?.value as? String == "en")
         #expect(params["latencyTier"]?.value as? Int == 3)
+    }
+
+    @Test func `talk chat event observation surfaces run errors`() {
+        let push = GatewayPush.event(EventFrame(
+            type: "event",
+            event: "chat",
+            payload: AnyCodable([
+                "runId": "run-1",
+                "sessionKey": "main",
+                "state": "error",
+                "errorMessage": "Your authentication token has been invalidated.",
+            ]),
+            seq: nil,
+            stateversion: nil))
+
+        let observation = TalkModeRuntime.chatRunObservation(
+            from: push,
+            runId: "run-1",
+            sessionKey: "main")
+
+        #expect(observation == .failed("Your authentication token has been invalidated."))
+    }
+
+    @Test func `talk chat event observation extracts final assistant text`() {
+        let push = GatewayPush.event(EventFrame(
+            type: "event",
+            event: "chat",
+            payload: AnyCodable([
+                "runId": "run-1",
+                "sessionKey": "main",
+                "state": "final",
+                "message": [
+                    "role": "assistant",
+                    "timestamp": 1_700_000_000.0,
+                    "content": [
+                        [
+                            "type": "text",
+                            "text": "Ready when you are.",
+                        ],
+                    ],
+                ],
+            ]),
+            seq: nil,
+            stateversion: nil))
+
+        let observation = TalkModeRuntime.chatRunObservation(
+            from: push,
+            runId: "run-1",
+            sessionKey: "main")
+
+        #expect(observation == .text("Ready when you are."))
+    }
+
+    @Test func `talk chat event observation ignores other runs`() {
+        let push = GatewayPush.event(EventFrame(
+            type: "event",
+            event: "chat",
+            payload: AnyCodable([
+                "runId": "run-2",
+                "sessionKey": "main",
+                "state": "error",
+                "errorMessage": "wrong run",
+            ]),
+            seq: nil,
+            stateversion: nil))
+
+        let observation = TalkModeRuntime.chatRunObservation(
+            from: push,
+            runId: "run-1",
+            sessionKey: "main")
+
+        #expect(observation == nil)
     }
 }

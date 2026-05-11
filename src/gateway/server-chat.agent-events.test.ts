@@ -1566,7 +1566,7 @@ describe("agent event handler", () => {
     expect(agentRunSeq.has("run-chat-send")).toBe(false);
   });
 
-  it("emits lifecycle chat errors for active chat.send runs with a chat run link", () => {
+  it("suppresses lifecycle chat errors for active chat.send runs with a chat run link", () => {
     vi.useFakeTimers();
     const { broadcast, chatRunState, clearAgentRunContext, agentRunSeq, handler } = createHarness({
       resolveSessionKeyForRun: () => "session-chat-send",
@@ -1589,16 +1589,11 @@ describe("agent event handler", () => {
 
     vi.advanceTimersByTime(100);
 
-    const chatErrors = chatBroadcastCalls(broadcast).filter(
-      ([, payload]) => (payload as { state?: string }).state === "error",
-    );
-    expect(chatErrors).toHaveLength(1);
-    expectPayloadFields(chatErrors[0]?.[1], {
-      runId: "run-chat-send",
-      sessionKey: "session-chat-send",
-      state: "error",
-      errorMessage: "chat.send failed",
-    });
+    expect(
+      chatBroadcastCalls(broadcast).some(
+        ([, payload]) => (payload as { state?: string }).state === "error",
+      ),
+    ).toBe(false);
     expect(chatRunState.registry.peek("run-chat-send")).toBeUndefined();
     expect(clearAgentRunContext).toHaveBeenCalledWith("run-chat-send");
     expect(agentRunSeq.has("run-chat-send")).toBe(false);

@@ -540,6 +540,32 @@ function isSubagentAnnounceInterSessionUserMessage(message: Record<string, unkno
   );
 }
 
+function extractTextOnlyContent(content: unknown): string | undefined {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (!Array.isArray(content)) {
+    return undefined;
+  }
+  const texts: string[] = [];
+  for (const block of content) {
+    if (!block || typeof block !== "object") {
+      return undefined;
+    }
+    const entry = block as { type?: unknown; text?: unknown };
+    if (entry.type !== "text" || typeof entry.text !== "string") {
+      return undefined;
+    }
+    texts.push(entry.text);
+  }
+  return texts.join("\n");
+}
+
+function isAssistantFailureShellContent(content: unknown): boolean {
+  const text = extractTextOnlyContent(content)?.trim().toLowerCase();
+  return text === "" || text === "[assistant turn failed before producing content]";
+}
+
 function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): boolean {
   const roleContent = asRoleContentMessage(message);
   if (!roleContent) {
@@ -551,8 +577,8 @@ function shouldHideProjectedHistoryMessage(message: Record<string, unknown>): bo
   if (roleContent.role === "user" && isEmptyTextOnlyContent(message.content ?? message.text)) {
     return true;
   }
-  if (roleContent.role === "assistant" && isEmptyTextOnlyContent(message.content ?? message.text)) {
-    return false;
+  if (roleContent.role === "assistant") {
+    return isAssistantFailureShellContent(message.content ?? message.text);
   }
   if (isHeartbeatUserMessage(roleContent, HEARTBEAT_PROMPT)) {
     return true;

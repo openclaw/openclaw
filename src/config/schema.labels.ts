@@ -863,6 +863,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "discovery.wideArea.domain": "Wide-area Discovery Domain",
   "discovery.mdns": "mDNS Discovery",
   talk: "Talk",
+  "talk.conversationEngine": "Talk Conversation Engine",
   "talk.speechLocale": "Talk Speech Locale",
   "talk.interruptOnSpeech": "Talk Interrupt on Speech",
   "talk.silenceTimeoutMs": "Talk Silence Timeout (ms)",

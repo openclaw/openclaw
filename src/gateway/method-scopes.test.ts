@@ -6,6 +6,7 @@ import {
   isGatewayMethodClassified,
   resolveLeastPrivilegeOperatorScopesForMethod,
 } from "./method-scopes.js";
+import { isRoleAuthorizedForMethod } from "./role-policy.js";
 import { listGatewayMethods } from "./server-methods-list.js";
 import { coreGatewayHandlers } from "./server-methods.js";
 
@@ -42,6 +43,11 @@ describe("method scope resolution", () => {
     ["environments.list", ["operator.read"]],
     ["environments.status", ["operator.read"]],
     ["diagnostics.stability", ["operator.read"]],
+    ["actions.list", ["operator.read"]],
+    ["actions.add", ["operator.write"]],
+    ["actions.update", ["operator.write"]],
+    ["actions.resolve", ["operator.write"]],
+    ["node.canvas.capability.refresh", ["operator.read"]],
     ["node.pair.approve", ["operator.pairing"]],
     ["poll", ["operator.write"]],
     ["talk.client.create", ["operator.write"]],
@@ -175,6 +181,12 @@ describe("method scope resolution", () => {
     ]);
   });
 
+  it("keeps canvas capability refresh available to node-role clients", () => {
+    expect(isGatewayMethodClassified("node.canvas.capability.refresh")).toBe(true);
+    expect(isRoleAuthorizedForMethod("node", "node.canvas.capability.refresh")).toBe(true);
+    expect(isRoleAuthorizedForMethod("operator", "node.canvas.capability.refresh")).toBe(true);
+  });
+
   it("returns empty scopes for unknown methods", () => {
     expect(resolveLeastPrivilegeOperatorScopesForMethod("totally.unknown.method")).toStrictEqual(
       [],
@@ -208,6 +220,7 @@ describe("operator scope authorization", () => {
     ["health", ["operator.write"], { allowed: true }],
     ["config.schema.lookup", ["operator.read"], { allowed: true }],
     ["config.patch", ["operator.admin"], { allowed: true }],
+    ["node.canvas.capability.refresh", ["operator.read"], { allowed: true }],
   ])("authorizes %s for scopes %j", (method, scopes, expected) => {
     expect(authorizeOperatorScopesForMethod(method, scopes)).toEqual(expected);
   });
@@ -348,6 +361,12 @@ describe("core gateway method classification", () => {
       (method) => !isGatewayMethodClassified(method),
     );
     expect(unclassified).toStrictEqual([]);
+  });
+
+  it("lists every exposed core gateway handler method", () => {
+    const listed = new Set(listGatewayMethods());
+    const unlisted = Object.keys(coreGatewayHandlers).filter((method) => !listed.has(method));
+    expect(unlisted).toEqual([]);
   });
 });
 

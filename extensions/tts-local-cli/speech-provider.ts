@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import path from "node:path";
 import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
@@ -15,19 +16,35 @@ import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-s
 const log = createSubsystemLogger("tts-local-cli");
 
 const VALID_OUTPUT_FORMATS = ["mp3", "opus", "wav"] as const;
+const LOCAL_CLI_PROVIDER_CONFIG_KEYS = [
+  "tts-local-cli",
+  "cli",
+  "local-voice",
+  "local",
+  "piper",
+  "say",
+] as const;
+const LOCAL_CLI_PROVIDER_ALIASES = ["cli", "local-voice", "local", "piper", "say"] as const;
+const VALID_ENGINES = ["auto", "command", "piper", "say"] as const;
 const AUDIO_EXTENSIONS = new Set([".wav", ".mp3", ".opus", ".ogg", ".m4a"]);
 type OutputFormat = (typeof VALID_OUTPUT_FORMATS)[number];
+type LocalVoiceEngine = (typeof VALID_ENGINES)[number];
 
 type CliConfig = {
   command: string;
   args?: string[];
   outputFormat?: OutputFormat;
+  outputPathFormat?: OutputFormat;
   timeoutMs?: number;
   cwd?: string;
   env?: Record<string, string>;
 };
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+const DEFAULT_LOCAL_OUTPUT_FORMAT: OutputFormat = "wav";
+const DEFAULT_PIPER_MODEL_DIR = "~/.openclaw/models/piper";
+const DEFAULT_SAY_DATA_FORMAT = "LEI16@22050";
+const DEFAULT_SAY_RATE_WPM = 175;
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -53,6 +70,19 @@ function asRecord(value: unknown): Record<string, string> | undefined {
   return Object.keys(result).length > 0 ? result : undefined;
 }
 
+function trimToUndefined(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function asFiniteNumber(value: unknown): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+function asPositiveNumber(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number !== undefined && number > 0 ? number : undefined;
+}
+
 function normalizeOutputFormat(value: unknown): OutputFormat {
   if (typeof value !== "string") {
     return "mp3";
@@ -64,12 +94,288 @@ function normalizeOutputFormat(value: unknown): OutputFormat {
   return "mp3";
 }
 
-function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  return asObject(providers?.["tts-local-cli"]) ?? asObject(providers?.cli) ?? {};
+function normalizeLocalOutputFormat(value: unknown): OutputFormat {
+  if (typeof value !== "string") {
+    return DEFAULT_LOCAL_OUTPUT_FORMAT;
+  }
+  return normalizeOutputFormat(value);
 }
 
-function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
+function normalizeEngine(value: unknown): LocalVoiceEngine | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+  const normalized = value.trim().toLowerCase();
+  return VALID_ENGINES.includes(normalized as LocalVoiceEngine)
+    ? (normalized as LocalVoiceEngine)
+    : undefined;
+}
+
+function resolveCliProviderConfig(rawConfig: Record<string, unknown>): SpeechProviderConfig {
+  const providers = asObject(rawConfig.providers);
+  for (const providerId of LOCAL_CLI_PROVIDER_CONFIG_KEYS) {
+    const providerConfig = asObject(providers?.[providerId]);
+    if (providerConfig) {
+      return providerConfig;
+    }
+  }
+  return {};
+}
+
+function resolveTalkCliProviderConfig(params: {
+  baseTtsConfig: Record<string, unknown>;
+  talkProviderConfig: SpeechProviderConfig;
+}): SpeechProviderConfig {
+  return {
+    ...resolveCliProviderConfig(params.baseTtsConfig),
+    ...params.talkProviderConfig,
+  };
+}
+
+function resolveTalkCliOverrides(params: {
+  voiceId?: unknown;
+  modelId?: unknown;
+  speed?: unknown;
+  rateWpm?: unknown;
+}): SpeechProviderConfig | undefined {
+  const overrides: SpeechProviderConfig = {};
+  const voiceId = trimToUndefined(params.voiceId);
+  const modelId = trimToUndefined(params.modelId);
+  const speed = asPositiveNumber(params.speed);
+  const rateWpm = asPositiveNumber(params.rateWpm);
+
+  if (voiceId) {
+    overrides.voiceId = voiceId;
+  }
+  if (modelId) {
+    if (
+      modelId.endsWith(".onnx") ||
+      modelId.startsWith("/") ||
+      modelId.startsWith("~/") ||
+      modelId.startsWith("./") ||
+      modelId.startsWith("../")
+    ) {
+      overrides.modelPath = modelId;
+    } else {
+      overrides.voiceId = modelId;
+    }
+  }
+  if (speed !== undefined) {
+    overrides.speed = speed;
+  }
+  if (rateWpm !== undefined) {
+    overrides.rateWpm = rateWpm;
+  }
+  return Object.keys(overrides).length > 0 ? overrides : undefined;
+}
+
+function expandUserPath(value: string): string {
+  if (value === "~") {
+    return homedir();
+  }
+  if (value.startsWith("~/")) {
+    return path.join(homedir(), value.slice(2));
+  }
+  return value;
+}
+
+function resolvePathValue(value: unknown): string | undefined {
+  const trimmed = trimToUndefined(value);
+  if (!trimmed) {
+    return undefined;
+  }
+  return expandUserPath(trimmed);
+}
+
+function uniqueStrings(values: Array<string | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))];
+}
+
+function resolveLocalVoiceId(cfg: SpeechProviderConfig): string | undefined {
+  return (
+    trimToUndefined(cfg.voiceId) ??
+    trimToUndefined(cfg.voiceName) ??
+    trimToUndefined(cfg.voice) ??
+    trimToUndefined(cfg.modelId) ??
+    trimToUndefined(cfg.model)
+  );
+}
+
+function resolvePiperModelPath(cfg: SpeechProviderConfig): string | undefined {
+  const direct =
+    resolvePathValue(cfg.modelPath) ??
+    resolvePathValue(cfg.piperModelPath) ??
+    resolvePathValue(cfg.model);
+  if (direct) {
+    return direct;
+  }
+
+  const voiceId = resolveLocalVoiceId(cfg);
+  if (!voiceId) {
+    return undefined;
+  }
+  const modelDirs = uniqueStrings([
+    resolvePathValue(cfg.modelDir),
+    resolvePathValue(cfg.piperModelDir),
+    expandUserPath(DEFAULT_PIPER_MODEL_DIR),
+  ]);
+  const baseNames = uniqueStrings([
+    voiceId,
+    voiceId.replace(/-/g, "_"),
+    voiceId.replace(/_/g, "-"),
+  ]);
+  for (const modelDir of modelDirs) {
+    for (const baseName of baseNames) {
+      const modelPath = path.join(
+        modelDir,
+        baseName.endsWith(".onnx") ? baseName : `${baseName}.onnx`,
+      );
+      if (existsSync(modelPath)) {
+        return modelPath;
+      }
+    }
+  }
+  return undefined;
+}
+
+function hasPiperSignal(cfg: SpeechProviderConfig): boolean {
+  return Boolean(
+    trimToUndefined(cfg.modelPath) ||
+    trimToUndefined(cfg.piperModelPath) ||
+    trimToUndefined(cfg.modelDir) ||
+    trimToUndefined(cfg.piperModelDir) ||
+    trimToUndefined(cfg.model),
+  );
+}
+
+function normalizeEngineForConfig(cfg: SpeechProviderConfig): LocalVoiceEngine | undefined {
+  const command = typeof cfg.command === "string" ? cfg.command.trim() : "";
+  const engine = normalizeEngine(cfg.engine);
+  if (engine) {
+    return engine;
+  }
+  if (command) {
+    return "command";
+  }
+  if (hasPiperSignal(cfg)) {
+    return "piper";
+  }
+  return undefined;
+}
+
+function pushOptionalArg(args: string[], flag: string, value: unknown): void {
+  const stringValue = trimToUndefined(value);
+  if (stringValue) {
+    args.push(flag, stringValue);
+  }
+}
+
+function pushOptionalNumberArg(args: string[], flag: string, value: unknown): void {
+  const number = asFiniteNumber(value);
+  if (number !== undefined) {
+    args.push(flag, String(number));
+  }
+}
+
+function resolvePiperLengthScale(cfg: SpeechProviderConfig): number | undefined {
+  const explicit = asPositiveNumber(cfg.lengthScale) ?? asPositiveNumber(cfg.length_scale);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const speed = asPositiveNumber(cfg.speed);
+  if (speed === undefined) {
+    return undefined;
+  }
+  return Math.min(4, Math.max(0.25, 1 / speed));
+}
+
+function buildPiperConfig(cfg: SpeechProviderConfig): CliConfig | null {
+  const modelPath = resolvePiperModelPath(cfg);
+  if (!modelPath) {
+    return null;
+  }
+  const args = [
+    ...(asStringArray(cfg.args) ?? []),
+    "--model",
+    modelPath,
+    "--output_file",
+    "{{OutputPath}}",
+  ];
+  pushOptionalArg(
+    args,
+    "--config",
+    resolvePathValue(cfg.configPath) ?? resolvePathValue(cfg.piperConfigPath),
+  );
+  pushOptionalArg(
+    args,
+    "--data-dir",
+    resolvePathValue(cfg.dataDir) ?? resolvePathValue(cfg.espeakDataPath),
+  );
+  pushOptionalArg(args, "--speaker", cfg.speaker);
+  pushOptionalNumberArg(args, "--length_scale", resolvePiperLengthScale(cfg));
+  pushOptionalNumberArg(args, "--noise_scale", cfg.noiseScale ?? cfg.noise_scale);
+  pushOptionalNumberArg(args, "--noise_w", cfg.noiseW ?? cfg.noise_w);
+  pushOptionalNumberArg(args, "--sentence_silence", cfg.sentenceSilence ?? cfg.sentence_silence);
+
+  return {
+    command:
+      trimToUndefined(cfg.executable) ??
+      trimToUndefined(cfg.piperExecutable) ??
+      trimToUndefined(cfg.command) ??
+      "piper",
+    args,
+    outputFormat: normalizeLocalOutputFormat(cfg.outputFormat),
+    outputPathFormat: "wav",
+    timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
+    cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
+    env: asRecord(cfg.env),
+  };
+}
+
+function resolveSayRateWpm(cfg: SpeechProviderConfig): number | undefined {
+  const explicit = asPositiveNumber(cfg.rateWpm);
+  if (explicit !== undefined) {
+    return explicit;
+  }
+  const speed = asPositiveNumber(cfg.speed);
+  if (speed === undefined) {
+    return undefined;
+  }
+  return Math.round(DEFAULT_SAY_RATE_WPM * speed);
+}
+
+function buildSayConfig(cfg: SpeechProviderConfig): CliConfig | null {
+  const args = [...(asStringArray(cfg.args) ?? [])];
+  const voice = resolveLocalVoiceId(cfg);
+  if (voice) {
+    args.push("-v", voice);
+  }
+  const rateWpm = resolveSayRateWpm(cfg);
+  if (rateWpm !== undefined) {
+    args.push("-r", String(Math.round(rateWpm)));
+  }
+  args.push(
+    `--data-format=${trimToUndefined(cfg.dataFormat) ?? DEFAULT_SAY_DATA_FORMAT}`,
+    "-o",
+    "{{OutputPath}}",
+    "{{Text}}",
+  );
+  return {
+    command:
+      trimToUndefined(cfg.executable) ??
+      trimToUndefined(cfg.sayExecutable) ??
+      trimToUndefined(cfg.command) ??
+      "say",
+    args,
+    outputFormat: normalizeLocalOutputFormat(cfg.outputFormat),
+    outputPathFormat: "wav",
+    timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : DEFAULT_TIMEOUT_MS,
+    cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,
+    env: asRecord(cfg.env),
+  };
+}
+
+function buildCommandConfig(cfg: SpeechProviderConfig): CliConfig | null {
   const command = typeof cfg.command === "string" ? cfg.command.trim() : "";
   if (!command) {
     return null;
@@ -84,6 +390,24 @@ function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
   };
 }
 
+function getConfig(cfg: SpeechProviderConfig): CliConfig | null {
+  const engine = normalizeEngineForConfig(cfg);
+  if (engine === "piper") {
+    return buildPiperConfig(cfg);
+  }
+  if (engine === "say") {
+    return buildSayConfig(cfg);
+  }
+  if (engine === "auto") {
+    return (
+      (hasPiperSignal(cfg) ? buildPiperConfig(cfg) : null) ??
+      (process.platform === "darwin" ? buildSayConfig(cfg) : null) ??
+      buildCommandConfig(cfg)
+    );
+  }
+  return buildCommandConfig(cfg);
+}
+
 function stripEmojis(text: string): string {
   return text
     .replace(/[\p{Emoji_Presentation}\p{Extended_Pictographic}]/gu, " ")
@@ -94,7 +418,7 @@ function stripEmojis(text: string): string {
 function applyTemplate(str: string, ctx: Record<string, string | undefined>): string {
   return str.replace(/{{\s*(\w+)\s*}}/gi, (_, key) => {
     const normalizedKey = key.charAt(0).toUpperCase() + key.slice(1).toLowerCase();
-    return ctx[normalizedKey] ?? ctx[key] ?? "";
+    return ctx[key] ?? ctx[normalizedKey] ?? "";
   });
 }
 
@@ -147,6 +471,20 @@ function findAudioFile(dir: string, baseName: string): string | null {
 }
 
 function detectFormat(filePath: string): "mp3" | "opus" | "wav" | null {
+  try {
+    const header = readFileSync(filePath).subarray(0, 12);
+    if (header.subarray(0, 4).toString("ascii") === "RIFF") {
+      return "wav";
+    }
+    if (header.subarray(0, 3).toString("ascii") === "ID3") {
+      return "mp3";
+    }
+    if (header.subarray(0, 4).toString("ascii") === "OggS") {
+      return "opus";
+    }
+  } catch {
+    // Fall back to extension-based detection below.
+  }
   const ext = path.extname(filePath).toLowerCase();
   if (ext === ".opus" || ext === ".ogg") {
     return "opus";
@@ -180,6 +518,8 @@ async function runCli(params: {
   outputDir: string;
   filePrefix: string;
   outputFormat?: OutputFormat;
+  voiceId?: string;
+  modelPath?: string;
 }): Promise<{ buffer: Buffer; actualFormat: "mp3" | "opus" | "wav"; audioPath?: string }> {
   const cleanText = stripEmojis(params.text);
   if (!cleanText) {
@@ -192,6 +532,8 @@ async function runCli(params: {
     OutputPath: path.join(params.outputDir, `${params.filePrefix}${outputExt}`),
     OutputDir: params.outputDir,
     OutputBase: params.filePrefix,
+    VoiceId: params.voiceId,
+    ModelPath: params.modelPath,
   };
 
   const { cmd, initialArgs } = parseCommand(params.command);
@@ -321,20 +663,29 @@ async function convertToRawPcm(inputPath: string, outputDir: string): Promise<Bu
 export function buildCliSpeechProvider(): SpeechProviderPlugin {
   return {
     id: "tts-local-cli",
-    aliases: ["cli"],
-    label: "Local CLI",
+    aliases: [...LOCAL_CLI_PROVIDER_ALIASES],
+    label: "Local Voice",
     autoSelectOrder: 1000,
 
     resolveConfig(ctx): SpeechProviderConfig {
       return resolveCliProviderConfig(ctx.rawConfig);
     },
 
+    resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) =>
+      resolveTalkCliProviderConfig({
+        baseTtsConfig: baseTtsConfig as Record<string, unknown>,
+        talkProviderConfig,
+      }),
+
+    resolveTalkOverrides: ({ params }) => resolveTalkCliOverrides(params),
+
     isConfigured(ctx): boolean {
       return getConfig(ctx.providerConfig) !== null;
     },
 
     async synthesize(req: SpeechSynthesisRequest) {
-      const config = getConfig(req.providerConfig);
+      const providerConfig = { ...req.providerConfig, ...(req.providerOverrides ?? {}) };
+      const config = getConfig(providerConfig);
       if (!config) {
         throw new Error("CLI TTS not configured");
       }
@@ -357,7 +708,9 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           text: req.text,
           outputDir: tempDir,
           filePrefix: "speech",
-          outputFormat: config.outputFormat,
+          outputFormat: config.outputPathFormat ?? config.outputFormat,
+          voiceId: resolveLocalVoiceId(providerConfig),
+          modelPath: resolvePiperModelPath(providerConfig),
         });
 
         log.debug(`synthesize: format=${result.actualFormat}, size=${result.buffer.length}`);
@@ -407,7 +760,8 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
     },
 
     async synthesizeTelephony(req: SpeechTelephonySynthesisRequest) {
-      const config = getConfig(req.providerConfig);
+      const providerConfig = { ...req.providerConfig, ...(req.providerOverrides ?? {}) };
+      const config = getConfig(providerConfig);
       if (!config) {
         throw new Error("CLI TTS not configured");
       }
@@ -430,7 +784,9 @@ export function buildCliSpeechProvider(): SpeechProviderPlugin {
           text: req.text,
           outputDir: tempDir,
           filePrefix: "telephony",
-          outputFormat: config.outputFormat,
+          outputFormat: config.outputPathFormat ?? config.outputFormat,
+          voiceId: resolveLocalVoiceId(providerConfig),
+          modelPath: resolvePiperModelPath(providerConfig),
         });
 
         const inputFile =

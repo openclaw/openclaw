@@ -153,4 +153,68 @@ struct GatewayConnectionTests {
         }
         #expect(secondFrame.seq == 3)
     }
+
+    @Test func `refresh canvas plugin surface updates cached canvas url`() async throws {
+        let initialUrl = "http://127.0.0.1:18789/__openclaw__/cap/expired"
+        let refreshedUrl = "http://127.0.0.1:18789/__openclaw__/cap/fresh"
+        let session = GatewayTestWebSocketSession(
+            taskFactory: {
+                GatewayTestWebSocketTask(
+                    sendHook: { task, message, sendIndex in
+                        guard sendIndex > 0 else { return }
+                        guard let id = GatewayWebSocketTestSupport.requestID(from: message) else { return }
+                        let data: Data
+                        if Self.requestMethod(from: message) == "node.pluginSurface.refresh" {
+                            data = Data(
+                                """
+                                {
+                                  "type": "res",
+                                  "id": "\(id)",
+                                  "ok": true,
+                                  "payload": {
+                                    "surface": "canvas",
+                                    "expiresAtMs": 9999999999999,
+                                    "pluginSurfaceUrls": {
+                                      "canvas": "\(refreshedUrl)"
+                                    }
+                                  }
+                                }
+                                """.utf8)
+                        } else {
+                            data = GatewayWebSocketTestSupport.okResponseData(id: id)
+                        }
+                        task.emitReceiveSuccess(.data(data))
+                    },
+                    receiveHook: { task, receiveIndex in
+                        if receiveIndex == 0 {
+                            return .data(GatewayWebSocketTestSupport.connectChallengeData())
+                        }
+                        let id = task.snapshotConnectRequestID() ?? "connect"
+                        return .data(GatewayWebSocketTestSupport.connectOkData(
+                            id: id,
+                            canvasPluginSurfaceUrl: initialUrl))
+                    })
+            })
+        let (conn, _) = try self.makeConnection(session: session)
+
+        _ = try await conn.request(method: "status", params: nil)
+        #expect(await conn.canvasPluginSurfaceUrl() == initialUrl)
+
+        let refreshed = await conn.refreshCanvasPluginSurfaceUrl()
+
+        #expect(refreshed == refreshedUrl)
+        #expect(await conn.canvasPluginSurfaceUrl() == refreshedUrl)
+    }
+
+    private static func requestMethod(from message: URLSessionWebSocketTask.Message) -> String? {
+        let data: Data? = switch message {
+        case let .data(data): data
+        case let .string(string): string.data(using: .utf8)
+        @unknown default: nil
+        }
+        guard let data,
+              let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+        return json["method"] as? String
+    }
 }

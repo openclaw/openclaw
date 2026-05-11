@@ -69,6 +69,13 @@ export type RealtimeTalkGatewayRelaySessionResult = {
   consultFastMode?: boolean;
 };
 
+export type RealtimeTalkBrowserSpeechLocalSessionResult = {
+  provider: string;
+  transport: "browser-speech-local";
+  speechLocale?: string;
+  conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
+};
+
 export type RealtimeTalkManagedRoomSessionResult = {
   provider: string;
   transport: "managed-room";
@@ -85,6 +92,7 @@ export type RealtimeTalkSessionResult =
   | RealtimeTalkWebRtcSdpSessionResult
   | RealtimeTalkJsonPcmWebSocketSessionResult
   | RealtimeTalkGatewayRelaySessionResult
+  | RealtimeTalkBrowserSpeechLocalSessionResult
   | RealtimeTalkManagedRoomSessionResult;
 
 export type RealtimeTalkTransport = {
@@ -98,6 +106,7 @@ export type RealtimeTalkTransportContext = {
   callbacks: RealtimeTalkCallbacks;
   consultThinkingLevel?: string;
   consultFastMode?: boolean;
+  onRecoverableError?: (error: Error, source: RealtimeTalkTransport) => boolean;
 };
 
 export function createRealtimeTalkEventEmitter(
@@ -208,7 +217,7 @@ function extractTextFromMessage(message: unknown): string {
   return parts.join("\n\n").trim();
 }
 
-function waitForChatResult(params: {
+export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;

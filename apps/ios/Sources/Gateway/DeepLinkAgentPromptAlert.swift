@@ -35,6 +35,6 @@ struct DeepLinkAgentPromptAlert: ViewModifier {
 
 extension View {
     func deepLinkAgentPromptAlert() -> some View {
-        self.modifier(DeepLinkAgentPromptAlert())
+        modifier(DeepLinkAgentPromptAlert())
     }
 }

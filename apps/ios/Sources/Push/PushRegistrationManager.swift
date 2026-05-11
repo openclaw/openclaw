@@ -42,7 +42,8 @@ actor PushRegistrationManager {
         apnsTokenHex: String,
         topic: String,
         gatewayIdentity: PushRelayGatewayIdentity?)
-    async throws -> String {
+        async throws -> String
+    {
         switch self.buildConfig.transport {
         case .direct:
             return try Self.encodePayload(
@@ -65,7 +66,8 @@ actor PushRegistrationManager {
         apnsTokenHex: String,
         topic: String,
         gatewayIdentity: PushRelayGatewayIdentity)
-    async throws -> String {
+        async throws -> String
+    {
         guard self.buildConfig.distribution == .official else {
             throw PushRelayError.relayMisconfigured(
                 "Relay transport requires OpenClawPushDistribution=official")
@@ -74,7 +76,7 @@ actor PushRegistrationManager {
             throw PushRelayError.relayMisconfigured(
                 "Relay transport requires OpenClawPushAPNsEnvironment=production")
         }
-        guard let relayClient = self.relayClient else {
+        guard let relayClient else {
             throw PushRelayError.relayBaseURLMissing
         }
         guard let bundleId = Bundle.main.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines),

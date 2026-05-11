@@ -60,5 +60,6 @@ extension CanvasWindowController {
 
     func webView(_: WKWebView, didFinish _: WKNavigation?) {
         self.applyDebugStatusIfNeeded()
+        self.applyHomeCanvasStateIfNeeded()
     }
 }

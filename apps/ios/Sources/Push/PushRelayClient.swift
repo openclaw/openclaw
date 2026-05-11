@@ -100,13 +100,13 @@ private final class PushRelayAppAttestService {
             throw PushRelayError.unsupportedAppAttest
         }
 
-        let keyID = try await self.loadOrCreateKeyID(using: service)
-        let attestationObject = try await self.attestKeyIfNeeded(
+        let keyID = try await loadOrCreateKeyID(using: service)
+        let attestationObject = try await attestKeyIfNeeded(
             service: service,
             keyID: keyID,
             challenge: challenge)
         let signedPayloadHash = Data(SHA256.hash(data: signedPayload))
-        let assertion = try await self.generateAssertion(
+        let assertion = try await generateAssertion(
             service: service,
             keyID: keyID,
             signedPayloadHash: signedPayloadHash)
@@ -132,7 +132,8 @@ private final class PushRelayAppAttestService {
         service: DCAppAttestService,
         keyID: String,
         challenge: String)
-    async throws -> String? {
+        async throws -> String?
+    {
         if PushRelayRegistrationStore.loadAttestedKeyID() == keyID {
             return nil
         }
@@ -150,7 +151,8 @@ private final class PushRelayAppAttestService {
         service: DCAppAttestService,
         keyID: String,
         signedPayloadHash: Data)
-    async throws -> Data {
+        async throws -> Data
+    {
         do {
             return try await service.generateAssertion(keyID, clientDataHash: signedPayloadHash)
         } catch {
@@ -216,8 +218,9 @@ final class PushRelayClient: @unchecked Sendable {
         distribution: PushDistributionMode,
         apnsTokenHex: String,
         gatewayIdentity: PushRelayGatewayIdentity)
-    async throws -> PushRelayRegisterResponse {
-        let challenge = try await self.fetchChallenge()
+        async throws -> PushRelayRegisterResponse
+    {
+        let challenge = try await fetchChallenge()
         let signedPayload = PushRelayRegisterSignedPayload(
             challengeId: challenge.challengeId,
             installationId: installationId,
@@ -227,11 +230,11 @@ final class PushRelayClient: @unchecked Sendable {
             gateway: gatewayIdentity,
             appVersion: appVersion,
             apnsToken: apnsTokenHex)
-        let signedPayloadData = try self.jsonEncoder.encode(signedPayload)
+        let signedPayloadData = try jsonEncoder.encode(signedPayload)
         let appAttest = try await self.appAttest.createProof(
             challenge: challenge.challenge,
             signedPayload: signedPayloadData)
-        let receiptBase64 = try await self.receiptProvider.loadReceiptBase64()
+        let receiptBase64 = try await receiptProvider.loadReceiptBase64()
         let requestBody = PushRelayRegisterRequest(
             challengeId: signedPayload.challengeId,
             installationId: signedPayload.installationId,
@@ -256,7 +259,7 @@ final class PushRelayClient: @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try self.jsonEncoder.encode(requestBody)
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let status = Self.statusCode(from: response)
         guard (200..<300).contains(status) else {
             if status == 401 {
@@ -280,7 +283,7 @@ final class PushRelayClient: @unchecked Sendable {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = Data("{}".utf8)
 
-        let (data, response) = try await self.session.data(for: request)
+        let (data, response) = try await session.data(for: request)
         let status = Self.statusCode(from: response)
         guard (200..<300).contains(status) else {
             throw PushRelayError.requestFailed(

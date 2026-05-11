@@ -2,6 +2,16 @@ import { describe, expect, it } from "vitest";
 import { OpenClawSchema } from "./zod-schema.js";
 
 describe("OpenClawSchema talk validation", () => {
+  it("accepts the deluxe Thomas conversation engine", () => {
+    expect(() =>
+      OpenClawSchema.parse({
+        talk: {
+          conversationEngine: "deluxe-thomas",
+        },
+      }),
+    ).not.toThrow();
+  });
+
   it("accepts a positive integer talk.silenceTimeoutMs", () => {
     const result = OpenClawSchema.safeParse({
       talk: {

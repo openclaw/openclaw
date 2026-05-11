@@ -173,12 +173,12 @@ final class GatewayDiscoveryModel {
     }
 
     private static func txtIntValue(_ dict: [String: String], key: String) -> Int? {
-        guard let raw = self.txtValue(dict, key: key) else { return nil }
+        guard let raw = txtValue(dict, key: key) else { return nil }
         return Int(raw)
     }
 
     private static func txtBoolValue(_ dict: [String: String], key: String) -> Bool {
-        guard let raw = self.txtValue(dict, key: key)?.lowercased() else { return false }
+        guard let raw = txtValue(dict, key: key)?.lowercased() else { return false }
         return raw == "1" || raw == "true" || raw == "yes"
     }
 }

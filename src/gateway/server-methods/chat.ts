@@ -14,7 +14,8 @@ import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.j
 import { stageSandboxMedia } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import { extractCanvasFromText } from "../../chat/canvas-render.js";
-import { resolveSessionFilePath } from "../../config/sessions.js";
+import { resolveSessionFilePath, updateSessionStore } from "../../config/sessions.js";
+import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
 import { streamSessionTranscriptLines } from "../../config/sessions/transcript-stream.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -87,6 +88,12 @@ import {
 } from "../managed-image-attachments.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import {
+  buildOfflineThomasConversationalFallbackReply,
+  type OfflineThomasConversationMessage,
+  type OfflineThomasFallbackReason,
+  resolveOfflineThomasFallbackReason,
+} from "../offline-thomas-fallback.js";
+import {
   GATEWAY_CLIENT_CAPS,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -113,6 +120,7 @@ import {
   readRecentSessionMessagesAsync,
   resolveSessionModelRef,
 } from "../session-utils.js";
+import { applySessionsPatchToStore } from "../sessions-patch.js";
 import { formatForLog } from "../ws-log.js";
 import { injectTimestamp, timestampOptsFromConfig } from "./agent-timestamp.js";
 import { setGatewayDedupeEntry } from "./agent-wait-dedupe.js";
@@ -245,6 +253,7 @@ type ChatSendOriginatingRoute = {
 };
 
 const ACTIVE_CHAT_SEND_DEDUPE_PREFIX = "chat:active-send";
+const RECENT_TALK_OFFLINE_FALLBACK_SKIP_MS = 10 * 60 * 1_000;
 
 function resolveActiveChatSendRunId(value: unknown): string | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
@@ -252,6 +261,31 @@ function resolveActiveChatSendRunId(value: unknown): string | null {
   }
   const runId = (value as { runId?: unknown }).runId;
   return typeof runId === "string" && runId.trim() ? runId : null;
+}
+
+function isRecentOfflineThomasFallbackTranscriptMessage(message: unknown, nowMs: number): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const entry = message as Record<string, unknown>;
+  if (entry.role !== "assistant") {
+    return false;
+  }
+  if (entry.model !== "gateway-injected") {
+    return false;
+  }
+  const idempotencyKey =
+    typeof entry.idempotencyKey === "string"
+      ? entry.idempotencyKey
+      : typeof (entry.__openclaw as { idempotencyKey?: unknown } | undefined)?.idempotencyKey ===
+          "string"
+        ? ((entry.__openclaw as { idempotencyKey: string }).idempotencyKey as string)
+        : "";
+  if (!idempotencyKey.includes("offline-thomas-fallback")) {
+    return false;
+  }
+  const timestamp = typeof entry.timestamp === "number" ? entry.timestamp : 0;
+  return timestamp > 0 && nowMs - timestamp <= RECENT_TALK_OFFLINE_FALLBACK_SKIP_MS;
 }
 
 function buildActiveChatSendDedupeKey(params: {
@@ -538,6 +572,125 @@ function hasAssistantDisplayMediaContent(
   content: readonly AssistantDisplayContentBlock[] | undefined,
 ): boolean {
   return Boolean(content?.some((block) => block?.type !== "text"));
+}
+
+function extractOfflineThomasHistoryText(message: Record<string, unknown>): string | undefined {
+  const directText = sanitizeAssistantDisplayText(
+    typeof message.text === "string" ? message.text : undefined,
+  );
+  if (directText) {
+    return directText;
+  }
+  if (typeof message.content === "string") {
+    return sanitizeAssistantDisplayText(message.content);
+  }
+  if (!Array.isArray(message.content)) {
+    return undefined;
+  }
+  const text = message.content
+    .map((block) => {
+      if (!block || typeof block !== "object") {
+        return "";
+      }
+      const entry = block as Record<string, unknown>;
+      return entry.type === "text" && typeof entry.text === "string" ? entry.text : "";
+    })
+    .filter(Boolean)
+    .join("\n\n")
+    .trim();
+  return sanitizeAssistantDisplayText(text);
+}
+
+function projectOfflineThomasConversationHistory(params: {
+  messages: unknown[];
+  userMessage: string;
+}): OfflineThomasConversationMessage[] {
+  const currentUserMessage = params.userMessage.replace(/\s+/gu, " ").trim();
+  return projectRecentChatDisplayMessages(params.messages, { maxMessages: 8, maxChars: 1_000 })
+    .map((message) => {
+      const role = typeof message.role === "string" ? message.role.toLowerCase() : "";
+      if (role !== "user" && role !== "assistant") {
+        return undefined;
+      }
+      const text = extractOfflineThomasHistoryText(message);
+      if (!text) {
+        return undefined;
+      }
+      if (role === "user" && text.replace(/\s+/gu, " ").trim() === currentUserMessage) {
+        return undefined;
+      }
+      return { role, text } as OfflineThomasConversationMessage;
+    })
+    .filter((message): message is OfflineThomasConversationMessage => Boolean(message));
+}
+
+async function readOfflineThomasConversationHistory(params: {
+  sessionId: string | undefined;
+  storePath: string | undefined;
+  sessionFile?: string;
+  userMessage: string;
+  context: Pick<GatewayRequestContext, "logGateway">;
+}): Promise<OfflineThomasConversationMessage[]> {
+  if (!params.sessionId || !params.storePath) {
+    return [];
+  }
+  try {
+    const messages = await readRecentSessionMessagesAsync(
+      params.sessionId,
+      params.storePath,
+      params.sessionFile,
+      { maxMessages: 12, maxBytes: 96 * 1024 },
+    );
+    return projectOfflineThomasConversationHistory({
+      messages,
+      userMessage: params.userMessage,
+    });
+  } catch (error) {
+    params.context.logGateway.debug(`offline thomas history unavailable: ${formatForLog(error)}`);
+    return [];
+  }
+}
+
+async function buildOfflineThomasFallbackPayloads(params: {
+  userMessage: string;
+  reason: OfflineThomasFallbackReason;
+  loadHistory?: () => Promise<OfflineThomasConversationMessage[]>;
+}): Promise<ReplyPayload[]> {
+  const history = params.loadHistory ? await params.loadHistory() : [];
+  return [
+    {
+      text: await buildOfflineThomasConversationalFallbackReply({
+        userMessage: params.userMessage,
+        reason: params.reason,
+        history,
+      }),
+    },
+  ];
+}
+
+async function maybeReplaceWithOfflineThomasFallback(params: {
+  finalPayloads: ReplyPayload[];
+  userMessage: string;
+  loadHistory?: () => Promise<OfflineThomasConversationMessage[]>;
+}): Promise<{ applied: boolean; payloads: ReplyPayload[] }> {
+  const assistantTexts = params.finalPayloads
+    .map((payload) => payload.text?.trim() ?? "")
+    .filter(Boolean);
+  const reason = resolveOfflineThomasFallbackReason({
+    userMessage: params.userMessage,
+    assistantTexts,
+  });
+  if (!reason) {
+    return { applied: false, payloads: params.finalPayloads };
+  }
+  return {
+    applied: true,
+    payloads: await buildOfflineThomasFallbackPayloads({
+      userMessage: params.userMessage,
+      reason,
+      loadHistory: params.loadHistory,
+    }),
+  };
 }
 
 function scheduleChatHistoryManagedImageCleanup(params: {
@@ -861,6 +1014,60 @@ function buildChatSendTranscriptMessage(params: {
     timestamp: params.timestamp,
     ...mediaFields,
   };
+}
+
+async function appendUserTranscriptMessage(params: {
+  message: ReturnType<typeof buildChatSendTranscriptMessage>;
+  sessionId: string;
+  storePath: string | undefined;
+  sessionFile?: string;
+  agentId?: string;
+  sessionKey: string;
+  idempotencyKey?: string;
+  cfg?: OpenClawConfig;
+}): Promise<TranscriptAppendResult> {
+  const transcriptPath = resolveTranscriptPath({
+    sessionId: params.sessionId,
+    storePath: params.storePath,
+    sessionFile: params.sessionFile,
+    agentId: params.agentId,
+  });
+  if (!transcriptPath) {
+    return { ok: false, error: "transcript path not resolved" };
+  }
+
+  const ensured = ensureTranscriptFile({
+    transcriptPath,
+    sessionId: params.sessionId,
+  });
+  if (!ensured.ok) {
+    return { ok: false, error: ensured.error ?? "failed to create transcript file" };
+  }
+
+  const message = {
+    ...params.message,
+    ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+  };
+  if (
+    params.idempotencyKey &&
+    (await transcriptHasIdempotencyKey(transcriptPath, params.idempotencyKey))
+  ) {
+    return { ok: true, message };
+  }
+
+  const { messageId } = await appendSessionTranscriptMessage({
+    transcriptPath,
+    message,
+    sessionId: params.sessionId,
+    config: params.cfg,
+  });
+  emitSessionTranscriptUpdate({
+    sessionFile: transcriptPath,
+    sessionKey: params.sessionKey,
+    message,
+    messageId,
+  });
+  return { ok: true, messageId, message };
 }
 
 function stripTrailingOffloadedMediaMarkers(message: string, refs: OffloadedRef[]): string {
@@ -1918,6 +2125,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         content?: unknown;
       }>;
       timeoutMs?: number;
+      conversationEngine?: "auto" | "deluxe-thomas" | "local-thomas";
       systemInputProvenance?: InputProvenance;
       systemProvenanceReceipt?: string;
       idempotencyKey: string;
@@ -2352,6 +2560,88 @@ export const chatHandlers: GatewayRequestHandlers = {
         })();
         await userTranscriptUpdatePromise;
       };
+      const ensureLocalThomasSessionEntry = async (): Promise<
+        | {
+            ok: true;
+          }
+        | {
+            ok: false;
+            error: string;
+          }
+      > => {
+        const latest = loadSessionEntry(sessionKey);
+        if (latest.entry?.sessionId) {
+          return { ok: true };
+        }
+        const created = await updateSessionStore(latest.storePath, async (store) => {
+          return await applySessionsPatchToStore({
+            cfg: latest.cfg,
+            store,
+            storeKey: latest.canonicalKey,
+            patch: { key: latest.canonicalKey },
+            loadGatewayModelCatalog: context.loadGatewayModelCatalog,
+          });
+        });
+        if (!created.ok) {
+          return { ok: false, error: formatForLog(created.error) };
+        }
+        const transcriptPath = resolveTranscriptPath({
+          sessionId: created.entry.sessionId,
+          storePath: latest.storePath,
+          sessionFile: created.entry.sessionFile,
+          agentId,
+        });
+        if (!transcriptPath) {
+          return { ok: false, error: "local Thomas transcript path not resolved" };
+        }
+        const ensured = ensureTranscriptFile({
+          transcriptPath,
+          sessionId: created.entry.sessionId,
+        });
+        if (!ensured.ok) {
+          return {
+            ok: false,
+            error: ensured.error ?? "failed to create local Thomas transcript",
+          };
+        }
+        if (created.entry.sessionFile !== transcriptPath) {
+          await updateSessionStore(latest.storePath, (store) => {
+            const existing = store[latest.canonicalKey];
+            if (existing) {
+              store[latest.canonicalKey] = {
+                ...existing,
+                sessionFile: transcriptPath,
+              };
+            }
+            return { ok: true };
+          });
+        }
+        return { ok: true };
+      };
+      const appendLocalThomasUserTranscript = async () => {
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const resolvedSessionId = latestEntry?.sessionId ?? backingSessionId;
+        if (!resolvedSessionId) {
+          throw new Error("local Thomas session entry unavailable");
+        }
+        const appended = await appendUserTranscriptMessage({
+          sessionKey,
+          sessionId: resolvedSessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          agentId,
+          cfg,
+          idempotencyKey: `${clientRunId}:user`,
+          message: buildChatSendTranscriptMessage({
+            message: parsedMessage,
+            savedImages: await persistedImagesPromise,
+            timestamp: now,
+          }),
+        });
+        if (!appended.ok) {
+          throw new Error(appended.error ?? "local Thomas user transcript append failed");
+        }
+      };
       let transcriptMediaRewriteDone = false;
       const rewriteUserTranscriptMedia = async () => {
         if (transcriptMediaRewriteDone) {
@@ -2379,6 +2669,42 @@ export const chatHandlers: GatewayRequestHandlers = {
           savedImages: await persistedImagesPromise,
           cfg,
         });
+      };
+      const loadOfflineThomasConversationHistory = async (): Promise<
+        OfflineThomasConversationMessage[]
+      > => {
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+        return await readOfflineThomasConversationHistory({
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile ?? entry?.sessionFile,
+          userMessage: parsedMessage,
+          context,
+        });
+      };
+      const hasRecentOfflineThomasFallback = async (): Promise<boolean> => {
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? backingSessionId;
+        if (!sessionId) {
+          return false;
+        }
+        try {
+          const messages = await readRecentSessionMessagesAsync(
+            sessionId,
+            latestStorePath,
+            latestEntry?.sessionFile ?? entry?.sessionFile,
+            { maxMessages: 12, maxBytes: 96 * 1024 },
+          );
+          return messages.some((message) =>
+            isRecentOfflineThomasFallbackTranscriptMessage(message, Date.now()),
+          );
+        } catch (error) {
+          context.logGateway.debug(
+            `offline thomas recent fallback probe unavailable: ${formatForLog(error)}`,
+          );
+          return false;
+        }
       };
       const appendWebchatAgentMediaTranscriptIfNeeded = async (payload: ReplyPayload) => {
         if (!agentRunStarted || appendedWebchatAgentMedia || !isMediaBearingPayload(payload)) {
@@ -2466,6 +2792,145 @@ export const chatHandlers: GatewayRequestHandlers = {
           `webchat transcript append failed for media reply: ${appended.error ?? "unknown error"}`,
         );
       };
+      const appendAndBroadcastOfflineThomasFallbackIfNeeded = async (
+        reason?: OfflineThomasFallbackReason,
+      ): Promise<boolean> => {
+        const offlineFallback = reason
+          ? {
+              applied: true,
+              payloads: await buildOfflineThomasFallbackPayloads({
+                userMessage: parsedMessage,
+                reason,
+                loadHistory: loadOfflineThomasConversationHistory,
+              }),
+            }
+          : await maybeReplaceWithOfflineThomasFallback({
+              finalPayloads: deliveredReplies
+                .filter((entry) => entry.kind === "final")
+                .map((entry) => entry.payload),
+              userMessage: parsedMessage,
+              loadHistory: loadOfflineThomasConversationHistory,
+            });
+        if (!offlineFallback.applied) {
+          return false;
+        }
+        const { storePath: latestStorePath, entry: latestEntry } = loadSessionEntry(sessionKey);
+        const sessionId = latestEntry?.sessionId ?? backingSessionId ?? clientRunId;
+        const assistantContent = await buildAssistantDisplayContentFromReplyPayloads({
+          sessionKey,
+          payloads: offlineFallback.payloads,
+          includeSensitiveMedia: false,
+          onLocalAudioAccessDenied: (message) => {
+            context.logGateway.warn(`offline thomas audio embedding denied local path: ${message}`);
+          },
+          onManagedImagePrepareError: (message) => {
+            context.logGateway.warn(
+              `offline thomas image embedding skipped attachment: ${message}`,
+            );
+          },
+        });
+        const displayReply =
+          extractAssistantDisplayTextFromContent(assistantContent) ??
+          buildTranscriptReplyText(offlineFallback.payloads);
+        if (!displayReply && !assistantContent?.length) {
+          return false;
+        }
+        const appended = await appendAssistantTranscriptMessage({
+          message: displayReply,
+          ...(assistantContent?.length ? { content: assistantContent } : {}),
+          sessionId,
+          storePath: latestStorePath,
+          sessionFile: latestEntry?.sessionFile,
+          agentId,
+          createIfMissing: true,
+          idempotencyKey: `${clientRunId}:offline-thomas-fallback`,
+          cfg,
+        });
+        let message: Record<string, unknown> | undefined;
+        if (appended.ok && appended.message) {
+          message = assistantContent?.length
+            ? { ...appended.message, content: assistantContent }
+            : appended.message;
+        } else {
+          context.logGateway.warn(
+            `offline thomas transcript append failed: ${appended.error ?? "unknown error"}`,
+          );
+          message = {
+            role: "assistant",
+            content: [{ type: "text", text: displayReply }],
+            text: displayReply,
+            timestamp: Date.now(),
+            stopReason: "stop",
+            usage: { input: 0, output: 0, totalTokens: 0 },
+          };
+        }
+        broadcastChatFinal({
+          context,
+          runId: clientRunId,
+          sessionKey,
+          message,
+        });
+        return true;
+      };
+      const runOfflineThomasConversation = (reason: OfflineThomasFallbackReason) => {
+        void (async () => {
+          try {
+            const ensured = await ensureLocalThomasSessionEntry();
+            if (!ensured.ok) {
+              throw new Error(ensured.error);
+            }
+            await appendLocalThomasUserTranscript();
+            const applied = await appendAndBroadcastOfflineThomasFallbackIfNeeded(reason);
+            if (!applied) {
+              throw new Error("local Thomas reply unavailable");
+            }
+            if (!context.chatAbortedRuns.has(clientRunId)) {
+              setGatewayDedupeEntry({
+                dedupe: context.dedupe,
+                key: `chat:${clientRunId}`,
+                entry: {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                },
+              });
+            }
+          } catch (err) {
+            const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
+            setGatewayDedupeEntry({
+              dedupe: context.dedupe,
+              key: `chat:${clientRunId}`,
+              entry: {
+                ts: Date.now(),
+                ok: false,
+                payload: {
+                  runId: clientRunId,
+                  status: "error" as const,
+                  summary: String(err),
+                },
+                error,
+              },
+            });
+            broadcastChatError({
+              context,
+              runId: clientRunId,
+              sessionKey,
+              errorMessage: String(err),
+            });
+          } finally {
+            activeRunAbort.cleanup();
+            context.removeChatRun(clientRunId, clientRunId, sessionKey);
+          }
+        })();
+      };
+      if (p.conversationEngine === "local-thomas") {
+        runOfflineThomasConversation("local");
+        return;
+      }
+      if (p.conversationEngine === "deluxe-thomas" && (await hasRecentOfflineThomasFallback())) {
+        runOfflineThomasConversation("unavailable");
+        return;
+      }
       const dispatcher = createReplyDispatcher({
         ...replyPipeline,
         onError: (err) => {
@@ -2583,12 +3048,17 @@ export const chatHandlers: GatewayRequestHandlers = {
                     : deliveredReplies
                         .filter((entry) => entry.kind === "final")
                         .map((entry) => entry.payload);
+                  const offlineFallback = await maybeReplaceWithOfflineThomasFallback({
+                    finalPayloads: rawFinalPayloads,
+                    userMessage: parsedMessage,
+                    loadHistory: loadOfflineThomasConversationHistory,
+                  });
                   const finalPayloads = await normalizeWebchatReplyMediaPathsForDisplay({
                     cfg,
                     sessionKey,
                     agentId,
                     accountId,
-                    payloads: rawFinalPayloads,
+                    payloads: offlineFallback.payloads,
                   });
                   const { storePath: latestStorePath, entry: latestEntry } =
                     loadSessionEntry(sessionKey);
@@ -2684,6 +3154,9 @@ export const chatHandlers: GatewayRequestHandlers = {
                       sessionFile: latestEntry?.sessionFile,
                       agentId,
                       createIfMissing: true,
+                      idempotencyKey: offlineFallback.applied
+                        ? `${clientRunId}:offline-thomas-fallback`
+                        : undefined,
                       cfg,
                     });
                     if (appended.ok) {
@@ -2729,12 +3202,15 @@ export const chatHandlers: GatewayRequestHandlers = {
                     message,
                   });
                 }
-              } else if (!hasBeforeAgentRunGate) {
-                await emitUserTranscriptUpdate().catch((transcriptErr) => {
-                  context.logGateway.warn(
-                    `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
-                  );
-                });
+              } else {
+                await appendAndBroadcastOfflineThomasFallbackIfNeeded();
+                if (!hasBeforeAgentRunGate) {
+                  await emitUserTranscriptUpdate().catch((transcriptErr) => {
+                    context.logGateway.warn(
+                      `webchat user transcript update failed after agent run: ${formatForLog(transcriptErr)}`,
+                    );
+                  });
+                }
               }
               if (!context.chatAbortedRuns.has(clientRunId)) {
                 setGatewayDedupeEntry({
@@ -2756,7 +3232,7 @@ export const chatHandlers: GatewayRequestHandlers = {
           );
         })
         .catch(async (err) => {
-          void rewriteUserTranscriptMedia().catch((rewriteErr) => {
+          await rewriteUserTranscriptMedia().catch((rewriteErr) => {
             context.logGateway.warn(
               `webchat transcript media rewrite failed after error: ${formatForLog(rewriteErr)}`,
             );
@@ -2770,6 +3246,25 @@ export const chatHandlers: GatewayRequestHandlers = {
               `webchat user transcript update failed after error: ${formatForLog(transcriptErr)}`,
             );
           });
+          const offlineReason = resolveOfflineThomasFallbackReason({
+            userMessage: parsedMessage,
+            assistantTexts: [String(err)],
+          });
+          if (offlineReason) {
+            const applied = await appendAndBroadcastOfflineThomasFallbackIfNeeded(offlineReason);
+            if (applied) {
+              setGatewayDedupeEntry({
+                dedupe: context.dedupe,
+                key: `chat:${clientRunId}`,
+                entry: {
+                  ts: Date.now(),
+                  ok: true,
+                  payload: { runId: clientRunId, status: "ok" as const },
+                },
+              });
+              return;
+            }
+          }
           const error = errorShape(ErrorCodes.UNAVAILABLE, String(err));
           setGatewayDedupeEntry({
             dedupe: context.dedupe,

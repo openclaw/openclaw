@@ -268,7 +268,7 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     }
 
     func photoOutput(
-        _ output: AVCapturePhotoOutput,
+        _: AVCapturePhotoOutput,
         didFinishProcessingPhoto photo: AVCapturePhoto,
         error: Error?)
     {
@@ -301,8 +301,8 @@ private final class PhotoCaptureDelegate: NSObject, AVCapturePhotoCaptureDelegat
     }
 
     func photoOutput(
-        _ output: AVCapturePhotoOutput,
-        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        _: AVCapturePhotoOutput,
+        didFinishCaptureFor _: AVCaptureResolvedPhotoSettings,
         error: Error?)
     {
         guard let error else { return }
@@ -325,9 +325,9 @@ private final class MovieFileDelegate: NSObject, AVCaptureFileOutputRecordingDel
     }
 
     func fileOutput(
-        _ output: AVCaptureFileOutput,
+        _: AVCaptureFileOutput,
         didFinishRecordingTo outputFileURL: URL,
-        from connections: [AVCaptureConnection],
+        from _: [AVCaptureConnection],
         error: Error?)
     {
         let alreadyResumed = self.resumed.withLock { old in

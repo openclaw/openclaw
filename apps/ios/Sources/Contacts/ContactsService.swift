@@ -97,7 +97,7 @@ final class ContactsService: ContactsServicing {
         return OpenClawContactsAddPayload(contact: Self.payload(from: persisted))
     }
 
-    private static func ensureAuthorization(store: CNContactStore, status: CNAuthorizationStatus) async -> Bool {
+    private static func ensureAuthorization(store _: CNContactStore, status: CNAuthorizationStatus) async -> Bool {
         switch status {
         case .authorized, .limited:
             return true

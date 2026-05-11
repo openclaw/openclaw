@@ -16,7 +16,7 @@ final class LiveActivityManager {
     }
 
     var isActive: Bool {
-        guard let activity = self.currentActivity else { return false }
+        guard let activity = currentActivity else { return false }
         guard activity.activityState == .active else {
             self.currentActivity = nil
             return false
@@ -90,7 +90,7 @@ final class LiveActivityManager {
     }
 
     private func updateCurrent(state: OpenClawActivityAttributes.ContentState) {
-        guard let activity = self.currentActivity else { return }
+        guard let activity = currentActivity else { return }
         Task {
             await activity.update(ActivityContent(state: state, staleDate: nil))
         }

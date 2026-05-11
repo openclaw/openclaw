@@ -84,6 +84,7 @@ actor GatewayConnection {
         case skillsUpdate = "skills.update"
         case voicewakeGet = "voicewake.get"
         case voicewakeSet = "voicewake.set"
+        case nodePluginSurfaceRefresh = "node.pluginSurface.refresh"
         case nodePairApprove = "node.pair.approve"
         case nodePairReject = "node.pair.reject"
         case devicePairList = "device.pair.list"
@@ -97,6 +98,7 @@ actor GatewayConnection {
         case cronUpdate = "cron.update"
         case cronAdd = "cron.add"
         case cronStatus = "cron.status"
+        case actionsList = "actions.list"
     }
 
     private let configProvider: @Sendable () async throws -> Config
@@ -110,6 +112,7 @@ actor GatewayConnection {
 
     private var subscribers: [UUID: AsyncStream<GatewayPush>.Continuation] = [:]
     private var lastSnapshot: HelloOk?
+    private var refreshedCanvasHostUrl: String?
 
     private struct LossyDecodable<Value: Decodable>: Decodable {
         let value: Value?
@@ -146,6 +149,19 @@ actor GatewayConnection {
         init(from decoder: Decoder) throws {
             let container = try decoder.container(keyedBy: CodingKeys.self)
             self.entries = try container.decodeIfPresent([LossyDecodable<CronRunLogEntry>].self, forKey: .entries) ?? []
+        }
+    }
+
+    private struct LossyActionsListResponse: Decodable {
+        let items: [LossyDecodable<CanvasActionQueueItem>]
+
+        enum CodingKeys: String, CodingKey {
+            case items
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            self.items = try container.decodeIfPresent([LossyDecodable<CanvasActionQueueItem>].self, forKey: .items) ?? []
         }
     }
 
@@ -311,10 +327,43 @@ actor GatewayConnection {
     }
 
     func canvasPluginSurfaceUrl() async -> String? {
+        if let refreshedCanvasHostUrl {
+            let trimmed = refreshedCanvasHostUrl.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
         guard let snapshot = self.lastSnapshot else { return nil }
         let raw = snapshot.pluginsurfaceurls?["canvas"]?.value as? String
         let trimmed = raw?.trimmingCharacters(in: CharacterSet.whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
+    }
+
+    @discardableResult
+    func refreshCanvasPluginSurfaceUrl(timeoutMs: Double = 8000) async -> String? {
+        do {
+            let data = try await self.requestRaw(
+                method: .nodePluginSurfaceRefresh,
+                params: ["surface": AnyCodable("canvas")],
+                timeoutMs: timeoutMs)
+            guard
+                let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let pluginSurfaceUrls = payload["pluginSurfaceUrls"] as? [String: Any],
+                let rawUrl = pluginSurfaceUrls["canvas"] as? String
+            else {
+                gatewayConnectionLogger.warning("node.pluginSurface.refresh missing pluginSurfaceUrls.canvas")
+                return nil
+            }
+            let refreshed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !refreshed.isEmpty else {
+                gatewayConnectionLogger.warning("node.pluginSurface.refresh returned empty pluginSurfaceUrls.canvas")
+                return nil
+            }
+            self.refreshedCanvasHostUrl = refreshed
+            return refreshed
+        } catch {
+            gatewayConnectionLogger.warning(
+                "node.pluginSurface.refresh failed \(error.localizedDescription, privacy: .public)")
+            return nil
+        }
     }
 
     private func sessionDefaultString(_ defaults: [String: OpenClawProtocol.AnyCodable]?, key: String) -> String {
@@ -405,6 +454,7 @@ actor GatewayConnection {
             await client.shutdown()
         }
         self.lastSnapshot = nil
+        self.refreshedCanvasHostUrl = nil
         self.client = GatewayChannelActor(
             url: url,
             token: token,
@@ -766,6 +816,26 @@ extension GatewayConnection {
         return try Self.decodeCronRunsResponse(data)
     }
 
+    func cronRunsAll(limit: Int = 8) async throws -> [CronRunLogEntry] {
+        let data = try await self.requestRaw(
+            method: .cronRuns,
+            params: [
+                "scope": AnyCodable("all"),
+                "limit": AnyCodable(limit),
+            ])
+        return try Self.decodeCronRunsResponse(data)
+    }
+
+    func actionsList(limit: Int = 6) async throws -> [CanvasActionQueueItem] {
+        let data = try await self.requestRaw(
+            method: .actionsList,
+            params: [
+                "status": AnyCodable("open"),
+                "limit": AnyCodable(limit),
+            ])
+        return try Self.decodeActionsListResponse(data)
+    }
+
     func cronRun(jobId: String, force: Bool = true) async throws {
         try await self.requestVoid(
             method: .cronRun,
@@ -808,5 +878,15 @@ extension GatewayConnection {
             gatewayConnectionLogger.warning("cron.runs skipped \(skipped, privacy: .public) malformed entries")
         }
         return entries
+    }
+
+    nonisolated static func decodeActionsListResponse(_ data: Data) throws -> [CanvasActionQueueItem] {
+        let decoded = try JSONDecoder().decode(LossyActionsListResponse.self, from: data)
+        let items = decoded.items.compactMap(\.value)
+        let skipped = decoded.items.count - items.count
+        if skipped > 0 {
+            gatewayConnectionLogger.warning("actions.list skipped \(skipped, privacy: .public) malformed items")
+        }
+        return items
     }
 }

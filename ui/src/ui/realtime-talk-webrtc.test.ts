@@ -118,6 +118,46 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     transport.stop();
   });
 
+  it("includes provider error bodies in unsuccessful WebRTC SDP setup failures", async () => {
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            error: {
+              message: "You exceeded your current quota",
+              code: "insufficient_quota",
+            },
+          }),
+          { status: 429 },
+        ),
+    );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc-sdp",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: {},
+      },
+    );
+
+    let thrown: unknown;
+    try {
+      await transport.start();
+    } catch (error) {
+      thrown = error;
+    } finally {
+      transport.stop();
+    }
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toMatch(/exceeded your current quota/i);
+    expect((thrown as Error).message).toMatch(/insufficient_quota/i);
+  });
+
   it("surfaces realtime provider errors from the OpenAI data channel", async () => {
     vi.stubGlobal(
       "fetch",
@@ -149,6 +189,49 @@ describe("WebRtcSdpRealtimeTalkTransport", () => {
     );
 
     expect(onStatus).toHaveBeenCalledWith("error", "Realtime model rejected the session");
+    transport.stop();
+  });
+
+  it("routes recoverable realtime provider errors to browser fallback recovery", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("answer-sdp")) as unknown as typeof fetch,
+    );
+    const onStatus = vi.fn();
+    const onRecoverableError = vi.fn(() => true);
+    const transport = new WebRtcSdpRealtimeTalkTransport(
+      {
+        provider: "openai",
+        transport: "webrtc-sdp",
+        clientSecret: "client-secret-123",
+      },
+      {
+        client: {} as never,
+        sessionKey: "main",
+        callbacks: { onStatus },
+        onRecoverableError,
+      },
+    );
+
+    await transport.start();
+    const peer = FakePeerConnection.instances[0];
+    peer?.channel.dispatchEvent(
+      new MessageEvent("message", {
+        data: JSON.stringify({
+          type: "error",
+          error: {
+            message: "You exceeded your current quota",
+            code: "insufficient_quota",
+          },
+        }),
+      }),
+    );
+
+    expect(onRecoverableError).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringMatching(/exceeded your current quota/i) }),
+      transport,
+    );
+    expect(onStatus).not.toHaveBeenCalledWith("error", expect.any(String));
     transport.stop();
   });
 

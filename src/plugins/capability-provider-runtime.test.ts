@@ -754,6 +754,73 @@ describe("resolvePluginCapabilityProviders", () => {
     expectInitialRuntimeRegistryLookup();
   });
 
+  it("loads missing speech providers when cfg requests a Talk provider alias", () => {
+    const active = createEmptyPluginRegistry();
+    active.speechProviders.push({
+      pluginId: "openai",
+      pluginName: "openai",
+      source: "test",
+      provider: {
+        id: "openai",
+        label: "openai",
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    const loaded = createEmptyPluginRegistry();
+    loaded.speechProviders.push({
+      pluginId: "microsoft",
+      pluginName: "microsoft",
+      source: "test",
+      provider: {
+        id: "microsoft",
+        label: "microsoft",
+        aliases: ["edge"],
+        isConfigured: () => true,
+        synthesize: async () => ({
+          audioBuffer: Buffer.from("x"),
+          outputFormat: "mp3",
+          voiceCompatible: false,
+          fileExtension: ".mp3",
+        }),
+      },
+    } as never);
+    mocks.loadPluginManifestRegistry.mockReturnValue({
+      plugins: [
+        {
+          id: "microsoft",
+          origin: "bundled",
+          contracts: { speechProviders: ["microsoft"] },
+        },
+      ] as never,
+      diagnostics: [],
+    });
+    mocks.resolveRuntimePluginRegistry.mockImplementation((params?: unknown) =>
+      params === undefined ? active : loaded,
+    );
+
+    const providers = resolvePluginCapabilityProviders({
+      key: "speechProviders",
+      cfg: {
+        talk: {
+          provider: "edge",
+          providers: {
+            edge: { voiceId: "nl-NL-Xander" },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(providers, ["openai", "microsoft"]);
+    expectActiveRegistryLookup(["microsoft"]);
+    expect(mocks.resolveRuntimePluginRegistry).toHaveBeenCalledWith();
+  });
+
   it("keeps active capability providers when cfg has no explicit plugin config", () => {
     const active = createEmptyPluginRegistry();
     active.speechProviders.push({

@@ -27,6 +27,44 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
     }
 
     private let sessionKey: String
+    private weak var liveThomasWebView: WKWebView?
+
+    private lazy var realtimeBridge = CanvasRealtimeTalkBridge(
+        request: { method, paramsJSON, timeoutSeconds in
+            let isLocal = await MainActor.run {
+                AppStateStore.shared.connectionMode == .local
+            }
+            if isLocal {
+                await GatewayProcessManager.shared.setActive(true)
+            }
+            let params: [String: AnyCodable]? = Self.decodeParamsJSON(paramsJSON)
+            return try await GatewayConnection.shared.request(
+                method: method,
+                params: params,
+                timeoutMs: Double(timeoutSeconds * 1000))
+        },
+        events: {
+            let stream = await GatewayConnection.shared.subscribe(bufferingNewest: 200)
+            return AsyncStream { continuation in
+                let task = Task {
+                    for await push in stream {
+                        guard !Task.isCancelled else { break }
+                        if case let .event(event) = push {
+                            continuation.yield(event)
+                        }
+                    }
+                    continuation.finish()
+                }
+                continuation.onTermination = { _ in
+                    task.cancel()
+                }
+            }
+        },
+        onStatus: { [weak self] status in
+            await MainActor.run {
+                self?.dispatchLiveThomasStatus(status)
+            }
+        })
 
     init(sessionKey: String) {
         self.sessionKey = sessionKey
@@ -75,6 +113,11 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
 
         canvasWindowLogger.info("A2UI action \(name, privacy: .public) session=\(self.sessionKey, privacy: .public)")
 
+        if OpenClawCanvasA2UIAction.isTalkRealtimeActionName(name) {
+            self.handleTalkRealtimeAction(name: name, userAction: userAction, actionId: actionId, webView: webView)
+            return
+        }
+
         let surfaceId = (userAction["surfaceId"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
             .nonEmpty ?? "main"
         let sourceComponentId = (userAction["sourceComponentId"] as? String)?
@@ -121,6 +164,41 @@ final class CanvasA2UIActionMessageHandler: NSObject, WKScriptMessageHandler {
                     """)
             }
         }
+    }
+
+    private func handleTalkRealtimeAction(
+        name _: String,
+        userAction _: [String: Any],
+        actionId: String,
+        webView: WKWebView)
+    {
+        Task { [weak self, weak webView] in
+            guard let self, let webView else { return }
+            self.liveThomasWebView = webView
+            let status = await self.realtimeBridge.toggle(sessionKey: self.sessionKey)
+            await MainActor.run {
+                let js = OpenClawCanvasA2UIAction.jsDispatchA2UIActionStatus(
+                    actionId: actionId,
+                    ok: status.ok,
+                    error: status.ok ? nil : status.message,
+                    state: status.state,
+                    message: status.message)
+                webView.evaluateJavaScript(js) { _, _ in }
+            }
+        }
+    }
+
+    @MainActor
+    private func dispatchLiveThomasStatus(_ status: CanvasRealtimeTalkStatus) {
+        guard let webView = self.liveThomasWebView else { return }
+        let js = OpenClawCanvasA2UIAction.jsDispatchLiveThomasStatus(status)
+        webView.evaluateJavaScript(js) { _, _ in }
+    }
+
+    nonisolated private static func decodeParamsJSON(_ json: String?) -> [String: AnyCodable]? {
+        let trimmed = json?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !trimmed.isEmpty, let data = trimmed.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode([String: AnyCodable].self, from: data)
     }
 
     private static func parseIPv4(_ host: String) -> (UInt8, UInt8, UInt8, UInt8)? {

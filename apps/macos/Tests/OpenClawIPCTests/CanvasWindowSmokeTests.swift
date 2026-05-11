@@ -47,6 +47,42 @@ struct CanvasWindowSmokeTests {
         controller.close()
     }
 
+    @Test func `built in scaffold still evaluates after creative control room update`() async throws {
+        let root = FileManager().temporaryDirectory
+            .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")
+        try FileManager().createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager().removeItem(at: root) }
+
+        let controller = try CanvasWindowController(
+            sessionKey: "main",
+            root: root,
+            presentation: .window)
+        defer { controller.close() }
+
+        controller.showCanvas(path: "/")
+        var renderedTitle = ""
+        for _ in 0..<10 {
+            renderedTitle = try await controller.eval(
+                javaScript: "document.title || document.querySelector('#openclaw-home-eyebrow')?.textContent || ''")
+            if renderedTitle.contains("Thomas Workbench") {
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(renderedTitle.contains("Thomas Workbench"))
+
+        var avatarState = ""
+        for _ in 0..<10 {
+            avatarState = try await controller.eval(
+                javaScript: "document.querySelector('.thomas-avatar')?.naturalWidth > 0 ? 'avatar-loaded' : ''")
+            if avatarState == "avatar-loaded" {
+                break
+            }
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        #expect(avatarState == "avatar-loaded")
+    }
+
     @Test func `A2UI auto navigation is idempotent for current host target`() throws {
         let root = FileManager().temporaryDirectory
             .appendingPathComponent("openclaw-canvas-test-\(UUID().uuidString)")

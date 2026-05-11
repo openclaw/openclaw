@@ -10,7 +10,7 @@ struct ChatSheet: View {
 
     init(gateway: GatewayNodeSession, sessionKey: String, agentName: String? = nil, userAccent: Color? = nil) {
         let transport = IOSGatewayChatTransport(gateway: gateway)
-        self._viewModel = State(
+        _viewModel = State(
             initialValue: OpenClawChatViewModel(
                 sessionKey: sessionKey,
                 transport: transport))
@@ -40,7 +40,7 @@ struct ChatSheet: View {
     }
 
     private var chatTitle: String {
-        let trimmed = (self.agentName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = (agentName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty { return "Chat" }
         return "Chat (\(trimmed))"
     }

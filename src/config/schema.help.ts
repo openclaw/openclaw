@@ -173,6 +173,8 @@ export const FIELD_HELP: Record<string, string> = {
     "Use this to override the thinking level for the regular agent run behind Talk realtime consults.",
   "talk.consultFastMode":
     "Use this to set true or false fast mode for the regular agent run behind Talk realtime consults.",
+  "talk.conversationEngine":
+    'Conversation engine for non-realtime Talk mode. "deluxe-thomas" uses the configured cloud chat model first and keeps the local Thomas engine as recovery.',
   "talk.speechLocale":
     'BCP 47 locale id for Talk speech recognition on device nodes, for example "ru-RU". Leave unset to use each device default.',
   "talk.interruptOnSpeech":

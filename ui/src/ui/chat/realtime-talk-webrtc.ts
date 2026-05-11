@@ -91,7 +91,7 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
       },
     });
     if (!sdp.ok) {
-      throw new Error(`Realtime WebRTC setup failed (${sdp.status})`);
+      throw new Error(buildSdpSetupErrorMessage(sdp.status, await readProviderErrorBody(sdp)));
     }
     await this.peer.setRemoteDescription({
       type: "answer",
@@ -188,16 +188,24 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
         });
         return;
       case "error":
-        this.ctx.callbacks.onStatus?.("error", this.extractErrorDetail(event.error));
-        this.emitTalkEvent({
-          type: "session.error",
-          final: true,
-          payload: { message: this.extractErrorDetail(event.error) },
-        });
+        this.handleProviderError(event.error);
         return;
       default:
         return;
     }
+  }
+
+  private handleProviderError(error: unknown): void {
+    const detail = this.extractErrorDetail(error);
+    this.emitTalkEvent({
+      type: "session.error",
+      final: true,
+      payload: { message: detail },
+    });
+    if (this.ctx.onRecoverableError?.(new Error(detail), this)) {
+      return;
+    }
+    this.ctx.callbacks.onStatus?.("error", detail);
   }
 
   private extractResponseStatus(event: RealtimeServerEvent): string | undefined {
@@ -213,7 +221,10 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     const message = typeof record.message === "string" ? record.message.trim() : "";
     const code = typeof record.code === "string" ? record.code.trim() : "";
     const type = typeof record.type === "string" ? record.type.trim() : "";
-    return message || code || type || "Realtime provider error";
+    const parts = [message, code, type].filter((part, index, values) => {
+      return part && values.indexOf(part) === index;
+    });
+    return parts.join(" ") || "Realtime provider error";
   }
 
   private bufferToolDelta(event: RealtimeServerEvent): void {
@@ -271,4 +282,16 @@ export class WebRtcSdpRealtimeTalkTransport implements RealtimeTalkTransport {
     });
     this.send({ type: "response.create" });
   }
+}
+
+async function readProviderErrorBody(response: Response): Promise<string> {
+  try {
+    return (await response.text()).trim().slice(0, 2000);
+  } catch {
+    return "";
+  }
+}
+
+function buildSdpSetupErrorMessage(status: number, detail: string): string {
+  return `Realtime WebRTC setup failed (${status})${detail ? `: ${detail}` : ""}`;
 }

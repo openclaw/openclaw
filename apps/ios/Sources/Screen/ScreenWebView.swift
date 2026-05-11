@@ -61,7 +61,7 @@ final class ScreenWebViewCoordinator: NSObject {
         ])
 
         self.managedWebView = webView
-        self.containerView = container
+        containerView = container
         self.controller?.attachWebView(webView)
         return container
     }
@@ -86,7 +86,7 @@ final class ScreenWebViewCoordinator: NSObject {
         self.removeA2UIHandlers()
         self.navigationDelegate.controller = nil
         self.a2uiActionHandler.controller = nil
-        self.managedWebView = nil
+        managedWebView = nil
         self.containerView = nil
     }
 

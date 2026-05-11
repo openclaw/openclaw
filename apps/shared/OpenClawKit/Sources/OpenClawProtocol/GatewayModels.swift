@@ -3268,6 +3268,42 @@ public struct TalkSessionCreateParams: Codable, Sendable {
     }
 }
 
+public struct TalkRealtimeConsultParams: Codable, Sendable {
+    public let sessionkey: String?
+    public let args: AnyCodable
+    public let transcript: [[String: AnyCodable]]?
+
+    public init(
+        sessionkey: String?,
+        args: AnyCodable,
+        transcript: [[String: AnyCodable]]?)
+    {
+        self.sessionkey = sessionkey
+        self.args = args
+        self.transcript = transcript
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case sessionkey = "sessionKey"
+        case args
+        case transcript
+    }
+}
+
+public struct TalkRealtimeConsultResult: Codable, Sendable {
+    public let result: String
+
+    public init(
+        result: String)
+    {
+        self.result = result
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case result
+    }
+}
+
 public struct TalkSessionCreateResult: Codable, Sendable {
     public let sessionid: String
     public let provider: String?
@@ -6127,6 +6163,7 @@ public struct ChatSendParams: Codable, Sendable {
     public let originatingthreadid: String?
     public let attachments: [AnyCodable]?
     public let timeoutms: Int?
+    public let conversationengine: AnyCodable?
     public let systeminputprovenance: [String: AnyCodable]?
     public let systemprovenancereceipt: String?
     public let idempotencykey: String
@@ -6144,6 +6181,7 @@ public struct ChatSendParams: Codable, Sendable {
         originatingthreadid: String?,
         attachments: [AnyCodable]?,
         timeoutms: Int?,
+        conversationengine: AnyCodable?,
         systeminputprovenance: [String: AnyCodable]?,
         systemprovenancereceipt: String?,
         idempotencykey: String)
@@ -6160,6 +6198,7 @@ public struct ChatSendParams: Codable, Sendable {
         self.originatingthreadid = originatingthreadid
         self.attachments = attachments
         self.timeoutms = timeoutms
+        self.conversationengine = conversationengine
         self.systeminputprovenance = systeminputprovenance
         self.systemprovenancereceipt = systemprovenancereceipt
         self.idempotencykey = idempotencykey
@@ -6178,6 +6217,7 @@ public struct ChatSendParams: Codable, Sendable {
         case originatingthreadid = "originatingThreadId"
         case attachments
         case timeoutms = "timeoutMs"
+        case conversationengine = "conversationEngine"
         case systeminputprovenance = "systemInputProvenance"
         case systemprovenancereceipt = "systemProvenanceReceipt"
         case idempotencykey = "idempotencyKey"

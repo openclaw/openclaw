@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { emitAgentEvent, registerAgentRunContext } from "../infra/agent-events.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
@@ -27,6 +27,7 @@ const CHAT_RESPONSE_TIMEOUT_MS = 10_000;
 
 let ws: WebSocket;
 let port: number;
+const previousOfflineThomasDisableModel = process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL;
 
 installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
@@ -36,6 +37,15 @@ installConnectedControlUiServerSuite((started) => {
 describe("gateway server chat", () => {
   beforeEach(() => {
     dispatchInboundMessageMock.mockReset();
+    process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL = "1";
+  });
+
+  afterEach(() => {
+    if (previousOfflineThomasDisableModel === undefined) {
+      delete process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL;
+    } else {
+      process.env.OPENCLAW_OFFLINE_THOMAS_DISABLE_MODEL = previousOfflineThomasDisableModel;
+    }
   });
 
   const removeTempDir = async (dir: string): Promise<void> => {
@@ -840,6 +850,341 @@ describe("gateway server chat", () => {
       expect(historyRes.ok).toBe(true);
       const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
       expect(historyTexts).toEqual(["main thread context"]);
+    });
+  });
+
+  test("chat.send falls back to local Thomas conversation when provider billing fails", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "API provider returned a billing error - your API key has run out of credits.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-billing",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "What can you do for me?",
+        idempotencyKey: "idem-offline-thomas-billing",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(text).toContain("What can you do for me?");
+      expect(text).not.toContain("billing error");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credits/i);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("What can you do for me?")]),
+      );
+    });
+  });
+
+  test("chat.send skips a failing cloud retry for deluxe Talk after a recent local Thomas fallback", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        params.dispatcher.sendFinalReply({
+          text: "API provider returned a billing error - your API key has run out of credits.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const firstFinalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-deluxe-first-fallback",
+        8000,
+      );
+      const firstRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we talk?",
+        idempotencyKey: "idem-deluxe-first-fallback",
+        conversationEngine: "deluxe-thomas",
+      });
+      expect(firstRes.ok).toBe(true);
+      await firstFinalPromise;
+
+      dispatchInboundMessageMock.mockClear();
+      const secondFinalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-deluxe-fast-fallback",
+        8000,
+      );
+      const secondRes = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Hoe gaat het met je?",
+        idempotencyKey: "idem-deluxe-fast-fallback",
+        conversationEngine: "deluxe-thomas",
+      });
+
+      expect(secondRes.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const secondFinal = await secondFinalPromise;
+      const text = extractFirstTextBlock(secondFinal.payload?.message);
+      expect(text).toMatch(/goed|prima|hier|zin|vertel|Thomas/i);
+      expect(text).not.toMatch(/auth|billing|cloud|fallback|local|lokaal/i);
+    });
+  });
+
+  test("chat.send can use local Thomas directly for Talk mode", async () => {
+    await withMainSessionStore(async () => {
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-local-thomas-direct",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we talk without cloud models?",
+        idempotencyKey: "idem-local-thomas-direct",
+        conversationEngine: "local-thomas",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const final = await finalPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(text).toContain("Can we talk without cloud models?");
+      expect(text).not.toMatch(/local Thomas mode|free local Thomas mode|fallback/i);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("Can we talk without cloud models?")]),
+      );
+    });
+  });
+
+  test("chat.send local Thomas creates history for a missing Talk session", async () => {
+    await withMainSessionStore(async () => {
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-local-thomas-new-session",
+        8000,
+      );
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "fresh-local-talk",
+        message: "Start a brand new local Talk session.",
+        idempotencyKey: "idem-local-thomas-new-session",
+        conversationEngine: "local-thomas",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      const final = await finalPromise;
+      const finalText = extractFirstTextBlock(final.payload?.message);
+      expect(finalText).toContain("Start a brand new local Talk session.");
+      expect(finalText).not.toMatch(/local Thomas mode|free local Thomas mode|fallback/i);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "fresh-local-talk",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("Start a brand new local Talk session.")]),
+      );
+    });
+  });
+
+  test("chat.send falls back to local Thomas after an agent-started auth failure", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
+        const [params] = args as [
+          {
+            replyOptions?: {
+              runId?: string;
+              onAgentRunStart?: (runId: string) => void;
+            };
+            dispatcher: {
+              sendFinalReply: (payload: { text: string }) => boolean;
+              markComplete: () => void;
+              waitForIdle: () => Promise<void>;
+              getQueuedCounts: () => { final: number; block: number; tool: number };
+            };
+          },
+        ];
+        const runId = params.replyOptions?.runId ?? "idem-offline-thomas-auth-started";
+        params.replyOptions?.onAgentRunStart?.(runId);
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          ts: Date.now(),
+          data: {
+            phase: "error",
+            error: "Your authentication token has been invalidated. Please try signing in again.",
+          },
+        });
+        params.dispatcher.sendFinalReply({
+          text: "Your authentication token has been invalidated. Please try signing in again.",
+        });
+        params.dispatcher.markComplete();
+        await params.dispatcher.waitForIdle();
+        return {
+          queuedFinal: true,
+          counts: params.dispatcher.getQueuedCounts(),
+        };
+      });
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-auth-started",
+        8000,
+      );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-offline-thomas-auth-started",
+        1000,
+      ).catch(() => undefined);
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can we still talk?",
+        idempotencyKey: "idem-offline-thomas-auth-started",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const error = await errorPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(error).toBeUndefined();
+      expect(text).toContain("Can we still talk?");
+      expect(text).not.toContain("authentication token");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credentials/i);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("Can we still talk?")]),
+      );
+    });
+  });
+
+  test("chat.send falls back to local Thomas when dispatch fails before final delivery", async () => {
+    await withMainSessionStore(async () => {
+      dispatchInboundMessageMock.mockRejectedValueOnce(
+        new Error("API provider returned a billing error - your API key has run out of credits."),
+      );
+
+      const finalPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload?.runId === "idem-offline-thomas-reject",
+        8000,
+      );
+      const errorPromise = onceMessage(
+        ws,
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "error" &&
+          o.payload?.runId === "idem-offline-thomas-reject",
+        250,
+      ).catch(() => undefined);
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "Can you talk with me?",
+        idempotencyKey: "idem-offline-thomas-reject",
+      });
+
+      expect(res.ok).toBe(true);
+      const final = await finalPromise;
+      const error = await errorPromise;
+      const text = extractFirstTextBlock(final.payload?.message);
+      expect(error).toBeUndefined();
+      expect(text).toContain("Can you talk with me?");
+      expect(text).not.toContain("billing error");
+      expect(text).not.toMatch(/free local Thomas mode|cloud model|fallback|credits/i);
+
+      const historyRes = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+        sessionKey: "main",
+      });
+      expect(historyRes.ok).toBe(true);
+      const historyTexts = collectHistoryTextValues(historyRes.payload?.messages ?? []);
+      expect(historyTexts).toEqual(
+        expect.arrayContaining([expect.stringContaining("Can you talk with me?")]),
+      );
     });
   });
 

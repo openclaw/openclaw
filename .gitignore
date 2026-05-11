@@ -90,6 +90,7 @@ apps/ios/*.mobileprovision
 
 # Local untracked files
 .local/
+/artifacts/
 docs/.local/
 docs/internal/
 tmp/

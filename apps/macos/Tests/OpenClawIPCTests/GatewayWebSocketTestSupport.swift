@@ -45,7 +45,10 @@ enum GatewayWebSocketTestSupport {
         return params?["scopes"] as? [String]
     }
 
-    static func connectOkData(id: String) -> Data {
+    static func connectOkData(id: String, canvasPluginSurfaceUrl: String? = nil) -> Data {
+        let pluginSurfaceUrlsJson = canvasPluginSurfaceUrl.map {
+            #","pluginSurfaceUrls":{"canvas":"\#($0)"}"#
+        } ?? ""
         let json = """
         {
           "type": "res",
@@ -64,6 +67,7 @@ enum GatewayWebSocketTestSupport {
             },
             "auth": { "role": "operator", "scopes": [] },
             "policy": { "maxPayload": 1, "maxBufferedBytes": 1, "tickIntervalMs": 30000 }
+            \(pluginSurfaceUrlsJson)
           }
         }
         """

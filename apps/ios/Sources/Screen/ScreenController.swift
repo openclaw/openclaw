@@ -51,7 +51,7 @@ final class ScreenController {
 
     func reload() {
         self.applyScrollBehavior()
-        guard let webView = self.activeWebView else { return }
+        guard let webView = activeWebView else { return }
 
         let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         if trimmed.isEmpty {
@@ -91,7 +91,7 @@ final class ScreenController {
     }
 
     func applyDebugStatusIfNeeded() {
-        guard let webView = self.activeWebView else { return }
+        guard let webView = activeWebView else { return }
         WebViewJavaScriptSupport.applyDebugStatus(
             webView: webView,
             enabled: self.debugStatusEnabled,
@@ -105,18 +105,8 @@ final class ScreenController {
     }
 
     func applyHomeCanvasStateIfNeeded() {
-        guard let webView = self.activeWebView else { return }
-        let payload = self.homeCanvasStateJSON ?? "null"
-        let js = """
-        (() => {
-          try {
-            const api = globalThis.__openclaw;
-            if (!api || typeof api.renderHome !== 'function') return;
-            api.renderHome(\(payload));
-          } catch (_) {}
-        })()
-        """
-        webView.evaluateJavaScript(js) { _, _ in }
+        guard let webView = activeWebView else { return }
+        WebViewJavaScriptSupport.applyHomeCanvasState(webView: webView, json: self.homeCanvasStateJSON)
     }
 
     func waitForA2UIReady(timeoutMs: Int) async -> Bool {
@@ -124,7 +114,7 @@ final class ScreenController {
         let deadline = clock.now.advanced(by: .milliseconds(timeoutMs))
         while clock.now < deadline {
             do {
-                let res = try await self.eval(javaScript: """
+                let res = try await eval(javaScript: """
                 (() => {
                   try {
                     const host = globalThis.openclawA2UI;
@@ -143,7 +133,7 @@ final class ScreenController {
     }
 
     func eval(javaScript: String) async throws -> String {
-        guard let webView = self.activeWebView else {
+        guard let webView = activeWebView else {
             throw NSError(domain: "Screen", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "web view unavailable",
             ])
@@ -152,7 +142,7 @@ final class ScreenController {
     }
 
     func snapshotPNGBase64(maxWidth: CGFloat? = nil) async throws -> String {
-        let image = try await self.snapshotImage(maxWidth: maxWidth)
+        let image = try await snapshotImage(maxWidth: maxWidth)
         guard let data = image.pngData() else {
             throw NSError(domain: "Screen", code: 1, userInfo: [
                 NSLocalizedDescriptionKey: "snapshot encode failed",
@@ -166,7 +156,7 @@ final class ScreenController {
         format: OpenClawCanvasSnapshotFormat,
         quality: Double? = nil) async throws -> String
     {
-        let image = try await self.snapshotImage(maxWidth: maxWidth)
+        let image = try await snapshotImage(maxWidth: maxWidth)
 
         let data: Data?
         switch format {
@@ -189,7 +179,7 @@ final class ScreenController {
         if let maxWidth {
             config.snapshotWidth = NSNumber(value: Double(maxWidth))
         }
-        guard let webView = self.activeWebView else {
+        guard let webView = activeWebView else {
             throw NSError(domain: "Screen", code: 3, userInfo: [
                 NSLocalizedDescriptionKey: "web view unavailable",
             ])
@@ -249,7 +239,7 @@ final class ScreenController {
             }
             return false
         }
-        guard let trusted = self.trustedRemoteA2UIURL else { return false }
+        guard let trusted = trustedRemoteA2UIURL else { return false }
         return Self.normalizeTrustedRemoteA2UIURL(from: url) == trusted
     }
 
@@ -272,7 +262,7 @@ final class ScreenController {
     }
 
     private func applyScrollBehavior() {
-        guard let webView = self.activeWebView else { return }
+        guard let webView = activeWebView else { return }
         let trimmed = self.urlString.trimmingCharacters(in: .whitespacesAndNewlines)
         let allowScroll = !trimmed.isEmpty
         let scrollView = webView.scrollView
