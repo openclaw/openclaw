@@ -21,6 +21,7 @@ const CHECK_IDS = {
   policyMissingFile: "policy/policy-jsonc-missing",
   policyMissingToolRisk: "policy/tools-missing-risk-level",
   policyMissingToolSensitivity: "policy/tools-missing-sensitivity-token",
+  policyUnknownToolRisk: "policy/tools-unknown-risk-level",
   policyUnknownToolSensitivity: "policy/tools-unknown-sensitivity-token",
 } as const;
 
@@ -31,10 +32,12 @@ export const POLICY_CHECK_IDS = [
   CHECK_IDS.policyAttestationMismatch,
   CHECK_IDS.policyDeniedChannelProvider,
   CHECK_IDS.policyMissingToolRisk,
+  CHECK_IDS.policyUnknownToolRisk,
   CHECK_IDS.policyMissingToolSensitivity,
   CHECK_IDS.policyUnknownToolSensitivity,
 ] as const;
 
+const KNOWN_RISK_LEVELS = ["low", "medium", "high", "critical"] as const;
 const KNOWN_SENSITIVITY_LEVELS = ["public", "internal", "confidential", "restricted"] as const;
 
 let registered = false;
@@ -67,6 +70,7 @@ export function registerPolicyDoctorChecks(host?: PolicyDoctorRegistrationHost):
   registerHealthCheck(policyAttestationMismatchCheck);
   registerHealthCheck(policyChannelsDeniedProviderCheck);
   registerHealthCheck(policyToolsMissingRiskCheck);
+  registerHealthCheck(policyToolsUnknownRiskCheck);
   registerHealthCheck(policyToolsMissingSensitivityCheck);
   registerHealthCheck(policyToolsUnknownSensitivityCheck);
   registered = true;
@@ -168,6 +172,16 @@ const policyToolsMissingRiskCheck: HealthCheck = {
   source: "policy",
   async detect(ctx) {
     return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyMissingToolRisk);
+  },
+};
+
+const policyToolsUnknownRiskCheck: HealthCheck = {
+  id: CHECK_IDS.policyUnknownToolRisk,
+  kind: "plugin",
+  description: "TOOLS.md policy entries use known risk levels.",
+  source: "policy",
+  async detect(ctx) {
+    return findingsForCheck(await evaluatePolicy(ctx), CHECK_IDS.policyUnknownToolRisk);
   },
 };
 
@@ -280,6 +294,7 @@ async function evaluatePolicyUncached(ctx: HealthCheckContext): Promise<PolicyEv
   ];
   if (policyRequirementEnabled(settings, policy, "requireRisk")) {
     policyFindings.push(...toolRiskFindings(policyFile.ocDocName, evidence));
+    policyFindings.push(...toolUnknownRiskFindings(policyFile.ocDocName, evidence));
   }
   if (policyRequirementEnabled(settings, policy, "requireSensitivity")) {
     policyFindings.push(...toolSensitivityFindings(policyFile.ocDocName, evidence));
@@ -480,11 +495,37 @@ function toolRiskFindings(
         source: "policy",
         path: "TOOLS.md",
         line: tool.line,
-        ocPath: tool.ocPath,
-        target: tool.ocPath,
+        ocPath: tool.source,
+        target: tool.source,
         requirement: `oc://${policyDocName}/tools/settings/requireRisk`,
         fixHint:
           "Declare risk:low, risk:medium, risk:high, risk:critical, or an R0-R5 review alias.",
+      };
+    });
+}
+
+function toolUnknownRiskFindings(
+  policyDocName: string,
+  evidence: PolicyEvidence,
+): readonly HealthFinding[] {
+  return evidence.tools
+    .filter(
+      (tool) =>
+        tool.risk !== undefined &&
+        !KNOWN_RISK_LEVELS.includes(tool.risk as (typeof KNOWN_RISK_LEVELS)[number]),
+    )
+    .map((tool): HealthFinding => {
+      return {
+        checkId: CHECK_IDS.policyUnknownToolRisk,
+        severity: "error",
+        message: `TOOLS.md tool '${tool.id}' declares unknown risk '${tool.risk}'.`,
+        source: "policy",
+        path: "TOOLS.md",
+        line: tool.line,
+        ocPath: tool.source,
+        target: tool.source,
+        requirement: `oc://${policyDocName}/tools/settings/requireRisk`,
+        fixHint: `Use one of: ${KNOWN_RISK_LEVELS.join(", ")}.`,
       };
     });
 }
@@ -503,8 +544,8 @@ function toolSensitivityFindings(
           source: "policy",
           path: "TOOLS.md",
           line: tool.line,
-          ocPath: tool.ocPath,
-          target: tool.ocPath,
+          ocPath: tool.source,
+          target: tool.source,
           requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
           fixHint: `Declare sensitivity as one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
         },
@@ -525,8 +566,8 @@ function toolSensitivityFindings(
         source: "policy",
         path: "TOOLS.md",
         line: tool.line,
-        ocPath: tool.ocPath,
-        target: tool.ocPath,
+        ocPath: tool.source,
+        target: tool.source,
         requirement: `oc://${policyDocName}/tools/settings/requireSensitivity`,
         fixHint: `Use one of: ${KNOWN_SENSITIVITY_LEVELS.join(", ")}.`,
       },
