@@ -12,6 +12,7 @@ import {
   evaluateMattermostMentionGate,
   formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
+  updateMattermostReplyDeliveryState,
   processMattermostReplayGuardedPost,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
@@ -404,6 +405,35 @@ describe("didMattermostDeliverVisibleReply", () => {
     expect(didMattermostDeliverVisibleReply("preview-finalized")).toBe(true);
     expect(didMattermostDeliverVisibleReply("normal-skipped")).toBe(false);
     expect(didMattermostDeliverVisibleReply("preview-retained")).toBe(false);
+  });
+});
+
+describe("updateMattermostReplyDeliveryState", () => {
+  it("latches visible delivery once any payload produced a visible reply", () => {
+    expect(
+      updateMattermostReplyDeliveryState({
+        previousDelivered: false,
+        resultKind: "normal-delivered",
+      }),
+    ).toBe(true);
+    expect(
+      updateMattermostReplyDeliveryState({
+        previousDelivered: true,
+        resultKind: "normal-skipped",
+      }),
+    ).toBe(true);
+    expect(
+      updateMattermostReplyDeliveryState({
+        previousDelivered: true,
+        resultKind: "preview-retained",
+      }),
+    ).toBe(true);
+    expect(
+      updateMattermostReplyDeliveryState({
+        previousDelivered: false,
+        resultKind: "normal-skipped",
+      }),
+    ).toBe(false);
   });
 });
 

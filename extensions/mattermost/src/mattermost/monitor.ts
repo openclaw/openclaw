@@ -309,6 +309,13 @@ export function didMattermostDeliverVisibleReply(
   return resultKind === "normal-delivered" || resultKind === "preview-finalized";
 }
 
+export function updateMattermostReplyDeliveryState(params: {
+  previousDelivered: boolean;
+  resultKind: LivePreviewFinalizerResultKind;
+}): boolean {
+  return params.previousDelivered || didMattermostDeliverVisibleReply(params.resultKind);
+}
+
 export function shouldFinalizeMattermostPreviewAfterDispatch(params: {
   finalCount: number;
   canFinalizeInPlace: boolean;
@@ -1793,7 +1800,10 @@ export async function monitorMattermostProvider(opts: MonitorMattermostOpts = {}
                   }
                 },
               });
-              anyReplyDelivered ||= didMattermostDeliverVisibleReply(result.kind);
+              anyReplyDelivered = updateMattermostReplyDeliveryState({
+                previousDelivered: anyReplyDelivered,
+                resultKind: result.kind,
+              });
             },
             onError: (err, info) => {
               runtime.error?.(`mattermost ${info.kind} reply failed: ${String(err)}`);
