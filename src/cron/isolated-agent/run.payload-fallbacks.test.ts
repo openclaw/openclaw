@@ -100,10 +100,9 @@ describe("runCronIsolatedAgentTurn — payload.fallbacks", () => {
 
     expect(result.status).toBe("ok");
     expect(runWithModelFallbackMock).toHaveBeenCalledOnce();
-    expect(runWithModelFallbackMock.mock.calls[0][0]).toMatchObject({
-      provider: "anthropic",
-      model: "claude-opus-4-6",
-    });
+    const fallbackRequest = runWithModelFallbackMock.mock.calls[0]?.[0];
+    expect(fallbackRequest?.provider).toBe("anthropic");
+    expect(fallbackRequest?.model).toBe("claude-opus-4-6");
     expect(runCliAgentMock.mock.calls.map((call) => [call[0].provider, call[0].model])).toEqual([
       ["claude-cli", "claude-opus-4-6"],
       ["claude-cli", "claude-sonnet-4-6"],

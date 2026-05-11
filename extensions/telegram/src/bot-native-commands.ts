@@ -2,16 +2,13 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
-  buildConfiguredModelCatalog,
+  loadModelCatalog,
   resolveAgentConfig,
   resolveDefaultModelForAgent,
-  resolveThinkingDefault,
+  resolveThinkingDefaultWithRuntimeCatalog,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-streaming";
-import {
-  resolveCommandAuthorizedFromAuthorizers,
-  resolveNativeCommandSessionTargets,
-} from "openclaw/plugin-sdk/command-auth-native";
+import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-auth-native";
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
@@ -23,15 +20,15 @@ import {
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
-import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ChannelGroupPolicy } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ReplyToMode,
   TelegramAccountConfig,
   TelegramDirectConfig,
   TelegramGroupConfig,
   TelegramTopicConfig,
-} from "openclaw/plugin-sdk/config-types";
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -49,11 +46,11 @@ import {
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "openclaw/plugin-sdk/text-runtime";
-import { resolveTelegramDmAllow } from "./access-groups.js";
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount } from "./accounts.js";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
-import { isSenderAllowed, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
+import { normalizeDmAllowFromWithStore, resolveTelegramEffectiveDmPolicy } from "./bot-access.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import type { TelegramMediaRef } from "./bot-message-context.js";
 import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
@@ -99,6 +96,7 @@ import {
   evaluateTelegramGroupPolicyAccess,
 } from "./group-access.js";
 import { resolveTelegramGroupPromptSettings } from "./group-config-helpers.js";
+import { resolveTelegramCommandIngressAuthorization } from "./ingress.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import { recordSentMessage } from "./sent-message-cache.js";
 
@@ -258,13 +256,26 @@ function resolveTelegramCommandMenuModelContext(params: {
   }
 }
 
-function resolveTelegramThinkMenuCurrentLevel(params: {
+async function resolveTelegramDefaultThinkingLevel(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): Promise<string> {
+  return resolveThinkingDefaultWithRuntimeCatalog({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    loadModelCatalog: () => loadModelCatalog({ config: params.cfg }),
+  });
+}
+
+async function resolveTelegramThinkMenuCurrentLevel(params: {
   cfg: OpenClawConfig;
   agentId: string;
   provider?: string;
   model?: string;
   thinkingLevel?: string;
-}): string {
+}): Promise<string> {
   const explicit = normalizeOptionalString(params.thinkingLevel);
   if (explicit) {
     return explicit;
@@ -279,11 +290,10 @@ function resolveTelegramThinkMenuCurrentLevel(params: {
     cfg: params.cfg,
     agentId: params.agentId,
   });
-  return resolveThinkingDefault({
+  return await resolveTelegramDefaultThinkingLevel({
     cfg: params.cfg,
     provider: params.provider ?? defaultModel.provider,
     model: params.model ?? defaultModel.model,
-    catalog: buildConfiguredModelCatalog({ cfg: params.cfg }),
   });
 }
 
@@ -344,7 +354,9 @@ async function cleanupTelegramProgressPlaceholder(params: {
       runtime: params.runtime,
       fn: () => params.bot.api.deleteMessage(params.chatId, progressMessageId),
     });
-  } catch {}
+  } catch {
+    // Best-effort cleanup before fallback or suppression exits.
+  }
 }
 
 async function resolveTelegramNativeCommandThreadContext(params: {
@@ -406,6 +418,7 @@ export type RegisterTelegramHandlerParams = {
     options?: TelegramMessageContextOptions,
     replyMedia?: TelegramMediaRef[],
     replyChain?: import("./message-cache.js").TelegramReplyChainEntry[],
+    promptContext?: import("./bot-message-context.types.js").TelegramPromptContextEntry[],
   ) => Promise<void>;
   logger: ReturnType<typeof getChildLogger>;
 };
@@ -525,15 +538,7 @@ async function resolveTelegramCommandAuth(params: {
     logVerbose(`Blocked telegram command in DM ${chatId}: requireTopic=true but no topic present`);
     return null;
   }
-  const dmAllow = await resolveTelegramDmAllow({
-    cfg,
-    groupAllowOverride,
-    allowFrom,
-    accountId,
-    senderId,
-    storeAllowFrom: isGroup ? [] : storeAllowFrom,
-    dmPolicy: effectiveDmPolicy,
-  });
+  const dmAllowFrom = groupAllowOverride ?? allowFrom;
   const commandsAllowFromConfigured = isTelegramCommandsAllowFromConfigured(cfg);
   const commandsAllowFromAccess = commandsAllowFromConfigured
     ? resolveTelegramCommandAuthorization({
@@ -621,31 +626,34 @@ async function resolveTelegramCommandAuth(params: {
     }
   }
 
-  const senderAllowed = isSenderAllowed({
-    allow: dmAllow.effectiveAllow,
+  const expandedDmAllowFrom = await expandTelegramAllowFromWithAccessGroups({
+    cfg,
+    allowFrom: dmAllowFrom,
+    accountId,
     senderId,
-    senderUsername,
   });
-  const groupSenderAllowed = isGroup
-    ? isSenderAllowed({ allow: effectiveGroupAllow, senderId, senderUsername })
-    : false;
-  const ownerAuthorizerConfigured = ownerAccess.senderIsOwner || ownerAccess.ownerList.length > 0;
+  const dmAllow = normalizeDmAllowFromWithStore({
+    allowFrom: expandedDmAllowFrom,
+    storeAllowFrom: isGroup ? [] : storeAllowFrom,
+    dmPolicy: effectiveDmPolicy,
+  });
   const commandAuthorized = commandsAllowFromConfigured
     ? Boolean(commandsAllowFromAccess?.isAuthorizedSender)
-    : resolveCommandAuthorizedFromAuthorizers({
-        useAccessGroups,
-        authorizers: [
-          { configured: dmAllow.effectiveAllow.hasEntries, allowed: senderAllowed },
-          ...(isGroup
-            ? [{ configured: effectiveGroupAllow.hasEntries, allowed: groupSenderAllowed }]
-            : []),
-          {
-            configured: ownerAuthorizerConfigured,
-            allowed: ownerAccess.senderIsOwner,
-          },
-        ],
-        modeWhenAccessGroupsOff: "configured",
-      });
+    : (
+        await resolveTelegramCommandIngressAuthorization({
+          accountId,
+          cfg,
+          dmPolicy: effectiveDmPolicy,
+          isGroup,
+          chatId,
+          resolvedThreadId,
+          senderId,
+          effectiveDmAllow: dmAllow,
+          effectiveGroupAllow,
+          ownerAccess,
+          eventKind: "native-command",
+        })
+      ).authorized;
   if (requireAuth && !commandAuthorized) {
     return await rejectNotAuthorized();
   }
@@ -1054,7 +1062,7 @@ export const registerTelegramNativeCommands = ({
             menu,
             currentThinkingLevel:
               commandDefinition.key === "think"
-                ? resolveTelegramThinkMenuCurrentLevel({
+                ? await resolveTelegramThinkMenuCurrentLevel({
                     cfg: runtimeCfg,
                     agentId: route.agentId,
                     ...menuModelContext,
@@ -1149,6 +1157,7 @@ export const registerTelegramNativeCommands = ({
           CommandTargetSessionKey: commandTargetSessionKey,
           MessageThreadId: threadSpec.id,
           IsForum: isForum,
+          // Originating context for sub-agent announce routing
           OriginatingChannel: "telegram" as const,
           OriginatingTo: originatingTo,
         });
@@ -1328,7 +1337,9 @@ export const registerTelegramNativeCommands = ({
             if (typeof maybeMessageId === "number") {
               progressMessageId = maybeMessageId;
             }
-          } catch {}
+          } catch {
+            // Fall back to the normal final reply path if the placeholder send fails.
+          }
         }
 
         const sessionFileContext = await resolveTelegramCommandSessionFile({
@@ -1408,7 +1419,9 @@ export const registerTelegramNativeCommands = ({
               groupId: isGroup ? String(chatId) : undefined,
             });
             return;
-          } catch {}
+          } catch {
+            // Fall through to cleanup + normal delivered reply if editing fails.
+          }
         }
         await cleanupTelegramProgressPlaceholder({
           bot,

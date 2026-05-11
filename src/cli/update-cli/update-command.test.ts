@@ -249,7 +249,7 @@ describe("collectMissingPluginInstallPayloads", () => {
             },
           },
         }),
-      ).resolves.toEqual([]);
+      ).resolves.toStrictEqual([]);
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }
@@ -531,18 +531,17 @@ describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
     }));
     const waitForHealthy = vi.fn(async () => stillUnhealthy);
 
-    await expect(
-      recoverLaunchAgentAndRecheckGatewayHealth({
-        health: unhealthy,
-        service,
-        port: 18790,
-        expectedVersion: "2026.5.3",
-        deps: { recoverLaunchAgent, waitForHealthy },
-      }),
-    ).resolves.toMatchObject({
-      health: { healthy: false, waitOutcome: "timeout" },
-      launchAgentRecovery: { attempted: true, recovered: true },
+    const result = await recoverLaunchAgentAndRecheckGatewayHealth({
+      health: unhealthy,
+      service,
+      port: 18790,
+      expectedVersion: "2026.5.3",
+      deps: { recoverLaunchAgent, waitForHealthy },
     });
+    expect(result.health.healthy).toBe(false);
+    expect(result.health.waitOutcome).toBe("timeout");
+    expect(result.launchAgentRecovery?.attempted).toBe(true);
+    expect(result.launchAgentRecovery?.recovered).toBe(true);
   });
 });
 

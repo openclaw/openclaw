@@ -18,7 +18,7 @@ describe("fireAndForgetHook", () => {
       logger,
     );
     await Promise.resolve();
-    expect(logger).toHaveBeenCalledWith(expect.stringMatching(/^hook failed: boom forged secret/));
+    expect(logger).toHaveBeenCalledWith("hook failed: boom forged secret ***");
     const message = requireFirstLog(logger);
     expect(message).not.toContain("\n");
     expect(message).not.toContain("sk-test1234567890");
@@ -67,12 +67,14 @@ describe("fireAndForgetBoundedHook", () => {
       { maxConcurrency: 1, maxQueue: 1, timeoutMs: 10_000 },
     );
 
-    await Promise.resolve();
-    expect(starts).toEqual(["first"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first"]);
+    });
     expect(logger).toHaveBeenCalledWith("hook failed: queue full; dropping hook");
 
     resolveFirst?.();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(starts).toEqual(["first", "second"]);
+    await vi.waitFor(() => {
+      expect(starts).toEqual(["first", "second"]);
+    });
   });
 });

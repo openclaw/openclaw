@@ -6,6 +6,11 @@ import { moveSingleAccountChannelSectionToDefaultAccount } from "../../channels/
 import type { ChannelSetupPlugin } from "../../channels/plugins/setup-wizard-types.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId, ChannelSetupInput } from "../../channels/plugins/types.public.js";
+import { formatCliCommand } from "../../cli/command-format.js";
+import {
+  formatUnknownChannelMessage,
+  formatUnsupportedChannelActionMessage,
+} from "../../cli/error-format.js";
 import { commitConfigWithPendingPluginInstalls } from "../../cli/plugins-install-record-commit.js";
 import { refreshPluginRegistryAfterConfigMutation } from "../../cli/plugins-registry-refresh.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -14,6 +19,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
+import { WizardCancelledError } from "../../wizard/prompts.js";
 import { applyAgentBindings, describeBinding } from "../agents.bindings.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import { applyAccountName, applyChannelAccountConfig } from "./add-mutators.js";
@@ -121,6 +127,22 @@ export async function channelsAddCommand(
   runtime: RuntimeEnv = defaultRuntime,
   params?: { hasFlags?: boolean },
 ) {
+  try {
+    return await channelsAddCommandImpl(opts, runtime, params);
+  } catch (err) {
+    if (err instanceof WizardCancelledError) {
+      runtime.exit(1);
+      return;
+    }
+    throw err;
+  }
+}
+
+async function channelsAddCommandImpl(
+  opts: ChannelsAddOptions,
+  runtime: RuntimeEnv,
+  params?: { hasFlags?: boolean },
+) {
   const configSnapshot = await requireValidConfigFileSnapshot(runtime);
   if (!configSnapshot) {
     return;
@@ -149,6 +171,8 @@ export async function channelsAddCommand(
         postWriteHooks.collect(hook);
       },
       promptAccountIds: true,
+      deferStatusUntilSelection: true,
+      skipStatusNote: true,
       onSelection: (value) => {
         selection = value;
       },
@@ -160,12 +184,12 @@ export async function channelsAddCommand(
       },
     });
     if (selection.length === 0) {
-      await prompter.outro("No channels selected.");
+      await prompter.outro("No channel changes made.");
       return;
     }
 
     const wantsNames = await prompter.confirm({
-      message: "Add display names for these accounts? (optional)",
+      message: "Name these channel accounts now? (optional)",
       initialValue: false,
     });
     if (wantsNames) {
@@ -178,7 +202,7 @@ export async function channelsAddCommand(
         const snapshot = plugin?.config.describeAccount?.(account, nextConfig);
         const existingName = snapshot?.name ?? account?.name;
         const name = await prompter.text({
-          message: `${channel} account name (${accountId})`,
+          message: `${channel} display name for account "${accountId}"`,
           initialValue: existingName,
         });
         if (name?.trim()) {
@@ -208,7 +232,7 @@ export async function channelsAddCommand(
       );
     if (bindTargets.length > 0) {
       const bindNow = await prompter.confirm({
-        message: "Bind configured channel accounts to agents now?",
+        message: "Route these channel accounts to agents now?",
         initialValue: true,
       });
       if (bindNow) {
@@ -216,7 +240,7 @@ export async function channelsAddCommand(
         const defaultAgentId = resolveDefaultAgentId(nextConfig);
         for (const target of bindTargets) {
           const targetAgentId = await prompter.select({
-            message: `Route ${target.channel} account "${target.accountId}" to agent`,
+            message: `Send ${target.channel}/${target.accountId} messages to agent`,
             options: agentSummaries.map((agent) => ({
               value: agent.id,
               label: agent.isDefault ? `${agent.id} (default)` : agent.id,
@@ -344,8 +368,8 @@ export async function channelsAddCommand(
 
   if (!channel) {
     const hint = catalogEntry
-      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install.`
-      : `Unknown channel: ${rawChannel}`;
+      ? `Plugin ${catalogEntry.meta.label} could not be loaded after install. Run openclaw doctor --fix, then retry openclaw channels add.`
+      : formatUnknownChannelMessage({ channel: rawChannel });
     runtime.error(hint);
     runtime.exit(1);
     return;
@@ -353,7 +377,12 @@ export async function channelsAddCommand(
 
   const plugin = await loadScopedPlugin(channel, catalogEntry?.pluginId);
   if (!plugin?.setup?.applyAccountConfig) {
-    runtime.error(`Channel ${channel} does not support add.`);
+    runtime.error(
+      `${formatUnsupportedChannelActionMessage({
+        channel,
+        action: "non-interactive add",
+      })} Run ${formatCliCommand("openclaw channels add")} with no flags for guided setup.`,
+    );
     runtime.exit(1);
     return;
   }

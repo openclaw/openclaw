@@ -40,7 +40,7 @@ describe("plugin extension import boundary inventory", () => {
         file === "src/plugins/bundled-web-search-registry.ts",
     );
 
-    expect(blockedShimFiles).toEqual([]);
+    expect(blockedShimFiles).toStrictEqual([]);
   });
 
   it("ignores boundary shims by scope", async () => {
@@ -50,7 +50,7 @@ describe("plugin extension import boundary inventory", () => {
       (file) => file.startsWith("src/plugin-sdk/") || file.startsWith("src/plugin-sdk-internal/"),
     );
 
-    expect(boundaryShimFiles).toEqual([]);
+    expect(boundaryShimFiles).toStrictEqual([]);
   });
 
   it("produces stable sorted output", async () => {

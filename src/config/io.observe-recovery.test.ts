@@ -91,6 +91,44 @@ describe("config observe recovery", () => {
     return clobberFiles;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    try {
+      await fsp.stat(targetPath);
+      throw new Error(`Expected ${targetPath} to be missing`);
+    } catch (error) {
+      expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+    }
+  }
+
+  function warnMessages(warn: ReturnType<typeof vi.fn>): string[] {
+    return warn.mock.calls.map(([message]) => String(message));
+  }
+
+  function expectWarnContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
+    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(true);
+  }
+
+  function expectWarnNotContaining(warn: ReturnType<typeof vi.fn>, expected: string) {
+    expect(warnMessages(warn).some((message) => message.includes(expected))).toBe(false);
+  }
+
+  function observeSuspicious(observe: Record<string, unknown> | undefined): string[] {
+    const suspicious = observe?.suspicious;
+    expect(Array.isArray(suspicious)).toBe(true);
+    return suspicious as string[];
+  }
+
+  function expectSuspiciousIncludes(
+    observe: Record<string, unknown> | undefined,
+    expected: string,
+  ) {
+    expect(observeSuspicious(observe)).toContain(expected);
+  }
+
+  function expectSuspiciousMatching(observe: Record<string, unknown> | undefined, pattern: RegExp) {
+    expect(observeSuspicious(observe).some((entry) => pattern.test(entry))).toBe(true);
+  }
+
   async function readLastObserveEvent(
     auditPath: string,
   ): Promise<Record<string, unknown> | undefined> {
@@ -236,15 +274,12 @@ describe("config observe recovery", () => {
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
       await expect(fsp.readFile(configPath, "utf-8")).resolves.not.toBe(clobberedUpdateChannelRaw);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restored from backup:"),
-      );
+      expectWarnContaining(warn, "Config auto-restored from backup:");
 
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
-      expect(observe?.suspicious).toEqual(
-        expect.arrayContaining(["gateway-mode-missing-vs-last-good", "update-channel-only-root"]),
-      );
+      expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
+      expectSuspiciousIncludes(observe, "update-channel-only-root");
     });
   });
 
@@ -263,7 +298,7 @@ describe("config observe recovery", () => {
       expect((recovered.parsed as { meta?: unknown }).meta).toEqual(recoverableTelegramConfig.meta);
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
-      expect(observe?.suspicious).toEqual(expect.arrayContaining(["missing-meta-vs-last-good"]));
+      expectSuspiciousIncludes(observe, "missing-meta-vs-last-good");
     });
   });
 
@@ -282,9 +317,7 @@ describe("config observe recovery", () => {
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
-      expect(observe?.suspicious).toEqual(
-        expect.arrayContaining(["gateway-mode-missing-vs-last-good"]),
-      );
+      expectSuspiciousIncludes(observe, "gateway-mode-missing-vs-last-good");
     });
   });
 
@@ -331,9 +364,7 @@ describe("config observe recovery", () => {
       ).toHaveLength(60);
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
-      expect(observe?.suspicious).toEqual(
-        expect.arrayContaining([expect.stringMatching(/^size-drop-vs-last-good:/)]),
-      );
+      expectSuspiciousMatching(observe, /^size-drop-vs-last-good:/);
     });
   });
 
@@ -351,7 +382,7 @@ describe("config observe recovery", () => {
 
       expect(recovered.parsed).toEqual(editedConfig);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(edited.raw);
-      await expect(fsp.stat(auditPath)).rejects.toThrow();
+      await expectPathMissing(auditPath);
     });
   });
 
@@ -378,12 +409,8 @@ describe("config observe recovery", () => {
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restore from backup failed:"),
-      );
-      expect(warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restored from backup:"),
-      );
+      expectWarnContaining(warn, "Config auto-restore from backup failed:");
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
 
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(false);
@@ -415,13 +442,9 @@ describe("config observe recovery", () => {
 
       expect((recovered.parsed as { gateway?: { mode?: string } }).gateway?.mode).toBe("local");
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(clobbered.raw);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restore from backup failed:"),
-      );
-      expect(warn).toHaveBeenCalledWith(expect.stringContaining("EACCES: permission denied"));
-      expect(warn).not.toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restored from backup:"),
-      );
+      expectWarnContaining(warn, "Config auto-restore from backup failed:");
+      expectWarnContaining(warn, "EACCES: permission denied");
+      expectWarnNotContaining(warn, "Config auto-restored from backup:");
 
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(false);
@@ -520,10 +543,9 @@ describe("config observe recovery", () => {
         }),
       ).resolves.toBe(true);
 
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Config health-state write failed: ${healthPath}: health write failed`,
-        ),
+      expectWarnContaining(
+        warn,
+        `Config health-state write failed: ${healthPath}: health write failed`,
       );
     });
   });
@@ -540,10 +562,9 @@ describe("config observe recovery", () => {
         configPath,
       });
 
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          `Config health-state write failed: ${healthPath}: health write failed`,
-        ),
+      expectWarnContaining(
+        warn,
+        `Config health-state write failed: ${healthPath}: health write failed`,
       );
     });
   });
@@ -579,12 +600,8 @@ describe("config observe recovery", () => {
 
       expect(restored).toBe(true);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config auto-restored from last-known-good:"),
-      );
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Rejected validation details: gateway.mode: Expected string."),
-      );
+      expectWarnContaining(warn, "Config auto-restored from last-known-good:");
+      expectWarnContaining(warn, "Rejected validation details: gateway.mode: Expected string.");
       const observe = await readLastObserveEvent(auditPath);
       expect(observe?.restoredFromBackup).toBe(true);
       expect(observe?.restoredBackupPath).toBe(resolveLastKnownGoodConfigPath(configPath));
@@ -646,9 +663,7 @@ describe("config observe recovery", () => {
 
       expect(restored).toBe(false);
       await expect(fsp.readFile(configPath, "utf-8")).resolves.toBe(active.raw);
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config last-known-good recovery skipped"),
-      );
+      expectWarnContaining(warn, "Config last-known-good recovery skipped");
     });
   });
 
@@ -717,10 +732,8 @@ describe("config observe recovery", () => {
       await expect(
         promoteConfigSnapshotToLastKnownGood({ deps, snapshot, logger: deps.logger }),
       ).resolves.toBe(false);
-      await expect(fsp.stat(resolveLastKnownGoodConfigPath(configPath))).rejects.toThrow();
-      expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining("Config last-known-good promotion skipped"),
-      );
+      await expectPathMissing(resolveLastKnownGoodConfigPath(configPath));
+      expectWarnContaining(warn, "Config last-known-good promotion skipped");
     });
   });
 });

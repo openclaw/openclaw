@@ -94,22 +94,26 @@ describe("modelsAuthListCommand", () => {
       cfg: {},
       provider: "openai-codex",
     });
-    expect(runtime.jsonPayloads).toHaveLength(1);
+    expect(runtime.jsonPayloads).toStrictEqual([
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw/agents/coder",
+        agentId: "coder",
+        authStatePath: "/tmp/openclaw/agents/coder/auth-state.json",
+        profiles: [
+          {
+            cooldownUntil: "2027-01-15T08:00:10.000Z",
+            email: "user@example.com",
+            expiresAt: "2027-01-15T08:00:00.000Z",
+            id: "openai-codex:user@example.com",
+            label: "openai-codex:user@example.com",
+            provider: "openai-codex",
+            type: "oauth",
+          },
+        ],
+        provider: "openai-codex",
+      }),
+    ]);
     expect(JSON.stringify(runtime.jsonPayloads[0])).not.toContain("secret");
-    expect(runtime.jsonPayloads[0]).toMatchObject({
-      agentId: "coder",
-      provider: "openai-codex",
-      profiles: [
-        {
-          id: "openai-codex:user@example.com",
-          provider: "openai-codex",
-          type: "oauth",
-          email: "user@example.com",
-          expiresAt: "2027-01-15T08:00:00.000Z",
-          cooldownUntil: "2027-01-15T08:00:10.000Z",
-        },
-      ],
-    });
   });
 
   it("prints an empty profile list without failing", async () => {

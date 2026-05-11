@@ -1,4 +1,4 @@
-import type { AgentTool } from "@mariozechner/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { TSchema } from "typebox";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "auto";
@@ -29,6 +29,7 @@ export type AgentRuntimeFailoverReason =
   | "rate_limit"
   | "overloaded"
   | "billing"
+  | "server_error"
   | "timeout"
   | "model_not_found"
   | "session_expired"
@@ -266,6 +267,7 @@ export type AgentRuntimeAuthPlan = {
   authProfileProviderForAuth: string;
   harnessAuthProvider?: string;
   forwardedAuthProfileId?: string;
+  forwardedAuthProfileCandidateIds?: string[];
 };
 
 export type AgentRuntimePromptPlan = {
@@ -388,7 +390,9 @@ export type BuildAgentRuntimePlanParams = {
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
   authProfileProvider?: string;
+  authProfileMode?: string;
   sessionAuthProfileId?: string;
+  sessionAuthProfileCandidateIds?: string[];
   agentId?: string;
   thinkingLevel?: AgentRuntimeThinkLevel;
   extraParamsOverride?: Record<string, unknown>;

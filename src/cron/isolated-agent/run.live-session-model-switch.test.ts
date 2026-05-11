@@ -160,10 +160,8 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(result.status).toBe("error");
     expect(String(result.error)).toContain("transient network error");
     expect(updateSessionStoreMock).toHaveBeenCalled();
-    expect(cronSession.sessionEntry).toMatchObject({
-      model: "claude-sonnet-4-6",
-      modelProvider: "anthropic",
-    });
+    expect(cronSession.sessionEntry.model).toBe("claude-sonnet-4-6");
+    expect(cronSession.sessionEntry.modelProvider).toBe("anthropic");
   });
 
   it("retries with switched auth profile state from LiveSessionModelSwitchError", async () => {
@@ -209,16 +207,13 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
 
     expect(result.status).toBe("ok");
     expect(runEmbeddedPiAgentMock).toHaveBeenCalledTimes(2);
-    expect(runEmbeddedPiAgentMock.mock.calls[1]?.[0]).toMatchObject({
-      provider: "anthropic",
-      model: "claude-sonnet-4-6",
-      authProfileId: "profile-b",
-      authProfileIdSource: "user",
-    });
-    expect(cronSession.sessionEntry).toMatchObject({
-      authProfileOverride: "profile-b",
-      authProfileOverrideSource: "user",
-    });
+    const retryParams = runEmbeddedPiAgentMock.mock.calls[1]?.[0];
+    expect(retryParams?.provider).toBe("anthropic");
+    expect(retryParams?.model).toBe("claude-sonnet-4-6");
+    expect(retryParams?.authProfileId).toBe("profile-b");
+    expect(retryParams?.authProfileIdSource).toBe("user");
+    expect(cronSession.sessionEntry.authProfileOverride).toBe("profile-b");
+    expect(cronSession.sessionEntry.authProfileOverrideSource).toBe("user");
   });
 
   it("returns error (not infinite loop) when LiveSessionModelSwitchError is thrown repeatedly", async () => {
@@ -266,7 +261,9 @@ describe("runCronIsolatedAgentTurn — LiveSessionModelSwitchError retry (#57206
     expect(result.status).toBe("error");
     // Circuit breaker: max 2 retries → 3 total attempts (initial + 2 retries)
     expect(callCount).toBe(3);
-    expect(logWarnMock).toHaveBeenCalledWith(expect.stringContaining("retry limit reached"));
+    expect(logWarnMock).toHaveBeenCalledWith(
+      "[cron:cron-model-switch-job] LiveSessionModelSwitchError retry limit reached (2); aborting",
+    );
   });
 
   it("does not retry when the thrown error is not a LiveSessionModelSwitchError", async () => {

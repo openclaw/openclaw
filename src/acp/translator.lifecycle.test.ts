@@ -141,11 +141,11 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(capabilities.loadSession).toBe(true);
     expect(typeof agent.loadSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.list).toEqual({});
+    expect(capabilities.sessionCapabilities?.list).toStrictEqual({});
     expect(typeof agent.listSessions).toBe("function");
-    expect(capabilities.sessionCapabilities?.resume).toEqual({});
+    expect(capabilities.sessionCapabilities?.resume).toStrictEqual({});
     expect(typeof agent.resumeSession).toBe("function");
-    expect(capabilities.sessionCapabilities?.close).toEqual({});
+    expect(capabilities.sessionCapabilities?.close).toStrictEqual({});
     expect(typeof agent.closeSession).toBe("function");
     expect(capabilities.sessionCapabilities?.fork).toBeUndefined();
     expect("unstable_listSessions" in agent).toBe(false);
@@ -336,22 +336,25 @@ describe("acp translator stable lifecycle handlers", () => {
     const result = await agent.resumeSession(createResumeSessionRequest("agent:main:work"));
 
     expect(result.modes?.currentModeId).toBe("adaptive");
-    expect(result.configOptions).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: "thought_level",
-          currentValue: "adaptive",
-        }),
-      ]),
-    );
+    if (!result.configOptions) {
+      throw new Error("expected resume session config options");
+    }
+    const thoughtLevelOption = result.configOptions.find((option) => option.id === "thought_level");
+    expect(thoughtLevelOption?.currentValue).toBe("adaptive");
     expect(sessionStore.getSession("agent:main:work")?.sessionKey).toBe("agent:main:work");
-    expect(request).not.toHaveBeenCalledWith("sessions.get", expect.anything());
+    const requestCalls = (request as unknown as { mock: { calls: Array<[string]> } }).mock.calls;
+    expect(requestCalls.map((call) => call[0])).not.toContain("sessions.get");
     expect(sessionUpdate).toHaveBeenCalledWith({
       sessionId: "agent:main:work",
       update: {
         sessionUpdate: "session_info_update",
         title: "Work session",
         updatedAt: "2024-03-09T16:00:00.000Z",
+        _meta: {
+          sessionKey: "agent:main:work",
+          kind: "direct",
+          spawnedWorkspaceDir: "/tmp/openclaw",
+        },
       },
     });
 
@@ -401,7 +404,9 @@ describe("acp translator stable lifecycle handlers", () => {
     });
     const pending = await startPendingPrompt({ agent, sentRunIds, sessionId: "session-1" });
 
-    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toEqual({});
+    await expect(agent.closeSession(createCloseSessionRequest("session-1"))).resolves.toStrictEqual(
+      {},
+    );
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
       sessionKey: "agent:main:work",

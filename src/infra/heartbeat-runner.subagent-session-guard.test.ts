@@ -68,15 +68,11 @@ describe("runHeartbeatOnce", () => {
       });
 
       expect(replySpy).toHaveBeenCalledTimes(1);
-      expect(replySpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          SessionKey: mainSessionKey,
-          OriginatingChannel: undefined,
-          OriginatingTo: undefined,
-        }),
-        expect.anything(),
-        cfg,
-      );
+      const [replyParams, _replyRuntime, replyConfig] = replySpy.mock.calls[0] ?? [];
+      expect(replyParams?.SessionKey).toBe(mainSessionKey);
+      expect(replyParams?.OriginatingChannel).toBeUndefined();
+      expect(replyParams?.OriginatingTo).toBeUndefined();
+      expect(replyConfig).toBe(cfg);
     });
   });
 });

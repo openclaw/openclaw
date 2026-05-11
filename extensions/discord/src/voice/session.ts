@@ -50,7 +50,8 @@ export type VoiceRealtimeSession = {
   ) => VoiceRealtimeSpeakerTurn;
   close: () => void;
   connect: () => Promise<void>;
-  handleBargeIn: () => void;
+  handleBargeIn: (reason?: string) => void;
+  isBargeInEnabled: () => boolean;
 };
 
 export type VoiceSessionEntry = {
@@ -59,6 +60,7 @@ export type VoiceSessionEntry = {
   channelId: string;
   channelName?: string;
   sessionChannelId: string;
+  voiceSessionKey: string;
   route: ReturnType<typeof resolveAgentRoute>;
   connection: import("@discordjs/voice").VoiceConnection;
   player: import("@discordjs/voice").AudioPlayer;

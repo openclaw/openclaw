@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import {
+  resolveAgentConfig,
   resolveAgentDir,
   resolveAgentWorkspaceDir,
   resolveSessionAgentId,
@@ -19,6 +20,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
+import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import type { ReplyPayload } from "../reply-payload.js";
 import type { MsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -43,10 +45,34 @@ import { hasInboundMedia } from "./inbound-media.js";
 import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { initSessionState } from "./session.js";
-import { resolveStoredModelOverride } from "./stored-model-override.js";
+import {
+  isStaleHeartbeatAutoFallbackOverride,
+  resolveStoredModelOverride,
+} from "./stored-model-override.js";
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
+
+function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
+  const stripped = stripHeartbeatToken(text, {
+    mode: "heartbeat",
+    maxAckChars: ackMaxChars,
+  });
+  return {
+    shouldClear: stripped.shouldSkip,
+    replayText: stripped.didStrip && stripped.text ? stripped.text : text,
+  };
+}
+
+function resolveHeartbeatAckMaxChars(cfg: OpenClawConfig, agentId: string): number {
+  const agentHeartbeat = resolveAgentConfig(cfg, agentId)?.heartbeat;
+  return Math.max(
+    0,
+    agentHeartbeat?.ackMaxChars ??
+      cfg.agents?.defaults?.heartbeat?.ackMaxChars ??
+      DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  );
+}
 
 const sessionResetModelRuntimeLoader = createLazyImportLoader(
   () => import("./session-reset-model.runtime.js"),
@@ -368,29 +394,64 @@ export async function getReplyFromConfig(
     // If it's a user message, we deliver the lost reply first, then continue.
     // For now, let's just return the lost reply if it's a heartbeat.
     if (opts?.isHeartbeat) {
-      const updatedAt = Date.now();
-      const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
-      sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
-      sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
-      sessionEntry.pendingFinalDeliveryLastError = null;
-      sessionEntry.updatedAt = updatedAt;
-      if (sessionKey && sessionStore) {
-        sessionStore[sessionKey] = sessionEntry;
+      const heartbeatPending = classifyHeartbeatPendingFinalDelivery(
+        text,
+        resolveHeartbeatAckMaxChars(cfg, agentId),
+      );
+      if (heartbeatPending.shouldClear) {
+        sessionEntry.pendingFinalDelivery = undefined;
+        sessionEntry.pendingFinalDeliveryText = undefined;
+        sessionEntry.pendingFinalDeliveryCreatedAt = undefined;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = undefined;
+        sessionEntry.pendingFinalDeliveryAttemptCount = undefined;
+        sessionEntry.pendingFinalDeliveryLastError = undefined;
+        sessionEntry.pendingFinalDeliveryContext = undefined;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDelivery: undefined,
+              pendingFinalDeliveryText: undefined,
+              pendingFinalDeliveryCreatedAt: undefined,
+              pendingFinalDeliveryLastAttemptAt: undefined,
+              pendingFinalDeliveryAttemptCount: undefined,
+              pendingFinalDeliveryLastError: undefined,
+              pendingFinalDeliveryContext: undefined,
+            }),
+          });
+        }
+      } else {
+        const updatedAt = Date.now();
+        const attemptCount = (sessionEntry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        sessionEntry.pendingFinalDeliveryLastAttemptAt = updatedAt;
+        sessionEntry.pendingFinalDeliveryAttemptCount = attemptCount;
+        sessionEntry.pendingFinalDeliveryLastError = null;
+        sessionEntry.pendingFinalDeliveryText = heartbeatPending.replayText;
+        sessionEntry.updatedAt = updatedAt;
+        if (sessionKey && sessionStore) {
+          sessionStore[sessionKey] = sessionEntry;
+        }
+        if (sessionKey && storePath) {
+          const { updateSessionStoreEntry } = await import("../../config/sessions.js");
+          await updateSessionStoreEntry({
+            storePath,
+            sessionKey,
+            update: async () => ({
+              pendingFinalDeliveryText: heartbeatPending.replayText,
+              pendingFinalDeliveryLastAttemptAt: updatedAt,
+              pendingFinalDeliveryAttemptCount: attemptCount,
+              pendingFinalDeliveryLastError: null,
+              updatedAt,
+            }),
+          });
+        }
+        return { text: heartbeatPending.replayText };
       }
-      if (sessionKey && storePath) {
-        const { updateSessionStoreEntry } = await import("../../config/sessions.js");
-        await updateSessionStoreEntry({
-          storePath,
-          sessionKey,
-          update: async () => ({
-            pendingFinalDeliveryLastAttemptAt: updatedAt,
-            pendingFinalDeliveryAttemptCount: attemptCount,
-            pendingFinalDeliveryLastError: null,
-            updatedAt,
-          }),
-        });
-      }
-      return { text };
     }
   }
 
@@ -432,6 +493,16 @@ export async function getReplyFromConfig(
         parentSessionKey: sessionCtx.ModelParentSessionKey ?? sessionCtx.ParentSessionKey,
       })
     : null;
+  const resolvedChannelModelOverride =
+    channelModelOverride && !hasResolvedHeartbeatModelOverride
+      ? resolveModelRefFromString({
+          raw: channelModelOverride.model,
+          defaultProvider,
+          aliasIndex,
+        })
+      : null;
+  const primaryProvider = resolvedChannelModelOverride?.ref.provider ?? defaultProvider;
+  const primaryModel = resolvedChannelModelOverride?.ref.model ?? defaultModel;
   const hasSessionModelOverride = Boolean(
     normalizeOptionalString(sessionEntry.modelOverride) ||
     normalizeOptionalString(sessionEntry.providerOverride),
@@ -446,20 +517,33 @@ export async function getReplyFromConfig(
       sessionCtx.ParentSessionKey,
     defaultProvider,
   });
-  if (storedModelOverride?.model && !hasResolvedHeartbeatModelOverride) {
+  const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
+    isHeartbeat: opts?.isHeartbeat === true,
+    hasResolvedHeartbeatModelOverride,
+    sessionEntry,
+    storedOverride: storedModelOverride,
+    defaultProvider,
+    defaultModel,
+    primaryProvider,
+    primaryModel,
+  });
+  if (
+    storedModelOverride?.model &&
+    !hasResolvedHeartbeatModelOverride &&
+    !staleHeartbeatAutoFallbackOverride
+  ) {
     provider = storedModelOverride.provider ?? defaultProvider;
     model = storedModelOverride.model;
   }
-  if (!hasResolvedHeartbeatModelOverride && !hasSessionModelOverride && channelModelOverride) {
-    const resolved = resolveModelRefFromString({
-      raw: channelModelOverride.model,
-      defaultProvider,
-      aliasIndex,
-    });
-    if (resolved) {
-      provider = resolved.ref.provider;
-      model = resolved.ref.model;
-    }
+  const hasEffectiveSessionModelOverride =
+    hasSessionModelOverride && !staleHeartbeatAutoFallbackOverride;
+  if (
+    !hasResolvedHeartbeatModelOverride &&
+    !hasEffectiveSessionModelOverride &&
+    resolvedChannelModelOverride
+  ) {
+    provider = resolvedChannelModelOverride.ref.provider;
+    model = resolvedChannelModelOverride.ref.model;
   }
 
   if (
@@ -560,6 +644,8 @@ export async function getReplyFromConfig(
       commandAuthorized,
       defaultProvider,
       defaultModel,
+      primaryProvider,
+      primaryModel,
       aliasIndex,
       provider,
       model,

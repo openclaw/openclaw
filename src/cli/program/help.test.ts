@@ -135,6 +135,11 @@ describe("configureProgramHelp", () => {
 
     const help = captureHelpOutput(program);
     expect(help).toContain("BANNER-LINE");
+    const [version, options] = (formatCliBannerLineMock.mock.calls[0] as unknown as
+      | [string, { mode?: string }]
+      | undefined) ?? [undefined, undefined];
+    expect(version).toBe(testProgramContext.programVersion);
+    expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
   });

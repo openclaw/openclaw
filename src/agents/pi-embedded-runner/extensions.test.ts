@@ -1,5 +1,5 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
-import type { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { Api, Model } from "@earendil-works/pi-ai";
+import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { getCompactionSafeguardRuntime } from "../pi-hooks/compaction-safeguard-runtime.js";
@@ -41,7 +41,10 @@ function expectSafeguardRuntime(
   const { factories, sessionManager } = buildSafeguardFactories(cfg);
 
   expect(factories).toContain(compactionSafeguardExtension);
-  expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject(expectedRuntime);
+  const runtime = getCompactionSafeguardRuntime(sessionManager);
+  expect(runtime?.contextWindowTokens).toBe(200_000);
+  expect(runtime?.qualityGuardEnabled).toBe(expectedRuntime.qualityGuardEnabled);
+  expect(runtime?.qualityGuardMaxRetries).toBe(expectedRuntime.qualityGuardMaxRetries);
 }
 
 describe("buildEmbeddedExtensionFactories", () => {

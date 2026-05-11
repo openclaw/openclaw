@@ -1,5 +1,5 @@
 import path from "node:path";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type {
   ImageGenerationOutputFormat,
   ImageGenerationProvider,
@@ -681,6 +681,7 @@ async function generateOpenAICodexImage(params: {
       timeoutMs,
       fetchFn: fetch,
       allowPrivateNetwork,
+      ssrfPolicy: req.ssrfPolicy,
       dispatcherPolicy,
     });
     const { response, release } = requestResult;
@@ -842,6 +843,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
           })()
@@ -864,6 +866,7 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
               timeoutMs,
               fetchFn: fetch,
               allowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
               dispatcherPolicy,
             });
           })();

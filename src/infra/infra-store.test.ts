@@ -44,7 +44,7 @@ const missingStoreDefaultCases = [
       const cfg = await loadVoiceWakeRoutingConfig(baseDir);
       expect(cfg.version).toBe(1);
       expect(cfg.defaultTarget).toEqual({ mode: "current" });
-      expect(cfg.routes).toEqual([]);
+      expect(cfg.routes).toStrictEqual([]);
       expect(cfg.updatedAtMs).toBe(0);
     },
   },
@@ -59,7 +59,7 @@ describe("infra store", () => {
 
         const result = readSessionStoreJson5(storePath);
         expect(result.ok).toBe(false);
-        expect(result.store).toEqual({});
+        expect(result.store).toStrictEqual({});
       });
     });
 

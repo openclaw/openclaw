@@ -104,13 +104,15 @@ describe("acp translator stop reason mapping", () => {
     await vi.waitFor(() => {
       expect(sentRunIds).toHaveLength(2);
     });
-    expect(request).toHaveBeenLastCalledWith(
-      "chat.send",
-      expect.objectContaining({
-        sessionKey: "agent:main:acp:session-1",
-      }),
-      { timeoutMs: null },
-    );
+    const requestCalls = (
+      request as unknown as {
+        mock: { calls: Array<[string, { sessionKey?: string }, { timeoutMs?: number | null }]> };
+      }
+    ).mock.calls;
+    const lastRequestCall = requestCalls.at(-1);
+    expect(lastRequestCall?.[0]).toBe("chat.send");
+    expect(lastRequestCall?.[1].sessionKey).toBe("agent:main:acp:session-1");
+    expect(lastRequestCall?.[2]).toEqual({ timeoutMs: null });
     await agent.handleGatewayEvent(
       createChatEvent({
         runId: sentRunIds[1],
@@ -225,17 +227,21 @@ describe("acp translator stop reason mapping", () => {
   it("rechecks accepted prompts at the disconnect deadline after reconnect timeout", async () => {
     vi.useFakeTimers();
     try {
+      let chatRunId: string | undefined;
+      const agentWaitParams: Array<Record<string, unknown> | undefined> = [];
       let waitCount = 0;
       const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
         if (method === "chat.send") {
+          const runId = params?.idempotencyKey;
+          if (typeof runId !== "string") {
+            throw new Error("expected chat.send idempotency key");
+          }
+          chatRunId = runId;
           return {};
         }
         if (method === "agent.wait") {
           waitCount += 1;
-          expect(params).toEqual({
-            runId: expect.any(String),
-            timeoutMs: 0,
-          });
+          agentWaitParams.push(params);
           return waitCount === 1 ? { status: "timeout" } : { status: "ok" };
         }
         return {};
@@ -254,6 +260,16 @@ describe("acp translator stop reason mapping", () => {
 
       await vi.advanceTimersByTimeAsync(1);
       await expect(promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+      expect(agentWaitParams).toEqual([
+        {
+          runId: requireValue(chatRunId, "chat.send run id"),
+          timeoutMs: 0,
+        },
+        {
+          runId: requireValue(chatRunId, "chat.send run id"),
+          timeoutMs: 0,
+        },
+      ]);
     } finally {
       vi.useRealTimers();
     }
@@ -315,12 +331,7 @@ describe("acp translator stop reason mapping", () => {
       await Promise.resolve();
       agent.handleGatewayDisconnect("1006: first disconnect");
       agent.handleGatewayReconnect();
-      for (let attempt = 0; attempt < 5; attempt += 1) {
-        if (resolveAgentWait) {
-          break;
-        }
-        await Promise.resolve();
-      }
+      await vi.waitFor(() => expect(resolveAgentWait).toBeDefined());
       const resolveWait = requireValue(resolveAgentWait, "agent.wait resolver");
 
       agent.handleGatewayDisconnect("1006: second disconnect");

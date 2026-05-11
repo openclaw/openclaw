@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import { SessionManager } from "@mariozechner/pi-coding-agent";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   onSessionTranscriptUpdate,
@@ -34,19 +34,23 @@ describe("guardSessionManager transcript updates", () => {
       message: AgentMessage,
     ) => void;
 
+    const timestamp = Date.now();
     appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "hello from subagent" }],
-      timestamp: Date.now(),
+      timestamp,
     } as AgentMessage);
 
-    expect(updates).toHaveLength(1);
-    expect(updates[0]).toMatchObject({
-      sessionFile,
-      sessionKey: "agent:main:worker",
-      message: {
-        role: "assistant",
-      },
-    });
+    expect(updates).toStrictEqual([
+      expect.objectContaining({
+        message: {
+          content: [{ text: "hello from subagent", type: "text" }],
+          role: "assistant",
+          timestamp,
+        },
+        sessionFile,
+        sessionKey: "agent:main:worker",
+      }),
+    ]);
   });
 });

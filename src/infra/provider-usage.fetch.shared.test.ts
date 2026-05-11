@@ -47,14 +47,12 @@ describe("provider usage fetch shared helpers", () => {
       fetchFn,
     );
 
-    expect(fetchFnMock).toHaveBeenCalledWith(
-      "https://example.com/usage",
-      expect.objectContaining({
-        method: "POST",
-        headers: { authorization: "Bearer test" },
-        signal: expect.any(AbortSignal),
-      }),
-    );
+    expect(fetchFnMock).toHaveBeenCalledOnce();
+    const [input, init] = fetchFnMock.mock.calls[0] ?? [];
+    expect(input).toBe("https://example.com/usage");
+    expect(init?.method).toBe("POST");
+    expect(init?.headers).toEqual({ authorization: "Bearer test" });
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
     await expect(response.json()).resolves.toEqual({ aborted: false });
     expect(clearTimeoutSpy).toHaveBeenCalledTimes(1);
   });

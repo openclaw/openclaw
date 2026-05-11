@@ -34,10 +34,10 @@ const mockLogInfo = vi.mocked(logInfo);
 const mockLogWarn = vi.mocked(logWarn);
 
 function expectProxyHandle(handle: Awaited<ReturnType<typeof startProxy>>): ProxyHandle {
-  expect(handle).toEqual(expect.objectContaining({ proxyUrl: expect.any(String) }));
   if (handle === null) {
     throw new Error("Expected managed proxy handle");
   }
+  expect(handle.proxyUrl).not.toBe("");
   return handle;
 }
 
@@ -155,10 +155,10 @@ describe("startProxy", () => {
     });
 
     const activeProxyUrl = getActiveManagedProxyUrl();
-    expect(activeProxyUrl).toEqual(expect.any(URL));
     if (activeProxyUrl === undefined) {
       throw new Error("Expected active managed proxy URL");
     }
+    expect(activeProxyUrl).toBeInstanceOf(URL);
     expect(activeProxyUrl.href).toBe("http://127.0.0.1:3128/");
 
     await stopProxy(expectProxyHandle(handle));
@@ -241,7 +241,11 @@ describe("startProxy", () => {
     expect(mockLogInfo).toHaveBeenCalledWith(
       "proxy: routing process HTTP traffic through external proxy http://127.0.0.1:3128",
     );
-    expect(mockLogInfo).not.toHaveBeenCalledWith(expect.stringContaining("user:pass"));
+    expect(
+      mockLogInfo.mock.calls.some((call) =>
+        call.some((value) => typeof value === "string" && value.includes("user:pass")),
+      ),
+    ).toBe(false);
   });
 
   it("clears NO_PROXY so internal destinations do not bypass the filtering proxy", async () => {

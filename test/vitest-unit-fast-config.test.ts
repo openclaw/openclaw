@@ -55,7 +55,7 @@ describe("unit-fast vitest lane", () => {
 
     expect(testConfig.isolate).toBe(false);
     expect(testConfig.runner).toBeUndefined();
-    expect(testConfig.setupFiles).toEqual([]);
+    expect(testConfig.setupFiles).toStrictEqual([]);
     expect(testConfig.include).toContain("src/agents/pi-tools.deferred-followup-guidance.test.ts");
     expect(testConfig.include).toContain("src/acp/control-plane/runtime-cache.test.ts");
     expect(testConfig.include).toContain("src/acp/runtime/registry.test.ts");
@@ -138,7 +138,7 @@ describe("unit-fast vitest lane", () => {
       expect(isUnitFastTestFile(file)).toBe(true);
     }
     const unroutedForcedFiles = collectUnroutedForcedFiles(analysis, forcedFileSet);
-    expect(unroutedForcedFiles).toEqual([]);
+    expect(unroutedForcedFiles).toStrictEqual([]);
   });
 
   it("keeps broad audit candidates separate from automatically routed unit-fast tests", () => {

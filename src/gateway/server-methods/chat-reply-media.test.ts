@@ -59,6 +59,15 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     return value;
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    try {
+      await fs.stat(targetPath);
+      throw new Error(`expected ${targetPath} to be missing`);
+    } catch (error) {
+      expect((error as { code?: string }).code).toBe("ENOENT");
+    }
+  }
+
   it("stages Codex-home image paths before Gateway managed-image display", async () => {
     const stateDir = process.env.OPENCLAW_STATE_DIR ?? "";
     const agentDir = path.join(stateDir, "agents", "main", "agent");
@@ -121,7 +130,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toEqual([sourcePath]);
-    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    await expectPathMissing(path.join(stateDir, "media", "outbound"));
   });
 
   it("preserves inline data image replies for WebChat rendering", async () => {
@@ -140,7 +149,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
 
     expect(payload?.mediaUrl).toBeUndefined();
     expect(payload?.mediaUrls).toEqual([dataUrl]);
-    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    await expectPathMissing(path.join(stateDir, "media", "outbound"));
   });
 
   it("preserves local audio paths for WebChat audio embedding", async () => {
@@ -163,7 +172,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.mediaUrls).toEqual([audioPath]);
     expect(payload?.trustedLocalMedia).toBe(true);
     expect(payload?.audioAsVoice).toBe(true);
-    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    await expectPathMissing(path.join(stateDir, "media", "outbound"));
   });
 
   it("preserves data images while staging mixed local image replies", async () => {
@@ -215,6 +224,6 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     expect(payload?.text).toBeUndefined();
     expect(payload?.mediaUrl).toBe(dataUrl);
     expect(payload?.mediaUrls).toEqual([dataUrl]);
-    await expect(fs.stat(path.join(stateDir, "media", "outbound"))).rejects.toThrow();
+    await expectPathMissing(path.join(stateDir, "media", "outbound"));
   });
 });

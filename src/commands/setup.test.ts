@@ -8,9 +8,11 @@ function createSetupDeps(home: string) {
   const configPath = path.join(home, ".openclaw", "openclaw.json");
   return {
     createConfigIO: () => ({ configPath }),
-    ensureAgentWorkspace: vi.fn(async (params?: { dir?: string }) => ({
-      dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
-    })),
+    ensureAgentWorkspace: vi.fn(
+      async (params?: { dir?: string; skipOptionalBootstrapFiles?: string[] }) => ({
+        dir: params?.dir ?? path.join(home, ".openclaw", "workspace"),
+      }),
+    ),
     formatConfigPath: (value: string) => value,
     logConfigUpdated: vi.fn(
       (runtime: { log: (message: string) => void }, opts: { path?: string; suffix?: string }) => {
@@ -41,10 +43,18 @@ describe("setupCommand", () => {
       await setupCommand({ workspace }, runtime, deps);
 
       const configPath = path.join(home, ".openclaw", "openclaw.json");
-      const raw = await fs.readFile(configPath, "utf-8");
+      const raw = JSON.parse(await fs.readFile(configPath, "utf-8")) as unknown;
 
-      expect(raw).toContain('"mode": "local"');
-      expect(raw).toContain('"workspace"');
+      expect(raw).toStrictEqual({
+        agents: {
+          defaults: {
+            workspace,
+          },
+        },
+        gateway: {
+          mode: "local",
+        },
+      });
     });
   });
 
@@ -59,12 +69,13 @@ describe("setupCommand", () => {
 
       await setupCommand(undefined, runtime, deps);
 
-      const logs = runtime.log.mock.calls.map((call) => String(call[0])).join("\n");
-      expect(logs).toContain(
-        "Setup complete: local config, workspace, and session directories are ready.",
-      );
-      expect(logs).toContain("openclaw configure");
-      expect(logs).toContain("openclaw setup --wizard");
+      expect(runtime.log.mock.calls.map((call) => String(call[0])).slice(-5)).toStrictEqual([
+        "",
+        "Setup complete: config, workspace, and session directories are ready.",
+        "Next guided path: openclaw onboard.",
+        "Next targeted changes: openclaw configure for models, channels, Gateway, plugins, skills, and health checks.",
+        "Add a chat channel later: openclaw channels add.",
+      ]);
     });
   });
 
@@ -131,12 +142,10 @@ describe("setupCommand", () => {
 
       await setupCommand(undefined, runtime, deps);
 
-      expect(deps.ensureAgentWorkspace).toHaveBeenCalledWith(
-        expect.objectContaining({
-          dir: workspace,
-          skipOptionalBootstrapFiles: ["IDENTITY.md", "USER.md"],
-        }),
-      );
+      expect(deps.ensureAgentWorkspace).toHaveBeenCalledOnce();
+      const [workspaceParams] = deps.ensureAgentWorkspace.mock.calls[0] ?? [];
+      expect(workspaceParams?.dir).toBe(workspace);
+      expect(workspaceParams?.skipOptionalBootstrapFiles).toEqual(["IDENTITY.md", "USER.md"]);
     });
   });
 

@@ -103,6 +103,17 @@ describe("pw-tools-core", () => {
     return { res, outPath };
   }
 
+  async function expectPathMissing(targetPath: string): Promise<void> {
+    let error: unknown;
+    try {
+      await fs.access(targetPath);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+  }
+
   function createDownloadEventHarness() {
     const downloadHandlers = new Set<(download: unknown) => void>();
     const on = vi.fn((event: string, handler: (download: unknown) => void) => {
@@ -145,7 +156,7 @@ describe("pw-tools-core", () => {
     expect(path.basename(String(savedPath))).toContain(path.basename(params.targetPath));
     expect(path.basename(String(savedPath))).toMatch(/\.part$/);
     expect(await fs.readFile(params.targetPath, "utf8")).toBe(params.content);
-    await expect(fs.access(String(savedPath))).rejects.toThrow();
+    await expectPathMissing(String(savedPath));
   }
 
   it("waits for the next download and atomically finalizes explicit output paths", async () => {
@@ -257,8 +268,8 @@ describe("pw-tools-core", () => {
         await expect(p).rejects.toThrow(/path alias|outside workspace|directory changed/i);
         expect(parentSwappedBeforeFinalize).toBe(true);
         expect(saveAs).toHaveBeenCalledOnce();
-        await expect(fs.access(outsideTargetPath)).rejects.toThrow();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expectPathMissing(outsideTargetPath);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );
@@ -428,7 +439,7 @@ describe("pw-tools-core", () => {
 
         await expect(p).rejects.toThrow(/output directory/i);
         expect(saveAs).not.toHaveBeenCalled();
-        await expect(fs.readdir(outsideDir)).resolves.toEqual([]);
+        await expect(fs.readdir(outsideDir)).resolves.toStrictEqual([]);
       });
     },
   );

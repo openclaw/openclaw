@@ -660,13 +660,14 @@ describe("msteams attachments", () => {
         );
 
         expectAttachmentMediaLength(media, 0);
-        expect(logger.warn).toHaveBeenCalledWith(
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(logger.warn.mock.calls[0]).toStrictEqual([
           "msteams attachment download failed",
-          expect.objectContaining({
-            error: expect.stringContaining("HTTP 500"),
-            host: expect.any(String),
-          }),
-        );
+          {
+            error: "HTTP 500",
+            host: "x",
+          },
+        ]);
       });
 
       it("does not log when downloads succeed", async () => {

@@ -139,12 +139,11 @@ describe("memory embedding provider registration", () => {
     if (!adapter) {
       throw new Error("expected local embedding provider adapter to be registered");
     }
-    expect(adapter).toEqual(
-      expect.objectContaining({
-        id: "local",
-        defaultModel: DEFAULT_LOCAL_MODEL,
-      }),
-    );
+    expect(adapter.id).toBe("local");
+    expect(adapter.defaultModel).toBe(DEFAULT_LOCAL_MODEL);
+    expect(adapter.transport).toBe("local");
+    expect(adapter.authProviderId).toBeUndefined();
+    expect(adapter.autoSelectPriority).toBe(10);
   });
 });
 
@@ -343,15 +342,13 @@ describe("memory index", () => {
       expect(results.length).toBeGreaterThan(0);
       expect(results[0]?.path).toContain("memory/2026-01-12.md");
       const status = manager.status();
-      expect(status.sourceCounts).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            source: "memory",
-            files: status.files,
-            chunks: status.chunks,
-          }),
-        ]),
-      );
+      expect(status.sourceCounts).toStrictEqual([
+        {
+          source: "memory",
+          files: status.files,
+          chunks: status.chunks,
+        },
+      ]);
     } finally {
       await manager.close?.();
     }
@@ -376,14 +373,10 @@ describe("memory index", () => {
     expect(embedBatchInputCalls).toBeGreaterThan(0);
 
     const imageResults = await manager.search("image");
-    expect(imageResults.map((result) => result.path)).toContainEqual(
-      expect.stringMatching(/diagram\.png$/),
-    );
+    expect(imageResults.some((result) => result.path.endsWith("diagram.png"))).toBe(true);
 
     const audioResults = await manager.search("audio");
-    expect(audioResults.map((result) => result.path)).toContainEqual(
-      expect.stringMatching(/meeting\.wav$/),
-    );
+    expect(audioResults.some((result) => result.path.endsWith("meeting.wav"))).toBe(true);
   });
 
   it("finds keyword matches via hybrid search when query embedding is zero", async () => {
@@ -428,7 +421,7 @@ describe("memory index", () => {
     const available = await manager.probeVectorStoreAvailability?.();
     const status = manager.status();
 
-    expect(providerCalls).toEqual([]);
+    expect(providerCalls).toStrictEqual([]);
     expect(typeof status.vector?.storeAvailable).toBe("boolean");
     expect(status.vector?.storeAvailable).toBe(available);
     expect(status.vector?.semanticAvailable).toBeUndefined();
@@ -451,18 +444,27 @@ describe("memory index", () => {
     );
     managersForCleanup.add(second);
 
-    expect(second.getCachedEmbeddingAvailability?.()).toEqual(
-      expect.objectContaining({
-        ok: true,
-        checked: true,
-        cached: true,
-        checkedAtMs: expect.any(Number),
-        cacheExpiresAtMs: expect.any(Number),
-      }),
-    );
-    await expect(second.probeEmbeddingAvailability()).resolves.toEqual(
-      expect.objectContaining({ ok: true, cached: true }),
-    );
+    const cachedBeforeProbe = second.getCachedEmbeddingAvailability?.();
+    expect(cachedBeforeProbe?.ok).toBe(true);
+    expect(cachedBeforeProbe?.checked).toBe(true);
+    expect(cachedBeforeProbe?.cached).toBe(true);
+    expect(cachedBeforeProbe?.checkedAtMs).toBeTypeOf("number");
+    expect(cachedBeforeProbe?.cacheExpiresAtMs).toBeTypeOf("number");
+    if (
+      typeof cachedBeforeProbe?.checkedAtMs === "number" &&
+      typeof cachedBeforeProbe.cacheExpiresAtMs === "number"
+    ) {
+      expect(cachedBeforeProbe.cacheExpiresAtMs - cachedBeforeProbe.checkedAtMs).toBe(
+        EMBEDDING_PROBE_CACHE_TTL_MS,
+      );
+    }
+    await expect(second.probeEmbeddingAvailability()).resolves.toStrictEqual({
+      ok: true,
+      checked: true,
+      cached: true,
+      checkedAtMs: cachedBeforeProbe?.checkedAtMs,
+      cacheExpiresAtMs: cachedBeforeProbe?.cacheExpiresAtMs,
+    });
     expect(embedBatchCalls).toBe(1);
 
     const cached = second.getCachedEmbeddingAvailability?.();

@@ -4,7 +4,10 @@ import { CONFIG_PATH } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { note } from "../terminal/note.js";
-import { noteOpencodeProviderOverrides } from "./doctor-config-analysis.js";
+import {
+  noteImplicitFallbackClobberWarnings,
+  noteOpencodeProviderOverrides,
+} from "./doctor-config-analysis.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { normalizeCompatibilityConfigValues } from "./doctor-legacy-config.js";
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
@@ -283,6 +286,7 @@ export async function loadAndMaybeMigrateDoctorConfig(params: {
   cfg = finalized.cfg;
 
   noteOpencodeProviderOverrides(cfg);
+  noteImplicitFallbackClobberWarnings(cfg);
 
   return {
     cfg,

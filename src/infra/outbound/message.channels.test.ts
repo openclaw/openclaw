@@ -156,11 +156,11 @@ describe("sendMessage channel normalization", () => {
         },
       },
       assertDeps: (deps: { localchat?: ReturnType<typeof vi.fn> }) => {
-        expect(deps.localchat).toHaveBeenCalledWith(
-          "someone@example.com",
-          "hi",
-          expect.any(Object),
-        );
+        expect(deps.localchat).toHaveBeenCalledTimes(1);
+        const [to, text, options] = deps.localchat?.mock.calls[0] ?? [];
+        expect(to).toBe("someone@example.com");
+        expect(text).toBe("hi");
+        expect(typeof options).toBe("object");
       },
       expectedChannel: "localchat",
     },
@@ -321,8 +321,36 @@ describe("gateway url override hardening", () => {
         },
       },
     },
+    {
+      name: "forwards gateway delivery options in send params",
+      params: {
+        threadId: "topic456",
+        forceDocument: true,
+        silent: true,
+        parseMode: "HTML" as const,
+      },
+      expected: {
+        params: {
+          threadId: "topic456",
+          forceDocument: true,
+          silent: true,
+          parseMode: "HTML",
+        },
+      },
+    },
   ])("$name", async ({ params, expected }) => {
-    expect(await sendThreadChatGatewayMessage(params)).toMatchObject(expected);
+    const result = await sendThreadChatGatewayMessage(params);
+    for (const [key, value] of Object.entries(expected)) {
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        for (const [nestedKey, nestedValue] of Object.entries(value)) {
+          expect(
+            ((result as Record<string, unknown>)[key] as Record<string, unknown>)[nestedKey],
+          ).toEqual(nestedValue);
+        }
+        continue;
+      }
+      expect((result as Record<string, unknown>)[key]).toEqual(value);
+    }
   });
 });
 

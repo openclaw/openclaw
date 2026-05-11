@@ -89,10 +89,10 @@ type ApprovalHandlerRuntime = NonNullable<Awaited<ReturnType<typeof createTestAp
 function expectApprovalRuntime(
   runtime: Awaited<ReturnType<typeof createTestApprovalHandler>>,
 ): ApprovalHandlerRuntime {
-  expect(runtime).toEqual(expect.objectContaining({ handleRequested: expect.any(Function) }));
   if (runtime === null) {
     throw new Error("Expected approval handler runtime");
   }
+  expect(typeof runtime.handleRequested).toBe("function");
   return runtime;
 }
 
@@ -153,12 +153,10 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     await approvalRuntime.handleRequested(request);
     await approvalRuntime.stop();
 
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        request,
-        approvalKind: "plugin",
-      }),
-    );
+    expect(unbindPending).toHaveBeenCalledOnce();
+    const stopUnbind = unbindPending.mock.calls[0]?.[0];
+    expect(stopUnbind?.request).toBe(request);
+    expect(stopUnbind?.approvalKind).toBe("plugin");
   });
 
   it("ignores duplicate pending request ids before finalization", async () => {
@@ -185,13 +183,10 @@ describe("createChannelApprovalHandlerFromCapability", () => {
     } as never);
 
     expect(unbindPending).toHaveBeenCalledTimes(1);
-    expect(unbindPending).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "1" },
-        binding: { bindingId: "bound-1" },
-        request,
-      }),
-    );
+    const unbind = unbindPending.mock.calls[0]?.[0];
+    expect(unbind?.entry).toEqual({ messageId: "1" });
+    expect(unbind?.binding).toEqual({ bindingId: "bound-1" });
+    expect(unbind?.request).toBe(request);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
   });
 
@@ -231,11 +226,7 @@ describe("createChannelApprovalHandlerFromCapability", () => {
 
     expect(unbindPending).toHaveBeenCalledTimes(2);
     expect(buildResolvedResult).toHaveBeenCalledTimes(1);
-    expect(buildResolvedResult).toHaveBeenCalledWith(
-      expect.objectContaining({
-        entry: { messageId: "2" },
-      }),
-    );
+    expect(buildResolvedResult.mock.calls[0]?.[0]?.entry).toEqual({ messageId: "2" });
   });
 
   it("continues stop-time unbind cleanup when one binding throws", async () => {

@@ -222,12 +222,10 @@ cli note
 
     const page = await fs.readFile(path.join(rootDir, "entities", "alpha.md"), "utf8");
     const parsed = parseWikiMarkdown(page);
-    expect(parsed.frontmatter).toMatchObject({
-      sourceIds: ["source.new"],
-      contradictions: ["Conflicts with source.beta"],
-      questions: ["Still active?"],
-      status: "review",
-    });
+    expect(parsed.frontmatter.sourceIds).toEqual(["source.new"]);
+    expect(parsed.frontmatter.contradictions).toEqual(["Conflicts with source.beta"]);
+    expect(parsed.frontmatter.questions).toEqual(["Still active?"]);
+    expect(parsed.frontmatter.status).toBe("review");
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
     expect(parsed.body).toContain("cli note");
   });
@@ -481,7 +479,7 @@ cli note
     });
     expect(dryRun.dryRun).toBe(true);
     expect(dryRun.createdCount).toBe(1);
-    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toEqual([]);
+    await expect(fs.readdir(path.join(rootDir, "sources"))).resolves.toStrictEqual([]);
 
     const applied = await runWikiChatGptImport({
       config,
@@ -522,6 +520,6 @@ cli note
       fs
         .readdir(path.join(rootDir, "sources"))
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
-    ).resolves.toEqual([]);
+    ).resolves.toStrictEqual([]);
   });
 });

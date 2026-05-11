@@ -29,6 +29,7 @@ import {
   applyProviderAuthConfigPatch,
   applyDefaultModel,
   pickAuthMethod,
+  restorePriorAgentsDefaultsModelUnlessOptIn,
   resolveProviderMatch,
 } from "../../plugins/provider-auth-choice-helpers.js";
 import { applyAuthProfileConfig } from "../../plugins/provider-auth-helpers.js";
@@ -260,6 +261,7 @@ async function persistProviderAuthResult(params: {
   }
 
   const updated = await updateConfig((cfg) => {
+    const priorAgentsDefaultsModel = cfg.agents?.defaults?.model;
     let next = cfg;
     if (params.result.configPatch) {
       next = applyProviderAuthConfigPatch(next, params.result.configPatch, {
@@ -273,6 +275,11 @@ async function persistProviderAuthResult(params: {
         mode: credentialMode(profile.credential),
       });
     }
+    next = restorePriorAgentsDefaultsModelUnlessOptIn({
+      cfg: next,
+      priorAgentsDefaultsModel,
+      setDefault: params.setDefault,
+    });
     if (params.setDefault && params.result.defaultModel) {
       next = applyDefaultModel(next, params.result.defaultModel);
     }
@@ -350,7 +357,9 @@ export async function modelsAuthSetupTokenCommand(
   runtime: RuntimeEnv,
 ) {
   if (!process.stdin.isTTY) {
-    throw new Error("setup-token requires an interactive TTY.");
+    throw new Error(
+      `setup-token requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} instead.`,
+    );
   }
 
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -367,7 +376,9 @@ export async function modelsAuthSetupTokenCommand(
   const provider =
     resolveRequestedProviderOrThrow(tokenProviders, opts.provider) ?? tokenProviders[0] ?? null;
   if (!provider) {
-    throw new Error("No token-capable provider is available.");
+    throw new Error(
+      `No token-capable provider is available. Run ${formatCliCommand("openclaw plugins list")} to verify provider plugins are installed.`,
+    );
   }
 
   if (!opts.yes) {
@@ -409,7 +420,9 @@ export async function modelsAuthPasteTokenCommand(
   const agentDir = await resolveModelsAuthAgentDir(opts.agent);
   const rawProvider = normalizeOptionalString(opts.provider);
   if (!rawProvider) {
-    throw new Error("Missing --provider.");
+    throw new Error(
+      `Missing --provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to choose a provider.`,
+    );
   }
   const provider = normalizeProviderId(rawProvider);
   const profileId =
@@ -512,7 +525,9 @@ export async function modelsAuthAddCommand(opts: { agent?: string }, runtime: Ru
       const prompter = createClackPrompter();
       const method = tokenMethods.find((candidate) => candidate.id === methodId);
       if (!method) {
-        throw new Error(`Unknown token auth method "${methodId}".`);
+        throw new Error(
+          `Unknown token auth method "${methodId}". Run ${formatCliCommand("openclaw models auth login --provider " + providerPlugin.id)} to choose interactively.`,
+        );
       }
       await runProviderAuthMethod({
         config,
@@ -618,7 +633,9 @@ function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: str
 }
 export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: RuntimeEnv) {
   if (!process.stdin.isTTY) {
-    throw new Error("models auth login requires an interactive TTY.");
+    throw new Error(
+      `models auth login requires an interactive TTY. In automation, use ${formatCliCommand("openclaw models auth paste-token --provider <provider>")} when token auth is available.`,
+    );
   }
 
   const { config, agentDir, workspaceDir, providers } = await resolveModelsAuthContext({
@@ -648,7 +665,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
       .then((id) => resolveProviderMatch(authProviders, id)));
 
   if (!selectedProvider) {
-    throw new Error("Unknown provider. Use --provider <id> to pick a provider plugin.");
+    throw new Error(
+      `Unknown provider. Run ${formatCliCommand("openclaw models status")} or ${formatCliCommand("openclaw plugins list")} to see available provider plugins.`,
+    );
   }
   const chosenMethod = await pickProviderAuthMethod({
     provider: selectedProvider,
@@ -657,7 +676,9 @@ export async function modelsAuthLoginCommand(opts: LoginOptions, runtime: Runtim
   });
 
   if (!chosenMethod) {
-    throw new Error("Unknown auth method. Use --method <id> to select one.");
+    throw new Error(
+      `Unknown auth method. Run ${formatCliCommand("openclaw models auth login --provider " + selectedProvider.id)} without --method to choose interactively.`,
+    );
   }
 
   await runProviderAuthMethod({

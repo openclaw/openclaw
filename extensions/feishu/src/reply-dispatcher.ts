@@ -10,12 +10,10 @@ import {
   resolveTextChunksWithFallback,
   sendMediaWithLeadingCaption,
 } from "openclaw/plugin-sdk/reply-payload";
-import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-runtime";
+import { stripReasoningTagsFromText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
-import type { MentionTarget } from "./mention-target.types.js";
-import { buildMentionedCardContent } from "./mention.js";
 import {
   createReplyPrefixContext,
   type ClawdbotConfig,
@@ -125,7 +123,6 @@ type CreateFeishuReplyDispatcherParams = {
   /** True when inbound message is already inside a thread/topic context */
   threadReply?: boolean;
   rootId?: string;
-  mentionTargets?: MentionTarget[];
   accountId?: string;
   identity?: OutboundIdentity;
   /** Epoch ms when the inbound message was created. Used to suppress typing
@@ -144,13 +141,18 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     replyInThread,
     threadReply,
     rootId,
-    mentionTargets,
     accountId,
     identity,
   } = params;
   const sendReplyToMessageId = skipReplyToInMessages ? undefined : replyToMessageId;
   const threadReplyMode = threadReply === true;
   const effectiveReplyInThread = threadReplyMode ? true : replyInThread;
+  const allowTopLevelReplyFallback =
+    effectiveReplyInThread === true &&
+    threadReplyMode &&
+    rootId !== undefined &&
+    sendReplyToMessageId !== undefined &&
+    sendReplyToMessageId !== rootId;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const prefixContext = createReplyPrefixContext({ cfg, agentId });
 
@@ -381,10 +383,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
       await partialUpdateQueue;
       if (streaming?.isActive()) {
         statusLine = "";
-        let text = buildCombinedStreamText(reasoningText, streamText);
-        if (mentionTargets?.length) {
-          text = buildMentionedCardContent(mentionTargets, text);
-        }
+        const text = buildCombinedStreamText(reasoningText, streamText);
         const finalNote = resolveCardNote(agentId, identity, prefixContext.prefixContext);
         await streaming.close(text, { note: finalNote });
         // Track the raw streamed text so the duplicate-final check in deliver()
@@ -465,14 +464,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             text: options.fallbackText,
             useCard: false,
             infoKind: "final",
-            sendChunk: async ({ chunk, isFirst }) => {
+            sendChunk: async ({ chunk }) => {
               await sendMessageFeishu({
                 cfg,
                 to: chatId,
                 text: chunk,
                 replyToMessageId: sendReplyToMessageId,
                 replyInThread: effectiveReplyInThread,
-                mentions: isFirst ? mentionTargets : undefined,
+                allowTopLevelReplyFallback,
                 accountId,
               });
             },
@@ -492,14 +491,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
                 text: fallbackText,
                 useCard: false,
                 infoKind: "final",
-                sendChunk: async ({ chunk, isFirst }) => {
+                sendChunk: async ({ chunk }) => {
                   await sendMessageFeishu({
                     cfg,
                     to: chatId,
                     text: chunk,
                     replyToMessageId: sendReplyToMessageId,
                     replyInThread: effectiveReplyInThread,
-                    mentions: isFirst ? mentionTargets : undefined,
+                    allowTopLevelReplyFallback,
                     accountId,
                   });
                 },
@@ -607,14 +606,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: true,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
+              sendChunk: async ({ chunk }) => {
                 await sendStructuredCardFeishu({
                   cfg,
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
+                  allowTopLevelReplyFallback,
                   accountId,
                   header: cardHeader,
                   note: cardNote,
@@ -626,14 +625,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               text,
               useCard: false,
               infoKind: info?.kind,
-              sendChunk: async ({ chunk, isFirst }) => {
+              sendChunk: async ({ chunk }) => {
                 await sendMessageFeishu({
                   cfg,
                   to: chatId,
                   text: chunk,
                   replyToMessageId: sendReplyToMessageId,
                   replyInThread: effectiveReplyInThread,
-                  mentions: isFirst ? mentionTargets : undefined,
+                  allowTopLevelReplyFallback,
                   accountId,
                 });
               },

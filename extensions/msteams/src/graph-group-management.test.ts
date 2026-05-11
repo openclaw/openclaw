@@ -96,13 +96,15 @@ describe("addParticipantMSTeams", () => {
       role: " OWNER ",
     });
 
-    expect(mockState.postGraphJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        body: expect.objectContaining({
-          roles: ["owner"],
-        }),
-      }),
-    );
+    expect(mockState.postGraphJson).toHaveBeenCalledWith({
+      token: TOKEN,
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/members`,
+      body: {
+        "@odata.type": "#microsoft.graph.aadUserConversationMember",
+        roles: ["owner"],
+        "user@odata.bind": "https://graph.microsoft.com/v1.0/users('user-aad-id-2')",
+      },
+    });
   });
 
   it("rejects unknown roles", async () => {

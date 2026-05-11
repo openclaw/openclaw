@@ -785,6 +785,21 @@
       "groupHint": "ChatGPT/Codex sign-in"
     },
     {
+      "provider": "openai-codex",
+      "method": "api-key",
+      "choiceId": "openai-codex-api-key",
+      "choiceLabel": "OpenAI API Key Backup",
+      "choiceHint": "Use an OpenAI API key when your Codex subscription is unavailable",
+      "assistantPriority": 5,
+      "groupId": "openai-codex",
+      "groupLabel": "OpenAI Codex",
+      "groupHint": "ChatGPT/Codex sign-in",
+      "optionKey": "openaiApiKey",
+      "cliFlag": "--openai-api-key",
+      "cliOption": "--openai-api-key <key>",
+      "cliDescription": "OpenAI API Key Backup"
+    },
+    {
       "provider": "openai",
       "method": "api-key",
       "choiceId": "openai-api-key",

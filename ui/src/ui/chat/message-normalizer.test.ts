@@ -47,7 +47,7 @@ describe("message-normalizer", () => {
         content: SENDER_METADATA_BLOCK,
       });
 
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("does not reinterpret directive-like user string content", () => {
@@ -307,7 +307,7 @@ describe("message-normalizer", () => {
       });
 
       expect(result.replyTarget).toEqual({ kind: "current" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("preserves structured attachment content items", () => {
@@ -381,7 +381,7 @@ describe("message-normalizer", () => {
 
     it("handles missing content", () => {
       const result = normalizeMessage({ role: "user" });
-      expect(result.content).toEqual([]);
+      expect(result.content).toStrictEqual([]);
     });
 
     it("uses current timestamp when not provided", () => {

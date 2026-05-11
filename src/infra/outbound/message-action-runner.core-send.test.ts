@@ -56,12 +56,9 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "caption-only text",
-        mediaUrl: "https://example.com/cat.png",
-      }),
-    );
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("caption-only text");
+    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/cat.png");
   });
 
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
@@ -116,12 +113,9 @@ describe("runMessageAction core send routing", () => {
     });
 
     expect(result.kind).toBe("send");
-    expect(sendMedia).toHaveBeenCalledWith(
-      expect.objectContaining({
-        text: "hello",
-        mediaUrl: "https://example.com/file.txt",
-      }),
-    );
+    expect(sendMedia).toHaveBeenCalledOnce();
+    expect(sendMedia.mock.calls[0]?.[0]?.text).toBe("hello");
+    expect(sendMedia.mock.calls[0]?.[0]?.mediaUrl).toBe("https://example.com/file.txt");
   });
 
   it("accepts Telegram numeric forum topic targets through plugin-owned grammar", async () => {
@@ -168,12 +162,9 @@ describe("runMessageAction core send routing", () => {
     if (result.kind !== "send") {
       throw new Error(`Expected send result, got ${result.kind}`);
     }
+    const payload = result.payload as { dryRun?: boolean; to?: string };
     expect(result.to).toBe("telegram:-1001234567890:topic:42");
-    expect(result.payload).toEqual(
-      expect.objectContaining({
-        to: "telegram:-1001234567890:topic:42",
-        dryRun: true,
-      }),
-    );
+    expect(payload.to).toBe("telegram:-1001234567890:topic:42");
+    expect(payload.dryRun).toBe(true);
   });
 });

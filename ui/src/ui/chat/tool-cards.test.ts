@@ -65,7 +65,7 @@ describe("tool-cards", () => {
     expect(container.textContent).not.toContain("No output");
   });
 
-  it("labels collapsed tool calls as tool call", () => {
+  it("labels collapsed tool calls with the display summary", () => {
     const container = document.createElement("div");
     render(
       renderToolCard(
@@ -80,7 +80,7 @@ describe("tool-cards", () => {
       container,
     );
 
-    expect(container.textContent).toContain("Tool call");
+    expect(container.textContent).toContain("Sessions Spawn");
     expect(container.textContent).not.toContain("Tool input");
     const summaryButton = container.querySelector("button.chat-tool-msg-summary");
     expect(summaryButton?.getAttribute("aria-expanded")).toBe("false");
@@ -178,12 +178,11 @@ describe("tool-cards", () => {
     expect(sidebarButton?.classList.contains("chat-tool-card__action-btn")).toBe(true);
     sidebarButton!.click();
 
-    expect(onOpenSidebar).toHaveBeenCalledWith(
-      expect.objectContaining({
-        kind: "canvas",
-        docId: "cv_sidebar",
-        entryUrl: "/__openclaw__/canvas/documents/cv_sidebar/index.html",
-      }),
-    );
+    const sidebar = onOpenSidebar.mock.calls[0]?.[0] as
+      | { kind?: string; docId?: string; entryUrl?: string }
+      | undefined;
+    expect(sidebar?.kind).toBe("canvas");
+    expect(sidebar?.docId).toBe("cv_sidebar");
+    expect(sidebar?.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 });

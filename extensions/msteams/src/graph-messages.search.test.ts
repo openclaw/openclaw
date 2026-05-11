@@ -172,11 +172,13 @@ describe("searchMessagesMSTeams", () => {
       query: "test",
     });
 
-    expect(mockState.fetchGraphJson).toHaveBeenCalledWith(
-      expect.objectContaining({
-        headers: { ConsistencyLevel: "eventual" },
-      }),
-    );
+    expect(mockState.fetchGraphJson).toHaveBeenCalledWith({
+      token: "test-graph-token",
+      path: `/chats/${encodeURIComponent(CHAT_ID)}/messages?$search=${encodeURIComponent(
+        '"test"',
+      )}&$top=25`,
+      headers: { ConsistencyLevel: "eventual" },
+    });
   });
 
   it("returns empty array when no messages match", async () => {
@@ -188,7 +190,7 @@ describe("searchMessagesMSTeams", () => {
       query: "nonexistent",
     });
 
-    expect(result.messages).toEqual([]);
+    expect(result.messages).toStrictEqual([]);
   });
 
   it("resolves user: target through conversation store", async () => {

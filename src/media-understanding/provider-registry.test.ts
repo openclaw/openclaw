@@ -44,11 +44,30 @@ describe("media-understanding provider registry", () => {
     const registry = buildMediaUnderstandingRegistry();
 
     expect(requireMediaProvider(registry, "groq").id).toBe("groq");
+    expect(typeof requireMediaProvider(registry, "groq").describeImage).toBe("function");
+    expect(typeof requireMediaProvider(registry, "groq").describeImages).toBe("function");
     expect(requireMediaProvider(registry, "deepgram").id).toBe("deepgram");
     expect(resolvePluginCapabilityProvidersMock).toHaveBeenCalledWith({
       key: "mediaUnderstandingProviders",
       cfg: undefined,
     });
+  });
+
+  it("hydrates manifest-only image providers with model-backed image hooks", () => {
+    resolvePluginCapabilityProvidersMock.mockReturnValue([
+      createMediaProvider({
+        id: "zai",
+        capabilities: ["image"],
+        defaultModels: { image: "glm-4.6v" },
+      }),
+    ]);
+
+    const registry = buildMediaUnderstandingRegistry();
+    const provider = requireMediaProvider(registry, "zai");
+
+    expect(provider.defaultModels?.image).toBe("glm-4.6v");
+    expect(provider.describeImage).toBeTypeOf("function");
+    expect(provider.describeImages).toBeTypeOf("function");
   });
 
   it("keeps provider id normalization behavior for capability providers", () => {
@@ -75,15 +94,13 @@ describe("media-understanding provider registry", () => {
       },
     } as never;
     const registry = buildMediaUnderstandingRegistry(undefined, cfg);
-    const glmProvider = getMediaUnderstandingProvider("glm", registry);
+    const glmProvider = requireMediaProvider(registry, "glm");
     const textOnlyProvider = getMediaUnderstandingProvider("textOnly", registry);
 
-    expect(glmProvider).toMatchObject({
-      id: "glm",
-      capabilities: ["image"],
-      describeImage: expect.any(Function),
-      describeImages: expect.any(Function),
-    });
+    expect(glmProvider.id).toBe("glm");
+    expect(glmProvider.capabilities).toEqual(["image"]);
+    expect(typeof glmProvider.describeImage).toBe("function");
+    expect(typeof glmProvider.describeImages).toBe("function");
     expect(textOnlyProvider).toBeUndefined();
   });
 

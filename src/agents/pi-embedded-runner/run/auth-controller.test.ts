@@ -1,4 +1,4 @@
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { RuntimeAuthState } from "./helpers.js";
@@ -179,12 +179,11 @@ describe("createEmbeddedRunAuthController", () => {
 
     await controller.initializeAuthProfile();
 
-    expect(mocks.getApiKeyForModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-      }),
-    );
+    const apiKeyParams = mocks.getApiKeyForModel.mock.calls[0]?.[0] as
+      | { agentDir?: string; workspaceDir?: string }
+      | undefined;
+    expect(apiKeyParams?.agentDir).toBe("/tmp/agent");
+    expect(apiKeyParams?.workspaceDir).toBe("/tmp/workspace");
     expect(harness.runtimeModel.baseUrl).toBe("https://runtime.example.com/v1");
     expect(harness.runtimeModel.headers).toEqual({
       "api-key": "runtime-header-token",
@@ -194,11 +193,9 @@ describe("createEmbeddedRunAuthController", () => {
       "api-key": "runtime-header-token",
     });
     expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "runtime-api-key");
-    expect(harness.runtimeAuthState).toMatchObject({
-      sourceApiKey: "source-api-key",
-      authMode: "api-key",
-      profileId: "default",
-    });
+    expect(harness.runtimeAuthState?.sourceApiKey).toBe("source-api-key");
+    expect(harness.runtimeAuthState?.authMode).toBe("api-key");
+    expect(harness.runtimeAuthState?.profileId).toBe("default");
   });
 
   it("rejects privileged runtime transport overrides on the first auth exchange", async () => {
@@ -347,9 +344,8 @@ describe("createEmbeddedRunAuthController", () => {
 
       vi.advanceTimersByTime(5_000);
       await Promise.resolve();
-      expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight).toEqual(
-        expect.any(Promise),
-      );
+      const refreshInFlight = getRuntimeAuthSnapshot(harness.runtimeAuthState)?.refreshInFlight;
+      expect(typeof refreshInFlight?.then).toBe("function");
 
       await controller.advanceAuthProfile();
       expect(getRuntimeAuthSnapshot(harness.runtimeAuthState)?.profileId).toBe("backup");
@@ -409,10 +405,8 @@ describe("createEmbeddedRunAuthController", () => {
       await controller.initializeAuthProfile();
 
       expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "imds-runtime-token");
-      expect(harness.runtimeAuthState).toMatchObject({
-        sourceApiKey: "__aws_sdk_auth__",
-        authMode: "aws-sdk",
-      });
+      expect(harness.runtimeAuthState?.sourceApiKey).toBe("__aws_sdk_auth__");
+      expect(harness.runtimeAuthState?.authMode).toBe("aws-sdk");
       expect(harness.runtimeAuthState?.expiresAt).toBeGreaterThan(Date.now());
       controller.stopRuntimeAuthRefreshTimer();
     });
@@ -500,9 +494,7 @@ describe("createEmbeddedRunAuthController", () => {
       expect(setRuntimeApiKey).toHaveBeenCalledWith("custom-openai", "__aws_sdk_auth__");
       expect(harness.runtimeAuthState).toBeNull();
       expect(warn).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
-        ),
+        "prepareProviderRuntimeAuth failed for custom-openai, falling back to sentinel: No runtime auth plugin",
       );
     });
   });

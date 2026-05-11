@@ -82,13 +82,16 @@ describe("tasks JSON commands", () => {
         status: string | null;
         tasks: Array<{ runtime: string; status: string; runId: string }>;
       };
-      expect(payload).toMatchObject({
-        count: 1,
-        runtime: "cli",
-        status: "running",
-      });
-      expect(payload.tasks).toEqual([
-        expect.objectContaining({ runtime: "cli", status: "running", runId: "run-cli" }),
+      expect(payload.count).toBe(1);
+      expect(payload.runtime).toBe("cli");
+      expect(payload.status).toBe("running");
+      expect(payload.tasks).toStrictEqual([
+        expect.objectContaining({
+          runtime: "cli",
+          status: "running",
+          runId: "run-cli",
+          task: "Inspect issue backlog",
+        }),
       ]);
     });
   });
@@ -148,7 +151,7 @@ describe("tasks JSON commands", () => {
       expect(payload.summary.taskFlows.byCode.stale_waiting).toBe(1);
       expect(payload.summary.taskFlows.byCode.missing_linked_tasks).toBe(2);
       expect(payload.summary.combined).toEqual({ total: 5, errors: 3, warnings: 2 });
-      expect(payload.findings).toEqual([
+      expect(payload.findings).toStrictEqual([
         expect.objectContaining({
           kind: "task_flow",
           code: "stale_running",

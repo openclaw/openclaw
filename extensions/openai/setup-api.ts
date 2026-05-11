@@ -5,6 +5,8 @@ import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   OPENAI_API_KEY_LABEL,
   OPENAI_API_KEY_WIZARD_GROUP,
+  OPENAI_CODEX_API_KEY_BACKUP_HINT,
+  OPENAI_CODEX_API_KEY_BACKUP_LABEL,
   OPENAI_CODEX_DEVICE_PAIRING_HINT,
   OPENAI_CODEX_DEVICE_PAIRING_LABEL,
   OPENAI_CODEX_LOGIN_HINT,
@@ -91,11 +93,26 @@ function buildOpenAICodexSetupProvider(): ProviderPlugin {
     run: async (ctx) => runOpenAICodexProviderAuthMethod("device-code", ctx),
   } satisfies ProviderAuthMethod;
 
+  const apiKeyBackupMethod = {
+    id: "api-key",
+    label: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+    hint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+    kind: "api_key",
+    wizard: {
+      choiceId: "openai-codex-api-key",
+      choiceLabel: OPENAI_CODEX_API_KEY_BACKUP_LABEL,
+      choiceHint: OPENAI_CODEX_API_KEY_BACKUP_HINT,
+      assistantPriority: 5,
+      ...OPENAI_CODEX_WIZARD_GROUP,
+    },
+    run: async (ctx) => runOpenAICodexProviderAuthMethod("api-key", ctx),
+  } satisfies ProviderAuthMethod;
+
   return {
     id: "openai-codex",
     label: "OpenAI Codex",
     docsPath: "/providers/models",
-    auth: [oauthMethod, deviceCodeMethod],
+    auth: [oauthMethod, deviceCodeMethod, apiKeyBackupMethod],
   };
 }
 

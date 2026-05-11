@@ -455,7 +455,7 @@ describe("channels command", () => {
 
     const next = await addAlertsTelegramAccount("alerts-token");
     expect(next.channels?.telegram?.enabled).toBe(true);
-    expect(next.channels?.telegram?.accounts?.default).toEqual({});
+    expect(next.channels?.telegram?.accounts?.default).toStrictEqual({});
     expect(next.channels?.telegram?.accounts?.alerts?.botToken).toBe("alerts-token");
   });
 

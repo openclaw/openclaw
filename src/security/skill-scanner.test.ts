@@ -298,7 +298,7 @@ export function greet(name: string): string {
 }
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("returns empty array for normal http client code (just a fetch GET)", () => {
@@ -308,7 +308,7 @@ const json = await response.json();
 console.log(json);
 `;
     const findings = scanSource(source, "plugin.ts");
-    expect(findings).toEqual([]);
+    expect(findings).toStrictEqual([]);
   });
 
   it("does not treat fetch in names or comments as network send context", () => {
@@ -626,7 +626,13 @@ describe("scanDirectoryWithSummary", () => {
     });
 
     try {
-      await expect(scanDirectoryWithSummary(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectoryWithSummary(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }
@@ -660,7 +666,13 @@ describe("scanDirectoryWithSummary", () => {
     const spy = mockStatPermissionDeniedFor(filePath);
 
     try {
-      await expect(scanDirectory(root)).rejects.toMatchObject({ code: "EACCES" });
+      let thrown: unknown;
+      try {
+        await scanDirectory(root);
+      } catch (error) {
+        thrown = error;
+      }
+      expect((thrown as NodeJS.ErrnoException | undefined)?.code).toBe("EACCES");
     } finally {
       spy.mockRestore();
     }

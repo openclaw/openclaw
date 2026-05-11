@@ -61,10 +61,14 @@ describe("json file helpers", () => {
 
       await expect(readDurableJsonFile(validPath)).resolves.toEqual({ ok: true });
       await expect(readDurableJsonFile(missingPath)).resolves.toBeNull();
-      await expect(readDurableJsonFile(invalidPath)).rejects.toMatchObject({
-        filePath: invalidPath,
-        reason: "parse",
-      } satisfies Partial<JsonFileReadError>);
+      let readError: unknown;
+      try {
+        await readDurableJsonFile(invalidPath);
+      } catch (error) {
+        readError = error;
+      }
+      expect((readError as JsonFileReadError | undefined)?.filePath).toBe(invalidPath);
+      expect((readError as JsonFileReadError | undefined)?.reason).toBe("parse");
     });
   });
 
@@ -138,7 +142,8 @@ describe("json file helpers", () => {
         "Refusing copy fallback through symlink destination",
       );
 
-      await expect(fs.lstat(filePath)).resolves.toSatisfy((stat) => stat.isSymbolicLink());
+      const fileStat = await fs.lstat(filePath);
+      expect(fileStat.isSymbolicLink()).toBe(true);
       await expect(fs.readFile(outsidePath, "utf8")).resolves.toBe("outside");
     });
   });

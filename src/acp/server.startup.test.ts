@@ -307,11 +307,10 @@ describe("serveAcpGateway startup", () => {
       const servePromise = serveAcpGateway({});
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-        }),
-      );
+      const bootstrapParams = mockState.resolveGatewayClientBootstrap.mock.calls[0]?.[0] as
+        | { env?: unknown }
+        | undefined;
+      expect(bootstrapParams?.env).toBe(process.env);
       expect(mockState.gatewayAuth[0]).toEqual({
         token: undefined,
         password: "resolved-secret-password", // pragma: allowlist secret
@@ -333,12 +332,11 @@ describe("serveAcpGateway startup", () => {
       });
       await Promise.resolve();
 
-      expect(mockState.resolveGatewayClientBootstrap).toHaveBeenCalledWith(
-        expect.objectContaining({
-          env: process.env,
-          gatewayUrl: "wss://override.example/ws",
-        }),
-      );
+      const bootstrapParams = mockState.resolveGatewayClientBootstrap.mock.calls[0]?.[0] as
+        | { env?: unknown; gatewayUrl?: unknown }
+        | undefined;
+      expect(bootstrapParams?.env).toBe(process.env);
+      expect(bootstrapParams?.gatewayUrl).toBe("wss://override.example/ws");
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);
@@ -364,11 +362,7 @@ describe("serveAcpGateway startup", () => {
       });
       await Promise.resolve();
 
-      expect(mockState.gatewayOptions[0]).toEqual(
-        expect.objectContaining({
-          url: "ws://127.0.0.1:19999",
-        }),
-      );
+      expect(mockState.gatewayOptions[0]?.url).toBe("ws://127.0.0.1:19999");
 
       await emitHelloAndWaitForAgentSideConnection();
       await stopServeWithSigint(signalHandlers, servePromise);

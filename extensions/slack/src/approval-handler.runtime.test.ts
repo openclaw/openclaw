@@ -167,23 +167,20 @@ describe("slackApprovalNativeRuntime", () => {
       phase: "resolved",
     });
 
-    expect(chatUpdate).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: "a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT),
-        blocks,
-      }),
-    );
-    expect(chatUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "C123",
-        ts: "1712345678.999999",
-        text: expect.stringMatching(/…$/),
-        blocks,
-      }),
-    );
+    const firstUpdate = chatUpdate.mock.calls[0]?.[0] as
+      | { channel?: string; ts?: string; text?: string; blocks?: unknown }
+      | undefined;
+    const secondUpdate = chatUpdate.mock.calls[1]?.[0] as
+      | { channel?: string; ts?: string; text?: string; blocks?: unknown }
+      | undefined;
+    expect(firstUpdate?.channel).toBe("C123");
+    expect(firstUpdate?.ts).toBe("1712345678.999999");
+    expect(firstUpdate?.text).toBe("a".repeat(SLACK_CHAT_UPDATE_TEXT_LIMIT));
+    expect(firstUpdate?.blocks).toBe(blocks);
+    expect(secondUpdate?.channel).toBe("C123");
+    expect(secondUpdate?.ts).toBe("1712345678.999999");
+    expect(secondUpdate?.text).toMatch(/…$/);
+    expect(secondUpdate?.blocks).toBe(blocks);
     expect(chatUpdate.mock.calls[1]?.[0].text).toHaveLength(SLACK_CHAT_UPDATE_TEXT_LIMIT);
   });
 

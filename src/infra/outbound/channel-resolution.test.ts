@@ -141,17 +141,15 @@ describe("outbound channel resolution", () => {
       }),
     ).toBe(plugin);
     expect(applyPluginAutoEnableMock).toHaveBeenCalledWith({ config: { channels: {} } });
-    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        config: { autoEnabled: true },
-        activationSourceConfig: { channels: {} },
-        autoEnabledReasons: {},
-        workspaceDir: "/tmp/workspace",
-        runtimeOptions: {
-          allowGatewaySubagentBinding: true,
-        },
-      }),
-    );
+    expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
+    const registryOptions = resolveRuntimePluginRegistryMock.mock.calls[0]?.[0];
+    expect(registryOptions?.config).toEqual({ autoEnabled: true });
+    expect(registryOptions?.activationSourceConfig).toEqual({ channels: {} });
+    expect(registryOptions?.autoEnabledReasons).toEqual({});
+    expect(registryOptions?.workspaceDir).toBe("/tmp/workspace");
+    expect(registryOptions?.runtimeOptions).toEqual({
+      allowGatewaySubagentBinding: true,
+    });
   });
 
   it("attempts activation when the active registry has other channels but not the requested one", async () => {

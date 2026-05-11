@@ -98,11 +98,14 @@ describeLive("Crestodian live rescue channel smoke", () => {
     );
 
     const config = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
-    expect(config.agents?.defaults?.model).toMatchObject({ primary: "openai/gpt-5.5" });
+    const defaultModel = config.agents?.defaults?.model;
+    expect(typeof defaultModel).toBe("object");
+    expect(defaultModel).not.toBeNull();
+    expect((defaultModel as { primary?: unknown }).primary).toBe("openai/gpt-5.5");
     const auditPath = path.join(tempDir, "audit", "crestodian.jsonl");
     const auditLines = (await fs.readFile(auditPath, "utf8")).trim().split("\n");
-    expect(auditLines).toEqual(
-      expect.arrayContaining([expect.stringContaining('"operation":"config.setDefaultModel"')]),
+    expect(auditLines.some((line) => line.includes('"operation":"config.setDefaultModel"'))).toBe(
+      true,
     );
   });
 });

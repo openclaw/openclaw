@@ -77,9 +77,13 @@ describe("requireValidConfigSnapshot", () => {
     expect(config).toEqual({ plugins: {} });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.exit).not.toHaveBeenCalled();
-    const logMessage = requireFirstLog(runtime);
-    expect(logMessage).toContain("Plugin compatibility: 1 notice.");
-    expect(logMessage).toContain("legacy-plugin still uses legacy before_agent_start");
+    expect(requireFirstLog(runtime)).toBe(
+      [
+        "Plugin compatibility: 1 notice.",
+        "- legacy-plugin still uses legacy before_agent_start; keep regression coverage on this plugin, and prefer before_model_resolve/before_prompt_build for new work.",
+        "Review: openclaw doctor",
+      ].join("\n"),
+    );
   });
 
   it("blocks invalid config before emitting compatibility advice", async () => {

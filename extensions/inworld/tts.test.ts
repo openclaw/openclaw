@@ -180,7 +180,7 @@ describe("listInworldVoices", () => {
     queueGuardedResponse(new Response(JSON.stringify({}), { status: 200 }));
 
     const voices = await listInworldVoices({ apiKey: "test-key" });
-    expect(voices).toEqual([]);
+    expect(voices).toStrictEqual([]);
   });
 
   it("passes language filter as query parameter", async () => {
@@ -335,7 +335,9 @@ describe("inworldTTS", () => {
   it("releases the guarded dispatcher after failure", async () => {
     const { release } = queueGuardedResponse(new Response("fail", { status: 500 }));
 
-    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow();
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
+      "Inworld TTS API error (500): fail",
+    );
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

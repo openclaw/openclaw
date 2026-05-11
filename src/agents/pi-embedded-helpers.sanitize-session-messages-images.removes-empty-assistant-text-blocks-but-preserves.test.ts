@@ -1,5 +1,5 @@
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   sanitizeGoogleTurnOrdering,
@@ -83,6 +83,24 @@ function expectSingleAssistantContentEntry(
   const content = out[0]?.role === "assistant" ? out[0].content : [];
   expect(content).toHaveLength(1);
   expectEntry((content as Array<{ type?: string; text?: string }>)[0] ?? {});
+}
+
+function expectContentBlock(
+  block:
+    | { type?: string; text?: string; thinking?: string; thought_signature?: string }
+    | undefined,
+  expected: { type: string; text?: string; thinking?: string; thought_signature?: string },
+) {
+  expect(block?.type).toBe(expected.type);
+  if (expected.text !== undefined) {
+    expect(block?.text).toBe(expected.text);
+  }
+  if (expected.thinking !== undefined) {
+    expect(block?.thinking).toBe(expected.thinking);
+  }
+  if (expected.thought_signature !== undefined) {
+    expect(block?.thought_signature).toBe(expected.thought_signature);
+  }
 }
 
 describe("sanitizeSessionMessagesImages", () => {
@@ -401,13 +419,13 @@ describe("sanitizeSessionMessagesImages", () => {
         "redacted_thinking",
         "text",
       ]);
-      expect(content?.[0]).toMatchObject({
+      expectContentBlock(content?.[0], {
         type: "thinking",
         thinking: "first",
         thought_signature: "sig-1",
       });
-      expect(content?.[1]).toMatchObject({ type: "text", text: "visible" });
-      expect(content?.[2]).toMatchObject({
+      expectContentBlock(content?.[1], { type: "text", text: "visible" });
+      expectContentBlock(content?.[2], {
         type: "redacted_thinking",
         thought_signature: "sig-2",
       });

@@ -6,6 +6,15 @@ import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
 const { createTempWorkspace } = createMemoryCoreTestHarness();
 
+async function expectPathMissing(targetPath: string): Promise<void> {
+  const error = await fs.access(targetPath).then(
+    () => undefined,
+    (accessError: unknown) => accessError,
+  );
+  expect(error).toBeInstanceOf(Error);
+  expect((error as NodeJS.ErrnoException).code).toBe("ENOENT");
+}
+
 function requireInlinePath(result: { inlinePath?: string }): string {
   if (!result.inlinePath) {
     throw new Error("Expected inline dreaming markdown path");
@@ -127,6 +136,6 @@ describe("dreaming markdown storage", () => {
     expect(content).toContain("# Deep Sleep");
     expect(content).toContain("- Promoted: durable preference");
 
-    await expect(fs.access(path.join(workspaceDir, "DREAMS.md"))).rejects.toThrow();
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
   });
 });

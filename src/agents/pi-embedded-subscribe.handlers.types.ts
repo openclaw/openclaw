@@ -1,4 +1,5 @@
-import type { AgentEvent, AgentMessage } from "@mariozechner/pi-agent-core";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { AgentSessionEvent } from "@earendil-works/pi-coding-agent";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
 import type { ReasoningLevel } from "../auto-reply/thinking.js";
@@ -18,6 +19,7 @@ import type { NormalizedUsage } from "./usage.js";
 
 type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
+  info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
 };
 
@@ -64,6 +66,8 @@ export type EmbeddedPiSubscribeState = {
   emittedAssistantUpdate: boolean;
   lastStreamedReasoning?: string;
   lastBlockReplyText?: string;
+  lastDeliveredBlockReplyText?: string;
+  toolExecutionSinceLastBlockReply: boolean;
   reasoningStreamOpen: boolean;
   assistantMessageIndex: number;
   lastAssistantStreamItemId?: string;
@@ -183,6 +187,7 @@ type ToolHandlerParams = Pick<
   | "runId"
   | "onBlockReplyFlush"
   | "onAgentEvent"
+  | "onExecutionPhase"
   | "onToolResult"
   | "sessionKey"
   | "sessionId"
@@ -216,6 +221,7 @@ type ToolHandlerState = Pick<
   | "heartbeatToolResponse"
   | "successfulCronAdds"
   | "deterministicApprovalPromptSent"
+  | "toolExecutionSinceLastBlockReply"
 >;
 
 export type ToolHandlerContext = {
@@ -233,6 +239,6 @@ export type ToolHandlerContext = {
 };
 
 export type EmbeddedPiSubscribeEvent =
-  | AgentEvent
+  | AgentSessionEvent
   | { type: string; [k: string]: unknown }
   | { type: "message_start"; message: AgentMessage };

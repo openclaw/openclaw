@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AuthProfileStore } from "../agents/auth-profiles.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { warnIfModelConfigLooksOff } from "./auth-choice.model-check.js";
 import { makePrompter } from "./setup/__tests__/test-utils.js";
@@ -43,12 +44,15 @@ describe("warnIfModelConfigLooksOff", () => {
 
     expect(loadModelCatalog).not.toHaveBeenCalled();
     expect(ensureAuthProfileStore).toHaveBeenCalledOnce();
-    expect(listProfilesForProvider).toHaveBeenCalledWith(
-      expect.objectContaining({ profiles: {} }),
-      "openai-codex",
-    );
+    expect(listProfilesForProvider).toHaveBeenCalledOnce();
+    const [profileStore, providerId] = listProfilesForProvider.mock.calls[0] as unknown as [
+      AuthProfileStore,
+      string,
+    ];
+    expect(profileStore?.profiles).toEqual({});
+    expect(providerId).toBe("openai-codex");
     expect(note).toHaveBeenCalledWith(
-      expect.stringContaining('No auth configured for provider "openai-codex"'),
+      'No auth configured for provider "openai-codex". The agent may fail until credentials are added. Run `openclaw models auth login --provider openai-codex`, `openclaw configure`, or set an API key env var.',
       "Model check",
     );
   });

@@ -28,7 +28,7 @@ function expectIssueMessageIncludes(
   issue: ReturnType<typeof expectValidationIssue>,
   fragments: readonly string[],
 ) {
-  expect(issue.message).toEqual(expect.stringContaining(fragments[0] ?? ""));
+  expect(issue.message).toContain(fragments[0] ?? "");
   fragments.slice(1).forEach((fragment) => {
     expect(issue.message).toContain(fragment);
   });
@@ -89,7 +89,7 @@ describe("schema validator", () => {
       expect(result.value).toEqual({ mode: "auto" });
       expect(result.value).not.toBe(value);
     }
-    expect(value).toEqual({});
+    expect(value).toStrictEqual({});
 
     expectSuccessfulValidationValue({
       input: {

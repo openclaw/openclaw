@@ -105,8 +105,31 @@ describe("status.scan.config-shared", () => {
     });
 
     expect(result.secretDiagnostics).toEqual([
-      expect.stringContaining("OPENCLAW_GATEWAY_TOKEN overrides gateway.auth.token"),
+      "OPENCLAW_GATEWAY_TOKEN conflicts with gateway.auth.token: Remove OPENCLAW_GATEWAY_TOKEN from the shell, ~/.openclaw/.env, or launchctl env if gateway.auth.token is intended, or point gateway.auth.token at ${OPENCLAW_GATEWAY_TOKEN} if the env var should be canonical.",
     ]);
+  });
+
+  it("does not add a token conflict diagnostic inside the managed gateway service context", async () => {
+    const sourceConfig = { gateway: { auth: { token: "config-token" } } };
+    const readBestEffortConfig = vi.fn(async () => sourceConfig);
+    const resolveConfig = vi.fn(async () => ({
+      resolvedConfig: sourceConfig,
+      diagnostics: [],
+    }));
+
+    const result = await loadStatusScanCommandConfig({
+      commandName: "status --json",
+      readBestEffortConfig,
+      resolveConfig,
+      env: {
+        VITEST: "true",
+        OPENCLAW_GATEWAY_TOKEN: "env-token",
+        OPENCLAW_SERVICE_KIND: "gateway",
+      },
+      allowMissingConfigFastPath: true,
+    });
+
+    expect(result.secretDiagnostics).toStrictEqual([]);
   });
 
   it("does not add a status diagnostic when config uses OPENCLAW_GATEWAY_TOKEN", async () => {
@@ -128,7 +151,7 @@ describe("status.scan.config-shared", () => {
       allowMissingConfigFastPath: true,
     });
 
-    expect(result.secretDiagnostics).toEqual([]);
+    expect(result.secretDiagnostics).toStrictEqual([]);
   });
 
   it("does not add a status diagnostic for remote gateway mode", async () => {
@@ -153,6 +176,6 @@ describe("status.scan.config-shared", () => {
       allowMissingConfigFastPath: true,
     });
 
-    expect(result.secretDiagnostics).toEqual([]);
+    expect(result.secretDiagnostics).toStrictEqual([]);
   });
 });

@@ -1,5 +1,5 @@
 import { ChannelType } from "discord-api-types/v10";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-types";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   auditDiscordChannelPermissionsWithFetcher,
@@ -116,7 +116,7 @@ describe("discord audit", () => {
     } as unknown as OpenClawConfig;
 
     const collected = collectDiscordAuditChannelIdsForGuilds(readDiscordGuilds(cfg));
-    expect(collected.channelIds).toEqual([]);
+    expect(collected.channelIds).toStrictEqual([]);
     expect(collected.unresolvedChannels).toBe(0);
   });
 

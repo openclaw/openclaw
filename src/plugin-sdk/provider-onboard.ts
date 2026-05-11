@@ -2,8 +2,12 @@
 // do not pull heavyweight runtime graphs at activation time.
 
 import { ensureStaticModelAllowlistEntry } from "../agents/model-allowlist-entry.js";
+import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { findNormalizedProviderKey } from "../agents/provider-id.js";
-import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
+import {
+  normalizeAgentModelMapForConfig,
+  normalizeAgentModelRefForConfig,
+} from "../config/model-input.js";
 import type { AgentModelEntryConfig } from "../config/types.agent-defaults.js";
 import type {
   ModelApi,
@@ -65,6 +69,40 @@ type ProviderModelMergeState = {
   existingModels: ModelDefinitionConfig[];
 };
 
+function normalizeProviderModelForConfig(
+  providerId: string,
+  model: ModelDefinitionConfig,
+): ModelDefinitionConfig {
+  const id = normalizeConfiguredProviderCatalogModelId(providerId, model.id);
+  return id === model.id ? model : { ...model, id };
+}
+
+function normalizeProviderModelsForConfig(
+  providerId: string,
+  models: ModelDefinitionConfig[],
+): ModelDefinitionConfig[] {
+  let mutated = false;
+  const next: ModelDefinitionConfig[] = [];
+  const seenById = new Map<string, number>();
+
+  for (const model of models) {
+    const normalized = normalizeProviderModelForConfig(providerId, model);
+    if (normalized !== model) {
+      mutated = true;
+    }
+    const existingIndex = seenById.get(normalized.id);
+    if (existingIndex !== undefined) {
+      mutated = true;
+      next[existingIndex] = { ...normalized, ...next[existingIndex] };
+      continue;
+    }
+    seenById.set(normalized.id, next.length);
+    next.push(normalized);
+  }
+
+  return mutated ? next : models;
+}
+
 function resolveProviderModelMergeState(
   cfg: OpenClawConfig,
   providerId: string,
@@ -76,12 +114,18 @@ function resolveProviderModelMergeState(
       ? (providers[existingProviderKey] as ModelProviderConfig | undefined)
       : undefined;
   const existingModels: ModelDefinitionConfig[] = Array.isArray(existingProvider?.models)
-    ? existingProvider.models
+    ? normalizeProviderModelsForConfig(providerId, existingProvider.models)
     : [];
   if (existingProviderKey && existingProviderKey !== providerId) {
     delete providers[existingProviderKey];
   }
-  return { providers, existingProvider, existingModels };
+  return {
+    providers,
+    existingProvider: existingProvider
+      ? { ...existingProvider, models: existingModels }
+      : existingProvider,
+    existingModels,
+  };
 }
 
 function buildProviderConfig(params: {
@@ -117,12 +161,14 @@ function applyProviderConfigWithMergedModels(
     fallbackModels: ModelDefinitionConfig[];
   },
 ): OpenClawConfig {
+  const mergedModels = normalizeProviderModelsForConfig(params.providerId, params.mergedModels);
+  const fallbackModels = normalizeProviderModelsForConfig(params.providerId, params.fallbackModels);
   params.providerState.providers[params.providerId] = buildProviderConfig({
     existingProvider: params.providerState.existingProvider,
     api: params.api,
     baseUrl: params.baseUrl,
-    mergedModels: params.mergedModels,
-    fallbackModels: params.fallbackModels,
+    mergedModels,
+    fallbackModels,
   });
   return applyOnboardAuthAgentModelsAndProviders(cfg, {
     agentModels: params.agentModels,
@@ -165,12 +211,13 @@ export function withAgentModelAliases(
   existing: Record<string, AgentModelEntryConfig> | undefined,
   aliases: readonly AgentModelAliasEntry[],
 ): Record<string, AgentModelEntryConfig> {
-  const next = { ...existing };
+  const next = normalizeAgentModelMapForConfig({ ...existing });
   for (const entry of aliases) {
     const normalized = normalizeAgentModelAliasEntry(entry);
-    next[normalized.modelRef] = {
-      ...next[normalized.modelRef],
-      ...(normalized.alias ? { alias: next[normalized.modelRef]?.alias ?? normalized.alias } : {}),
+    const modelRef = normalizeAgentModelRefForConfig(normalized.modelRef);
+    next[modelRef] = {
+      ...next[modelRef],
+      ...(normalized.alias ? { alias: next[modelRef]?.alias ?? normalized.alias } : {}),
     };
   }
   return next;
@@ -183,10 +230,10 @@ export function applyOnboardAuthAgentModelsAndProviders(
     providers: Record<string, ModelProviderConfig>;
   },
 ): OpenClawConfig {
-  const mergedAgentModels = {
+  const mergedAgentModels = normalizeAgentModelMapForConfig({
     ...cfg.agents?.defaults?.models,
     ...params.agentModels,
-  };
+  });
   return {
     ...cfg,
     agents: {

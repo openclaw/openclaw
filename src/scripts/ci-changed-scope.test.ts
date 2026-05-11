@@ -300,10 +300,28 @@ describe("detectChangedScope", () => {
       runChangedSmoke: false,
       runControlUiI18n: false,
     });
+    expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: true,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
   });
 
   it("runs changed-smoke for install and packaging surfaces", () => {
     expect(detectChangedScope(["scripts/install.sh"])).toEqual({
+      runNode: true,
+      runMacos: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: true,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
       runMacos: false,
       runAndroid: false,
@@ -456,6 +474,14 @@ describe("detectChangedScope", () => {
       runFastInstallSmoke: true,
       runFullInstallSmoke: true,
     });
+    expect(detectInstallSmokeScope(["scripts/install-cli.sh"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
+    expect(detectInstallSmokeScope(["scripts/install.ps1"])).toEqual({
+      runFastInstallSmoke: true,
+      runFullInstallSmoke: true,
+    });
     expect(detectInstallSmokeScope(["Dockerfile"])).toEqual({
       runFastInstallSmoke: true,
       runFullInstallSmoke: true,
@@ -578,7 +604,14 @@ describe("detectChangedScope", () => {
         ? `HEAD & echo injected > "${markerPath}" & rem`
         : `HEAD; touch "${markerPath}" #`;
 
-    expect(() => listChangedPaths(injectedBase, "HEAD")).toThrow();
+    let error: unknown;
+    try {
+      listChangedPaths(injectedBase, "HEAD");
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toContain(injectedBase);
     expect(fs.existsSync(markerPath)).toBe(false);
   });
 

@@ -124,9 +124,7 @@ describe("runCronIsolatedAgentTurn — skill filter", () => {
   it("forces a fresh session for isolated cron runs", async () => {
     await runSkillFilterCase();
     expect(resolveCronSessionMock).toHaveBeenCalledOnce();
-    expect(resolveCronSessionMock.mock.calls[0]?.[0]).toMatchObject({
-      forceNew: true,
-    });
+    expect(resolveCronSessionMock.mock.calls[0]?.[0]?.forceNew).toBe(true);
   });
 
   it("reuses cached snapshot when version and normalized skillFilter are unchanged", async () => {

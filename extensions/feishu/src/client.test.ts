@@ -238,19 +238,15 @@ describe("createFeishuClient HTTP timeout", () => {
   const expectGetCallTimeout = async (timeout: number) => {
     const httpInstance = readLastClientHttpInstance();
     await httpInstance.get("https://example.com/api");
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout }),
-    );
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", { timeout });
   };
 
   it("passes a custom httpInstance with default timeout to Lark.Client", () => {
     createFeishuClient({ appId: "app_1", appSecret: "secret_1", accountId: "timeout-test" }); // pragma: allowlist secret
 
-    expect(readLastClientHttpInstance()).toMatchObject({
-      get: expect.any(Function),
-      post: expect.any(Function),
-    });
+    const httpInstance = readLastClientHttpInstance();
+    expect(typeof httpInstance.get).toBe("function");
+    expect(typeof httpInstance.post).toBe("function");
   });
 
   it("injects default timeout into HTTP request options", async () => {
@@ -267,7 +263,7 @@ describe("createFeishuClient HTTP timeout", () => {
     expect(mockBaseHttpInstance.post).toHaveBeenCalledWith(
       "https://example.com/api",
       { data: 1 },
-      expect.objectContaining({ timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Custom": "yes" } }),
+      { timeout: FEISHU_HTTP_TIMEOUT_MS, headers: { "X-Custom": "yes" } },
     );
   });
 
@@ -278,10 +274,9 @@ describe("createFeishuClient HTTP timeout", () => {
 
     await httpInstance.get("https://example.com/api", { timeout: 5_000 });
 
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: 5_000 }),
-    );
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
+      timeout: 5_000,
+    });
   });
 
   it("uses config-configured default timeout when provided", async () => {
@@ -363,10 +358,9 @@ describe("createFeishuClient HTTP timeout", () => {
     const httpInstance = readLastClientHttpInstance();
     await httpInstance.get("https://example.com/api");
 
-    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith(
-      "https://example.com/api",
-      expect.objectContaining({ timeout: 45_000 }),
-    );
+    expect(mockBaseHttpInstance.get).toHaveBeenCalledWith("https://example.com/api", {
+      timeout: 45_000,
+    });
   });
 });
 

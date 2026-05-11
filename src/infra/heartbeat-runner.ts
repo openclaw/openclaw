@@ -38,6 +38,7 @@ import { resolveDefaultModel } from "../auto-reply/reply/directive-handling.defa
 import { resolveResponsePrefixTemplate } from "../auto-reply/reply/response-prefix-template.js";
 import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
+import { sendDurableMessageBatch } from "../channels/message/runtime.js";
 import { getChannelPlugin } from "../channels/plugins/index.js";
 import type {
   ChannelHeartbeatDeps,
@@ -105,12 +106,7 @@ import {
   resolveNextHeartbeatDueMs,
   seekNextActivePhaseDueMs,
 } from "./heartbeat-schedule.js";
-import {
-  isHeartbeatEnabledForAgent,
-  resolveHeartbeatIntervalMs,
-  resolveHeartbeatSummaryForAgent,
-  type HeartbeatSummary,
-} from "./heartbeat-summary.js";
+import { isHeartbeatEnabledForAgent, resolveHeartbeatIntervalMs } from "./heartbeat-summary.js";
 import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 import {
@@ -129,7 +125,6 @@ import {
   setHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
 import type { OutboundSendDeps } from "./outbound/deliver.js";
-import { deliverOutboundPayloads } from "./outbound/deliver.js";
 import { buildOutboundSessionContext } from "./outbound/session-context.js";
 import {
   resolveHeartbeatDeliveryTarget,
@@ -301,6 +296,34 @@ function resolveHeartbeatConfig(
     return overrides;
   }
   return { ...defaults, ...overrides };
+}
+
+function omitExplicitHeartbeatDestination(heartbeat: HeartbeatConfig | undefined) {
+  if (!heartbeat) {
+    return undefined;
+  }
+  const next = { ...heartbeat };
+  delete next.to;
+  delete next.accountId;
+  return next;
+}
+
+function resolveHeartbeatForWake(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  configuredHeartbeat?: HeartbeatConfig;
+  requestedHeartbeat?: HeartbeatConfig;
+  source?: HeartbeatWakeSource;
+  mergeRequestedHeartbeat: boolean;
+}): HeartbeatConfig | undefined {
+  const base = params.configuredHeartbeat ?? resolveHeartbeatConfig(params.cfg, params.agentId);
+  const heartbeat =
+    params.requestedHeartbeat && params.mergeRequestedHeartbeat
+      ? { ...base, ...params.requestedHeartbeat }
+      : (params.requestedHeartbeat ?? base);
+  return params.source === "cron" && params.requestedHeartbeat?.target === "last"
+    ? omitExplicitHeartbeatDestination(heartbeat)
+    : heartbeat;
 }
 
 function resolveHeartbeatAgents(cfg: OpenClawConfig): HeartbeatAgent[] {
@@ -1185,7 +1208,13 @@ export async function runHeartbeatOnce(opts: {
   const agentId = normalizeAgentId(
     explicitAgentId || forcedSessionAgentId || resolveDefaultAgentId(cfg),
   );
-  const heartbeat = opts.heartbeat ?? resolveHeartbeatConfig(cfg, agentId);
+  const heartbeat = resolveHeartbeatForWake({
+    cfg,
+    agentId,
+    requestedHeartbeat: opts.heartbeat,
+    source: opts.source,
+    mergeRequestedHeartbeat: opts.source === "cron",
+  });
   if (!areHeartbeatsEnabled()) {
     return { status: "skipped", reason: "disabled" };
   }
@@ -1235,8 +1264,16 @@ export async function runHeartbeatOnce(opts: {
     opts.sessionKey,
   );
   const HEARTBEAT_DEFER_WINDOW_MS = 30_000;
+  const pendingFinalDeliveryText = recentSessionEntry?.pendingFinalDeliveryText;
+  const pendingFinalDeliveryIsHeartbeatAck =
+    typeof pendingFinalDeliveryText === "string" &&
+    stripHeartbeatToken(pendingFinalDeliveryText, {
+      mode: "heartbeat",
+      maxAckChars: resolveHeartbeatAckMaxChars(cfg, heartbeat),
+    }).shouldSkip;
   if (
     recentSessionEntry?.pendingFinalDelivery === true &&
+    !pendingFinalDeliveryIsHeartbeatAck &&
     recentSessionEntry?.updatedAt &&
     startedAt - recentSessionEntry.updatedAt < HEARTBEAT_DEFER_WINDOW_MS
   ) {
@@ -1594,7 +1631,7 @@ export async function runHeartbeatOnce(opts: {
         return false;
       }
     }
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1604,6 +1641,9 @@ export async function runHeartbeatOnce(opts: {
       session: outboundSession,
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     return true;
   };
 
@@ -1863,7 +1903,7 @@ export async function runHeartbeatOnce(opts: {
       }
     }
 
-    await deliverOutboundPayloads({
+    const send = await sendDurableMessageBatch({
       cfg,
       channel: delivery.channel,
       to: delivery.to,
@@ -1883,6 +1923,9 @@ export async function runHeartbeatOnce(opts: {
       ],
       deps: opts.deps,
     });
+    if (send.status === "failed" || send.status === "partial_failed") {
+      throw send.error;
+    }
     await markCommitmentsStatus({
       cfg,
       ids: dueCommitmentIds,
@@ -2174,8 +2217,6 @@ export function startHeartbeatRunner(opts: {
     const requestedAgentId = params?.agentId ? normalizeAgentId(params.agentId) : undefined;
     const requestedSessionKey = normalizeOptionalString(params?.sessionKey);
     const requestedHeartbeat = params?.heartbeat;
-    const resolveRequestedHeartbeat = (heartbeat?: HeartbeatConfig) =>
-      requestedHeartbeat ? { ...heartbeat, ...requestedHeartbeat } : heartbeat;
     const isInterval = reason === "interval";
     const startedAt = Date.now();
     const now = startedAt;
@@ -2199,7 +2240,14 @@ export function startHeartbeatRunner(opts: {
           const res = await runOnce({
             cfg: state.cfg,
             agentId: targetAgent.agentId,
-            heartbeat: resolveRequestedHeartbeat(targetAgent.heartbeat),
+            heartbeat: resolveHeartbeatForWake({
+              cfg: state.cfg,
+              agentId: targetAgent.agentId,
+              configuredHeartbeat: targetAgent.heartbeat,
+              requestedHeartbeat,
+              source: params.source,
+              mergeRequestedHeartbeat: true,
+            }),
             source: params.source,
             intent,
             reason,

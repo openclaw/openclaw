@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { AgentMessage } from "@mariozechner/pi-agent-core";
-import type { Api, Model } from "@mariozechner/pi-ai";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { expect, vi, type Mock } from "vitest";
 import type {
   AssembleResult,
@@ -70,7 +70,6 @@ type AttemptSpawnWorkspaceHoisted = {
   installToolResultContextGuardMock: UnknownMock;
   installContextEngineLoopHookMock: UnknownMock;
   flushPendingToolResultsAfterIdleMock: AsyncUnknownMock;
-  releaseWsSessionMock: UnknownMock;
   resolveBootstrapFilesForRunMock: Mock<(...args: unknown[]) => Promise<WorkspaceBootstrapFile[]>>;
   resolveBootstrapContextForRunMock: Mock<() => Promise<BootstrapContext>>;
   isWorkspaceBootstrapPendingMock: Mock<(workspaceDir: string) => Promise<boolean>>;
@@ -96,6 +95,8 @@ export function createSubscriptionMock(): SubscriptionMock {
   return {
     assistantTexts: [] as string[],
     toolMetas: [] as Array<{ toolName: string; meta?: string }>,
+    runToolLifecycle: async <T>(toolParams: { execute: () => Promise<T> }) =>
+      await toolParams.execute(),
     unsubscribe: () => {},
     setTerminalLifecycleMeta: () => {},
     waitForCompactionRetry: async () => {},
@@ -134,7 +135,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
   const installToolResultContextGuardMock = vi.fn(() => () => {});
   const installContextEngineLoopHookMock = vi.fn(() => () => {});
   const flushPendingToolResultsAfterIdleMock = vi.fn(async () => {});
-  const releaseWsSessionMock = vi.fn(() => {});
   const subscribeEmbeddedPiSessionMock = vi.fn<SubscribeEmbeddedPiSessionFn>(() =>
     createSubscriptionMock(),
   );
@@ -205,7 +205,6 @@ const hoisted = vi.hoisted((): AttemptSpawnWorkspaceHoisted => {
     installToolResultContextGuardMock,
     installContextEngineLoopHookMock,
     flushPendingToolResultsAfterIdleMock,
-    releaseWsSessionMock,
     resolveBootstrapFilesForRunMock,
     resolveBootstrapContextForRunMock,
     isWorkspaceBootstrapPendingMock,
@@ -275,7 +274,12 @@ vi.mock("../../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: () => emptyPluginMetadataSnapshot,
 }));
 
-vi.mock("@mariozechner/pi-coding-agent", () => {
+vi.mock("../../../trajectory/metadata.js", () => ({
+  buildTrajectoryArtifacts: (params: Record<string, unknown>) => params,
+  buildTrajectoryRunMetadata: () => ({ source: "test" }),
+}));
+
+vi.mock("@earendil-works/pi-coding-agent", () => {
   function AuthStorage() {}
   class DefaultResourceLoader {
     async reload() {}
@@ -503,15 +507,30 @@ vi.mock("../extra-params.js", async () => {
   return {
     ...actual,
     applyExtraParamsToAgent: () => ({ effectiveExtraParams: {} }),
+    resolvePreparedExtraParams: (params: {
+      cfg?: unknown;
+      provider: string;
+      modelId: string;
+      agentId?: string;
+      extraParamsOverride?: Record<string, unknown>;
+      resolvedExtraParams?: Record<string, unknown>;
+    }) => ({
+      ...(params.resolvedExtraParams ??
+        actual.resolveExtraParams({
+          cfg: params.cfg as Parameters<typeof actual.resolveExtraParams>[0]["cfg"],
+          provider: params.provider,
+          modelId: params.modelId,
+          agentId: params.agentId,
+        })),
+      ...(params.extraParamsOverride
+        ? Object.fromEntries(
+            Object.entries(params.extraParamsOverride).filter(([, value]) => value !== undefined),
+          )
+        : undefined),
+    }),
     resolveAgentTransportOverride: () => undefined,
   };
 });
-
-vi.mock("../../openai-ws-stream.js", () => ({
-  createOpenAIWebSocketStreamFn: vi.fn(),
-  releaseWsSession: (...args: unknown[]) =>
-    (hoisted.releaseWsSessionMock as (...args: unknown[]) => unknown)(...args),
-}));
 
 vi.mock("../../anthropic-payload-log.js", () => ({
   createAnthropicPayloadLogger: () => undefined,
@@ -524,6 +543,17 @@ vi.mock("../../cache-trace.js", () => ({
 vi.mock("../../pi-tools.js", () => ({
   createOpenClawCodingTools: (options?: { workspaceDir?: string; spawnWorkspaceDir?: string }) =>
     hoisted.createOpenClawCodingToolsMock(options),
+  resolveProcessToolScopeKey: ({
+    scopeKey,
+    sessionKey,
+    sessionId,
+    agentId,
+  }: {
+    scopeKey?: string;
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+  }) => scopeKey ?? sessionKey ?? sessionId ?? (agentId ? `agent:${agentId}` : undefined),
   resolveToolLoopDetectionConfig: () => undefined,
 }));
 
@@ -725,7 +755,6 @@ vi.mock("../tool-name-allowlist.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../tool-name-allowlist.js")>();
   return {
     ...actual,
-    collectAllowedToolNames: () => undefined,
   };
 });
 
@@ -885,7 +914,6 @@ export function resetEmbeddedAttemptHarness(
   hoisted.installToolResultContextGuardMock.mockReset().mockReturnValue(() => {});
   hoisted.installContextEngineLoopHookMock.mockReset().mockReturnValue(() => {});
   hoisted.flushPendingToolResultsAfterIdleMock.mockReset().mockResolvedValue(undefined);
-  hoisted.releaseWsSessionMock.mockReset().mockReturnValue(undefined);
   hoisted.resolveBootstrapContextForRunMock.mockReset().mockResolvedValue({
     bootstrapFiles: [],
     contextFiles: [],
@@ -1001,11 +1029,9 @@ export function createContextEngineBootstrapAndAssemble() {
 }
 
 export function expectCalledWithSessionKey(mock: ReturnType<typeof vi.fn>, sessionKey: string) {
-  expect(mock).toHaveBeenCalledWith(
-    expect.objectContaining({
-      sessionKey,
-    }),
-  );
+  expect(mock).toHaveBeenCalled();
+  const [params] = mock.mock.calls.at(-1) ?? [];
+  expect((params as { sessionKey?: string } | undefined)?.sessionKey).toBe(sessionKey);
 }
 
 export const testModel = {

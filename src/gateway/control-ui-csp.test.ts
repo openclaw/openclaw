@@ -17,7 +17,7 @@ describe("buildControlUiCspHeader", () => {
     expect(csp).toContain("font-src 'self' https://fonts.gstatic.com");
   });
 
-  it("allows OpenAI realtime WebRTC offer requests without allowing all HTTPS", () => {
+  it("allows OpenAI realtime and tweakcn theme import requests without allowing all HTTPS", () => {
     const csp = buildControlUiCspHeader();
     const connectSrc = csp.split("; ").find((directive) => directive.startsWith("connect-src "));
     expect(connectSrc?.split(" ")).toEqual([
@@ -26,7 +26,10 @@ describe("buildControlUiCspHeader", () => {
       "ws:",
       "wss:",
       "https://api.openai.com",
+      "https://tweakcn.com",
     ]);
+    expect(connectSrc).not.toContain("https://*.tweakcn.com");
+    expect(connectSrc?.split(" ")).not.toContain("https:");
   });
 
   it("limits image loading to same-origin, data, and managed blob URLs", () => {
@@ -58,7 +61,7 @@ describe("buildControlUiCspHeader", () => {
 
 describe("computeInlineScriptHashes", () => {
   it("returns empty for HTML without scripts", () => {
-    expect(computeInlineScriptHashes("<html><body>hi</body></html>")).toEqual([]);
+    expect(computeInlineScriptHashes("<html><body>hi</body></html>")).toStrictEqual([]);
   });
 
   it("hashes inline script content", () => {
@@ -70,7 +73,7 @@ describe("computeInlineScriptHashes", () => {
 
   it("skips scripts with src attribute", () => {
     const hashes = computeInlineScriptHashes('<html><script src="/app.js"></script></html>');
-    expect(hashes).toEqual([]);
+    expect(hashes).toStrictEqual([]);
   });
 
   it("does not treat data-src as an external script attribute", () => {
@@ -103,6 +106,6 @@ describe("computeInlineScriptHashes", () => {
   });
 
   it("skips empty inline scripts", () => {
-    expect(computeInlineScriptHashes("<script></script>")).toEqual([]);
+    expect(computeInlineScriptHashes("<script></script>")).toStrictEqual([]);
   });
 });
