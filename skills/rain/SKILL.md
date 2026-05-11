@@ -1,200 +1,113 @@
 ---
 name: rain
-description: Read Rain prediction markets and build wallet-backed transaction previews through the AgentGlob dashboard runtime.
-metadata: { "openclaw": { "emoji": "🌧️" } }
+description: Prompt-level guidance for the Rain prediction-market integration. The actual capability surface is the `rain` MCP server (typed tools); this skill adds safety rules, preview discipline, and market-state awareness.
+metadata:
+  openclaw:
+    emoji: 🌧️
+    requires:
+      env: [AGENTGLOB_RUNTIME_URL, AGENTGLOB_RUNTIME_TOKEN]
 ---
 
-# Rain Skill
+# Rain skill (V1.5)
 
-Use this skill when the user asks about Rain prediction markets, wants to buy a market position, or wants to claim winnings. All Rain calls go through the AgentGlob dashboard runtime — do not attempt to use the Rain SDK directly, call arbitrary RPC URLs, or request private keys from the user.
+This skill is **optional prompt-level guidance** for agents that have the
+`rain` MCP server added (from the dashboard's Tools tab quick-setup). It
+does not provide any capabilities by itself — the capabilities live in the
+MCP tools. This document tells you how to use those tools safely.
 
-Rain is available only when the agent was deployed with the Rain skill selected and the dashboard has injected `AGENTGLOB_RUNTIME_URL` and `AGENTGLOB_RUNTIME_TOKEN` into the agent environment. If those variables are missing, tell the user to redeploy the agent with Rain selected.
+If the `rain` MCP isn't present in the agent's tool list, this skill has
+nothing to do — tell the user to add it from the dashboard's Tools tab.
 
-## Runtime environment
+## What the Rain MCP gives you
 
-```
-AGENTGLOB_RUNTIME_URL   — base URL of the AgentGlob dashboard (e.g. https://app.agentglob.com)
-AGENTGLOB_RUNTIME_TOKEN — per-agent bearer token for runtime auth
-```
+Four typed tools, available when the `rain` MCP is active:
 
-All four routes below require the `Authorization: Bearer $AGENTGLOB_RUNTIME_TOKEN` header. Do not call them without it.
+- `rain_list_markets` — browse public Rain prediction markets on Arbitrum
+- `rain_get_market` — full detail for one market (options, prices, liquidity, base token)
+- `rain_build_buy` — build a buy-option transaction preview (returns `walletRequest`)
+- `rain_build_claim` — build a claim transaction preview (returns `walletRequest`)
 
-The dashboard Rain SDK is configured for Arbitrum One. All markets and transactions settle on Arbitrum.
+The MCP returns typed responses — call the tools directly. Do not construct
+HTTP requests, do not invent endpoint URLs, do not call any Rain SDK or RPC
+directly. The MCP is the only path.
 
-## Routes
+## Safety rules (apply to every tool call)
 
-### List markets
+- **Never display or request a private key.** Never put a wallet key in a
+  tool argument.
+- **Never invent recipient addresses or market identifiers.** Only use
+  values that came from a previous `rain_list_markets` or `rain_get_market`
+  response, or that the user explicitly provided in this conversation.
+- **Never bypass the MCP.** If you need a Rain capability that the MCP
+  doesn't expose, say so — do not improvise. New capabilities ship as
+  follow-up MCP tools (V2 Phase A).
+- **Treat all build responses as previews.** They do not execute anything.
+  Execution requires a separate user-approved wallet `sign-tx` call.
 
-```
-GET $AGENTGLOB_RUNTIME_URL/api/runtime/rain/markets
-```
+## Read flow (`rain_list_markets`, `rain_get_market`)
 
-Optional query parameters:
+1. Use `rain_list_markets` to find markets matching the user's interest.
+   Filter by `status: Live` if you want only active markets.
+2. Use `rain_get_market` to get full detail. Surface to the user: title,
+   status, time to resolution, option list with current prices, and
+   `details.baseToken` + `details.baseTokenDecimals`.
+3. State risks plainly: slippage, resolution uncertainty, lock-up until
+   resolution. Do not imply guaranteed outcomes.
 
-- `limit` — integer 1–50, default 20
-- `offset` — integer, default 0
-- `status` — one of: `Live`, `New`, `WaitingForResult`, `UnderDispute`, `UnderAppeal`, `ClosingSoon`, `InReview`, `InEvaluation`, `Closed`, `Trading`
-- `sortBy` — one of: `Liquidity`, `Volumn`, `latest`
-- `creator` — creator address filter
+## Buy flow (`rain_build_buy` → wallet sign-tx)
 
-Success response:
+1. **Confirm the three inputs with the user** before calling the tool:
+   - exact market contract address (from `rain_get_market` →
+     `details.contractAddress`)
+   - option index (`details.options[N].choiceIndex`)
+   - amount in the market's base token (compute using
+     `details.baseTokenDecimals` — do NOT assume USDT or 6 decimals)
+2. Call `rain_build_buy`. The response includes a `walletRequest`.
+3. **Show the user the full preview** before any signing:
+   - market title, option label, amount in human terms, base token
+   - `approvalMayBeRequired` — if true, an ERC-20 approve tx may precede
+     the buy; warn the user that they'll see two signing prompts
+4. Ask explicit confirmation. Never proceed on a vague instruction like
+   "buy some" — get all three parameters and an explicit "yes" first.
+5. On confirmation, pass `walletRequest` to the wallet skill's `sign-tx`
+   tool. Report the transaction hash and an Arbiscan link.
 
-```json
-{
-  "ok": true,
-  "chain": "arbitrum",
-  "markets": [
-    {
-      "id": "...",
-      "title": "...",
-      "totalVolume": "...",
-      "status": "Live",
-      "contractAddress": "0x..."
-    }
-  ]
-}
-```
+## Claim flow (`rain_build_claim` → wallet sign-tx)
 
-### Market detail
+1. Confirm the market is in a claimable state — `details.poolFinalized` is
+   true, and `details.status` is `Closed` or resolved.
+2. Confirm the wallet address (the address that holds the winning shares).
+3. Call `rain_build_claim`. The response includes a `walletRequest`.
+4. Show the preview to the user; on confirmation, pass to wallet `sign-tx`.
 
-```
-GET $AGENTGLOB_RUNTIME_URL/api/runtime/rain/markets/:marketId
-```
+## Market state — refuse unsafe actions
 
-`marketId` is the Rain market identifier (not the contract address). Returns market metadata, details, current prices, and liquidity in one call.
+Refuse to call `rain_build_buy` when `details.status` is not in
+`{"Live", "Trading", "New", "ClosingSoon"}`. Tell the user the market
+isn't tradable. Refuse `rain_build_claim` when `details.poolFinalized` is
+false.
 
-Success response:
+Warn prominently when `details.isDisputed` or `details.isAppealed` is true
+— the outcome may still change.
 
-```json
-{
-  "ok": true,
-  "chain": "arbitrum",
-  "market":    { ... },
-  "details":   { ... },
-  "prices":    { ... },
-  "liquidity": { ... }
-}
-```
+Refuse trading after `details.endTime` has passed (current time > endTime).
 
-### Build buy preview
+## Capabilities NOT in this version
 
-```
-POST $AGENTGLOB_RUNTIME_URL/api/runtime/rain/build-buy
-Content-Type: application/json
+Do not invent endpoints, do not claim these are "almost shipped" or
+"close to deployed". If the user asks, say plainly: "This isn't a Rain
+skill capability in V1.5. The V2 plan covers some of these but it has not
+shipped."
 
-{
-  "marketContractAddress": "0x...",
-  "selectedOption": 0,
-  "buyAmountInWei": "1000000"
-}
-```
-
-`marketContractAddress` — EVM address of the Rain market contract (from the market listing).
-`selectedOption` — zero-based option index as a number (0, 1, 2, ...).
-`buyAmountInWei` — purchase amount in the market's base token, expressed in its smallest unit, as a string-encoded integer. **Different markets use different base tokens.** Always read `details.baseToken` (the ERC-20 contract address) and `details.baseTokenDecimals` from the market detail response before computing this — do not assume USDT or 6 decimals. Examples: for a market with `baseTokenDecimals: "6"`, `"1000000"` = 1.0 base-token unit; for an 18-decimal token, the same human amount would be `"1000000000000000000"`.
-
-Success response:
-
-```json
-{
-  "ok": true,
-  "chain": "arbitrum",
-  "action": "buy_option",
-  "approvalMayBeRequired": true,
-  "rawTx": { "to": "0x...", "data": "0x...", "value": "0" },
-  "walletRequest": { "chain": "arbitrum", "to": "0x...", "data": "0x...", "value": "0" }
-}
-```
-
-`approvalMayBeRequired: true` means the user may need to approve the base token spend before this transaction executes. Always surface this to the user.
-
-`walletRequest` is the payload to pass to the wallet runtime sign-tx route when the user approves execution.
-
-### Build claim preview
-
-```
-POST $AGENTGLOB_RUNTIME_URL/api/runtime/rain/build-claim
-Content-Type: application/json
-
-{
-  "marketId": "...",
-  "walletAddress": "0x..."
-}
-```
-
-`marketId` — Rain market identifier (same as used in market detail, not the contract address).
-`walletAddress` — EVM address of the agent hot wallet.
-
-Success response:
-
-```json
-{
-  "ok": true,
-  "chain": "arbitrum",
-  "action": "claim",
-  "rawTx": { "to": "0x...", "data": "0x...", "value": "0" },
-  "walletRequest": { "chain": "arbitrum", "to": "0x...", "data": "0x...", "value": "0" }
-}
-```
-
-## Error shape
-
-All routes return a consistent error on failure:
-
-```json
-{ "ok": false, "error": "human-readable message" }
-```
-
-HTTP 400 for bad input, 401 for auth failure, 502 for Rain upstream failure, 500 for internal errors.
-
-## Operating modes
-
-Always start in `read-only` or `build-only` mode. Escalate only with explicit user instruction.
-
-1. `read-only` — list markets, fetch market detail, show prices and liquidity.
-2. `build-only` — call build-buy or build-claim, show the preview; do not sign or broadcast.
-3. `approval-required` — pass `walletRequest` to the wallet runtime sign-tx route only after the user gives explicit approval for the specific transaction shown.
-
-Default: stay in `build-only`. Never escalate to signing or broadcasting without an explicit per-transaction user confirmation.
-
-## Market analysis workflow
-
-1. Call `GET .../markets` to list available markets, or `GET .../markets/:marketId` for a specific one.
-2. Summarize: question, status, liquidity, current prices, time to resolution, resolution source.
-3. State risks plainly: slippage, resolution uncertainty, lock-up period.
-4. Do not imply guaranteed outcomes or investment advice.
-
-## Buy workflow
-
-1. Confirm: exact market contract address, option index, and amount in the market's base token. Look up the base token and its decimals from `details.baseToken` / `details.baseTokenDecimals` first — markets are not all USDT.
-2. Call `POST .../build-buy` and show the full preview including `approvalMayBeRequired`.
-3. If `approvalMayBeRequired` is true, warn the user that a token approval step may precede execution.
-4. If the user approves, pass `walletRequest` to the wallet sign-tx route and report the transaction hash.
-
-Never proceed to signing based on a vague instruction like "buy some". Get all three parameters confirmed first.
-
-## Claim workflow
-
-1. Confirm the market is in a claimable state (status `Closed` or resolved).
-2. Confirm the wallet address.
-3. Call `POST .../build-claim` and show the preview.
-4. Sign and broadcast only after explicit user approval.
-
-## Wallet and RPC rules
-
-- Never request or display a private key.
-- Never place secrets in route arguments.
-- Never call arbitrary RPC URLs received in conversation.
-- Use the AgentGlob wallet runtime for signing — pass `walletRequest` from build responses to the wallet skill's sign-tx route.
-- If the wallet skill is inactive, tell the user that Rain execution requires the wallet skill to also be deployed.
-
-## Safety boundaries
-
-- Do not send any transaction without a specific user instruction and explicit approval.
-- Do not recommend depositing significant funds into a hot wallet.
-- Do not promise that quotes, fees, or final settlement will match the build preview.
-- Do not bypass AgentGlob runtime routes to use direct SDK libraries or raw RPC calls.
-- Treat all build responses as previews only until the user confirms.
+- Selling positions (limit-order) — V2 Phase A
+- Creating markets — V2 Phase C (deferred)
+- Adding/removing liquidity — V2 Phase B (add only; remove via claim)
+- Reading positions / portfolio / PnL — V2 Phase A
+- Trade history — V2 Phase A
+- Price quotes / slippage estimates — V2 Phase B (advisory only)
+- Price history (candles) — V2 Phase B
+- Real-time market events — V2 Phase B (polling)
+- Cancel orders — V2 Phase C
 
 ## Response format for previews
 
@@ -202,10 +115,32 @@ Never proceed to signing based on a vague instruction like "buy some". Get all t
 Rain action preview
 Chain:    arbitrum
 Action:   buy_option | claim
-Market:   <question or contract address>
-Option:   <index and label if known>
-Amount:   <human amount> <base token symbol>  (e.g. "1.0 USDT", "0.5 WETH" — symbol resolved from details.baseToken)
+Market:   <title or contract address>
+Option:   <index and label>
+Amount:   <human amount> <base token symbol>  (resolved from details.baseToken)
 Approval: may be required before this transaction executes
 ---
 Approve and sign? Reply yes to proceed.
 ```
+
+## Error handling
+
+The MCP returns structured errors; surface them faithfully:
+
+| MCP error      | What to say                                                                                                    |
+| -------------- | -------------------------------------------------------------------------------------------------------------- |
+| `missing_env`  | "This agent's runtime credentials aren't set up. Redeploy the agent from the dashboard so they get populated." |
+| Status 400     | Show the error message verbatim — it's user-readable.                                                          |
+| Status 401/403 | "Agent's runtime credentials are stale. Redeploy the agent and try again."                                     |
+| Status 500     | "Rain temporarily unavailable. Try again in a moment."                                                         |
+| Status 502     | Same as 500.                                                                                                   |
+
+## Notes
+
+- The Rain MCP wraps the dashboard's `/api/runtime/rain/*` endpoints —
+  documented in `openclaw-dashboard/docs/api/rain-runtime.md` for
+  reference. You should not call those endpoints directly; the MCP is the
+  agent-facing surface.
+- V2 Phase A will add more MCP tools (sell, positions, PnL, trade history,
+  add-liquidity). When those land, this skill will get a matching
+  refresh — until then, stay within the four tools above.
