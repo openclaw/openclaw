@@ -707,6 +707,7 @@ describe("OpenAI-compatible HTTP API (e2e)", () => {
         expect(clientTools[0]?.type).toBe("function");
         expect(clientTools[0]?.function?.name).toBe("get_time");
         expect(clientTools[0]?.function?.strict).toBe(true);
+        expect(firstCall).not.toHaveProperty("toolsAllow");
         await res.text();
       }
 
