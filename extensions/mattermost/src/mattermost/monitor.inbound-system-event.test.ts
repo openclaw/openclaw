@@ -479,10 +479,10 @@ describe("mattermost inbound user posts", () => {
       groupResolution?: unknown;
       onRecordError?: unknown;
     };
-    const [recordCall] =
-      (runtimeCore.channel.session.recordInboundSession.mock.calls[0] as
-        | [RecordedInboundSessionCall]
-        | undefined) ?? [];
+    const recordCalls = runtimeCore.channel.session.recordInboundSession.mock.calls as unknown as [
+      RecordedInboundSessionCall,
+    ][];
+    const recordCall = recordCalls[0]?.[0];
     expect(recordCall?.sessionKey).toBe("mattermost:default:channel:chan-1");
     const updateLastRoute = recordCall?.updateLastRoute;
     expect(updateLastRoute?.sessionKey).toBe("mattermost:default:channel:chan-1");
