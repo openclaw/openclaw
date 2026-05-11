@@ -74,7 +74,6 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     config: params.config,
     agentDir: params.agentDir ?? resolveDefaultAgentDir(params.config),
     skipPluginAuthWithoutCredentialSource: true,
-    allowOAuthRefresh: false,
   });
 }
 
