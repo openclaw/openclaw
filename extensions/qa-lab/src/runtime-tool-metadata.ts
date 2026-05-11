@@ -19,7 +19,7 @@ export type QaRuntimeCapabilityLayer =
 
 export type QaCodexToolLoading = "direct" | "searchable";
 
-export type RuntimeParityComparisonMode = "default" | "codex-native-workspace";
+export type RuntimeParityComparisonMode = "default" | "codex-native-workspace" | "outcome-only";
 
 export type QaRuntimeToolCoverageMetadata = {
   bucket: QaRuntimeToolBucket;
@@ -180,6 +180,19 @@ export function readScenarioRuntimeToolCoverageMetadata(
 export function runtimeToolComparisonModeForScenario(
   scenario: QaSeedScenarioWithSource,
 ): RuntimeParityComparisonMode {
+  const explicit = readString(scenario.execution.config?.runtimeParityComparison);
+  if (explicit) {
+    if (
+      explicit !== "default" &&
+      explicit !== "codex-native-workspace" &&
+      explicit !== "outcome-only"
+    ) {
+      throw new Error(
+        `unknown runtime parity comparison mode: ${explicit}; expected default, codex-native-workspace, outcome-only`,
+      );
+    }
+    return explicit;
+  }
   return readScenarioRuntimeToolCoverageMetadata(scenario).expectedLayer ===
     "codex-native-workspace"
     ? "codex-native-workspace"

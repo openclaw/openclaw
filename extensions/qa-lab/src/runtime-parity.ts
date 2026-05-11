@@ -117,6 +117,9 @@ type RuntimeParitySessionEntry = {
   sessionId?: string;
   sessionFile?: string;
   updatedAt?: number;
+  spawnedBy?: string;
+  parentSessionKey?: string;
+  spawnDepth?: number;
   systemPromptReport?: RuntimeParitySystemPromptReport;
 };
 
@@ -188,11 +191,25 @@ function normalizeVolatileRuntimeText(value: string) {
   return value
     .replaceAll(/\/(?:private\/)?tmp\/openclaw\/openclaw-qa-suite-[^\s"',)]+/gu, "<qa-temp>")
     .replaceAll(/\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b/giu, "<uuid>")
+    .replaceAll(/\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z\b/gu, "<timestamp>")
+    .replaceAll(/EXTERNAL_UNTRUSTED_CONTENT id="[^"]+"/gu, 'EXTERNAL_UNTRUSTED_CONTENT id="<id>"')
     .replaceAll(
       /\b(gateway|system)\s+\d+(?:ms|s|m|h|d)(?:\s+\d+(?:ms|s|m|h|d))*\b/giu,
       "$1 <duration>",
     )
     .replaceAll(/MEDIA:[^\s"')]+/gu, "MEDIA:<media>");
+}
+
+function normalizeSessionStatusResultText(value: string) {
+  return normalizeVolatileRuntimeText(value)
+    .replaceAll(/🔑[^🧮📚🧹🧵]+/gu, "")
+    .replaceAll(/🧮 Tokens:[^📚🧹🧵]+/gu, "")
+    .replaceAll(/💵 Cost:[^📚🧹🧵]+/gu, "")
+    .replaceAll(/📚 Context:[^🧹🧵]+/gu, "📚 Context: <context> ")
+    .replaceAll(/\s+·\s+(?=📚)/gu, " ")
+    .replaceAll(/⚙️ Execution:[^🪢]+/gu, "⚙️ Execution: <runtime> ")
+    .replaceAll(/\s+/gu, " ")
+    .trim();
 }
 
 function normalizeProviderDisabledResult(tool: string, value: unknown): unknown {
@@ -220,6 +237,9 @@ function normalizeToolResultValue(tool: string, value: unknown): unknown {
     return providerDisabled;
   }
   if (typeof raw === "string") {
+    if (tool === "session_status") {
+      return normalizeSessionStatusResultText(raw);
+    }
     return normalizeVolatileRuntimeText(raw);
   }
   if (Array.isArray(raw)) {
@@ -227,10 +247,15 @@ function normalizeToolResultValue(tool: string, value: unknown): unknown {
   }
   if (raw && typeof raw === "object") {
     return Object.fromEntries(
-      Object.entries(raw as Record<string, unknown>).map(([key, entry]) => [
-        key,
-        normalizeToolResultValue(tool, entry),
-      ]),
+      Object.entries(raw as Record<string, unknown>).map(([key, entry]) => {
+        if (tool === "web_fetch" && key === "fetchedAt") {
+          return [key, "<timestamp>"];
+        }
+        if (tool === "web_fetch" && key === "tookMs") {
+          return [key, "<durationMs>"];
+        }
+        return [key, normalizeToolResultValue(tool, entry)];
+      }),
     );
   }
   return raw;
@@ -992,7 +1017,12 @@ function classifyRuntimeParityCells(params: {
     };
   }
 
-  if (params.comparisonMode !== "codex-native-workspace") {
+  const compareToolShapes =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+  const compareTranscriptStructure =
+    params.comparisonMode !== "codex-native-workspace" && params.comparisonMode !== "outcome-only";
+
+  if (compareToolShapes) {
     const toolCallShapeDetails = compareToolCallShape(params.pi.toolCalls, params.codex.toolCalls);
     if (toolCallShapeDetails) {
       return { drift: "tool-call-shape", driftDetails: toolCallShapeDetails };
@@ -1013,7 +1043,7 @@ function classifyRuntimeParityCells(params: {
   const codexTranscriptLines = params.codex.transcriptBytes.trim().length
     ? params.codex.transcriptBytes.trim().split(/\r?\n/u).length
     : 0;
-  if (params.comparisonMode !== "codex-native-workspace") {
+  if (compareTranscriptStructure) {
     if (
       (params.pi.toolCalls.length === 0 &&
         params.codex.toolCalls.length === 0 &&
@@ -1084,6 +1114,14 @@ async function readRuntimeParitySessionEntries(params: {
     const parsed = JSON.parse(raw) as Record<string, RuntimeParitySessionEntry>;
     return Object.values(parsed)
       .filter((entry) => readNonEmptyString(entry?.sessionId))
+      .filter((entry) => {
+        const spawnDepth = readFiniteNumber(entry?.spawnDepth);
+        return (
+          (spawnDepth === undefined || spawnDepth <= 0) &&
+          !readNonEmptyString(entry?.spawnedBy) &&
+          !readNonEmptyString(entry?.parentSessionKey)
+        );
+      })
       .toSorted((left, right) => (right.updatedAt ?? 0) - (left.updatedAt ?? 0));
   } catch {
     return [];

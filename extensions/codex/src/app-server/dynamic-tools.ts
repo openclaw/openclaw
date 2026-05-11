@@ -321,6 +321,7 @@ function isToolResultError(result: AgentToolResult<unknown>): boolean {
     status !== "ok" &&
     status !== "success" &&
     status !== "completed" &&
+    status !== "accepted" &&
     status !== "recorded" &&
     status !== "running"
   );

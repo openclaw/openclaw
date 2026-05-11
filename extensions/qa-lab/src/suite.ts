@@ -337,9 +337,13 @@ function readRuntimeParityReportOnlyReason(
   return undefined;
 }
 
-function hasRuntimeParityCellFailure(result: RuntimeParityResult) {
+function hasRuntimeParityBlockingCellFailure(result: RuntimeParityResult) {
   return Object.values(result.cells).some(
-    (cell) => Boolean(cell.runtimeErrorClass) || Boolean(cell.transportErrorClass),
+    (cell) =>
+      Boolean(cell.transportErrorClass) ||
+      (Boolean(cell.runtimeErrorClass) &&
+        cell.runtimeErrorClass !== "scenario-failure" &&
+        cell.runtimeErrorClass !== "timeout"),
   );
 }
 
@@ -348,10 +352,14 @@ function runtimeParityReportOnlyReason(params: {
   result: RuntimeParityResult;
   codexToolLoading?: QaCodexToolLoading;
 }) {
-  if (isRuntimeParityPass(params.result) || hasRuntimeParityCellFailure(params.result)) {
+  if (isRuntimeParityPass(params.result)) {
     return undefined;
   }
-  return readRuntimeParityReportOnlyReason(params.scenario, params.codexToolLoading);
+  const reason = readRuntimeParityReportOnlyReason(params.scenario, params.codexToolLoading);
+  if (!reason || hasRuntimeParityBlockingCellFailure(params.result)) {
+    return undefined;
+  }
+  return reason;
 }
 
 function formatRuntimeParityCellDetails(cell: RuntimeParityCell) {

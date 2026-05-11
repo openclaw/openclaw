@@ -2295,6 +2295,24 @@ describe("qa mock openai server", () => {
     expect(toolPlanOutput.name).toBe("session_status");
   });
 
+  it("plans QA subagent handoff calls even when Codex dynamic tools are not in body.tools", async () => {
+    const server = await startMockServer();
+
+    const response = await postResponses(server, {
+      stream: false,
+      input: [
+        makeUserInput(
+          "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.",
+        ),
+      ],
+    });
+
+    expect(response.status).toBe(200);
+    const toolPlanOutput = outputItem(await response.json());
+    expect(toolPlanOutput.type).toBe("function_call");
+    expect(toolPlanOutput.name).toBe("sessions_spawn");
+  });
+
   it("records image inputs and describes attached images", async () => {
     const server = await startQaMockOpenAiServer({
       host: "127.0.0.1",

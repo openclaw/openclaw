@@ -26,6 +26,10 @@ execution:
   kind: flow
   summary: Verify a short approval like "ok do it" triggers immediate tool use instead of fake-progress narration.
   config:
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: "#80236"
+      reason: "mock-openai still models approval followthrough as a Pi-style read call; Codex-native approval/read behavior requires native/live proof"
     preActionPrompt: Before acting, tell me the single file you would start with in six words or fewer. Do not use tools yet.
     approvalPrompt: ok do it. read `QA_KICKOFF_TASK.md` now and reply with the QA mission in one short sentence.
     expectedReplyAny:

@@ -458,6 +458,24 @@ describe("createCodexDynamicToolBridge", () => {
     expectContextFields(callArg(handler, 0, 1, "middleware context"), { runtime: "codex" });
   });
 
+  it("treats accepted async tool results as successful", async () => {
+    const bridge = createBridgeWithToolResult("sessions_spawn", {
+      content: [{ type: "text", text: "subagent accepted" }],
+      details: { status: "accepted", childSessionKey: "agent:qa:subagent:child-1" },
+    });
+
+    const result = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-1",
+      namespace: null,
+      tool: "sessions_spawn",
+      arguments: { task: "Inspect the QA workspace", label: "qa-sidecar" },
+    });
+
+    expect(result).toEqual(expectInputText("subagent accepted"));
+  });
+
   it("uses raw tool provenance for media trust after middleware rewrites details", async () => {
     const registry = createEmptyPluginRegistry();
     const handler = vi.fn(async (event: { result: AgentToolResult<unknown> }) => ({

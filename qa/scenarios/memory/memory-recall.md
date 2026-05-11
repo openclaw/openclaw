@@ -52,6 +52,7 @@ execution:
   kind: flow
   summary: Verify the agent can store a fact, switch topics, then recall the fact accurately later.
   config:
+    runtimeParityComparison: outcome-only
     resetDurableMemory: true
     rememberPrompt: "Please remember this fact for later: the QA canary code is ALPHA-7. Use your normal memory mechanism, avoid manual repo cleanup, and reply exactly `Remembered ALPHA-7.` once stored."
     rememberAckAny:

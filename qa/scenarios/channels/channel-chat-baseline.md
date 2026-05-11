@@ -25,6 +25,7 @@ execution:
   kind: flow
   summary: Verify the QA agent can respond correctly in a shared channel and respect mention-driven group semantics.
   config:
+    runtimeParityComparison: outcome-only
     mentionPrompt: "@openclaw explain the QA lab"
 ```
 

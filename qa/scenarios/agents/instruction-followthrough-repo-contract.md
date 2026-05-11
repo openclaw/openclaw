@@ -27,6 +27,10 @@ execution:
   kind: flow
   summary: Verify the agent reads repo instructions first, then completes the first bounded followthrough task without stalling.
   config:
+    runtimeParityComparison: codex-native-workspace
+    knownHarnessGap:
+      issue: "#80434"
+      reason: "mock-openai cannot exercise Codex-native read/write tools; this row requires native/live Codex proof and must not be treated as OpenClaw dynamic-tool drift"
     workspaceFiles:
       AGENT.md: |-
         # Repo contract

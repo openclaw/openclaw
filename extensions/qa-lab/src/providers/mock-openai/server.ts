@@ -1503,6 +1503,9 @@ async function buildResponsesPayload(
   const hasEmptyResponseRetryInstruction = allInputText.includes(QA_EMPTY_RESPONSE_RETRY_NEEDLE);
   const canCallSessionsSpawn = hasDeclaredTool(body, "sessions_spawn");
   const canCallSessionsYield = hasDeclaredTool(body, "sessions_yield");
+  const canPlanQaSessionsSpawn =
+    canCallSessionsSpawn ||
+    /subagent fanout synthesis check|delegate one bounded qa task|subagent handoff/i.test(prompt);
   const buildToolProgressReadEvents = (pattern: RegExp) => {
     const toolProgressPrompt = extractLastMatchingUserText(extractAllUserTexts(input), pattern);
     return buildToolCallEventsWithArgs("read", {
@@ -1996,7 +1999,7 @@ async function buildResponsesPayload(
       size: "1024x1024",
     });
   }
-  if (canCallSessionsSpawn && /subagent fanout synthesis check/i.test(prompt)) {
+  if (canPlanQaSessionsSpawn && /subagent fanout synthesis check/i.test(prompt)) {
     if (!toolOutput && scenarioState.subagentFanoutPhase === 0) {
       scenarioState.subagentFanoutPhase = 1;
       return buildToolCallEventsWithArgs("sessions_spawn", {
@@ -2015,7 +2018,7 @@ async function buildResponsesPayload(
     }
   }
   const explicitSessionsSpawnArgs = buildExplicitSessionsSpawnArgs(allInputText);
-  if (canCallSessionsSpawn && explicitSessionsSpawnArgs && !toolOutput) {
+  if (explicitSessionsSpawnArgs && !toolOutput) {
     return buildToolCallEventsWithArgs("sessions_spawn", explicitSessionsSpawnArgs);
   }
   if (canCallSessionsSpawn && /forked subagent context qa check/i.test(prompt) && !toolOutput) {
@@ -2072,7 +2075,7 @@ async function buildResponsesPayload(
     }
   }
   if (
-    canCallSessionsSpawn &&
+    canPlanQaSessionsSpawn &&
     (/\bdelegate\b/i.test(prompt) || /subagent handoff/i.test(prompt)) &&
     !toolOutput
   ) {

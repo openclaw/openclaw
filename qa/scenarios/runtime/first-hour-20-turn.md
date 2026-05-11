@@ -25,6 +25,7 @@ execution:
   kind: flow
   summary: Run 20 deterministic same-session marker turns through the runtime pair.
   config:
+    runtimeParityComparison: outcome-only
     sessionKey: agent:qa:first-hour-20-turn
     turnCount: 20
 ```

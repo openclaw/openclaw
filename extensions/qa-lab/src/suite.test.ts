@@ -201,6 +201,43 @@ describe("qa suite", () => {
     ).toBeUndefined();
   });
 
+  it("keeps declared mock/native harness gaps report-only despite scenario-level timeouts", () => {
+    const scenario = readQaScenarioById("approval-turn-tool-followthrough");
+    const result: RuntimeParityResult = {
+      scenarioId: scenario.id,
+      drift: "failure-mode",
+      driftDetails: "scenario status differs (pass vs fail)",
+      cells: {
+        pi: {
+          runtime: "pi",
+          transcriptBytes: "",
+          toolCalls: [{ tool: "read", argsHash: "a", resultHash: "r" }],
+          finalText: "Protocol note: I reviewed the requested material.",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          bootStateLines: [],
+        },
+        codex: {
+          runtime: "codex",
+          transcriptBytes: "",
+          toolCalls: [],
+          finalText: "Protocol note: unsupported call: read",
+          usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 },
+          wallClockMs: 1,
+          runtimeErrorClass: "timeout",
+          bootStateLines: [],
+        },
+      },
+    };
+
+    expect(
+      qaSuiteProgressTesting.runtimeParityReportOnlyReason({
+        scenario,
+        result,
+      }),
+    ).toContain("Codex-native approval/read behavior requires native/live proof");
+  });
+
   it("hard-gates OpenClaw dynamic integration drift in direct loading mode", () => {
     const scenario = readQaScenarioById("runtime-tool-web-search");
     const result: RuntimeParityResult = {

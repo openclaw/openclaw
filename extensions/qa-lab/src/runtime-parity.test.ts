@@ -83,6 +83,27 @@ async function createRuntimeParityGatewayTempRoot(transcriptBytes: string) {
   return tempRoot;
 }
 
+async function createRuntimeParityGatewayTempRootWithSessions(params: {
+  sessions: Record<string, Record<string, unknown>>;
+  transcripts: Record<string, string>;
+}) {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "runtime-parity-"));
+  tempRoots.push(tempRoot);
+  const sessionsDir = path.join(tempRoot, "state", "agents", "qa", "sessions");
+  await fs.mkdir(sessionsDir, { recursive: true });
+  await fs.writeFile(
+    path.join(sessionsDir, "sessions.json"),
+    JSON.stringify(params.sessions),
+    "utf8",
+  );
+  await Promise.all(
+    Object.entries(params.transcripts).map(([file, transcript]) =>
+      fs.writeFile(path.join(sessionsDir, file), transcript, "utf8"),
+    ),
+  );
+  return tempRoot;
+}
+
 afterEach(async () => {
   await Promise.all(
     tempRoots.splice(0).map((tempRoot) => fs.rm(tempRoot, { recursive: true, force: true })),
@@ -167,6 +188,25 @@ describe("runtime parity", () => {
     ]);
   });
 
+  it("ignores structural transcript differences in outcome-only mode", async () => {
+    const result = await runRuntimeParityScenario({
+      scenarioId: "outcome-only",
+      comparisonMode: "outcome-only",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: makeCell(runtime, {
+          transcriptBytes:
+            runtime === "pi"
+              ? '{"message":{"role":"assistant"}}\n{"message":{"role":"assistant"}}\n'
+              : '{"message":{"role":"assistant"}}\n',
+          finalText: "same user-visible outcome",
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
   it("classifies tool result shape drift", async () => {
     const result = await runRuntimeParityScenario({
       scenarioId: "tool-result-shape",
@@ -194,6 +234,130 @@ describe("runtime parity", () => {
               errorClass: "tool-result-error",
             }),
           ],
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
+  it("normalizes volatile session_status result decorations", async () => {
+    const piRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "session_status", input: {} }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "session_status",
+            content:
+              "🦞 OpenClaw 2026.5.10-beta.1 ⏱️ Uptime: gateway 14s · system 18h 40m 🧠 Model: openai/gpt-5.5 · 🔑 api-key (qa) 🧮 Tokens: 64 in / 16 out · 💵 Cost: $0.0000 📚 Context: 6/128k (0%) 🧵 Session: agent:qa",
+          },
+        }),
+      ].join("\n"),
+    );
+    const codexRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "toolCall", id: "call-1", name: "session_status", input: {} }],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "session_status",
+            content:
+              "🦞 OpenClaw 2026.5.10-beta.1 ⏱️ Uptime: gateway 21s · system 18h 42m 🧠 Model: openai/gpt-5.5 📚 Context: 0/128k (0%) 🧵 Session: agent:qa",
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const result = await runRuntimeParityScenario({
+      scenarioId: "session-status-volatile",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: await captureRuntimeParityCell({
+          runtime,
+          gateway: { tempRoot: runtime === "pi" ? piRoot : codexRoot },
+          scenarioResult: { status: "pass" },
+          wallClockMs: 1,
+        }),
+      }),
+    });
+
+    expect(result.drift).toBe("none");
+  });
+
+  it("normalizes volatile external-content ids in web_fetch results", async () => {
+    const piRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "web_fetch",
+                input: { url: "https://example.com/" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "web_fetch",
+            content: '<<<EXTERNAL_UNTRUSTED_CONTENT id="abc123">>>Example Domain',
+          },
+        }),
+      ].join("\n"),
+    );
+    const codexRoot = await createRuntimeParityGatewayTempRoot(
+      [
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "web_fetch",
+                input: { url: "https://example.com/" },
+              },
+            ],
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "web_fetch",
+            content: '<<<EXTERNAL_UNTRUSTED_CONTENT id="def456">>>Example Domain',
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const result = await runRuntimeParityScenario({
+      scenarioId: "web-fetch-volatile",
+      runCell: async (runtime) => ({
+        scenarioStatus: "pass",
+        cell: await captureRuntimeParityCell({
+          runtime,
+          gateway: { tempRoot: runtime === "pi" ? piRoot : codexRoot },
+          scenarioResult: { status: "pass" },
+          wallClockMs: 1,
         }),
       }),
     });
@@ -490,6 +654,43 @@ describe("runtime parity", () => {
         errorClass: "tool-result-error",
       },
     ]);
+  });
+
+  it("excludes spawned child sessions from parent parity capture", async () => {
+    const tempRoot = await createRuntimeParityGatewayTempRootWithSessions({
+      sessions: {
+        parent: {
+          sessionId: "parent",
+          sessionFile: "parent.jsonl",
+          updatedAt: 1,
+        },
+        child: {
+          sessionId: "child",
+          sessionFile: "child.jsonl",
+          updatedAt: 2,
+          spawnedBy: "agent:qa:main",
+          spawnDepth: 1,
+        },
+      },
+      transcripts: {
+        "parent.jsonl": JSON.stringify({
+          message: { role: "assistant", content: [{ type: "text", text: "parent final" }] },
+        }),
+        "child.jsonl": JSON.stringify({
+          message: { role: "assistant", content: [{ type: "text", text: "child final" }] },
+        }),
+      },
+    });
+
+    const cell = await captureRuntimeParityCell({
+      runtime: "pi",
+      gateway: { tempRoot },
+      scenarioResult: { status: "pass" },
+      wallClockMs: 10,
+    });
+
+    expect(cell.finalText).toBe("parent final");
+    expect(cell.transcriptBytes).not.toContain("child final");
   });
 
   it("captures codex plugin state from the QA agent directory", async () => {

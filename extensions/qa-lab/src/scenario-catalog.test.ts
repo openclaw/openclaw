@@ -321,6 +321,8 @@ describe("qa scenario catalog", () => {
     const scenario = readQaScenarioById("instruction-followthrough-repo-contract");
     const config = readQaScenarioExecutionConfig("instruction-followthrough-repo-contract") as
       | {
+          runtimeParityComparison?: string;
+          knownHarnessGap?: { issue?: string; reason?: string };
           workspaceFiles?: Record<string, string>;
           prompt?: string;
           expectedReplyAll?: string[];
@@ -329,6 +331,8 @@ describe("qa scenario catalog", () => {
         }
       | undefined;
 
+    expect(config?.runtimeParityComparison).toBe("codex-native-workspace");
+    expect(config?.knownHarnessGap?.reason).toContain("Codex-native read/write tools");
     expect(config?.workspaceFiles?.["AGENT.md"]).toContain("Step order:");
     expect(config?.workspaceFiles?.["SOUL.md"]).toContain("action-first");
     expect(config?.workspaceFiles?.["FOLLOWTHROUGH_INPUT.md"]).toContain(
@@ -339,6 +343,18 @@ describe("qa scenario catalog", () => {
     expect(config?.expectedArtifactAll).toEqual(["repo contract"]);
     expect(config?.expectedArtifactAny).toContain("evidence path");
     expect(scenario.title).toBe("Instruction followthrough repo contract");
+  });
+
+  it("marks prose-only first-hour scenarios as outcome-only comparisons", () => {
+    expect(readQaScenarioExecutionConfig("channel-chat-baseline")).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+    });
+    expect(readQaScenarioExecutionConfig("memory-recall")).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+    });
+    expect(readQaScenarioExecutionConfig("runtime-first-hour-20-turn")).toMatchObject({
+      runtimeParityComparison: "outcome-only",
+    });
   });
 
   it("rejects malformed string matcher lists before running a flow", () => {
